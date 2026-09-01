@@ -19,7 +19,7 @@
 \title{\textit{cs-mail} Express Lanes --- Implementation Plan\\
 \large Recipient-Granted, Bond-Free Contact for Chosen Organizations}
 \author{C-SQD}
-\date{Draft 0.2 --- August 2026}
+\date{Draft 0.3 --- September 2026}
 
 \begin{document}
 \maketitle
@@ -28,7 +28,7 @@
 \fbox{\parbox{0.92\textwidth}{\small\textbf{Nonnormative implementation plan.}
 This document records settled design decisions and a build order for
 \emph{express lanes}, the launch-feature form of the scoped-capability extension
-that the \textit{cs-mail Protocol Specification} marks deferred. It extends the
+that the \textit{cs-mail Protocol Specification} advertises at launch. It extends the
 \textit{Rust Reference Architecture} and is written against the current Rust
 workspace. It does not change the settlement or privacy semantics of the
 specification; where the two differ, the specification controls. The user-facing
@@ -85,10 +85,13 @@ deterministic settlement kernel is left unchanged.
     address handover (checkout, signup, booking) or by replying to an
     organization first. The ``accept for receipts only'' first-contact path is
     removed.
-    \item \textbf{Volume is enforced, purpose is disclosed.} Each lane carries a
-    maximum message count per interval that admission consumes atomically.
-    Purpose remains an honest display label because providers cannot inspect
-    encrypted content.
+    \item \textbf{Volume and declared scope are enforced.} Each lane carries a
+    maximum message count per interval that admission consumes atomically, a
+    versioned declared-purpose constraint, an optional origin constraint, and the
+    declaration authorities it accepts. Admission compares authenticated
+    declarations exactly. This proves what a sender or gateway declared; providers
+    still cannot inspect encrypted content or certify that the declaration is
+    semantically truthful.
     \item \textbf{The settlement transition is untouched.} With the first-contact
     issuance path removed, no new settlement-bearing command is required. Every
     change is additive.
@@ -104,8 +107,9 @@ directed \texttt{(sender, recipient)} pair at a single canonical boundary, is:
     \item if the pair is \texttt{Blocked}, refuse (\texttt{ContactBlocked});
     \item else if the relationship is \texttt{Accepted}, deliver bond-free through
     the existing accepted-sender path;
-    \item else if a valid, in-window lane authorizes the pair, deliver bond-free
-    through the lane path;
+    \item else if a valid, in-window lane authorizes the pair and the authenticated
+    message declarations match its constraints, deliver bond-free through the lane
+    path;
     \item else require a bond and proceed through the kernel exactly as today.
 \end{enumerate}
 
@@ -126,10 +130,21 @@ enum AdmissionOutcome {
 \end{verbatim}
 
 For native mail, the sender signs the complete bond-free admission request,
-including content reference, evidence, idempotency key, protocol version,
-deployment domain, and intended provider. A legacy SMTP sender cannot supply a
-native protocol signature: the trusted ingress service instead constructs the
-request only after its configured \texttt{DmarcVerifier} returns passing evidence.
+including content reference, declared purpose, origin declaration, optional
+payload-schema identifier, message validity, capability reference, evidence,
+idempotency key, protocol version, deployment domain, and intended provider. The
+same declarations are cryptographically bound to the encrypted content. A legacy
+SMTP sender cannot supply a native protocol signature: the trusted ingress service
+constructs and signs the request only after its configured \texttt{DmarcVerifier}
+returns passing evidence, identifies itself as the declaration authority, and uses
+legacy or unspecified origin unless it has separate authenticated evidence.
+
+A scope mismatch returns \texttt{CapabilityScopeMismatch}, consumes no rate
+allowance, and moves no value. The message may use the ordinary bonded path only
+after obtaining and satisfying its own valid contact terms; the service does not
+silently reinterpret an unbonded lane request as a bonded attempt. Admission after
+message validity returns \texttt{MessageValidityClosed} under the ordinary full-
+release rules for any still-unadmitted reservation.
 
 \section{The Lane Object and Its Store}
 
@@ -140,7 +155,9 @@ no message content.
 struct Lane {
     subject: LaneSubject,        // native identity or verified domain
     recipient: ProtocolIdentity,
-    purpose_label: PurposeLabel, // disclosed, not content-inspected
+    purpose: PurposeConstraint,  // matches authenticated declaration
+    origin: Option<OriginConstraint>,
+    declaration_authority: DeclarationAuthorityConstraint,
     rate_limit: RateLimit,        // enforced atomically at admission
     window: Duration,            // sliding lifetime
     not_after: CanonicalTime,     // signed hard validity bound
@@ -156,10 +173,18 @@ enum LaneSubject {
 \end{verbatim}
 
 The stored lane is created only from a \texttt{SignedLaneGrant}. The recipient
-signature covers the subject, directed protocol pair, purpose label, rate limit,
-sliding lifetime, hard validity interval, mode, protocol version, deployment,
-intended provider, operational key, and grant version. \texttt{ScopedHandle}
-is an opaque identifier, not the signature or the authority by itself.
+signature covers the subject, directed protocol pair, purpose and optional origin
+constraints, accepted declaration authority, rate limit, sliding lifetime, hard
+validity interval, mode, protocol version, deployment, intended provider,
+operational key, and grant version. \texttt{ScopedHandle} is an opaque identifier,
+not the signature or the authority by itself.
+
+\texttt{DeclaredPurpose}, \texttt{OriginDeclaration}, declaration-authority, and
+schema identifier are constrained, versioned domain values rather than free-form
+strings. The base purpose vocabulary includes \texttt{Unspecified}; future
+purposes and schemas use namespaced identifiers. Unknown noncritical schemas do
+not prevent lane delivery, while an unsupported critical schema is refused before
+allowance is consumed.
 
 The lane store is a new, compartmentalized access domain: its own database table,
 credentials, encryption keys, and access role, per the specification's
@@ -198,6 +223,14 @@ sender to the system, one lane covers both, and admission still keys to a single
 lane's domain is simply not on the lane, regardless of its display name or
 local-part. DMARC resists unauthorized use of the expected domain; the separate
 expected-domain match rejects look-alike domains.\par}
+
+DMARC says nothing about message purpose, automation mode, or human authorship.
+The gateway therefore marks the envelope as gateway-declared and uses
+\texttt{LegacyOrUnspecified} origin unless another authenticated mechanism
+supports a narrower statement. A recipient grant explicitly decides whether a
+gateway-originated purpose declaration is acceptable. The user interface must not
+present that choice as content verification; recipient reports, revocation, and
+blocking remain the response to dishonest use of the declared scope.
 
 The workspace now has a dedicated \texttt{cs-mail-smtp-gateway} library. It pins
 Stalwart Labs' \texttt{mail-auth} 0.12.1 with default features disabled and the
@@ -310,8 +343,10 @@ accepted fully. The benefit is that issuance touches no money and no kernel stat
 
 \begin{itemize}[leftmargin=2em]
     \item \textbf{\texttt{cs-mail-capabilities}} holds the lane ``book'': the
-    lane record, subject enum, and idempotent grant/renew/revoke transitions, with
-    no ledger coupling and the block/lane mutual-exclusion invariant.
+    lane record, subject enum, purpose and origin constraints, declaration-
+    authority rules, and idempotent grant/renew/revoke transitions, with no ledger
+    coupling and the block/lane mutual-exclusion invariant. Its admission check
+    performs exact versioned declaration matching before consuming allowance.
     \item \textbf{\texttt{cs-mail-adapters}} defines the async, library-neutral
     SMTP authentication request, typed failures, and versioned evidence model,
     alongside the existing outbound downgrade route.
@@ -327,9 +362,18 @@ accepted fully. The benefit is that issuance touches no money and no kernel stat
     \item \textbf{\texttt{cs-mail-privacy}} supplies \texttt{ScopedHandle} as the
     native pair identifier; \texttt{cs-mail-capabilities} supplies the separately
     signed authority.
+    \item \textbf{\texttt{cs-mail-primitives}} defines constrained purpose,
+    origin, declaration-authority, message-validity, schema, and extension-
+    criticality values without acquiring workflow or policy behavior.
+    \item \textbf{\texttt{cs-mail-content} and \texttt{cs-mail-wire}} bind the
+    declarations, capability reference, and validity time to encrypted content and
+    provide canonical, versioned representations. Unknown noncritical schemas
+    remain opaque; unsupported critical schemas fail before admission.
     \item \textbf{Service and capability layers} add authenticated ingress and
     domain-separated, versioned signing representations for grants and bond-free
-    admission.
+    admission. Provider admission policy consumes envelope-visible facts only;
+    recipient presentation policy remains in the client and has no settlement
+    authority.
     \item \textbf{\texttt{cs-mail-protocol::transition}} (the settlement kernel)
     is unchanged. Shared effect and scheduling representations grow additively.
 \end{itemize}
@@ -350,6 +394,10 @@ Each stage is independently testable and none requires kernel work.
     and DKIM evidence and expected-domain mismatch enforcement.
     \item \textbf{Issuance flows.} Address-handover with web-origin seeding and
     confirm-on-first-authenticated-message, and reply-first auto-grant.
+    \item \textbf{Authenticated declaration enforcement.} Replace the existing
+    display-only purpose label with constrained declarations, bind them to native
+    content and bond-free admission signing bytes, add explicit gateway authority,
+    and reject mismatches without consuming lane allowance.
 \end{enumerate}
 
 \section{Open Questions and Risks}
@@ -372,6 +420,10 @@ Each stage is independently testable and none requires kernel work.
     must be encoded in the store's retention classes.
     \item \textbf{Issuance as a surface.} Rate-limit issuance confirmations and
     prevent the lane store or its prompts from becoming an enumeration oracle.
+    \item \textbf{Declaration honesty and metadata.} A matched declaration is not
+    proof that ciphertext has the claimed meaning. Keep the vocabulary coarse,
+    retain it only as long as required for admission and audit, expose no recipient
+    policy beyond actionable constraints, and make report, revoke, and block easy.
 \end{itemize}
 
 \section{Documentation Status Changes}
@@ -384,5 +436,11 @@ rules---no solicitation, no repeated-attempt advancement, block overrides a
 capability---are satisfied here by construction, because a lane-authorized message
 never enters the settlement kernel. The companion memo remains the user-facing
 explanation of the feature.
+
+Authenticated declaration enforcement is an additive correction to the admission
+edge: the earlier implementation enforced identity, rate, and lifetime while
+treating purpose as display-only. The follow-on makes the specification's existing
+``matching capability'' language concrete without claiming provider knowledge of
+encrypted content and without moving capability logic into settlement.
 
 \end{document}

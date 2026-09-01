@@ -7,16 +7,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cs_mail_ledger::{Account, LedgerBatch, LedgerError, LedgerView};
 use cs_mail_primitives::{
-    AttemptId, BondId, CanonicalTime, ContentRef, DeliveryIntentRef, Duration, EpisodeId, EventRef,
-    IdempotencyKey, JournalPosition, LaneId, MessageId, Money, OperationalKeyRef,
-    PersistenceReserveId, PolicyVersion, PrincipalRef, ProtocolIdentity, ProtocolVersion,
-    ProviderRef, QuoteId, SettlementUnit, Version,
+    AttemptId, AttemptSubjectRef, AttemptVersion, BondId, BondVersion, CanonicalTime, ContentRef,
+    DeliveryIntentRef, Duration, EpisodeId, EventRef, IdempotencyKey, JournalPosition, LaneId,
+    LedgerAccountRef, MessageDeclarationDigest, MessageId, MessageValidityUntil, Money,
+    OperationalKeyRef, PersistenceReserveId, PolicyVersion, PrincipalRef, PrivacyProfileVersion,
+    ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, RelationshipRef, RelationshipVersion,
+    ReserveVersion, RetentionPolicyVersion, SettlementUnit, Version,
 };
 pub use cs_mail_primitives::{ScheduleChange, ScheduleTask};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RelationshipKey {
+    pub reference: RelationshipRef,
     pub sender: ProtocolIdentity,
     pub recipient: ProtocolIdentity,
 }
@@ -34,18 +37,19 @@ pub enum RelationshipState {
 pub struct Relationship {
     pub key: RelationshipKey,
     pub state: RelationshipState,
-    pub version: Version,
+    pub version: RelationshipVersion,
     pub last_event: Option<EventRef>,
     pub changed_at: CanonicalTime,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RepeatedAttemptState {
-    pub principal: PrincipalRef,
+    pub subject: AttemptSubjectRef,
+    pub sender_account: LedgerAccountRef,
     pub recipient: ProtocolIdentity,
     pub level: u32,
     pub earliest_next_admission: CanonicalTime,
-    pub version: Version,
+    pub version: AttemptVersion,
     pub last_event: Option<EventRef>,
     pub changed_at: CanonicalTime,
 }
@@ -71,12 +75,16 @@ pub struct ContactTerms {
     pub quote_id: QuoteId,
     pub protocol_version: ProtocolVersion,
     pub policy_version: PolicyVersion,
-    pub principal: PrincipalRef,
+    pub privacy_profile_version: PrivacyProfileVersion,
+    pub retention_policy_version: RetentionPolicyVersion,
+    pub relationship: RelationshipRef,
+    pub attempt_subject: AttemptSubjectRef,
+    pub sender_account: LedgerAccountRef,
     pub sender: ProtocolIdentity,
     pub recipient: ProtocolIdentity,
     pub recipient_provider: ProviderRef,
-    pub relationship_version: Version,
-    pub attempt_version: Version,
+    pub relationship_version: RelationshipVersion,
+    pub attempt_version: AttemptVersion,
     pub processing_charge: Money,
     pub collateral: Money,
     pub persistence: Money,
@@ -86,8 +94,10 @@ pub struct ContactTerms {
     pub admission_window: Duration,
     pub decision_window: Duration,
     pub persistence_release_at: CanonicalTime,
+    pub earliest_final_expiry_at: CanonicalTime,
     pub issued_at: CanonicalTime,
     pub expires_at: CanonicalTime,
+    pub declaration_digest: Option<MessageDeclarationDigest>,
 }
 
 impl ContactTerms {
@@ -128,7 +138,7 @@ pub struct Bond {
     pub content_ref: Option<ContentRef>,
     pub delivery_intent_ref: Option<DeliveryIntentRef>,
     pub state: BondState,
-    pub version: Version,
+    pub version: BondVersion,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -141,14 +151,16 @@ pub enum ReserveState {
 pub struct PersistenceReserve {
     pub id: PersistenceReserveId,
     pub bond_id: BondId,
-    pub principal: PrincipalRef,
+    pub attempt_subject: AttemptSubjectRef,
+    pub sender_account: LedgerAccountRef,
+    pub relationship: RelationshipRef,
     pub sender: ProtocolIdentity,
     pub recipient: ProtocolIdentity,
     pub amount: Money,
     pub created_at: CanonicalTime,
     pub release_at: CanonicalTime,
     pub state: ReserveState,
-    pub version: Version,
+    pub version: ReserveVersion,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -179,26 +191,33 @@ pub struct ProtocolState {
 }
 
 impl ProtocolState {
-    pub fn initial(
-        principal: PrincipalRef,
+    pub fn initial_scoped(
+        relationship: RelationshipRef,
+        attempt_subject: AttemptSubjectRef,
+        sender_account: LedgerAccountRef,
         sender: ProtocolIdentity,
         recipient: ProtocolIdentity,
         now: CanonicalTime,
     ) -> Self {
         Self {
             relationship: Relationship {
-                key: RelationshipKey { sender, recipient },
+                key: RelationshipKey {
+                    reference: relationship,
+                    sender,
+                    recipient,
+                },
                 state: RelationshipState::Unknown,
-                version: Version::default(),
+                version: RelationshipVersion::default(),
                 last_event: None,
                 changed_at: now,
             },
             attempt: RepeatedAttemptState {
-                principal,
+                subject: attempt_subject,
+                sender_account,
                 recipient,
                 level: 0,
                 earliest_next_admission: now,
-                version: Version::default(),
+                version: AttemptVersion::default(),
                 last_event: None,
                 changed_at: now,
             },
@@ -206,6 +225,22 @@ impl ProtocolState {
             reserves: BTreeMap::new(),
             solicitation: None,
         }
+    }
+
+    pub fn initial(
+        principal: PrincipalRef,
+        sender: ProtocolIdentity,
+        recipient: ProtocolIdentity,
+        now: CanonicalTime,
+    ) -> Self {
+        Self::initial_scoped(
+            RelationshipRef::from_u128_for_test(sender.0 ^ recipient.0),
+            AttemptSubjectRef::from_u128_for_test(principal.0 ^ recipient.0),
+            LedgerAccountRef::from_u128_for_test(principal.0),
+            sender,
+            recipient,
+            now,
+        )
     }
 
     pub fn active_reserves(&self) -> impl Iterator<Item = &PersistenceReserve> {
@@ -248,6 +283,8 @@ impl SettlementSnapshot {
 pub struct PolicySnapshot {
     pub protocol_version: ProtocolVersion,
     pub policy_version: PolicyVersion,
+    pub privacy_profile_version: PrivacyProfileVersion,
+    pub retention_policy_version: RetentionPolicyVersion,
     pub recipient_provider: ProviderRef,
     pub unit: SettlementUnit,
     pub processing_charge: Money,
@@ -316,9 +353,12 @@ pub struct Authorized<T> {
 }
 
 impl<T> Authorized<T> {
-    /// Constructs evidence at the security boundary. The first milestone does
-    /// not yet implement signatures, so callers must make this trust assumption
-    /// explicit.
+    /// Constructs authorization inside a trusted adapter or test harness.
+    ///
+    /// Durable and network-facing adapters must not expose caller-controlled
+    /// values created through this constructor; they must verify signatures or
+    /// derive commands from trusted system state first.
+    #[doc(hidden)]
     pub const fn assume_verified(
         command: T,
         actor: ActorRef,
@@ -365,19 +405,22 @@ pub enum CancellationReason {
 pub enum ProtocolCommand {
     IssueContactTerms {
         quote_id: QuoteId,
+        declaration_digest: Option<MessageDeclarationDigest>,
     },
     ReserveAttempt {
         bond_id: BondId,
         reserve_id: PersistenceReserveId,
         attempt_id: AttemptId,
         message_id: MessageId,
-        terms: ContactTerms,
+        terms: Box<ContactTerms>,
     },
     AdmitAttempt {
         bond_id: BondId,
         expected_bond_version: Version,
         content_ref: ContentRef,
         delivery_intent_ref: DeliveryIntentRef,
+        declaration_digest: MessageDeclarationDigest,
+        message_valid_until: MessageValidityUntil,
     },
     CancelReservedAttempt {
         bond_id: BondId,
@@ -411,7 +454,7 @@ pub enum ProtocolCommand {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TermsOutcome {
-    BondRequired(ContactTerms),
+    BondRequired(Box<ContactTerms>),
     NoBondRequired,
 }
 
@@ -437,6 +480,8 @@ pub enum ProtocolEventKind {
     AttemptReserved(BondId),
     AttemptAdmitted(BondId),
     ReservedAttemptCancelled(BondId),
+    MessageValidityClosed(BondId),
+    DeclarationMismatch(BondId),
     RelationshipAccepted,
     RelationshipRejected,
     RelationshipBlocked,
@@ -582,8 +627,11 @@ pub fn transition(
     let mut manifest = ManifestBuilder::new(snapshot, context);
 
     match command {
-        ProtocolCommand::IssueContactTerms { quote_id } => {
-            issue_terms(&mut manifest, context, *quote_id)?;
+        ProtocolCommand::IssueContactTerms {
+            quote_id,
+            declaration_digest,
+        } => {
+            issue_terms(&mut manifest, context, *quote_id, *declaration_digest)?;
         }
         ProtocolCommand::ReserveAttempt {
             bond_id,
@@ -605,13 +653,19 @@ pub fn transition(
             expected_bond_version,
             content_ref,
             delivery_intent_ref,
+            declaration_digest,
+            message_valid_until,
         } => admit_attempt(
             &mut manifest,
             context,
-            *bond_id,
-            *expected_bond_version,
-            *content_ref,
-            *delivery_intent_ref,
+            AttemptAdmission {
+                bond_id: *bond_id,
+                expected_version: *expected_bond_version,
+                content_ref: *content_ref,
+                delivery_intent_ref: *delivery_intent_ref,
+                declaration_digest: *declaration_digest,
+                message_valid_until: *message_valid_until,
+            },
         )?,
         ProtocolCommand::CancelReservedAttempt {
             bond_id,
@@ -689,6 +743,7 @@ fn issue_terms(
     manifest: &mut ManifestBuilder,
     context: &TransitionContext,
     quote_id: QuoteId,
+    declaration_digest: Option<MessageDeclarationDigest>,
 ) -> Result<(), ProtocolError> {
     match manifest.next.relationship.state {
         RelationshipState::Accepted => {
@@ -705,11 +760,20 @@ fn issue_terms(
                 .now
                 .checked_add(policy.quote_lifetime)
                 .ok_or(ProtocolError::ArithmeticOverflow)?;
+            let earliest_final_expiry_at = context
+                .now
+                .checked_add(policy.admission_window)
+                .and_then(|time| time.checked_add(policy.decision_window))
+                .ok_or(ProtocolError::ArithmeticOverflow)?;
             let terms = ContactTerms {
                 quote_id,
                 protocol_version: context.protocol_version,
                 policy_version: policy.policy_version,
-                principal: manifest.next.attempt.principal,
+                privacy_profile_version: policy.privacy_profile_version,
+                retention_policy_version: policy.retention_policy_version,
+                relationship: manifest.next.relationship.key.reference,
+                attempt_subject: manifest.next.attempt.subject,
+                sender_account: manifest.next.attempt.sender_account,
                 sender: manifest.next.relationship.key.sender,
                 recipient: manifest.next.relationship.key.recipient,
                 recipient_provider: policy.recipient_provider,
@@ -724,11 +788,13 @@ fn issue_terms(
                 admission_window: policy.admission_window,
                 decision_window: policy.decision_window,
                 persistence_release_at: release_at,
+                earliest_final_expiry_at,
                 issued_at: context.now,
                 expires_at,
+                declaration_digest,
             };
             terms.total_reservation()?;
-            manifest.terms = Some(TermsOutcome::BondRequired(terms));
+            manifest.terms = Some(TermsOutcome::BondRequired(Box::new(terms)));
         }
     }
     manifest.event(ProtocolEventKind::TermsIssued);
@@ -757,12 +823,12 @@ fn reserve_attempt(
     }
     let bond_amount = terms.bond_amount()?;
     manifest.batch.transfer(
-        Account::Sender(terms.principal),
+        Account::Sender(terms.sender_account),
         Account::Bond(bond_id),
         bond_amount,
     );
     manifest.batch.transfer(
-        Account::Sender(terms.principal),
+        Account::Sender(terms.sender_account),
         Account::PersistenceReserve(reserve_id),
         terms.persistence,
     );
@@ -781,7 +847,7 @@ fn reserve_attempt(
             content_ref: None,
             delivery_intent_ref: None,
             state: BondState::Reserved,
-            version: Version::default(),
+            version: BondVersion::default(),
         },
     );
     manifest.next.reserves.insert(
@@ -789,14 +855,16 @@ fn reserve_attempt(
         PersistenceReserve {
             id: reserve_id,
             bond_id,
-            principal: terms.principal,
+            attempt_subject: terms.attempt_subject,
+            sender_account: terms.sender_account,
+            relationship: terms.relationship,
             sender: terms.sender,
             recipient: terms.recipient,
             amount: terms.persistence,
             created_at: context.now,
             release_at: terms.persistence_release_at,
             state: ReserveState::Reserved,
-            version: Version::default(),
+            version: ReserveVersion::default(),
         },
     );
     manifest.schedules.push(ScheduleChange::Schedule {
@@ -823,17 +891,13 @@ fn validate_reservation_terms(
         return Err(ProtocolError::QuoteExpired);
     }
     if terms.protocol_version != context.protocol_version
-        || terms.policy_version != context.policy.policy_version
         || terms.unit != context.policy.unit
-        || terms.principal != manifest.next.attempt.principal
+        || terms.relationship != manifest.next.relationship.key.reference
+        || terms.attempt_subject != manifest.next.attempt.subject
+        || terms.sender_account != manifest.next.attempt.sender_account
         || terms.sender != manifest.next.relationship.key.sender
         || terms.recipient != manifest.next.relationship.key.recipient
         || terms.recipient_provider != context.policy.recipient_provider
-        || terms.processing_charge != context.policy.processing_charge
-        || terms.collateral != context.policy.collateral
-        || terms.persistence != context.policy.persistence_for(terms.attempt_level)
-        || terms.admission_window != context.policy.admission_window
-        || terms.decision_window != context.policy.decision_window
         || terms.attempt_level != manifest.next.attempt.level
         || terms.eligibility_time != manifest.next.attempt.earliest_next_admission
     {
@@ -851,20 +915,30 @@ fn validate_reservation_terms(
     let latest_decision_deadline = admission_deadline
         .checked_add(terms.decision_window)
         .ok_or(ProtocolError::ArithmeticOverflow)?;
-    if terms.persistence_release_at < latest_decision_deadline {
+    if terms.persistence_release_at < latest_decision_deadline
+        || terms.earliest_final_expiry_at < terms.issued_at
+    {
         return Err(ProtocolError::PolicyInvalid);
     }
     Ok(admission_deadline)
 }
 
-fn admit_attempt(
-    manifest: &mut ManifestBuilder,
-    context: &TransitionContext,
+#[derive(Clone, Copy)]
+struct AttemptAdmission {
     bond_id: BondId,
     expected_version: Version,
     content_ref: ContentRef,
     delivery_intent_ref: DeliveryIntentRef,
+    declaration_digest: MessageDeclarationDigest,
+    message_valid_until: MessageValidityUntil,
+}
+
+fn admit_attempt(
+    manifest: &mut ManifestBuilder,
+    context: &TransitionContext,
+    admission: AttemptAdmission,
 ) -> Result<(), ProtocolError> {
+    let bond_id = admission.bond_id;
     if manifest.next.relationship.state == RelationshipState::Blocked {
         return Err(ProtocolError::ContactBlocked);
     }
@@ -874,7 +948,7 @@ fn admit_attempt(
         .get(&bond_id)
         .cloned()
         .ok_or(ProtocolError::MissingRecord)?;
-    if bond.version != expected_version {
+    if bond.version != admission.expected_version.into() {
         return Err(ProtocolError::VersionConflict);
     }
     if bond.state != BondState::Reserved {
@@ -885,11 +959,27 @@ fn admit_attempt(
         };
     }
     if manifest.next.relationship.state == RelationshipState::Accepted {
-        cancel_reserved(manifest, bond_id)?;
+        cancel_reserved(manifest, bond_id, ReservedCancellation::Ordinary)?;
         return Ok(());
     }
     if context.now > bond.admission_deadline {
-        cancel_reserved(manifest, bond_id)?;
+        cancel_reserved(manifest, bond_id, ReservedCancellation::Ordinary)?;
+        return Ok(());
+    }
+    if context.now > admission.message_valid_until.0 {
+        cancel_reserved(
+            manifest,
+            bond_id,
+            ReservedCancellation::MessageValidityClosed,
+        )?;
+        return Ok(());
+    }
+    if bond
+        .terms
+        .declaration_digest
+        .is_some_and(|expected| expected != admission.declaration_digest)
+    {
+        cancel_reserved(manifest, bond_id, ReservedCancellation::DeclarationMismatch)?;
         return Ok(());
     }
     if context.now < bond.terms.eligibility_time {
@@ -910,9 +1000,9 @@ fn admit_attempt(
     bond.state = BondState::Admitted;
     bond.admitted_at = Some(context.now);
     bond.decision_deadline = Some(deadline);
-    bond.content_ref = Some(content_ref);
-    bond.delivery_intent_ref = Some(delivery_intent_ref);
-    bond.version = next_version(bond.version)?;
+    bond.content_ref = Some(admission.content_ref);
+    bond.delivery_intent_ref = Some(admission.delivery_intent_ref);
+    bond.version = next_bond_version(bond.version)?;
     let attempt_id = bond.attempt_id;
     let message_id = bond.message_id;
     manifest.next.bonds.insert(bond_id, bond);
@@ -928,7 +1018,7 @@ fn admit_attempt(
         .now
         .checked_add(context.policy.backoff_for(next_level))
         .ok_or(ProtocolError::ArithmeticOverflow)?;
-    manifest.next.attempt.version = next_version(manifest.next.attempt.version)?;
+    manifest.next.attempt.version = next_attempt_version(manifest.next.attempt.version)?;
     manifest.next.attempt.last_event = Some(manifest.event);
     manifest.next.attempt.changed_at = context.now;
 
@@ -941,8 +1031,8 @@ fn admit_attempt(
     });
     manifest.effects.push(EffectIntent::DeliverMessage {
         message_id,
-        content_ref,
-        delivery_intent_ref,
+        content_ref: admission.content_ref,
+        delivery_intent_ref: admission.delivery_intent_ref,
     });
     open_or_join_solicitation(manifest, attempt_id)?;
     manifest.event(ProtocolEventKind::AttemptAdmitted(bond_id));
@@ -1008,16 +1098,27 @@ fn cancel_reserved_attempt(
             Err(ProtocolError::AlreadyTerminal)
         };
     }
-    if bond.version != expected_version {
+    if bond.version != expected_version.into() {
         return Err(ProtocolError::VersionConflict);
     }
     if reason == CancellationReason::AdmissionTimeout && manifest.now < bond.admission_deadline {
         return Err(ProtocolError::InvalidState);
     }
-    cancel_reserved(manifest, bond_id)
+    cancel_reserved(manifest, bond_id, ReservedCancellation::Ordinary)
 }
 
-fn cancel_reserved(manifest: &mut ManifestBuilder, bond_id: BondId) -> Result<(), ProtocolError> {
+#[derive(Clone, Copy)]
+enum ReservedCancellation {
+    Ordinary,
+    MessageValidityClosed,
+    DeclarationMismatch,
+}
+
+fn cancel_reserved(
+    manifest: &mut ManifestBuilder,
+    bond_id: BondId,
+    cancellation: ReservedCancellation,
+) -> Result<(), ProtocolError> {
     let mut bond = manifest
         .next
         .bonds
@@ -1030,11 +1131,11 @@ fn cancel_reserved(manifest: &mut ManifestBuilder, bond_id: BondId) -> Result<()
     bond.state = BondState::CancelledUnadmitted {
         event: manifest.event,
     };
-    bond.version = next_version(bond.version)?;
+    bond.version = next_bond_version(bond.version)?;
     let bond_amount = bond.terms.bond_amount()?;
     manifest.batch.transfer(
         Account::Bond(bond.id),
-        Account::Sender(bond.terms.principal),
+        Account::Sender(bond.terms.sender_account),
         bond_amount,
     );
     release_reserve(manifest, bond.reserve_id)?;
@@ -1042,7 +1143,15 @@ fn cancel_reserved(manifest: &mut ManifestBuilder, bond_id: BondId) -> Result<()
     manifest.schedules.push(ScheduleChange::Cancel {
         task: ScheduleTask::AdmissionTimeout(bond.id),
     });
-    manifest.event(ProtocolEventKind::ReservedAttemptCancelled(bond.id));
+    manifest.event(match cancellation {
+        ReservedCancellation::Ordinary => ProtocolEventKind::ReservedAttemptCancelled(bond.id),
+        ReservedCancellation::MessageValidityClosed => {
+            ProtocolEventKind::MessageValidityClosed(bond.id)
+        }
+        ReservedCancellation::DeclarationMismatch => {
+            ProtocolEventKind::DeclarationMismatch(bond.id)
+        }
+    });
     Ok(())
 }
 
@@ -1058,7 +1167,7 @@ fn relationship_decision(
     expected_version: Version,
     decision: Decision,
 ) -> Result<(), ProtocolError> {
-    if manifest.next.relationship.version != expected_version {
+    if manifest.next.relationship.version != expected_version.into() {
         return Err(ProtocolError::VersionConflict);
     }
     if matches!(decision, Decision::Reject)
@@ -1083,7 +1192,8 @@ fn relationship_decision(
         Decision::Block => RelationshipState::Blocked,
     };
     manifest.next.relationship.state = target;
-    manifest.next.relationship.version = next_version(manifest.next.relationship.version)?;
+    manifest.next.relationship.version =
+        next_relationship_version(manifest.next.relationship.version)?;
     manifest.next.relationship.last_event = Some(manifest.event);
     manifest.next.relationship.changed_at = manifest.now;
 
@@ -1098,7 +1208,9 @@ fn relationship_decision(
     for id in ids {
         let state = manifest.next.bonds[&id].state;
         match state {
-            BondState::Reserved => cancel_reserved(manifest, id)?,
+            BondState::Reserved => {
+                cancel_reserved(manifest, id, ReservedCancellation::Ordinary)?;
+            }
             BondState::Admitted => {
                 let deadline = manifest.next.bonds[&id]
                     .decision_deadline
@@ -1147,13 +1259,13 @@ fn settle_accepted(manifest: &mut ManifestBuilder, id: BondId) -> Result<(), Pro
     }
     manifest.batch.transfer(
         Account::Bond(id),
-        Account::Sender(bond.terms.principal),
+        Account::Sender(bond.terms.sender_account),
         bond.terms.bond_amount()?,
     );
     bond.state = BondState::Accepted {
         event: manifest.event,
     };
-    bond.version = next_version(bond.version)?;
+    bond.version = next_bond_version(bond.version)?;
     manifest.next.bonds.insert(id, bond);
     manifest.schedules.push(ScheduleChange::Cancel {
         task: ScheduleTask::BondExpiry(id),
@@ -1179,7 +1291,7 @@ fn settle_rejected(manifest: &mut ManifestBuilder, id: BondId) -> Result<(), Pro
     bond.state = BondState::Rejected {
         event: manifest.event,
     };
-    bond.version = next_version(bond.version)?;
+    bond.version = next_bond_version(bond.version)?;
     manifest.next.bonds.insert(id, bond);
     manifest.schedules.push(ScheduleChange::Cancel {
         task: ScheduleTask::BondExpiry(id),
@@ -1199,13 +1311,13 @@ fn settle_expired(manifest: &mut ManifestBuilder, id: BondId) -> Result<(), Prot
     );
     manifest.batch.transfer(
         Account::Bond(id),
-        Account::Sender(bond.terms.principal),
+        Account::Sender(bond.terms.sender_account),
         bond.terms.collateral,
     );
     bond.state = BondState::Expired {
         event: manifest.event,
     };
-    bond.version = next_version(bond.version)?;
+    bond.version = next_bond_version(bond.version)?;
     manifest.next.bonds.insert(id, bond);
     manifest.schedules.push(ScheduleChange::Cancel {
         task: ScheduleTask::BondExpiry(id),
@@ -1228,13 +1340,13 @@ fn release_reserve(
     }
     manifest.batch.transfer(
         Account::PersistenceReserve(reserve_id),
-        Account::Sender(reserve.principal),
+        Account::Sender(reserve.sender_account),
         reserve.amount,
     );
     reserve.state = ReserveState::Released {
         event: manifest.event,
     };
-    reserve.version = next_version(reserve.version)?;
+    reserve.version = next_reserve_version(reserve.version)?;
     manifest.next.reserves.insert(reserve_id, reserve);
     manifest.schedules.push(ScheduleChange::Cancel {
         task: ScheduleTask::PersistenceRelease(reserve_id),
@@ -1253,14 +1365,15 @@ fn close_solicitation(manifest: &mut ManifestBuilder) -> Result<(), ProtocolErro
 }
 
 fn unblock(manifest: &mut ManifestBuilder, expected: Version) -> Result<(), ProtocolError> {
-    if manifest.next.relationship.version != expected {
+    if manifest.next.relationship.version != expected.into() {
         return Err(ProtocolError::VersionConflict);
     }
     if manifest.next.relationship.state != RelationshipState::Blocked {
         return Err(ProtocolError::InvalidState);
     }
     manifest.next.relationship.state = RelationshipState::Rejected;
-    manifest.next.relationship.version = next_version(manifest.next.relationship.version)?;
+    manifest.next.relationship.version =
+        next_relationship_version(manifest.next.relationship.version)?;
     manifest.next.relationship.last_event = Some(manifest.event);
     manifest.next.relationship.changed_at = manifest.now;
     manifest.event(ProtocolEventKind::RelationshipUnblocked);
@@ -1268,14 +1381,15 @@ fn unblock(manifest: &mut ManifestBuilder, expected: Version) -> Result<(), Prot
 }
 
 fn revoke(manifest: &mut ManifestBuilder, expected: Version) -> Result<(), ProtocolError> {
-    if manifest.next.relationship.version != expected {
+    if manifest.next.relationship.version != expected.into() {
         return Err(ProtocolError::VersionConflict);
     }
     if manifest.next.relationship.state != RelationshipState::Accepted {
         return Err(ProtocolError::InvalidState);
     }
     manifest.next.relationship.state = RelationshipState::Revoked;
-    manifest.next.relationship.version = next_version(manifest.next.relationship.version)?;
+    manifest.next.relationship.version =
+        next_relationship_version(manifest.next.relationship.version)?;
     manifest.next.relationship.last_event = Some(manifest.event);
     manifest.next.relationship.changed_at = manifest.now;
     manifest.event(ProtocolEventKind::RelationshipRevoked);
@@ -1296,7 +1410,7 @@ fn expire_bond(
     if bond.state.is_terminal() {
         return Ok(());
     }
-    if bond.version != expected {
+    if bond.version != expected.into() {
         return Err(ProtocolError::VersionConflict);
     }
     if bond.state != BondState::Admitted {
@@ -1341,7 +1455,7 @@ fn release_persistence(
     if !matches!(reserve.state, ReserveState::Reserved) {
         return Ok(());
     }
-    if reserve.version != expected {
+    if reserve.version != expected.into() {
         return Err(ProtocolError::VersionConflict);
     }
     if manifest.now < reserve.release_at {
@@ -1358,6 +1472,32 @@ fn next_version(version: Version) -> Result<Version, ProtocolError> {
         .ok_or(ProtocolError::ArithmeticOverflow)
 }
 
+fn next_relationship_version(
+    version: RelationshipVersion,
+) -> Result<RelationshipVersion, ProtocolError> {
+    version
+        .checked_next()
+        .ok_or(ProtocolError::ArithmeticOverflow)
+}
+
+fn next_attempt_version(version: AttemptVersion) -> Result<AttemptVersion, ProtocolError> {
+    version
+        .checked_next()
+        .ok_or(ProtocolError::ArithmeticOverflow)
+}
+
+fn next_bond_version(version: BondVersion) -> Result<BondVersion, ProtocolError> {
+    version
+        .checked_next()
+        .ok_or(ProtocolError::ArithmeticOverflow)
+}
+
+fn next_reserve_version(version: ReserveVersion) -> Result<ReserveVersion, ProtocolError> {
+    version
+        .checked_next()
+        .ok_or(ProtocolError::ArithmeticOverflow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1367,15 +1507,15 @@ mod tests {
         let principal = PrincipalRef(1);
         let sender = ProtocolIdentity(10);
         let recipient = ProtocolIdentity(20);
+        let state = ProtocolState::initial(principal, sender, recipient, CanonicalTime(0));
         let mut ledger = LedgerState::new(SettlementUnit(1));
         ledger
-            .fund_for_test(Account::Sender(principal), Money::from_minor_units(1_000))
+            .fund_for_test(
+                Account::Sender(state.attempt.sender_account),
+                Money::from_minor_units(1_000),
+            )
             .unwrap();
-        let snapshot = SettlementSnapshot::complete(
-            0,
-            ProtocolState::initial(principal, sender, recipient, CanonicalTime(0)),
-            ledger.view(),
-        );
+        let snapshot = SettlementSnapshot::complete(0, state, ledger.view());
         let context = TransitionContext {
             now: CanonicalTime(1),
             journal_position: JournalPosition(1),
@@ -1383,6 +1523,8 @@ mod tests {
             policy: PolicySnapshot {
                 protocol_version: ProtocolVersion(1),
                 policy_version: PolicyVersion(1),
+                privacy_profile_version: PrivacyProfileVersion(1),
+                retention_policy_version: RetentionPolicyVersion(1),
                 recipient_provider: ProviderRef(30),
                 unit: SettlementUnit(1),
                 processing_charge: Money::from_minor_units(2),
@@ -1406,6 +1548,7 @@ mod tests {
         let command = Authorized::assume_verified(
             ProtocolCommand::IssueContactTerms {
                 quote_id: QuoteId(1),
+                declaration_digest: None,
             },
             ActorRef::Sender(ProtocolIdentity(10)),
             OperationalKeyRef(1),
@@ -1424,6 +1567,7 @@ mod tests {
         let command = Authorized::assume_verified(
             ProtocolCommand::IssueContactTerms {
                 quote_id: QuoteId(1),
+                declaration_digest: None,
             },
             ActorRef::Sender(ProtocolIdentity(10)),
             OperationalKeyRef(1),
@@ -1451,14 +1595,16 @@ mod tests {
                 PersistenceReserve {
                     id,
                     bond_id: BondId(id.0),
-                    principal,
+                    attempt_subject: state.attempt.subject,
+                    sender_account: state.attempt.sender_account,
+                    relationship: state.relationship.key.reference,
                     sender: public_identity,
                     recipient,
                     amount: Money::from_minor_units(5),
                     created_at: CanonicalTime(0),
                     release_at: CanonicalTime(100),
                     state: ReserveState::Reserved,
-                    version: Version(0),
+                    version: ReserveVersion(0),
                 },
             );
         }

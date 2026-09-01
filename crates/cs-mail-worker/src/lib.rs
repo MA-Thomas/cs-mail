@@ -3,13 +3,9 @@
 use core::fmt;
 
 use cs_mail_content::EncryptedContentRecord;
-use cs_mail_primitives::{CanonicalTime, Duration, IdempotencyKey, OperationalKeyRef, ProviderRef};
-use cs_mail_protocol::{
-    ActorRef, Authorized, BondState, EffectIntent, PolicySnapshot, ProtocolCommand, ReserveState,
-    ScheduleTask,
-};
+use cs_mail_primitives::{CanonicalTime, Duration, OperationalKeyRef, ProviderRef};
+use cs_mail_protocol::{EffectIntent, PolicySnapshot};
 use cs_mail_storage_postgres::{OutboxItem, PostgresEngine, StorageError};
-use sha2::{Digest, Sha256};
 
 pub trait DeliverySink {
     type Error: fmt::Display;
@@ -115,100 +111,8 @@ pub fn run_schedule_batch(
         completed: 0,
     };
     for item in items {
-        if let ScheduleTask::LaneHorizon(lane_id) = item.task {
-            engine.process_lane_horizon(lane_id, now)?;
-            report.completed += 1;
-            continue;
-        }
-        let snapshot = engine.snapshot()?;
-        let command = match item.task {
-            ScheduleTask::AdmissionTimeout(bond_id) => snapshot
-                .state
-                .bonds
-                .get(&bond_id)
-                .filter(|bond| bond.state == BondState::Reserved)
-                .map(|bond| ProtocolCommand::CancelReservedAttempt {
-                    bond_id,
-                    expected_bond_version: bond.version,
-                    reason: cs_mail_protocol::CancellationReason::AdmissionTimeout,
-                }),
-            ScheduleTask::BondExpiry(bond_id) => snapshot
-                .state
-                .bonds
-                .get(&bond_id)
-                .filter(|bond| bond.state == BondState::Admitted)
-                .map(|bond| ProtocolCommand::ExpireBond {
-                    bond_id,
-                    expected_bond_version: bond.version,
-                }),
-            ScheduleTask::PersistenceRelease(reserve_id) => snapshot
-                .state
-                .reserves
-                .get(&reserve_id)
-                .filter(|reserve| reserve.state == ReserveState::Reserved)
-                .map(|reserve| ProtocolCommand::ReleasePersistenceReserve {
-                    reserve_id,
-                    expected_reserve_version: reserve.version,
-                }),
-            ScheduleTask::LaneHorizon(_) => unreachable!(),
-        };
-        if let Some(command) = command {
-            let authorized = Authorized::assume_verified(
-                command,
-                ActorRef::Scheduler(scheduler),
-                operational_key,
-                schedule_idempotency(item.task),
-            );
-            engine.execute(authorized, now, policy.clone())?;
-        } else {
-            engine.complete_schedule(item.task)?;
-        }
+        engine.execute_claimed_schedule(item, now, scheduler, operational_key, policy.clone())?;
         report.completed += 1;
     }
     Ok(report)
-}
-
-fn schedule_idempotency(task: ScheduleTask) -> IdempotencyKey {
-    let mut hasher = Sha256::new();
-    hasher.update(b"cs-mail/schedule/v1");
-    match task {
-        ScheduleTask::AdmissionTimeout(id) => {
-            hasher.update([0]);
-            hasher.update(id.0.to_be_bytes());
-        }
-        ScheduleTask::BondExpiry(id) => {
-            hasher.update([1]);
-            hasher.update(id.0.to_be_bytes());
-        }
-        ScheduleTask::PersistenceRelease(id) => {
-            hasher.update([2]);
-            hasher.update(id.0.to_be_bytes());
-        }
-        ScheduleTask::LaneHorizon(id) => {
-            hasher.update([3]);
-            hasher.update(id.0.to_be_bytes());
-        }
-    }
-    let digest = hasher.finalize();
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    IdempotencyKey(u128::from_be_bytes(bytes))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cs_mail_primitives::{BondId, PersistenceReserveId};
-
-    #[test]
-    fn task_kinds_have_stable_distinct_idempotency_keys() {
-        assert_ne!(
-            schedule_idempotency(ScheduleTask::AdmissionTimeout(BondId(1))),
-            schedule_idempotency(ScheduleTask::BondExpiry(BondId(1)))
-        );
-        assert_eq!(
-            schedule_idempotency(ScheduleTask::PersistenceRelease(PersistenceReserveId(1))),
-            schedule_idempotency(ScheduleTask::PersistenceRelease(PersistenceReserveId(1)))
-        );
-    }
 }

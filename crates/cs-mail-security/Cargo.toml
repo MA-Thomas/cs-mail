@@ -5,10 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-content = { path = "../cs-mail-content" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
 cs-mail-protocol = { path = "../cs-mail-protocol" }
 cs-mail-wire = { path = "../cs-mail-wire" }
 ed25519-dalek.workspace = true
+serde.workspace = true
 sha2.workspace = true
 
 [lints]

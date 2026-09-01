@@ -89,7 +89,10 @@ impl InMemoryEngine {
         sender_balance: Money,
     ) -> Result<Self, EngineError> {
         let mut ledger = LedgerState::new(unit);
-        ledger.fund_for_test(Account::Sender(protocol.attempt.principal), sender_balance)?;
+        ledger.fund_for_test(
+            Account::Sender(protocol.attempt.sender_account),
+            sender_balance,
+        )?;
         Ok(Self {
             inner: Mutex::new(EngineState {
                 revision: 0,
@@ -206,9 +209,10 @@ impl InMemoryEngine {
             SigningScope {
                 deployment_domain,
                 intended_provider: policy.recipient_provider,
+                relationship: self.snapshot()?.state.relationship.key.reference,
             },
         )?;
-        self.execute(verified.authorized, now, policy)
+        self.execute(verified.into_authorized(), now, policy)
     }
 
     /// Returns a complete point-in-time settlement snapshot.

@@ -3,24 +3,33 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use cs_mail_primitives::{
-    CanonicalTime, OperationalKeyRef, ProtocolVersion, ProviderRef, RecoveryAttemptRef,
-    RecoveryFactorRef, Version,
+use cs_mail_content::{
+    ContentKeyCertificate, content_key_certificate_bytes, content_key_certificate_digest,
 };
-use cs_mail_protocol::{ActorRef, Authorized, ProtocolCommand};
+use cs_mail_primitives::{
+    CanonicalTime, JournalPosition, OperationalKeyRef, ProtocolVersion, ProviderRef, ReceiptRef,
+    RecoveryAttemptRef, RecoveryFactorRef, RelationshipRef, Version, WireVersion,
+};
+use cs_mail_protocol::{ActorRef, Authorized, ContactTerms, ProtocolCommand};
 use cs_mail_wire::{
-    CanonicalCommandEnvelope, WireError, decode_command_envelope, encode_command_envelope,
+    CanonicalCommandEnvelope, CommandTarget, WireError, decode_command_envelope,
+    encode_command_envelope, encode_contact_terms_artifact,
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct CommandDigest(pub [u8; 32]);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct OutcomeDigest(pub [u8; 32]);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SigningScope {
     pub deployment_domain: [u8; 32],
     pub intended_provider: ProviderRef,
+    pub relationship: RelationshipRef,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -29,14 +38,20 @@ pub struct SignedCommandBytes {
     pub signature: [u8; 64],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignedContentKeyCertificate {
+    pub certificate: ContentKeyCertificate,
+    pub signature: [u8; 64],
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum KeyStatus {
     Active,
     Retired { valid_until: CanonicalTime },
     Revoked { revoked_at: CanonicalTime },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OperationalKeyRecord {
     pub reference: OperationalKeyRef,
     pub actor: ActorRef,
@@ -46,14 +61,14 @@ pub struct OperationalKeyRecord {
     pub version: Version,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TransparencyAction {
     Registered,
     Retired,
     Revoked,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransparencyEntry {
     pub sequence: u64,
     pub key: OperationalKeyRef,
@@ -65,7 +80,7 @@ pub struct TransparencyEntry {
     pub hash: [u8; 32],
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct KeyTransparencyLog {
     entries: Vec<TransparencyEntry>,
 }
@@ -170,9 +185,28 @@ fn hash_actor(hasher: &mut Sha256, actor: ActorRef) {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedCommand {
-    pub authorized: Authorized<ProtocolCommand>,
-    pub digest: CommandDigest,
-    pub canonical_bytes: Vec<u8>,
+    authorized: Authorized<ProtocolCommand>,
+    target: RelationshipRef,
+    digest: CommandDigest,
+    canonical_bytes: Vec<u8>,
+}
+
+impl VerifiedCommand {
+    pub const fn target(&self) -> RelationshipRef {
+        self.target
+    }
+
+    pub const fn digest(&self) -> CommandDigest {
+        self.digest
+    }
+
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    pub fn into_authorized(self) -> Authorized<ProtocolCommand> {
+        self.authorized
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -185,6 +219,7 @@ pub enum SecurityError {
     KeyNotValidAtReceipt,
     InvalidPublicKey,
     InvalidSignature,
+    WireVersionMismatch,
     ProtocolVersionMismatch,
     SigningScopeMismatch,
     VersionConflict,
@@ -206,6 +241,7 @@ impl fmt::Display for SecurityError {
             }
             Self::InvalidPublicKey => formatter.write_str("invalid Ed25519 public key"),
             Self::InvalidSignature => formatter.write_str("invalid Ed25519 signature"),
+            Self::WireVersionMismatch => formatter.write_str("wire version mismatch"),
             Self::ProtocolVersionMismatch => formatter.write_str("protocol version mismatch"),
             Self::SigningScopeMismatch => formatter.write_str("command signing scope mismatch"),
             Self::VersionConflict => formatter.write_str("key registry version conflict"),
@@ -249,6 +285,10 @@ impl CommandSigner {
         self.signing_key.verifying_key().to_bytes()
     }
 
+    pub const fn reference(&self) -> OperationalKeyRef {
+        self.reference
+    }
+
     /// Signs one versioned canonical command envelope.
     ///
     /// # Errors
@@ -262,9 +302,11 @@ impl CommandSigner {
         command: ProtocolCommand,
     ) -> Result<SignedCommandBytes, SecurityError> {
         let payload = encode_command_envelope(&CanonicalCommandEnvelope {
+            wire_version: WireVersion(2),
             protocol_version,
             deployment_domain: scope.deployment_domain,
             intended_provider: scope.intended_provider,
+            target: CommandTarget::Relationship(scope.relationship),
             actor: self.actor,
             operational_key: self.reference,
             idempotency_key,
@@ -273,9 +315,33 @@ impl CommandSigner {
         let signature = self.signing_key.sign(&payload).to_bytes();
         Ok(SignedCommandBytes { payload, signature })
     }
+
+    /// Binds an endpoint content key to this operational signing identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the certificate owner, key, or lifetime is invalid.
+    pub fn sign_content_key_certificate(
+        &self,
+        certificate: ContentKeyCertificate,
+    ) -> Result<SignedContentKeyCertificate, SecurityError> {
+        if certificate.operational_key != self.reference
+            || self.actor != ActorRef::Sender(certificate.owner)
+            || certificate.valid_until <= certificate.valid_from
+        {
+            return Err(SecurityError::SigningScopeMismatch);
+        }
+        Ok(SignedContentKeyCertificate {
+            signature: self
+                .signing_key
+                .sign(&content_key_certificate_bytes(&certificate))
+                .to_bytes(),
+            certificate,
+        })
+    }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct KeyRegistry {
     keys: BTreeMap<OperationalKeyRef, OperationalKeyRecord>,
     version: Version,
@@ -446,11 +512,15 @@ impl KeyRegistry {
         expected_scope: SigningScope,
     ) -> Result<VerifiedCommand, SecurityError> {
         let envelope = decode_command_envelope(&signed.payload)?;
+        if envelope.wire_version != WireVersion(2) {
+            return Err(SecurityError::WireVersionMismatch);
+        }
         if envelope.protocol_version != expected_protocol_version {
             return Err(SecurityError::ProtocolVersionMismatch);
         }
         if envelope.deployment_domain != expected_scope.deployment_domain
             || envelope.intended_provider != expected_scope.intended_provider
+            || envelope.target != CommandTarget::Relationship(expected_scope.relationship)
         {
             return Err(SecurityError::SigningScopeMismatch);
         }
@@ -486,10 +556,214 @@ impl KeyRegistry {
                 envelope.operational_key,
                 envelope.idempotency_key,
             ),
+            target: expected_scope.relationship,
             digest,
             canonical_bytes: signed.payload.clone(),
         })
     }
+
+    /// Verifies an endpoint content-key certificate at provider receipt time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid scope, lifetime, key authority, or signature.
+    pub fn verify_content_key_certificate(
+        &self,
+        signed: &SignedContentKeyCertificate,
+        receipt_time: CanonicalTime,
+        expected_protocol_version: ProtocolVersion,
+        expected_scope: SigningScope,
+    ) -> Result<cs_mail_content::ContentCertificateDigest, SecurityError> {
+        let certificate = &signed.certificate;
+        if certificate.wire_version != WireVersion(1) {
+            return Err(SecurityError::WireVersionMismatch);
+        }
+        if certificate.protocol_version != expected_protocol_version {
+            return Err(SecurityError::ProtocolVersionMismatch);
+        }
+        if certificate.deployment_domain != expected_scope.deployment_domain
+            || certificate.intended_provider != expected_scope.intended_provider
+            || certificate.relationship != expected_scope.relationship
+            || receipt_time < certificate.valid_from
+            || receipt_time > certificate.valid_until
+        {
+            return Err(SecurityError::SigningScopeMismatch);
+        }
+        let key = self.active_verifying_key(
+            certificate.operational_key,
+            ActorRef::Sender(certificate.owner),
+            receipt_time,
+        )?;
+        VerifyingKey::from_bytes(&key)
+            .map_err(|_| SecurityError::InvalidPublicKey)?
+            .verify_strict(
+                &content_key_certificate_bytes(certificate),
+                &Signature::from_bytes(&signed.signature),
+            )
+            .map_err(|_| SecurityError::InvalidSignature)?;
+        Ok(content_key_certificate_digest(certificate))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignedContactTerms {
+    pub terms: ContactTerms,
+    pub provider_operational_key: OperationalKeyRef,
+    pub signature: [u8; 64],
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ReceiptKind {
+    ContactTermsIssued,
+    ReservationCommitted,
+    AdmissionCommitted,
+    RelationshipDecisionCommitted,
+    SettlementCommitted,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ReceiptPayload {
+    pub receipt_id: ReceiptRef,
+    pub kind: ReceiptKind,
+    pub relationship: RelationshipRef,
+    pub command_digest: CommandDigest,
+    pub journal_position: JournalPosition,
+    pub received_at: CanonicalTime,
+    pub outcome_digest: OutcomeDigest,
+    pub provider: ProviderRef,
+    pub protocol_version: ProtocolVersion,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignedReceipt {
+    pub payload: ReceiptPayload,
+    pub provider_operational_key: OperationalKeyRef,
+    pub signature: [u8; 64],
+}
+
+pub struct ProviderSigner {
+    provider: ProviderRef,
+    reference: OperationalKeyRef,
+    signing_key: SigningKey,
+}
+
+impl ProviderSigner {
+    pub fn from_secret_bytes(
+        provider: ProviderRef,
+        reference: OperationalKeyRef,
+        secret: &[u8; 32],
+    ) -> Self {
+        Self {
+            provider,
+            reference,
+            signing_key: SigningKey::from_bytes(secret),
+        }
+    }
+
+    pub const fn provider(&self) -> ProviderRef {
+        self.provider
+    }
+
+    pub const fn reference(&self) -> OperationalKeyRef {
+        self.reference
+    }
+
+    pub fn verifying_key_bytes(&self) -> [u8; 32] {
+        self.signing_key.verifying_key().to_bytes()
+    }
+
+    /// Signs the complete fixed quote issued by this provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the terms name another provider or cannot be encoded.
+    pub fn sign_contact_terms(
+        &self,
+        terms: ContactTerms,
+    ) -> Result<SignedContactTerms, SecurityError> {
+        if terms.recipient_provider != self.provider {
+            return Err(SecurityError::SigningScopeMismatch);
+        }
+        let bytes = encode_contact_terms_artifact(&terms)?;
+        Ok(SignedContactTerms {
+            terms,
+            provider_operational_key: self.reference,
+            signature: self.signing_key.sign(&bytes).to_bytes(),
+        })
+    }
+
+    /// Signs a committed protocol outcome receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the receipt names another provider.
+    pub fn sign_receipt(&self, payload: ReceiptPayload) -> Result<SignedReceipt, SecurityError> {
+        if payload.provider != self.provider {
+            return Err(SecurityError::SigningScopeMismatch);
+        }
+        let bytes = receipt_signing_bytes(&payload);
+        Ok(SignedReceipt {
+            payload,
+            provider_operational_key: self.reference,
+            signature: self.signing_key.sign(&bytes).to_bytes(),
+        })
+    }
+}
+
+impl SignedContactTerms {
+    /// Verifies the provider signature over the complete immutable quote.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid public key, encoding, or signature.
+    pub fn verify(&self, provider_key: &[u8; 32]) -> Result<(), SecurityError> {
+        let key =
+            VerifyingKey::from_bytes(provider_key).map_err(|_| SecurityError::InvalidPublicKey)?;
+        key.verify_strict(
+            &encode_contact_terms_artifact(&self.terms)?,
+            &Signature::from_bytes(&self.signature),
+        )
+        .map_err(|_| SecurityError::InvalidSignature)
+    }
+}
+
+impl SignedReceipt {
+    /// Verifies the provider signature over the receipt payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid public key or signature.
+    pub fn verify(&self, provider_key: &[u8; 32]) -> Result<(), SecurityError> {
+        let key =
+            VerifyingKey::from_bytes(provider_key).map_err(|_| SecurityError::InvalidPublicKey)?;
+        key.verify_strict(
+            &receipt_signing_bytes(&self.payload),
+            &Signature::from_bytes(&self.signature),
+        )
+        .map_err(|_| SecurityError::InvalidSignature)
+    }
+}
+
+fn receipt_signing_bytes(payload: &ReceiptPayload) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(192);
+    bytes.extend_from_slice(b"cs-mail/receipt/v1");
+    bytes.extend_from_slice(&payload.receipt_id.0.to_be_bytes());
+    bytes.push(match payload.kind {
+        ReceiptKind::ContactTermsIssued => 0,
+        ReceiptKind::ReservationCommitted => 1,
+        ReceiptKind::AdmissionCommitted => 2,
+        ReceiptKind::RelationshipDecisionCommitted => 3,
+        ReceiptKind::SettlementCommitted => 4,
+    });
+    bytes.extend_from_slice(&payload.relationship.derivation_version().to_be_bytes());
+    bytes.extend_from_slice(payload.relationship.as_bytes());
+    bytes.extend_from_slice(&payload.command_digest.0);
+    bytes.extend_from_slice(&payload.journal_position.0.to_be_bytes());
+    bytes.extend_from_slice(&payload.received_at.0.to_be_bytes());
+    bytes.extend_from_slice(&payload.outcome_digest.0);
+    bytes.extend_from_slice(&payload.provider.0.to_be_bytes());
+    bytes.extend_from_slice(&payload.protocol_version.0.to_be_bytes());
+    bytes
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -586,6 +860,7 @@ mod tests {
         SigningScope {
             deployment_domain: [9; 32],
             intended_provider: ProviderRef(5),
+            relationship: RelationshipRef::from_u128_for_test(6),
         }
     }
 
@@ -620,19 +895,19 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            verified.digest.0,
+            verified.digest().0,
             [
-                181, 130, 147, 228, 148, 162, 207, 9, 74, 183, 218, 42, 186, 67, 61, 72, 45, 103,
-                38, 228, 123, 184, 100, 186, 163, 81, 250, 88, 215, 25, 46, 112,
+                176, 80, 145, 19, 216, 248, 133, 53, 25, 254, 152, 147, 21, 255, 202, 71, 74, 252,
+                74, 23, 156, 25, 10, 76, 249, 231, 232, 74, 212, 6, 164, 137,
             ]
         );
         assert_eq!(
             signed_command.signature,
             [
-                1, 86, 100, 123, 8, 120, 143, 30, 221, 88, 55, 9, 175, 93, 164, 92, 19, 190, 143,
-                177, 77, 190, 145, 73, 157, 211, 232, 119, 175, 150, 68, 112, 136, 126, 156, 72,
-                84, 76, 80, 101, 109, 201, 140, 114, 255, 63, 117, 254, 221, 206, 213, 2, 75, 67,
-                129, 130, 171, 174, 75, 53, 27, 6, 198, 12,
+                175, 205, 16, 160, 216, 68, 115, 141, 91, 13, 52, 219, 98, 73, 184, 218, 27, 128,
+                172, 133, 84, 198, 72, 156, 75, 233, 70, 78, 209, 74, 116, 75, 200, 130, 90, 145,
+                10, 14, 209, 19, 69, 33, 181, 228, 219, 238, 168, 188, 51, 205, 98, 90, 246, 26,
+                68, 143, 224, 169, 229, 109, 139, 148, 89, 9,
             ]
         );
         assert_eq!(
@@ -647,6 +922,7 @@ mod tests {
                 SigningScope {
                     deployment_domain: [8; 32],
                     intended_provider: ProviderRef(5),
+                    relationship: RelationshipRef::from_u128_for_test(6),
                 },
             ),
             Err(SecurityError::SigningScopeMismatch)
@@ -658,6 +934,43 @@ mod tests {
         assert_eq!(
             registry.verify(&modified, CanonicalTime(1), ProtocolVersion(1), scope()),
             Err(SecurityError::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn previously_supported_command_wire_version_is_rejected() {
+        let command_signer = signer(1, 7);
+        let mut registry = KeyRegistry::default();
+        registry
+            .register(
+                OperationalKeyRef(1),
+                ActorRef::Recipient(ProtocolIdentity(2)),
+                command_signer.verifying_key_bytes(),
+                CanonicalTime(0),
+            )
+            .unwrap();
+        let payload = encode_command_envelope(&CanonicalCommandEnvelope {
+            wire_version: WireVersion(1),
+            protocol_version: ProtocolVersion(1),
+            deployment_domain: scope().deployment_domain,
+            intended_provider: scope().intended_provider,
+            target: CommandTarget::Relationship(scope().relationship),
+            actor: ActorRef::Recipient(ProtocolIdentity(2)),
+            operational_key: OperationalKeyRef(1),
+            idempotency_key: IdempotencyKey(30),
+            command: ProtocolCommand::AcceptRelationship {
+                expected_version: Version(0),
+            },
+        })
+        .unwrap();
+        let signed = SignedCommandBytes {
+            signature: command_signer.signing_key.sign(&payload).to_bytes(),
+            payload,
+        };
+
+        assert_eq!(
+            registry.verify(&signed, CanonicalTime(1), ProtocolVersion(1), scope()),
+            Err(SecurityError::WireVersionMismatch)
         );
     }
 

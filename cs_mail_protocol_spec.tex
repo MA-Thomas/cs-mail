@@ -28,7 +28,7 @@
 \title{\textit{cs-mail} Protocol Specification\\
 \large Permission, Bonded Contact, and Relationship Settlement}
 \author{C-SQD}
-\date{Draft 0.5 --- August 2026}
+\date{Draft 0.6 --- September 2026}
 
 \begin{document}
 \maketitle
@@ -202,6 +202,35 @@ relationship records, or inter-provider envelopes. A federated assertion \MAY{}
 carry an opaque, scoped reference sufficient to address the correct
 repeated-attempt state.
 
+\subsection{Authenticated Message Declarations}
+
+A \emph{declared purpose} is a versioned, machine-readable statement by the
+authority that constructs the message envelope about the intended communication
+class. It is not a provider determination that the encrypted content truthfully
+belongs to that class. The base vocabulary \MUST{} include an explicit
+\texttt{unspecified} value; extensions \MUST{} use namespaced, versioned
+identifiers rather than uncoordinated free text.
+
+An \emph{origin declaration} identifies the accountable submission mode, such as
+human-initiated, agent-drafted and human-approved, autonomous-agent, automated-
+system, or legacy/unspecified. Authentication proves which authorized sender or
+gateway made the declaration. It does not prove that a human composed particular
+words or that the declared workflow occurred. Any stronger attestation is a
+separate, purpose-limited extension and \MUSTNOT{} place general legal-identity
+evidence in an ordinary message envelope.
+
+A \emph{payload-schema identifier} is an optional namespaced and versioned label
+for the structure of encrypted content. It exposes no payload field by itself.
+An unknown noncritical schema identifier \MUSTNOT{} invalidate otherwise valid
+base delivery. An extension that requires schema understanding \MUST{} be
+explicitly advertised and treated as critical before reservation or admission.
+
+The message validity time is the final canonical time at which the message may be
+admitted. It is distinct from the recipient decision deadline, application-level
+meaning inside encrypted content, and the retention or deletion time of stored
+ciphertext. Once admission succeeds, message validity expiry \MUSTNOT{} shorten a
+bond decision window, alter settlement, or authorize premature deletion.
+
 \subsection{Relationship-Level Decision}
 
 An acceptance, rejection, or block applies to a directed communicative
@@ -362,6 +391,8 @@ from the recipient provider. A quote \MUST{} contain at least:
     \item admission-window duration, decision-window duration, and persistence-
           reserve release conditions;
     \item quote issue and expiry times;
+    \item when eligibility or quoted terms depend on authenticated message
+          declarations, a canonical digest binding those declarations;
     \item privacy-profile and retention-policy versions;
     \item policy version; and
     \item provider signature.
@@ -474,9 +505,20 @@ decrypted only by authorized recipient endpoints.
 The native message envelope contains only what is necessary to authenticate and
 route the attempt: a versioned opaque message identifier, scoped sender and
 recipient references, creation and validity times, an encrypted-content reference,
+a declared purpose, an origin declaration, an optional payload-schema identifier,
 and the permission, capability, quote, bond, or admission proofs required for that
-delivery. It \MUSTNOT{} contain plaintext content, legal identity evidence,
-unrelated protocol identities, an account balance, or relationship history.
+delivery. The declared purpose and origin declaration may use their explicit
+\texttt{unspecified} or legacy values. Every declaration, identifier, validity
+time, and proof that affects admission \MUST{} be covered by the authenticated
+envelope and cryptographically bound to the encrypted content.
+
+The envelope \MUST{} use the least revealing declaration sufficient for the
+advertised capability or recipient-controlled routing rule. It \MUSTNOT{} contain
+plaintext content, legal identity evidence, unrelated protocol identities, an
+account balance, relationship history, or content-derived classifications that
+are not required for the selected delivery path. A payload-schema identifier
+describes encrypted structure; it does not move structured payload fields into
+the envelope.
 
 \subsection{Relationship Solicitation State}
 
@@ -573,6 +615,13 @@ definitions:
 \texttt{IssueContactTerms} evaluates the authenticated sender identity, current
 relationship, repeated-attempt state, recipient policy, and provider policy.
 
+If any eligibility decision or quoted value depends on declared purpose, origin,
+schema requirements, or another authenticated envelope declaration, the request
+for terms \MUST{} supply the canonical declaration set and the signed terms
+\MUST{} bind its digest. A provider \MUSTNOT{} quote under one declaration set and
+admit a materially different set. The reference deployment does not vary bond
+economics merely to purchase priority, attention, or a response.
+
 If $A_{ij}=\texttt{accepted}$, the provider \SHOULD{} return a no-bond result and
 \MUSTNOT{} require $C$, $S$, or $L_k$.
 
@@ -624,6 +673,10 @@ reserve, current relationship, repeated-attempt state, and durable encrypted-
 content evidence. For an unaccepted relationship it \MUST{} atomically:
 
 \begin{enumerate}[leftmargin=2em]
+    \item confirm that canonical admission time does not exceed the envelope's
+          message validity time;
+    \item verify the integrity and supported criticality of authenticated message
+          declarations and any declaration digest fixed by the quote;
     \item confirm that the current time is not earlier than the quoted eligibility
           time;
     \item confirm that canonical admission time is not after the bond's admission
@@ -968,6 +1021,15 @@ query that exceeds the caller's authorized relationship and purpose.\\
 \texttt{ContentKeyUnavailable} & Do not ask a provider to bypass end-to-end
 encryption. Return ciphertext or an endpoint recovery error without changing
 settlement.\\
+\texttt{MessageValidityClosed} & Refuse admission after the envelope validity
+time. Fully release any still-unadmitted reservation, create no solicitation, and
+do not advance repeated-attempt state.\\
+\texttt{CapabilityScope}\newline\texttt{Mismatch} & Do not consume capability allowance or admit
+through that capability. Ordinary bonded admission may proceed only through its
+own valid quote and reservation.\\
+\texttt{UnsupportedCritical}\newline\texttt{Extension} & Refuse reservation or admission that
+depends on an unsupported critical declaration or payload schema; release any
+provisional or still-unadmitted hold without advancing attempt state.\\
 \texttt{LinkageErased} & Report that expired identifying linkage cannot be
 reconstructed; do not restore it from analytics, logs, or an unrelated backup.\\
 \bottomrule
@@ -986,27 +1048,38 @@ communication under the bond rules above. When advertised, the following
 requirements apply.
 
 A recipient \MAY{} issue a signed communication capability containing scoped
-sender and recipient references, purpose or message class, validity interval,
-maximum count or rate, capability version, and revocation conditions. Outside the
-endpoint and routing boundary, those references \MUST{} be pairwise opaque.
+sender and recipient references, a declared-purpose constraint, an optional
+origin constraint, validity interval, maximum count or rate, capability version,
+acceptable declaration authority, and revocation conditions. Outside the endpoint
+and routing boundary, those references \MUST{} be pairwise opaque.
 
 An advertised express-lane capability \MUST{} contain a recipient signature, a
-hard validity interval, and an enforceable maximum count or rate. Purpose labels
-\MUSTNOT{} be represented as provider-enforced content policy when content is
-end-to-end encrypted. A native opaque pair handle identifies the subject but is
-not authority without the signed grant.
+hard validity interval, and an enforceable maximum count or rate. Admission
+\MUST{} compare the authenticated declared purpose and any constrained origin
+exactly under the capability's versioned matching rules. This comparison enforces
+what the sender or gateway declared; it \MUSTNOT{} be represented as provider
+inspection or verification of end-to-end encrypted content. A recipient endpoint
+\MAY{} report misuse and revoke or block the authority. A native opaque pair
+handle identifies the subject but is not authority without the signed grant.
 
 For a legacy sender, a DMARC pass under RFC~9989 is evidence that use of the
 RFC 5322 author domain was authorized; it is not evidence that a message is
-safe or that a look-alike domain belongs to an expected organization. A legacy
+safe, that its content matches a declared purpose, that a human authored it, or
+that a look-alike domain belongs to an expected organization. A legacy ingress
+gateway that constructs the authenticated envelope \MUST{} identify itself as the
+declaration authority and use a legacy/unspecified origin unless it possesses
+separate authenticated evidence. A legacy capability \MUST{} explicitly state
+whether such gateway-originated purpose declarations satisfy its scope. A legacy
 lane \MUST{} bind separately to a canonical IDNA-ASCII organizational domain and
 \MUST{} apply the same versioned domain-to-protocol-identity mapping for grant,
 admission, blocking, and revocation. The aligned DKIM or SPF identifier
 \MUSTNOT{} silently replace that lane identity.
 
-A message matching a valid capability \MAY{} be admitted without a bond while the
-relationship remains unaccepted. Capability validation \MUST{} be deterministic,
-auditable, scoped to the represented authority, and replay-safe. A capability
+A message whose authenticated declarations and other constraints match a valid
+capability \MAY{} be admitted without a bond while the relationship remains
+unaccepted. Capability validation \MUST{} be deterministic, auditable, scoped to
+the represented authority, and replay-safe. A declaration mismatch \MUSTNOT{}
+consume allowance. A capability
 \MUSTNOT{} silently create unrestricted standing acceptance. A capability-
 authorized message \MUSTNOT{} open or join a relationship solicitation and
 \MUSTNOT{} advance repeated-attempt state.
@@ -1243,6 +1316,33 @@ rate and relationship state, or content a participant deliberately discloses for
 investigation. Any disclosed plaintext \MUST{} be scoped to that purpose and its
 own retention class.
 
+\subsection{Policy Authority and Isolation}
+
+Implementations \MUST{} distinguish three policy authorities. \emph{Protocol
+policy} is a versioned, immutable input to deterministic quotation and settlement
+transitions. Terms derived from it remain fixed as specified above. \emph{Admission
+policy} runs at an authenticated provider or capability boundary and may use only
+the envelope, permission proofs, rate and relationship state, safety evidence, and
+other data deliberately available to that boundary. It \MUSTNOT{} decrypt native
+content or create unrecorded settlement effects. \emph{Presentation policy} runs
+for the recipient, preferably at an authorized endpoint, and may control inbox
+placement, notifications, digests, ranking, and local content processing. It
+\MUSTNOT{} change protocol validity, relationship state, bond ownership, or
+canonical history.
+
+Neither admission nor presentation policy \MAY{} impose a protocol bond on
+ordinary communication while the directed relationship remains accepted.
+Narrowing that permission requires an authenticated relationship transition or a
+separately versioned recipient-granted capability model. A policy implementation
+may be assisted by probabilistic or learned software, but such output is not by
+itself an authenticated protocol command. Any policy result that affects protocol
+admission \MUST{} reduce to a versioned, auditable decision over authorized inputs.
+
+Sender-facing explanations \SHOULD{} disclose the actionable constraint needed to
+correct a request while withholding unrelated recipient rules, private signals,
+and details that would enable enumeration or adaptive probing. Internal audit
+records receive their own scoped references and retention class.
+
 \section{Interoperability Requirements}
 
 A federated implementation \MUST{} provide versioned representations for:
@@ -1251,6 +1351,8 @@ A federated implementation \MUST{} provide versioned representations for:
     \item provider and protocol identities;
     \item contact-term quotes;
     \item message envelopes and content references;
+    \item declared-purpose, origin-declaration, payload-schema, declaration-
+          authority, and extension-criticality representations;
     \item bond and persistence-reserve commitments;
     \item repeated-attempt assertions;
     \item admission and unadmitted-cancellation receipts;
@@ -1325,6 +1427,18 @@ Every conforming implementation \MUST{} preserve all of the following:
           requires no protocol bond and incurs no protocol message fee.
     \item \textbf{Replay safety.} Duplicate commands, events, receipts, and expiry
           jobs cannot duplicate value movement or state transition.
+    \item \textbf{Declaration integrity.} Every purpose, origin, schema,
+          declaration-authority, validity, and capability reference used for
+          admission is authenticated and bound to the admitted encrypted content.
+    \item \textbf{Fixed declaration-dependent terms.} When contact terms depend on
+          message declarations, reservation and admission use exactly the
+          declaration set fixed by those signed terms.
+    \item \textbf{Capability-scope enforcement.} A capability admits only messages
+          whose authenticated declarations match its constraints, and mismatch
+          consumes no allowance or settlement value.
+    \item \textbf{Message-validity isolation.} Envelope validity gates admission
+          but cannot shorten a decision window or rewrite settlement after
+          admission.
     \item \textbf{Atomic visibility.} No observer may see permission change without
           its required bond and reserve settlements, or vice versa.
     \item \textbf{Native content blindness.} Providers cannot decrypt a native
@@ -1339,6 +1453,9 @@ Every conforming implementation \MUST{} preserve all of the following:
     \item \textbf{Data compartmentalization.} Routine access to content, identity,
           relationships, the ledger, or telemetry does not automatically grant
           access to the other privacy domains or their translation keys.
+    \item \textbf{Policy-authority isolation.} Presentation and admission policy
+          cannot mutate settlement or canonical relationship history except
+          through an independently authenticated protocol command.
     \item \textbf{Bounded retention.} Every identifying field has a declared
           purpose, retention class, expiration condition, and deletion path across
           primary and derived storage.
@@ -1396,8 +1513,9 @@ A reference implementation \SHOULD{} proceed in the following order:
     \item test full event sequences, concurrent decisions, and the required
           invariants with unit and property-based tests;
     \item add the append-only double-entry journal and idempotent settlement;
-    \item add signed identities, endpoint content encryption, key transparency,
-          quotes, admission receipts, and decision receipts;
+    \item add signed identities, authenticated minimal message declarations,
+          endpoint content encryption, key transparency, quotes, admission
+          receipts, and decision receipts;
     \item introduce pairwise handles and enforce the identity, relationship,
           content, ledger, and telemetry access boundaries;
     \item persist journal streams and materialized projections with retention

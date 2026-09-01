@@ -5,16 +5,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cs_mail_adapters::{DomainIdentity, LegacyDmarcEvidence};
 use cs_mail_primitives::{
-    CanonicalTime, ContentRef, DeliveryIntentRef, Duration, IdempotencyKey, LaneId, MessageId,
-    OperationalKeyRef, ProtocolIdentity, ProtocolVersion, ProviderRef, ScheduleChange,
-    ScheduleTask, Version,
+    CanonicalTime, ContentRef, DeclarationAuthority, DeclaredPurpose, DeliveryIntentRef, Duration,
+    IdempotencyKey, LaneId, MessageDeclarations, MessageId, MessageValidityUntil,
+    OperationalKeyRef, OriginMode, PayloadSchema, ProtocolIdentity, ProtocolVersion, ProviderRef,
+    ScheduleChange, ScheduleTask, Version, WireVersion,
 };
 use cs_mail_privacy::ScopedHandle;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
-const SIGNING_DOMAIN: &[u8] = b"cs-mail/lane-grant/v1";
-const ADMISSION_SIGNING_DOMAIN: &[u8] = b"cs-mail/bond-free-admission/v1";
+const SIGNING_DOMAIN: &[u8] = b"cs-mail/lane-grant/v2";
 const CONTROL_SIGNING_DOMAIN: &[u8] = b"cs-mail/lane-control/v1";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -27,6 +27,22 @@ pub enum LaneSubject {
 pub enum LaneMode {
     Expiring,
     Persistent,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum DeclarationAuthorityConstraint {
+    NativeSender,
+    LegacyGateway,
+}
+
+impl DeclarationAuthorityConstraint {
+    const fn matches(self, authority: DeclarationAuthority) -> bool {
+        matches!(
+            (self, authority),
+            (Self::NativeSender, DeclarationAuthority::NativeSender(_))
+                | (Self::LegacyGateway, DeclarationAuthority::LegacyGateway(_))
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -52,7 +68,9 @@ pub struct LaneGrant {
     pub deployment_domain: [u8; 32],
     pub intended_provider: ProviderRef,
     pub recipient_operational_key: OperationalKeyRef,
-    pub purpose_label: String,
+    pub purpose: DeclaredPurpose,
+    pub origin: Option<OriginMode>,
+    pub declaration_authority: DeclarationAuthorityConstraint,
     pub lifetime: Duration,
     pub rate_limit: RateLimit,
     pub mode: LaneMode,
@@ -64,13 +82,29 @@ pub struct LaneGrant {
 
 impl LaneGrant {
     fn validate(&self) -> Result<(), CapabilityError> {
-        if self.purpose_label.is_empty()
-            || self.purpose_label.len() > 128
-            || self.lifetime.0 == 0
+        self.purpose
+            .validate()
+            .map_err(|_| CapabilityError::InvalidDeclaration)?;
+        let authority_matches_subject = matches!(
+            (&self.subject, self.declaration_authority),
+            (
+                LaneSubject::Native(_),
+                DeclarationAuthorityConstraint::NativeSender
+            ) | (
+                LaneSubject::LegacyDomain(_),
+                DeclarationAuthorityConstraint::LegacyGateway
+            )
+        );
+        if self.lifetime.0 == 0
             || self.protocol_version.0 == 0
             || !self.rate_limit.valid()
             || self.not_before < self.issued_at
             || self.not_after <= self.not_before
+            || !authority_matches_subject
+            || (self.declaration_authority == DeclarationAuthorityConstraint::LegacyGateway
+                && self
+                    .origin
+                    .is_some_and(|origin| origin != OriginMode::LegacyOrUnspecified))
         {
             return Err(CapabilityError::InvalidGrant);
         }
@@ -103,7 +137,20 @@ impl LaneGrant {
         bytes.extend_from_slice(&self.deployment_domain);
         bytes.extend_from_slice(&self.intended_provider.0.to_be_bytes());
         bytes.extend_from_slice(&self.recipient_operational_key.0.to_be_bytes());
-        push_bytes(&mut bytes, self.purpose_label.as_bytes())?;
+        self.purpose
+            .append_canonical(&mut bytes)
+            .map_err(|_| CapabilityError::InvalidDeclaration)?;
+        match self.origin {
+            Some(origin) => {
+                bytes.push(1);
+                bytes.push(origin.code());
+            }
+            None => bytes.push(0),
+        }
+        bytes.push(match self.declaration_authority {
+            DeclarationAuthorityConstraint::NativeSender => 0,
+            DeclarationAuthorityConstraint::LegacyGateway => 1,
+        });
         bytes.extend_from_slice(&self.lifetime.0.to_be_bytes());
         bytes.extend_from_slice(&self.rate_limit.max_messages.to_be_bytes());
         bytes.extend_from_slice(&self.rate_limit.interval.0.to_be_bytes());
@@ -280,9 +327,27 @@ impl Lane {
         &self,
         sender: ProtocolIdentity,
         recipient: ProtocolIdentity,
+        capability: Option<LaneId>,
+        declarations: &MessageDeclarations,
         evidence: &LaneEvidence,
         now: CanonicalTime,
     ) -> Result<(), CapabilityError> {
+        declarations
+            .validate()
+            .map_err(|_| CapabilityError::InvalidDeclaration)?;
+        if capability != Some(self.grant.id)
+            || declarations.purpose != self.grant.purpose
+            || self
+                .grant
+                .origin
+                .is_some_and(|origin| origin != declarations.origin.mode)
+            || !self
+                .grant
+                .declaration_authority
+                .matches(declarations.origin.authority)
+        {
+            return Err(CapabilityError::ScopeMismatch);
+        }
         if self.state != LaneState::Active
             || sender != self.grant.sender
             || recipient != self.grant.recipient
@@ -304,10 +369,19 @@ impl Lane {
     pub fn consume(
         &mut self,
         message: MessageId,
+        capability: Option<LaneId>,
+        declarations: &MessageDeclarations,
         evidence: &LaneEvidence,
         now: CanonicalTime,
     ) -> Result<bool, CapabilityError> {
-        self.authorizes(self.grant.sender, self.grant.recipient, evidence, now)?;
+        self.authorizes(
+            self.grant.sender,
+            self.grant.recipient,
+            capability,
+            declarations,
+            evidence,
+            now,
+        )?;
         if self.admitted_messages.contains(&message) {
             return Ok(true);
         }
@@ -467,11 +541,15 @@ fn append_dmarc_pass(bytes: &mut Vec<u8>, pass: Option<cs_mail_adapters::DmarcPa
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BondFreeAdmission {
+    pub wire_version: WireVersion,
     pub sender: ProtocolIdentity,
     pub recipient: ProtocolIdentity,
     pub message_id: MessageId,
     pub content_ref: ContentRef,
     pub delivery_intent_ref: DeliveryIntentRef,
+    pub declarations: MessageDeclarations,
+    pub message_valid_until: MessageValidityUntil,
+    pub capability: Option<LaneId>,
     pub evidence: Option<LaneEvidence>,
     pub idempotency_key: IdempotencyKey,
     pub protocol_version: ProtocolVersion,
@@ -493,6 +571,10 @@ pub struct LegacyBondFreeAdmission {
     pub message_id: MessageId,
     pub content_ref: ContentRef,
     pub delivery_intent_ref: DeliveryIntentRef,
+    pub purpose: DeclaredPurpose,
+    pub payload_schema: Option<PayloadSchema>,
+    pub message_valid_until: MessageValidityUntil,
+    pub capability: LaneId,
     pub idempotency_key: IdempotencyKey,
     pub protocol_version: ProtocolVersion,
     pub deployment_domain: [u8; 32],
@@ -502,19 +584,54 @@ pub struct LegacyBondFreeAdmission {
 }
 
 impl BondFreeAdmission {
+    fn validate(&self) -> Result<(), CapabilityError> {
+        if self.wire_version != WireVersion(1) {
+            return Err(CapabilityError::UnsupportedWireVersion);
+        }
+        self.declarations
+            .validate()
+            .map_err(|_| CapabilityError::InvalidDeclaration)?;
+        match (self.authentication, self.declarations.origin.authority) {
+            (
+                AdmissionAuthentication::NativeKey(expected),
+                DeclarationAuthority::NativeSender(actual),
+            ) if expected == actual => {}
+            (AdmissionAuthentication::LegacyDmarc, DeclarationAuthority::LegacyGateway(actual))
+                if actual == self.intended_provider => {}
+            _ => return Err(CapabilityError::InvalidDeclaration),
+        }
+        Ok(())
+    }
+
     /// Returns the domain-separated canonical admission representation.
     ///
     /// # Errors
     ///
     /// Returns an error when variable-length evidence cannot be represented.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, CapabilityError> {
-        let mut bytes = Vec::with_capacity(320);
-        bytes.extend_from_slice(ADMISSION_SIGNING_DOMAIN);
+        self.validate()?;
+        let mut bytes = Vec::with_capacity(448);
+        bytes.extend_from_slice(b"cs-mail/bond-free-admission/v2");
+        bytes.extend_from_slice(&self.wire_version.0.to_be_bytes());
         bytes.extend_from_slice(&self.sender.0.to_be_bytes());
         bytes.extend_from_slice(&self.recipient.0.to_be_bytes());
         bytes.extend_from_slice(&self.message_id.0.to_be_bytes());
         bytes.extend_from_slice(&self.content_ref.0.to_be_bytes());
         bytes.extend_from_slice(&self.delivery_intent_ref.0.to_be_bytes());
+        bytes.extend_from_slice(
+            &self
+                .declarations
+                .canonical_bytes()
+                .map_err(|_| CapabilityError::InvalidDeclaration)?,
+        );
+        bytes.extend_from_slice(&self.message_valid_until.0.0.to_be_bytes());
+        match self.capability {
+            Some(lane_id) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&lane_id.0.to_be_bytes());
+            }
+            None => bytes.push(0),
+        }
         match &self.evidence {
             Some(evidence) => {
                 bytes.push(1);
@@ -579,6 +696,11 @@ pub enum CapabilityError {
     RateLimitExceeded,
     CapacityExceeded,
     ArithmeticOverflow,
+    InvalidDeclaration,
+    ScopeMismatch,
+    MessageValidityClosed,
+    UnsupportedCriticalExtension,
+    UnsupportedWireVersion,
 }
 
 impl fmt::Display for CapabilityError {
@@ -665,7 +787,9 @@ mod tests {
             deployment_domain: [3; 32],
             intended_provider: ProviderRef(4),
             recipient_operational_key: OperationalKeyRef(5),
-            purpose_label: "account notices".into(),
+            purpose: DeclaredPurpose::Known(cs_mail_primitives::KnownPurpose::Transactional),
+            origin: Some(OriginMode::LegacyOrUnspecified),
+            declaration_authority: DeclarationAuthorityConstraint::LegacyGateway,
             lifetime: Duration(1_000),
             rate_limit: RateLimit {
                 max_messages: 1,
@@ -702,6 +826,17 @@ mod tests {
         )
     }
 
+    fn legacy_declarations() -> MessageDeclarations {
+        MessageDeclarations {
+            purpose: DeclaredPurpose::Known(cs_mail_primitives::KnownPurpose::Transactional),
+            origin: cs_mail_primitives::OriginDeclaration {
+                mode: OriginMode::LegacyOrUnspecified,
+                authority: DeclarationAuthority::LegacyGateway(ProviderRef(4)),
+            },
+            payload_schema: None,
+        }
+    }
+
     #[test]
     fn recipient_signature_domain_evidence_and_rate_are_enforced() {
         let (signed, key) = signed_grant();
@@ -709,15 +844,33 @@ mod tests {
         signed.verify(&key).unwrap();
         assert!(
             !lane
-                .consume(MessageId(1), &evidence(), CanonicalTime(20))
+                .consume(
+                    MessageId(1),
+                    Some(LaneId(1)),
+                    &legacy_declarations(),
+                    &evidence(),
+                    CanonicalTime(20),
+                )
                 .unwrap()
         );
         assert!(
-            lane.consume(MessageId(1), &evidence(), CanonicalTime(21))
-                .unwrap()
+            lane.consume(
+                MessageId(1),
+                Some(LaneId(1)),
+                &legacy_declarations(),
+                &evidence(),
+                CanonicalTime(21),
+            )
+            .unwrap()
         );
         assert_eq!(
-            lane.consume(MessageId(2), &evidence(), CanonicalTime(22)),
+            lane.consume(
+                MessageId(2),
+                Some(LaneId(1)),
+                &legacy_declarations(),
+                &evidence(),
+                CanonicalTime(22),
+            ),
             Err(CapabilityError::RateLimitExceeded)
         );
     }
@@ -734,6 +887,8 @@ mod tests {
             lane.authorizes(
                 ProtocolIdentity(2),
                 ProtocolIdentity(3),
+                Some(LaneId(1)),
+                &legacy_declarations(),
                 &evidence(),
                 CanonicalTime(1_010)
             ),
@@ -743,6 +898,8 @@ mod tests {
         lane.authorizes(
             ProtocolIdentity(2),
             ProtocolIdentity(3),
+            Some(LaneId(1)),
+            &legacy_declarations(),
             &evidence(),
             CanonicalTime(1_011),
         )
@@ -750,14 +907,57 @@ mod tests {
     }
 
     #[test]
+    fn declaration_scope_mismatch_does_not_consume_lane_allowance() {
+        let (signed, _) = signed_grant();
+        let mut lane = Lane::from_grant(signed.grant).unwrap();
+        let mut wrong_purpose = legacy_declarations();
+        wrong_purpose.purpose = DeclaredPurpose::Known(cs_mail_primitives::KnownPurpose::Personal);
+
+        assert_eq!(
+            lane.consume(
+                MessageId(1),
+                Some(LaneId(1)),
+                &wrong_purpose,
+                &evidence(),
+                CanonicalTime(20),
+            ),
+            Err(CapabilityError::ScopeMismatch)
+        );
+        assert_eq!(lane.messages_in_rate_window, 0);
+        assert!(
+            !lane
+                .consume(
+                    MessageId(1),
+                    Some(LaneId(1)),
+                    &legacy_declarations(),
+                    &evidence(),
+                    CanonicalTime(20),
+                )
+                .unwrap()
+        );
+        assert_eq!(lane.messages_in_rate_window, 1);
+    }
+
+    #[test]
     fn bond_free_admission_signature_covers_scope_and_evidence() {
         let signing = SigningKey::from_bytes(&[8; 32]);
         let admission = BondFreeAdmission {
+            wire_version: WireVersion(1),
             sender: ProtocolIdentity(2),
             recipient: ProtocolIdentity(3),
             message_id: MessageId(4),
             content_ref: ContentRef(5),
             delivery_intent_ref: DeliveryIntentRef(6),
+            declarations: MessageDeclarations {
+                purpose: DeclaredPurpose::Known(cs_mail_primitives::KnownPurpose::Transactional),
+                origin: cs_mail_primitives::OriginDeclaration {
+                    mode: OriginMode::AutomatedSystem,
+                    authority: DeclarationAuthority::NativeSender(OperationalKeyRef(11)),
+                },
+                payload_schema: None,
+            },
+            message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+            capability: Some(LaneId(1)),
             evidence: Some(evidence()),
             idempotency_key: IdempotencyKey(7),
             protocol_version: ProtocolVersion(1),
@@ -774,6 +974,20 @@ mod tests {
         altered.admission.intended_provider = ProviderRef(12);
         assert_eq!(
             altered.verify(&signing.verifying_key().to_bytes()),
+            Err(CapabilityError::InvalidSignature)
+        );
+
+        let mut altered_origin = BondFreeAdmission {
+            intended_provider: ProviderRef(10),
+            ..admission.clone()
+        };
+        altered_origin.declarations.origin.mode = OriginMode::AutonomousAgent;
+        let altered_origin = SignedBondFreeAdmission {
+            admission: altered_origin,
+            signature: signing.sign(&admission.signing_bytes().unwrap()).to_bytes(),
+        };
+        assert_eq!(
+            altered_origin.verify(&signing.verifying_key().to_bytes()),
             Err(CapabilityError::InvalidSignature)
         );
     }

@@ -281,12 +281,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cs-mail-conformance"
+version = "0.1.0"
+dependencies = [
+ "cs-mail-application",
+ "cs-mail-content",
+ "cs-mail-ledger",
+ "cs-mail-primitives",
+ "cs-mail-privacy",
+ "cs-mail-protocol",
+ "cs-mail-security",
+]
+
+[[package]]
 name = "cs-mail-content"
 version = "0.1.0"
 dependencies = [
  "cs-mail-primitives",
  "hpke",
  "serde",
+ "sha2",
 ]
 
 [[package]]
@@ -327,10 +341,12 @@ dependencies = [
 name = "cs-mail-security"
 version = "0.1.0"
 dependencies = [
+ "cs-mail-content",
  "cs-mail-primitives",
  "cs-mail-protocol",
  "cs-mail-wire",
  "ed25519-dalek",
+ "serde",
  "sha2",
 ]
 
@@ -345,6 +361,8 @@ dependencies = [
  "cs-mail-protocol",
  "cs-mail-security",
  "cs-mail-storage-postgres",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -371,6 +389,7 @@ dependencies = [
  "postgres",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -389,8 +408,8 @@ dependencies = [
  "cs-mail-content",
  "cs-mail-primitives",
  "cs-mail-protocol",
+ "cs-mail-security",
  "cs-mail-storage-postgres",
- "sha2",
 ]
 
 [[package]]

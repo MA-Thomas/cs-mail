@@ -3,6 +3,23 @@
 //! Each command locks one relationship aggregate, evaluates the pure kernel,
 //! and atomically commits protocol state, ledger projections, journal records,
 //! idempotency evidence, schedules, and outbox intents.
+//!
+//! Caller-constructed authorization cannot be executed through the durable API:
+//!
+//! ```compile_fail
+//! use cs_mail_primitives::CanonicalTime;
+//! use cs_mail_protocol::{Authorized, PolicySnapshot, ProtocolCommand};
+//! use cs_mail_storage_postgres::PostgresEngine;
+//!
+//! fn bypass(
+//!     engine: &PostgresEngine,
+//!     command: Authorized<ProtocolCommand>,
+//!     now: CanonicalTime,
+//!     policy: PolicySnapshot,
+//! ) {
+//!     engine.execute(command, now, policy).unwrap();
+//! }
+//! ```
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -12,26 +29,33 @@ use cs_mail_capabilities::{
     BondFreeAdmission, CapabilityError, Lane, LaneControl, LaneControlAction, LaneHorizonEffect,
     LaneState, SignedLaneGrant,
 };
-use cs_mail_content::EncryptedContentRecord;
+use cs_mail_content::{ContentBinding, EncryptedContentRecord, message_declaration_digest};
 use cs_mail_ledger::{Account, LedgerError, LedgerView};
 use cs_mail_primitives::{
     CanonicalTime, ContentRef, Duration, IdempotencyKey, JournalPosition, LaneId, MessageId, Money,
-    OperationalKeyRef, ProtocolVersion, ScheduleChange, ScheduleTask, SettlementUnit,
+    OperationalKeyRef, ProtocolVersion, ProviderRef, RetentionPolicyVersion, ScheduleChange,
+    ScheduleTask, SettlementUnit, Version,
 };
 use cs_mail_protocol::{
     ActorRef, Authorized, EffectIntent, PolicySnapshot, ProtocolCommand, ProtocolError,
-    ProtocolState, RelationshipState, SettlementSnapshot, TransitionContext, TransitionManifest,
-    transition,
+    ProtocolState, RelationshipState, RepeatedAttemptState, SettlementSnapshot, TermsOutcome,
+    TransitionContext, TransitionManifest, transition,
 };
-use cs_mail_security::{KeyRegistry, SecurityError, SignedCommandBytes, SigningScope};
+use cs_mail_security::{
+    KeyRegistry, SecurityError, SignedCommandBytes, SignedContactTerms, SignedReceipt, SigningScope,
+};
 use postgres::types::Json;
 use postgres::{Client, IsolationLevel, NoTls, Transaction};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 const MIGRATION_1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_2: &str = include_str!("../migrations/0002_encrypted_content.sql");
 const MIGRATION_3: &str = include_str!("../migrations/0003_outbox_content_retention.sql");
 const MIGRATION_4: &str = include_str!("../migrations/0004_express_lanes.sql");
+const MIGRATION_5: &str = include_str!("../migrations/0005_protocol_foundations.sql");
+const MIGRATION_6: &str = include_str!("../migrations/0006_authenticated_message_envelopes.sql");
+const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 2;
 
 #[derive(Debug)]
 pub enum StorageError {
@@ -47,8 +71,14 @@ pub enum StorageError {
     ContentMissing,
     ContentScopeMismatch,
     ContentExpired,
+    MessageValidityClosed,
+    QuoteMissing,
+    QuoteNotSigned,
+    RegistryMissing,
     Capability(CapabilityError),
     BondFreeNotAuthorized,
+    InvalidScheduleClaim,
+    UnsupportedStoredProtocolFormat(i16),
 }
 
 impl fmt::Display for StorageError {
@@ -72,9 +102,26 @@ impl fmt::Display for StorageError {
                 formatter.write_str("encrypted content does not match the admitted attempt")
             }
             Self::ContentExpired => formatter.write_str("encrypted content has expired"),
+            Self::MessageValidityClosed => {
+                formatter.write_str("message validity closed before admission")
+            }
+            Self::QuoteMissing => {
+                formatter.write_str("contact terms were not issued by this provider")
+            }
+            Self::QuoteNotSigned => {
+                formatter.write_str("contact terms do not have provider evidence")
+            }
+            Self::RegistryMissing => formatter.write_str("durable key registry is not initialized"),
             Self::Capability(error) => write!(formatter, "capability error: {error}"),
             Self::BondFreeNotAuthorized => formatter
                 .write_str("no accepted relationship or valid express lane authorizes delivery"),
+            Self::InvalidScheduleClaim => {
+                formatter.write_str("scheduled work was not claimed from this aggregate")
+            }
+            Self::UnsupportedStoredProtocolFormat(version) => write!(
+                formatter,
+                "stored protocol format version {version} requires an explicit migration"
+            ),
         }
     }
 }
@@ -138,11 +185,22 @@ pub struct OutboxItem {
     pub payload: EffectIntent,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct ScheduledItem {
-    pub aggregate_key: String,
-    pub task: ScheduleTask,
-    pub due_at: CanonicalTime,
+    aggregate_key: String,
+    task: ScheduleTask,
+    due_at: CanonicalTime,
+    claim_until: CanonicalTime,
+}
+
+impl ScheduledItem {
+    pub const fn task(&self) -> ScheduleTask {
+        self.task
+    }
+
+    pub const fn due_at(&self) -> CanonicalTime {
+        self.due_at
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -181,7 +239,8 @@ pub struct PostgresEngine {
 }
 
 impl PostgresEngine {
-    /// Connects, migrates the schema, and creates the aggregate if absent.
+    /// Connects without transport TLS, migrates, and bootstraps an aggregate.
+    /// Production callers should create a TLS-configured `Client` and use `from_client`.
     ///
     /// # Errors
     ///
@@ -194,7 +253,23 @@ impl PostgresEngine {
         unit: SettlementUnit,
         sender_balance: Money,
     ) -> Result<Self, StorageError> {
-        let mut client = Client::connect(database_url, NoTls)?;
+        let client = Client::connect(database_url, NoTls)?;
+        Self::from_client(client, aggregate_key, initial_state, unit, sender_balance)
+    }
+
+    /// Builds an engine from a caller-configured client, including a TLS client
+    /// created outside this crate for production deployments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for migration, bootstrap, serialization, or database failures.
+    pub fn from_client(
+        mut client: Client,
+        aggregate_key: impl Into<String>,
+        initial_state: &ProtocolState,
+        unit: SettlementUnit,
+        sender_balance: Money,
+    ) -> Result<Self, StorageError> {
         migrate(&mut client)?;
         let aggregate_key = aggregate_key.into();
         bootstrap(
@@ -210,17 +285,189 @@ impl PostgresEngine {
         })
     }
 
-    /// Atomically evaluates and commits one protocol command.
+    /// Installs the initial durable key authority without replacing an existing registry.
     ///
     /// # Errors
     ///
-    /// Returns an error if database, protocol, ledger, serialization,
-    /// concurrency, idempotency, or numeric preconditions fail.
-    pub fn execute(
+    /// Returns an error for database, serialization, or numeric failures.
+    pub fn initialize_key_registry(
+        &self,
+        registry: &KeyRegistry,
+        now: CanonicalTime,
+    ) -> Result<(), StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        client.execute(
+            "INSERT INTO cs_key_registries \
+             (aggregate_key, registry_version, registry, updated_at) VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (aggregate_key) DO NOTHING",
+            &[
+                &self.aggregate_key,
+                &to_i64(registry.version().0)?,
+                &Json(registry),
+                &to_i64(now.0)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Loads the durable operational-key authority and transparency projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the registry is absent or cannot be decoded.
+    pub fn key_registry(&self) -> Result<KeyRegistry, StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        client
+            .query_opt(
+                "SELECT registry FROM cs_key_registries WHERE aggregate_key = $1",
+                &[&self.aggregate_key],
+            )?
+            .map(|row| row.get::<_, Json<KeyRegistry>>("registry").0)
+            .ok_or(StorageError::RegistryMissing)
+    }
+
+    /// Registers a key under a row lock so restarts and competing service instances agree.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid or duplicate keys, lock failures, or database failures.
+    pub fn register_operational_key(
+        &self,
+        reference: OperationalKeyRef,
+        actor: ActorRef,
+        verifying_key: [u8; 32],
+        now: CanonicalTime,
+    ) -> Result<(), StorageError> {
+        self.update_key_registry(now, |registry| {
+            registry.register(reference, actor, verifying_key, now)
+        })
+    }
+
+    /// Revokes a key under the same durable authority used by command verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for missing/stale keys, lock failures, or database failures.
+    pub fn revoke_operational_key(
+        &self,
+        reference: OperationalKeyRef,
+        expected_version: Version,
+        now: CanonicalTime,
+    ) -> Result<(), StorageError> {
+        self.update_key_registry(now, |registry| {
+            registry.revoke(reference, expected_version, now)
+        })
+    }
+
+    fn update_key_registry<F>(&self, now: CanonicalTime, update: F) -> Result<(), StorageError>
+    where
+        F: FnOnce(&mut KeyRegistry) -> Result<(), SecurityError>,
+    {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut transaction = client.transaction()?;
+        let row = transaction
+            .query_opt(
+                "SELECT registry FROM cs_key_registries \
+                 WHERE aggregate_key = $1 FOR UPDATE",
+                &[&self.aggregate_key],
+            )?
+            .ok_or(StorageError::RegistryMissing)?;
+        let mut registry = row.get::<_, Json<KeyRegistry>>("registry").0;
+        update(&mut registry)?;
+        transaction.execute(
+            "UPDATE cs_key_registries SET registry_version = $2, registry = $3, updated_at = $4 \
+             WHERE aggregate_key = $1",
+            &[
+                &self.aggregate_key,
+                &to_i64(registry.version().0)?,
+                &Json(&registry),
+                &to_i64(now.0)?,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Adds the provider signature to terms already committed by `IssueContactTerms`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the quote is absent, differs, or cannot be stored.
+    pub fn attach_signed_quote(&self, quote: &SignedContactTerms) -> Result<(), StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let changed = client.execute(
+            "UPDATE cs_contact_quotes SET provider_operational_key = $3, signature = $4 \
+             WHERE aggregate_key = $1 AND quote_id = $2 AND terms = $5",
+            &[
+                &self.aggregate_key,
+                &quote.terms.quote_id.0.to_string(),
+                &quote.provider_operational_key.0.to_string(),
+                &&quote.signature[..],
+                &Json(&quote.terms),
+            ],
+        )?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(StorageError::QuoteMissing)
+        }
+    }
+
+    /// Stores an immutable signed receipt; exact replay is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a conflicting receipt or database failure.
+    pub fn store_receipt(&self, receipt: &SignedReceipt) -> Result<(), StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let inserted = client.execute(
+            "INSERT INTO cs_provider_receipts \
+             (aggregate_key, receipt_id, journal_position, payload, provider_operational_key, \
+              signature, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (aggregate_key, receipt_id) DO NOTHING",
+            &[
+                &self.aggregate_key,
+                &receipt.payload.receipt_id.0.to_string(),
+                &to_i64(receipt.payload.journal_position.0)?,
+                &Json(&receipt.payload),
+                &receipt.provider_operational_key.0.to_string(),
+                &&receipt.signature[..],
+                &to_i64(receipt.payload.received_at.0)?,
+            ],
+        )?;
+        if inserted == 1 {
+            return Ok(());
+        }
+        let row = client.query_one(
+            "SELECT payload, provider_operational_key, signature FROM cs_provider_receipts \
+             WHERE aggregate_key = $1 AND receipt_id = $2",
+            &[
+                &self.aggregate_key,
+                &receipt.payload.receipt_id.0.to_string(),
+            ],
+        )?;
+        let signature: Vec<u8> = row.get("signature");
+        if row
+            .get::<_, Json<cs_mail_security::ReceiptPayload>>("payload")
+            .0
+            == receipt.payload
+            && row.get::<_, String>("provider_operational_key")
+                == receipt.provider_operational_key.0.to_string()
+            && signature.as_slice() == receipt.signature
+        {
+            Ok(())
+        } else {
+            Err(StorageError::DuplicateConflict)
+        }
+    }
+
+    fn execute_authorized(
         &self,
         authorized: Authorized<ProtocolCommand>,
         now: CanonicalTime,
         policy: PolicySnapshot,
+        expected_registry_version: Option<Version>,
+        require_signed_quote: bool,
     ) -> Result<DurableExecutionOutcome, StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut transaction = client
@@ -228,6 +475,9 @@ impl PostgresEngine {
             .isolation_level(IsolationLevel::ReadCommitted)
             .start()?;
         let aggregate = load_locked_aggregate(&mut transaction, &self.aggregate_key)?;
+        if let Some(expected) = expected_registry_version {
+            lock_registry_version(&mut transaction, &self.aggregate_key, expected)?;
+        }
         let idempotency_key = authorized.idempotency_key();
         let request = StoredRequest {
             actor: authorized.actor(),
@@ -250,13 +500,26 @@ impl PostgresEngine {
         let balances = load_balances(&mut transaction, &self.aggregate_key)?;
         let ledger = LedgerView::from_balances(aggregate.ledger_revision, aggregate.unit, balances);
         let snapshot = SettlementSnapshot::complete(aggregate.revision, aggregate.state, ledger);
-        let journal_position = aggregate
+        validate_issued_quote(
+            &mut transaction,
+            &self.aggregate_key,
+            authorized.command(),
+            require_signed_quote,
+        )?;
+        let next_revision = aggregate
             .revision
             .checked_add(1)
             .ok_or(StorageError::NumericRange)?;
+        let journal_position = allocate_journal_position(
+            &mut transaction,
+            &self.aggregate_key,
+            next_revision,
+            "protocol",
+            now,
+        )?;
         let context = TransitionContext {
             now,
-            journal_position: JournalPosition(journal_position),
+            journal_position,
             protocol_version: policy.protocol_version,
             policy,
         };
@@ -311,16 +574,26 @@ impl PostgresEngine {
         now: CanonicalTime,
         policy: PolicySnapshot,
     ) -> Result<DurableExecutionOutcome, StorageError> {
-        let verified = registry.verify(
+        self.initialize_key_registry(registry, now)?;
+        let durable_registry = self.key_registry()?;
+        let registry_version = durable_registry.version();
+        let verified = durable_registry.verify(
             signed,
             now,
             policy.protocol_version,
             SigningScope {
                 deployment_domain,
                 intended_provider: policy.recipient_provider,
+                relationship: self.snapshot()?.state.relationship.key.reference,
             },
         )?;
-        self.execute(verified.authorized, now, policy)
+        self.execute_authorized(
+            verified.into_authorized(),
+            now,
+            policy,
+            Some(registry_version),
+            true,
+        )
     }
 
     /// Verifies and atomically stores a recipient-signed express lane.
@@ -546,7 +819,7 @@ impl PostgresEngine {
         {
             return Err(StorageError::BondFreeNotAuthorized);
         }
-        validate_content_for_delivery(
+        let binding = validate_content_for_delivery(
             &mut transaction,
             &self.aggregate_key,
             &aggregate.state,
@@ -555,8 +828,17 @@ impl PostgresEngine {
             now,
             request.protocol_version,
         )?;
+        if binding.declarations != request.declarations
+            || binding.message_valid_until != request.message_valid_until
+            || binding.capability != request.capability
+        {
+            return Err(StorageError::ContentScopeMismatch);
+        }
         let (authority, event, schedule) =
             if aggregate.state.relationship.state == RelationshipState::Accepted {
+                if request.capability.is_some() || request.evidence.is_some() {
+                    return Err(StorageError::BondFreeNotAuthorized);
+                }
                 (
                     BondFreeAuthority::AcceptedRelationship,
                     CapabilityEvent::AcceptedMessageAdmitted(request.message_id),
@@ -578,10 +860,18 @@ impl PostgresEngine {
                 lane.authorizes(
                     aggregate.state.relationship.key.sender,
                     aggregate.state.relationship.key.recipient,
+                    request.capability,
+                    &request.declarations,
                     evidence,
                     now,
                 )?;
-                let replayed = lane.consume(request.message_id, evidence, now)?;
+                let replayed = lane.consume(
+                    request.message_id,
+                    request.capability,
+                    &request.declarations,
+                    evidence,
+                    now,
+                )?;
                 if replayed {
                     return Err(StorageError::DuplicateConflict);
                 }
@@ -640,7 +930,7 @@ impl PostgresEngine {
     /// # Errors
     ///
     /// Returns an error for database, serialization, or arithmetic failures.
-    pub fn process_lane_horizon(
+    fn process_lane_horizon(
         &self,
         lane_id: LaneId,
         now: CanonicalTime,
@@ -745,33 +1035,82 @@ impl PostgresEngine {
     ///
     /// Returns an error for conflicting references, invalid scope, or database failures.
     pub fn store_content(&self, record: &EncryptedContentRecord) -> Result<(), StorageError> {
+        self.store_content_with_retention(record, RetentionPolicyVersion(0))
+    }
+
+    /// Stores ciphertext and its versioned deletion obligation in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a conflicting record, invalid numeric value, or database failure.
+    pub fn store_content_with_retention(
+        &self,
+        record: &EncryptedContentRecord,
+        retention_policy_version: RetentionPolicyVersion,
+    ) -> Result<(), StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut transaction = client.transaction()?;
         let content_ref = record.binding.content_ref.0.to_string();
-        let existing = client.query_opt(
+        let existing = transaction.query_opt(
             "SELECT record FROM cs_encrypted_content \
              WHERE aggregate_key = $1 AND content_ref = $2",
             &[&self.aggregate_key, &content_ref],
         )?;
         if let Some(row) = existing {
             return if row.get::<_, Json<EncryptedContentRecord>>("record").0 == *record {
+                transaction.commit()?;
                 Ok(())
             } else {
                 Err(StorageError::DuplicateConflict)
             };
         }
-        client.execute(
+        let relationship = self.snapshot_relationship_ref(&mut transaction)?;
+        let record_ref = retention_record_key(relationship.as_bytes(), "content", &content_ref);
+        transaction.execute(
             "INSERT INTO cs_encrypted_content \
-             (aggregate_key, content_ref, record, created_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5)",
+             (aggregate_key, content_ref, record, created_at, expires_at, \
+              retention_policy_version, record_ref) VALUES ($1, $2, $3, $4, $5, $6, $7)",
             &[
                 &self.aggregate_key,
                 &content_ref,
                 &Json(record),
                 &to_i64(record.created_at.0)?,
                 &to_i64(record.expires_at.0)?,
+                &to_i64(u64::from(retention_policy_version.0))?,
+                &record_ref,
             ],
         )?;
+        transaction.execute(
+            "INSERT INTO cs_retention_records \
+             (record_ref, aggregate_key, record_domain, object_ref, policy_version, \
+              delete_after, state, created_at) VALUES ($1, $2, 'content', $3, $4, $5, 'active', $6)",
+            &[
+                &record_ref,
+                &self.aggregate_key,
+                &content_ref,
+                &to_i64(u64::from(retention_policy_version.0))?,
+                &to_i64(record.expires_at.0)?,
+                &to_i64(record.created_at.0)?,
+            ],
+        )?;
+        transaction.commit()?;
         Ok(())
+    }
+
+    fn snapshot_relationship_ref(
+        &self,
+        transaction: &mut Transaction<'_>,
+    ) -> Result<cs_mail_primitives::RelationshipRef, StorageError> {
+        let row = transaction.query_one(
+            "SELECT protocol_state FROM cs_relationship_aggregates WHERE aggregate_key = $1",
+            &[&self.aggregate_key],
+        )?;
+        Ok(row
+            .get::<_, Json<ProtocolState>>("protocol_state")
+            .0
+            .relationship
+            .key
+            .reference)
     }
 
     /// Loads ciphertext without exposing any decryption key to the provider.
@@ -800,7 +1139,39 @@ impl PostgresEngine {
     /// Returns an error for database, numeric, or lock failures.
     pub fn purge_expired_content(&self, now: CanonicalTime) -> Result<u64, StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        Ok(client.execute(
+        let mut transaction = client.transaction()?;
+        let rows = transaction.query(
+            "SELECT content.content_ref, content.record_ref, content.retention_policy_version \
+             FROM cs_encrypted_content AS content \
+             WHERE content.aggregate_key = $1 AND content.expires_at <= $2 \
+             AND NOT EXISTS (SELECT 1 FROM cs_outbox AS outbox \
+                 WHERE outbox.aggregate_key = content.aggregate_key \
+                 AND outbox.content_ref = content.content_ref \
+                 AND outbox.status IN ('pending', 'processing')) FOR UPDATE",
+            &[&self.aggregate_key, &to_i64(now.0)?],
+        )?;
+        for row in &rows {
+            let content_ref: String = row.get("content_ref");
+            let record_ref: Vec<u8> = row.get("record_ref");
+            let policy_version: i64 = row.get("retention_policy_version");
+            transaction.execute(
+                "INSERT INTO cs_deletion_manifests \
+                 (record_ref, aggregate_key, record_domain, object_ref, policy_version, \
+                  deleted_at, reason) VALUES ($1, $2, 'content', $3, $4, $5, 'retention-expired')",
+                &[
+                    &record_ref,
+                    &self.aggregate_key,
+                    &content_ref,
+                    &policy_version,
+                    &to_i64(now.0)?,
+                ],
+            )?;
+            transaction.execute(
+                "UPDATE cs_retention_records SET state = 'deleted' WHERE record_ref = $1",
+                &[&record_ref],
+            )?;
+        }
+        let deleted = transaction.execute(
             "DELETE FROM cs_encrypted_content AS content \
              WHERE content.aggregate_key = $1 AND content.expires_at <= $2 \
              AND NOT EXISTS (SELECT 1 FROM cs_outbox AS outbox \
@@ -808,7 +1179,9 @@ impl PostgresEngine {
                  AND outbox.content_ref = content.content_ref \
                  AND outbox.status IN ('pending', 'processing'))",
             &[&self.aggregate_key, &to_i64(now.0)?],
-        )?)
+        )?;
+        transaction.commit()?;
+        Ok(deleted)
     }
 
     /// Loads the complete current settlement snapshot.
@@ -819,11 +1192,23 @@ impl PostgresEngine {
     pub fn snapshot(&self) -> Result<SettlementSnapshot, StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let row = client.query_one(
-            "SELECT revision, ledger_revision, settlement_unit, protocol_state \
+            "SELECT revision, ledger_revision, settlement_unit, protocol_state, \
+                    protocol_format_version \
              FROM cs_relationship_aggregates WHERE aggregate_key = $1",
             &[&self.aggregate_key],
         )?;
-        let aggregate = aggregate_from_row(&row)?;
+        let mut aggregate = aggregate_from_row(&row)?;
+        let subject = scoped_key(
+            aggregate.state.attempt.subject.derivation_version(),
+            aggregate.state.attempt.subject.as_bytes(),
+        );
+        let attempt_row = client.query_one(
+            "SELECT attempt_state FROM cs_attempt_aggregates WHERE attempt_subject = $1",
+            &[&subject],
+        )?;
+        aggregate.state.attempt = attempt_row
+            .get::<_, Json<RepeatedAttemptState>>("attempt_state")
+            .0;
         let balances = load_balances_client(&mut client, &self.aggregate_key)?;
         Ok(SettlementSnapshot::complete(
             aggregate.revision,
@@ -922,23 +1307,143 @@ impl PostgresEngine {
                 aggregate_key,
                 task: row.get::<_, Json<ScheduleTask>>("task").0,
                 due_at: CanonicalTime(to_u64(row.get("due_at"))?),
+                claim_until: CanonicalTime(to_u64(claim_until)?),
             });
         }
         transaction.commit()?;
         Ok(items)
     }
 
-    /// Removes a claimed schedule that is already obsolete.
+    /// Executes only the protocol action predetermined by a claimed schedule.
+    ///
+    /// The opaque claim prevents callers from supplying arbitrary unsigned
+    /// commands to the durable engine. Obsolete tasks are simply completed.
     ///
     /// # Errors
     ///
-    /// Returns an error for database, serialization, or lock failures.
-    pub fn complete_schedule(&self, task: ScheduleTask) -> Result<bool, StorageError> {
+    /// Returns an error for a foreign claim or for snapshot, protocol, ledger,
+    /// serialization, concurrency, idempotency, or numeric failures.
+    #[allow(clippy::needless_pass_by_value)] // Consuming the opaque claim prevents caller reuse.
+    pub fn execute_claimed_schedule(
+        &self,
+        item: ScheduledItem,
+        now: CanonicalTime,
+        scheduler: ProviderRef,
+        operational_key: OperationalKeyRef,
+        policy: PolicySnapshot,
+    ) -> Result<(), StorageError> {
+        if scheduler != policy.recipient_provider {
+            return Err(StorageError::InvalidScheduleClaim);
+        }
+        self.key_registry()?.active_verifying_key(
+            operational_key,
+            ActorRef::Scheduler(scheduler),
+            now,
+        )?;
+        self.validate_schedule_claim(&item, now)?;
+        if let ScheduleTask::LaneHorizon(lane_id) = item.task {
+            self.process_lane_horizon(lane_id, now)?;
+            return Ok(());
+        }
+        let snapshot = self.snapshot()?;
+        let command = match item.task {
+            ScheduleTask::AdmissionTimeout(bond_id) => snapshot
+                .state
+                .bonds
+                .get(&bond_id)
+                .filter(|bond| bond.state == cs_mail_protocol::BondState::Reserved)
+                .map(|bond| ProtocolCommand::CancelReservedAttempt {
+                    bond_id,
+                    expected_bond_version: bond.version.into(),
+                    reason: cs_mail_protocol::CancellationReason::AdmissionTimeout,
+                }),
+            ScheduleTask::BondExpiry(bond_id) => snapshot
+                .state
+                .bonds
+                .get(&bond_id)
+                .filter(|bond| bond.state == cs_mail_protocol::BondState::Admitted)
+                .map(|bond| ProtocolCommand::ExpireBond {
+                    bond_id,
+                    expected_bond_version: bond.version.into(),
+                }),
+            ScheduleTask::PersistenceRelease(reserve_id) => snapshot
+                .state
+                .reserves
+                .get(&reserve_id)
+                .filter(|reserve| reserve.state == cs_mail_protocol::ReserveState::Reserved)
+                .map(|reserve| ProtocolCommand::ReleasePersistenceReserve {
+                    reserve_id,
+                    expected_reserve_version: reserve.version.into(),
+                }),
+            ScheduleTask::LaneHorizon(_) => unreachable!(),
+        };
+        if let Some(command) = command {
+            self.execute_authorized(
+                Authorized::assume_verified(
+                    command,
+                    ActorRef::Scheduler(scheduler),
+                    operational_key,
+                    schedule_idempotency(item.task),
+                ),
+                now,
+                policy,
+                None,
+                false,
+            )?;
+        } else {
+            self.complete_claimed_schedule(&item)?;
+        }
+        Ok(())
+    }
+
+    fn validate_schedule_claim(
+        &self,
+        item: &ScheduledItem,
+        now: CanonicalTime,
+    ) -> Result<(), StorageError> {
+        if item.aggregate_key != self.aggregate_key || item.due_at > now || item.claim_until <= now
+        {
+            return Err(StorageError::InvalidScheduleClaim);
+        }
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        Ok(client.execute(
-            "DELETE FROM cs_schedules WHERE aggregate_key = $1 AND task_key = $2",
-            &[&self.aggregate_key, &task_key(task)?],
-        )? == 1)
+        let row = client.query_opt(
+            "SELECT due_at, status, claim_until FROM cs_schedules \
+             WHERE aggregate_key = $1 AND task_key = $2",
+            &[&self.aggregate_key, &task_key(item.task)?],
+        )?;
+        let Some(row) = row else {
+            return Err(StorageError::InvalidScheduleClaim);
+        };
+        let due_at = CanonicalTime(to_u64(row.get("due_at"))?);
+        let status: String = row.get("status");
+        let claim_until = row
+            .get::<_, Option<i64>>("claim_until")
+            .map(to_u64)
+            .transpose()?
+            .map(CanonicalTime);
+        if due_at != item.due_at || status != "processing" || claim_until != Some(item.claim_until)
+        {
+            return Err(StorageError::InvalidScheduleClaim);
+        }
+        Ok(())
+    }
+
+    fn complete_claimed_schedule(&self, item: &ScheduledItem) -> Result<(), StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let deleted = client.execute(
+            "DELETE FROM cs_schedules WHERE aggregate_key = $1 AND task_key = $2 \
+             AND status = 'processing' AND due_at = $3 AND claim_until = $4",
+            &[
+                &self.aggregate_key,
+                &task_key(item.task)?,
+                &to_i64(item.due_at.0)?,
+                &to_i64(item.claim_until.0)?,
+            ],
+        )?;
+        if deleted != 1 {
+            return Err(StorageError::InvalidScheduleClaim);
+        }
+        Ok(())
     }
 }
 
@@ -955,12 +1460,129 @@ fn migrate(client: &mut Client) -> Result<(), StorageError> {
         "SELECT pg_advisory_xact_lock(hashtext('cs-mail-schema-migrations'))",
         &[],
     )?;
-    transaction.batch_execute(MIGRATION_1)?;
-    transaction.batch_execute(MIGRATION_2)?;
-    transaction.batch_execute(MIGRATION_3)?;
-    transaction.batch_execute(MIGRATION_4)?;
+    transaction.batch_execute(
+        "CREATE TABLE IF NOT EXISTS cs_schema_migrations (\
+             version BIGINT PRIMARY KEY, \
+             applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()\
+         )",
+    )?;
+    for (version, migration) in [
+        (1_i64, MIGRATION_1),
+        (2_i64, MIGRATION_2),
+        (3_i64, MIGRATION_3),
+        (4_i64, MIGRATION_4),
+        (5_i64, MIGRATION_5),
+        (6_i64, MIGRATION_6),
+    ] {
+        if transaction
+            .query_opt(
+                "SELECT version FROM cs_schema_migrations WHERE version = $1",
+                &[&version],
+            )?
+            .is_none()
+        {
+            transaction.batch_execute(migration)?;
+        }
+    }
     transaction.commit()?;
     Ok(())
+}
+
+fn lock_registry_version(
+    transaction: &mut Transaction<'_>,
+    aggregate_key: &str,
+    expected: Version,
+) -> Result<(), StorageError> {
+    let row = transaction
+        .query_opt(
+            "SELECT registry_version FROM cs_key_registries \
+             WHERE aggregate_key = $1 FOR SHARE",
+            &[&aggregate_key],
+        )?
+        .ok_or(StorageError::RegistryMissing)?;
+    if to_u64(row.get("registry_version"))? != expected.0 {
+        return Err(StorageError::Security(SecurityError::VersionConflict));
+    }
+    Ok(())
+}
+
+fn validate_issued_quote(
+    transaction: &mut Transaction<'_>,
+    aggregate_key: &str,
+    command: &ProtocolCommand,
+    require_signature: bool,
+) -> Result<(), StorageError> {
+    let ProtocolCommand::ReserveAttempt { terms, .. } = command else {
+        return Ok(());
+    };
+    let row = transaction
+        .query_opt(
+            "SELECT terms, provider_operational_key, signature FROM cs_contact_quotes \
+             WHERE aggregate_key = $1 AND quote_id = $2 FOR SHARE",
+            &[&aggregate_key, &terms.quote_id.0.to_string()],
+        )?
+        .ok_or(StorageError::QuoteMissing)?;
+    if row
+        .get::<_, Json<cs_mail_protocol::ContactTerms>>("terms")
+        .0
+        != **terms
+    {
+        return Err(StorageError::DuplicateConflict);
+    }
+    if require_signature {
+        let signature = row
+            .get::<_, Option<Vec<u8>>>("signature")
+            .ok_or(StorageError::QuoteNotSigned)?;
+        let signature: [u8; 64] = signature
+            .try_into()
+            .map_err(|_| StorageError::Security(SecurityError::InvalidSignature))?;
+        let provider_key = row
+            .get::<_, Option<String>>("provider_operational_key")
+            .ok_or(StorageError::QuoteNotSigned)?
+            .parse::<u128>()
+            .map(OperationalKeyRef)
+            .map_err(|_| StorageError::NumericRange)?;
+        let registry_row = transaction
+            .query_opt(
+                "SELECT registry FROM cs_key_registries WHERE aggregate_key = $1",
+                &[&aggregate_key],
+            )?
+            .ok_or(StorageError::RegistryMissing)?;
+        let registry = registry_row.get::<_, Json<KeyRegistry>>("registry").0;
+        let provider_verifying_key = registry.active_verifying_key(
+            provider_key,
+            ActorRef::Provider(terms.recipient_provider),
+            terms.issued_at,
+        )?;
+        SignedContactTerms {
+            terms: (**terms).clone(),
+            provider_operational_key: provider_key,
+            signature,
+        }
+        .verify(&provider_verifying_key)?;
+    }
+    Ok(())
+}
+
+fn allocate_journal_position(
+    transaction: &mut Transaction<'_>,
+    aggregate_key: &str,
+    aggregate_revision: u64,
+    entry_kind: &str,
+    now: CanonicalTime,
+) -> Result<JournalPosition, StorageError> {
+    let row = transaction.query_one(
+        "INSERT INTO cs_canonical_journal \
+         (aggregate_key, aggregate_revision, entry_kind, received_at) \
+         VALUES ($1, $2, $3, $4) RETURNING position",
+        &[
+            &aggregate_key,
+            &to_i64(aggregate_revision)?,
+            &entry_kind,
+            &to_i64(now.0)?,
+        ],
+    )?;
+    Ok(JournalPosition(to_u64(row.get("position"))?))
 }
 
 fn validate_content_for_manifest(
@@ -975,6 +1597,8 @@ fn validate_content_for_manifest(
     let ProtocolCommand::AdmitAttempt {
         bond_id,
         content_ref,
+        declaration_digest,
+        message_valid_until,
         ..
     } = command
     else {
@@ -1000,12 +1624,20 @@ fn validate_content_for_manifest(
     if record.expires_at <= now {
         return Err(StorageError::ContentExpired);
     }
-    let binding = record.binding;
+    if record.binding.message_valid_until.0 < now {
+        return Err(StorageError::MessageValidityClosed);
+    }
+    let binding = &record.binding;
     if binding.content_ref != *content_ref
         || binding.message_id != bond.message_id
         || binding.sender != state.relationship.key.sender
         || binding.recipient != state.relationship.key.recipient
         || binding.protocol_version != protocol_version
+        || binding.relationship != state.relationship.key.reference
+        || binding.message_valid_until != *message_valid_until
+        || message_declaration_digest(&binding.declarations)
+            .map_err(|_| StorageError::ContentScopeMismatch)?
+            != *declaration_digest
     {
         return Err(StorageError::ContentScopeMismatch);
     }
@@ -1020,7 +1652,7 @@ fn validate_content_for_delivery(
     content_ref: ContentRef,
     now: CanonicalTime,
     protocol_version: ProtocolVersion,
-) -> Result<(), StorageError> {
+) -> Result<ContentBinding, StorageError> {
     let row = transaction
         .query_opt(
             "SELECT record FROM cs_encrypted_content \
@@ -1032,16 +1664,20 @@ fn validate_content_for_delivery(
     if record.expires_at <= now {
         return Err(StorageError::ContentExpired);
     }
+    if record.binding.message_valid_until.0 < now {
+        return Err(StorageError::MessageValidityClosed);
+    }
     let binding = record.binding;
     if binding.content_ref != content_ref
         || binding.message_id != message_id
         || binding.sender != state.relationship.key.sender
         || binding.recipient != state.relationship.key.recipient
         || binding.protocol_version != protocol_version
+        || binding.relationship != state.relationship.key.reference
     {
         return Err(StorageError::ContentScopeMismatch);
     }
-    Ok(())
+    Ok(binding)
 }
 
 fn advance_aggregate_revision(
@@ -1066,7 +1702,7 @@ fn advance_aggregate_revision(
     if changed != 1 {
         return Err(StorageError::VersionConflict);
     }
-    Ok(JournalPosition(next))
+    allocate_journal_position(transaction, aggregate_key, next, "capability", now)
 }
 
 fn upsert_lane(
@@ -1183,14 +1819,33 @@ fn bootstrap(
     sender_balance: Money,
 ) -> Result<(), StorageError> {
     let mut transaction = client.transaction()?;
+    let attempt_subject = scoped_key(
+        state.attempt.subject.derivation_version(),
+        state.attempt.subject.as_bytes(),
+    );
+    transaction.execute(
+        "INSERT INTO cs_attempt_aggregates (attempt_subject, attempt_state, updated_at) \
+         VALUES ($1, $2, $3) ON CONFLICT (attempt_subject) DO NOTHING",
+        &[
+            &attempt_subject,
+            &Json(&state.attempt),
+            &to_i64(state.attempt.changed_at.0)?,
+        ],
+    )?;
     let inserted = transaction.execute(
         "INSERT INTO cs_relationship_aggregates \
-         (aggregate_key, revision, ledger_revision, settlement_unit, protocol_state, updated_at) \
-         VALUES ($1, 0, 0, $2, $3, 0) ON CONFLICT (aggregate_key) DO NOTHING",
-        &[&aggregate_key, &i64::from(unit.0), &Json(state)],
+         (aggregate_key, revision, ledger_revision, settlement_unit, protocol_state, updated_at, \
+          protocol_format_version) \
+         VALUES ($1, 0, 0, $2, $3, 0, $4) ON CONFLICT (aggregate_key) DO NOTHING",
+        &[
+            &aggregate_key,
+            &i64::from(unit.0),
+            &Json(state),
+            &CURRENT_PROTOCOL_FORMAT_VERSION,
+        ],
     )?;
     if inserted == 1 {
-        let account = Account::Sender(state.attempt.principal);
+        let account = Account::Sender(state.attempt.sender_account);
         let account_key = account_key(account)?;
         let balance = sender_balance.minor_units().to_string();
         transaction.execute(
@@ -1199,6 +1854,18 @@ fn bootstrap(
              VALUES ($1, $2, $3, $4::text::numeric)",
             &[&aggregate_key, &account_key, &Json(account), &balance],
         )?;
+    }
+    let stored_version: i16 = transaction
+        .query_one(
+            "SELECT protocol_format_version FROM cs_relationship_aggregates \
+             WHERE aggregate_key = $1",
+            &[&aggregate_key],
+        )?
+        .get("protocol_format_version");
+    if stored_version != CURRENT_PROTOCOL_FORMAT_VERSION {
+        return Err(StorageError::UnsupportedStoredProtocolFormat(
+            stored_version,
+        ));
     }
     transaction.commit()?;
     Ok(())
@@ -1209,14 +1876,34 @@ fn load_locked_aggregate(
     aggregate_key: &str,
 ) -> Result<Aggregate, StorageError> {
     let row = transaction.query_one(
-        "SELECT revision, ledger_revision, settlement_unit, protocol_state \
+        "SELECT revision, ledger_revision, settlement_unit, protocol_state, \
+                protocol_format_version \
          FROM cs_relationship_aggregates WHERE aggregate_key = $1 FOR UPDATE",
         &[&aggregate_key],
     )?;
-    aggregate_from_row(&row)
+    let mut aggregate = aggregate_from_row(&row)?;
+    let subject = scoped_key(
+        aggregate.state.attempt.subject.derivation_version(),
+        aggregate.state.attempt.subject.as_bytes(),
+    );
+    let attempt_row = transaction.query_one(
+        "SELECT attempt_state FROM cs_attempt_aggregates \
+         WHERE attempt_subject = $1 FOR UPDATE",
+        &[&subject],
+    )?;
+    aggregate.state.attempt = attempt_row
+        .get::<_, Json<RepeatedAttemptState>>("attempt_state")
+        .0;
+    Ok(aggregate)
 }
 
 fn aggregate_from_row(row: &postgres::Row) -> Result<Aggregate, StorageError> {
+    let stored_version: i16 = row.get("protocol_format_version");
+    if stored_version != CURRENT_PROTOCOL_FORMAT_VERSION {
+        return Err(StorageError::UnsupportedStoredProtocolFormat(
+            stored_version,
+        ));
+    }
     let unit = to_u64(row.get("settlement_unit"))?;
     Ok(Aggregate {
         revision: to_u64(row.get("revision"))?,
@@ -1316,6 +2003,22 @@ fn persist_manifest(
     if changed != 1 {
         return Err(StorageError::VersionConflict);
     }
+    let attempt_subject = scoped_key(
+        manifest.next_state.attempt.subject.derivation_version(),
+        manifest.next_state.attempt.subject.as_bytes(),
+    );
+    if transaction.execute(
+        "UPDATE cs_attempt_aggregates SET attempt_state = $2, updated_at = $3 \
+         WHERE attempt_subject = $1",
+        &[
+            &attempt_subject,
+            &Json(&manifest.next_state.attempt),
+            &to_i64(now.0)?,
+        ],
+    )? != 1
+    {
+        return Err(StorageError::VersionConflict);
+    }
     persist_balances(transaction, aggregate_key, next_ledger)?;
     persist_ledger_batch(
         transaction,
@@ -1328,6 +2031,33 @@ fn persist_manifest(
     persist_events(transaction, aggregate_key, manifest, position)?;
     persist_schedules(transaction, aggregate_key, &manifest.schedule_changes)?;
     persist_outbox(transaction, aggregate_key, manifest, now, position)?;
+    if let Some(TermsOutcome::BondRequired(terms)) = &manifest.terms_outcome {
+        let inserted = transaction.execute(
+            "INSERT INTO cs_contact_quotes \
+             (aggregate_key, quote_id, terms, issued_at, expires_at) VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (aggregate_key, quote_id) DO NOTHING",
+            &[
+                &aggregate_key,
+                &terms.quote_id.0.to_string(),
+                &Json(terms),
+                &to_i64(terms.issued_at.0)?,
+                &to_i64(terms.expires_at.0)?,
+            ],
+        )?;
+        if inserted == 0 {
+            let existing = transaction.query_one(
+                "SELECT terms FROM cs_contact_quotes WHERE aggregate_key = $1 AND quote_id = $2",
+                &[&aggregate_key, &terms.quote_id.0.to_string()],
+            )?;
+            if existing
+                .get::<_, Json<cs_mail_protocol::ContactTerms>>("terms")
+                .0
+                != **terms
+            {
+                return Err(StorageError::DuplicateConflict);
+            }
+        }
+    }
     transaction.execute(
         "INSERT INTO cs_idempotency_records \
          (aggregate_key, idempotency_key, request, manifest, journal_position, created_at) \
@@ -1488,10 +2218,76 @@ fn task_key(task: ScheduleTask) -> Result<String, StorageError> {
     Ok(serde_json::to_string(&task)?)
 }
 
+fn schedule_idempotency(task: ScheduleTask) -> IdempotencyKey {
+    let mut hasher = Sha256::new();
+    hasher.update(b"cs-mail/schedule/v1");
+    match task {
+        ScheduleTask::AdmissionTimeout(id) => {
+            hasher.update([0]);
+            hasher.update(id.0.to_be_bytes());
+        }
+        ScheduleTask::BondExpiry(id) => {
+            hasher.update([1]);
+            hasher.update(id.0.to_be_bytes());
+        }
+        ScheduleTask::PersistenceRelease(id) => {
+            hasher.update([2]);
+            hasher.update(id.0.to_be_bytes());
+        }
+        ScheduleTask::LaneHorizon(id) => {
+            hasher.update([3]);
+            hasher.update(id.0.to_be_bytes());
+        }
+    }
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    IdempotencyKey(u128::from_be_bytes(bytes))
+}
+
+fn scoped_key(derivation_version: u16, value: &[u8; 32]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(34);
+    key.extend_from_slice(&derivation_version.to_be_bytes());
+    key.extend_from_slice(value);
+    key
+}
+
+fn retention_record_key(relationship: &[u8; 32], domain: &str, object_ref: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(64 + domain.len() + object_ref.len());
+    key.extend_from_slice(b"cs-mail/retention-record/v1\0");
+    key.extend_from_slice(relationship);
+    key.extend_from_slice(domain.as_bytes());
+    key.push(0);
+    key.extend_from_slice(object_ref.as_bytes());
+    key
+}
+
 fn to_i64(value: u64) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_| StorageError::NumericRange)
 }
 
 fn to_u64(value: i64) -> Result<u64, StorageError> {
     u64::try_from(value).map_err(|_| StorageError::NumericRange)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cs_mail_primitives::{BondId, PersistenceReserveId};
+
+    #[test]
+    fn schedule_task_kinds_have_stable_distinct_idempotency_keys() {
+        assert_ne!(
+            schedule_idempotency(ScheduleTask::AdmissionTimeout(BondId(1))),
+            schedule_idempotency(ScheduleTask::BondExpiry(BondId(1)))
+        );
+        assert_ne!(
+            schedule_idempotency(ScheduleTask::AdmissionTimeout(BondId(1))),
+            schedule_idempotency(ScheduleTask::PersistenceRelease(PersistenceReserveId(1)))
+        );
+        assert_eq!(
+            schedule_idempotency(ScheduleTask::PersistenceRelease(PersistenceReserveId(1))),
+            schedule_idempotency(ScheduleTask::PersistenceRelease(PersistenceReserveId(1)))
+        );
+    }
 }

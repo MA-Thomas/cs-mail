@@ -1,19 +1,17 @@
 [package]
-name = "cs-mail-service"
+name = "cs-mail-conformance"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-cs-mail-adapters = { path = "../cs-mail-adapters" }
-cs-mail-capabilities = { path = "../cs-mail-capabilities" }
+cs-mail-application = { path = "../cs-mail-application" }
 cs-mail-content = { path = "../cs-mail-content" }
+cs-mail-ledger = { path = "../cs-mail-ledger" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
+cs-mail-privacy = { path = "../cs-mail-privacy" }
 cs-mail-protocol = { path = "../cs-mail-protocol" }
 cs-mail-security = { path = "../cs-mail-security" }
-cs-mail-storage-postgres = { path = "../cs-mail-storage-postgres" }
-serde_json.workspace = true
-sha2.workspace = true
 
 [lints]
 workspace = true

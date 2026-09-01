@@ -5,13 +5,15 @@ use cs_mail_application::{EngineError, InMemoryEngine, initial_state};
 use cs_mail_ledger::Account;
 use cs_mail_primitives::{
     AttemptId, BondId, CanonicalTime, ContentRef, DeliveryIntentRef, Duration, IdempotencyKey,
-    MessageId, Money, OperationalKeyRef, PersistenceReserveId, PolicyVersion, PrincipalRef,
-    ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, SettlementUnit, Version,
+    LedgerAccountRef, MessageDeclarationDigest, MessageId, MessageValidityUntil, Money,
+    OperationalKeyRef, PersistenceReserveId, PolicyVersion, PrincipalRef, PrivacyProfileVersion,
+    ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, RetentionPolicyVersion,
+    SettlementUnit, Version,
 };
 use cs_mail_protocol::{
     ActorRef, Authorized, BondState, CancellationReason, EffectIntent, PolicySnapshot,
-    ProtocolCommand, ProtocolError, RelationshipState, ReserveState, SolicitationStatus,
-    TermsOutcome,
+    ProtocolCommand, ProtocolError, ProtocolEventKind, RelationshipState, ReserveState,
+    SolicitationStatus, TermsOutcome,
 };
 
 const PRINCIPAL: PrincipalRef = PrincipalRef(1);
@@ -24,6 +26,8 @@ fn policy() -> PolicySnapshot {
     PolicySnapshot {
         protocol_version: ProtocolVersion(1),
         policy_version: PolicyVersion(1),
+        privacy_profile_version: PrivacyProfileVersion(1),
+        retention_policy_version: RetentionPolicyVersion(1),
         recipient_provider: PROVIDER,
         unit: UNIT,
         processing_charge: Money::from_minor_units(2),
@@ -39,6 +43,10 @@ fn policy() -> PolicySnapshot {
             Money::from_minor_units(9),
         ],
     }
+}
+
+fn sender_account() -> Account {
+    Account::Sender(LedgerAccountRef::from_u128_for_test(PRINCIPAL.0))
 }
 
 fn engine_with_level(level: u32) -> InMemoryEngine {
@@ -80,6 +88,7 @@ fn issue_terms(engine: &InMemoryEngine, at: u64, key: u128) -> cs_mail_protocol:
             sender(
                 ProtocolCommand::IssueContactTerms {
                     quote_id: QuoteId(key),
+                    declaration_digest: None,
                 },
                 key,
             ),
@@ -88,7 +97,7 @@ fn issue_terms(engine: &InMemoryEngine, at: u64, key: u128) -> cs_mail_protocol:
         )
         .unwrap();
     match outcome.manifest.terms_outcome.unwrap() {
-        TermsOutcome::BondRequired(terms) => terms,
+        TermsOutcome::BondRequired(terms) => *terms,
         TermsOutcome::NoBondRequired => panic!("expected bonded terms"),
     }
 }
@@ -116,7 +125,7 @@ fn reserve(
                     reserve_id: spec.reserve,
                     attempt_id: spec.attempt,
                     message_id: spec.message,
-                    terms,
+                    terms: Box::new(terms),
                 },
                 spec.key_base + 1,
             ),
@@ -135,6 +144,8 @@ fn admit(engine: &InMemoryEngine, spec: &AttemptSpec, at: u64) {
                     expected_bond_version: Version(0),
                     content_ref: ContentRef(spec.key_base),
                     delivery_intent_ref: DeliveryIntentRef(spec.key_base),
+                    declaration_digest: MessageDeclarationDigest([0; 32]),
+                    message_valid_until: MessageValidityUntil(CanonicalTime(u64::MAX)),
                 },
                 spec.key_base + 2,
             ),
@@ -157,7 +168,7 @@ fn unadmitted_cancellation_returns_everything_without_advancing() {
     };
     reserve(&engine, &spec, terms, 2);
     assert_eq!(
-        engine.balance(Account::Sender(PRINCIPAL)).unwrap(),
+        engine.balance(sender_account()).unwrap(),
         Money::from_minor_units(985)
     );
 
@@ -189,7 +200,7 @@ fn unadmitted_cancellation_returns_everything_without_advancing() {
     assert!(snapshot.state.solicitation.is_none());
     assert!(engine.outbox().unwrap().is_empty());
     assert_eq!(
-        engine.balance(Account::Sender(PRINCIPAL)).unwrap(),
+        engine.balance(sender_account()).unwrap(),
         Money::from_minor_units(1_000)
     );
 }
@@ -246,7 +257,7 @@ fn admissions_coalesce_and_acceptance_is_relationship_wide() {
         .execute(
             recipient(
                 ProtocolCommand::AcceptRelationship {
-                    expected_version: version,
+                    expected_version: version.into(),
                 },
                 3_000,
             ),
@@ -280,7 +291,7 @@ fn admissions_coalesce_and_acceptance_is_relationship_wide() {
         SolicitationStatus::Closed
     );
     assert_eq!(
-        engine.balance(Account::Sender(PRINCIPAL)).unwrap(),
+        engine.balance(sender_account()).unwrap(),
         Money::from_minor_units(1_000)
     );
     assert_eq!(
@@ -418,7 +429,8 @@ fn block_cancels_unadmitted_attempts_and_unblock_does_not_reset_history() {
         engine.execute(
             sender(
                 ProtocolCommand::IssueContactTerms {
-                    quote_id: QuoteId(99)
+                    quote_id: QuoteId(99),
+                    declaration_digest: None,
                 },
                 8_100
             ),
@@ -458,6 +470,7 @@ fn exact_replay_returns_the_original_result_without_a_second_effect() {
     let command = sender(
         ProtocolCommand::IssueContactTerms {
             quote_id: QuoteId(1),
+            declaration_digest: None,
         },
         9_000,
     );
@@ -541,6 +554,8 @@ fn admission_and_timeout_at_the_same_boundary_are_ordered_not_partial() {
                     expected_bond_version: Version(0),
                     content_ref: ContentRef(1),
                     delivery_intent_ref: DeliveryIntentRef(1),
+                    declaration_digest: MessageDeclarationDigest([0; 32]),
+                    message_valid_until: MessageValidityUntil(CanonicalTime(u64::MAX)),
                 },
                 11_100,
             ),
@@ -590,6 +605,7 @@ fn cancellation_conserves_value_across_small_policy_matrix() {
                         sender(
                             ProtocolCommand::IssueContactTerms {
                                 quote_id: QuoteId(1),
+                                declaration_digest: None,
                             },
                             20_000 + u128::from(processing * 100 + collateral * 10 + persistence),
                         ),
@@ -636,7 +652,7 @@ fn cancellation_conserves_value_across_small_policy_matrix() {
                     Money::from_minor_units(1_000)
                 );
                 assert_eq!(
-                    engine.balance(Account::Sender(PRINCIPAL)).unwrap(),
+                    engine.balance(sender_account()).unwrap(),
                     Money::from_minor_units(1_000)
                 );
             }
@@ -690,7 +706,7 @@ fn expiry_settles_once_and_lapses_the_last_open_solicitation() {
         Money::from_minor_units(2)
     );
     assert_eq!(
-        engine.balance(Account::Sender(PRINCIPAL)).unwrap(),
+        engine.balance(sender_account()).unwrap(),
         Money::from_minor_units(993)
     );
 
@@ -734,6 +750,7 @@ fn accepted_relationships_are_bond_free_until_revoked() {
             sender(
                 ProtocolCommand::IssueContactTerms {
                     quote_id: QuoteId(1),
+                    declaration_digest: None,
                 },
                 60_001,
             ),
@@ -766,6 +783,7 @@ fn accepted_relationships_are_bond_free_until_revoked() {
             sender(
                 ProtocolCommand::IssueContactTerms {
                     quote_id: QuoteId(2),
+                    declaration_digest: None,
                 },
                 60_003,
             ),
@@ -777,6 +795,114 @@ fn accepted_relationships_are_bond_free_until_revoked() {
         new_terms.manifest.terms_outcome,
         Some(TermsOutcome::BondRequired(_))
     ));
+}
+
+#[test]
+fn quote_bound_declaration_mismatch_cancels_and_fully_releases_value() {
+    let engine = engine_with_level(1);
+    let expected = MessageDeclarationDigest([1; 32]);
+    let issued = engine
+        .execute(
+            sender(
+                ProtocolCommand::IssueContactTerms {
+                    quote_id: QuoteId(70_000),
+                    declaration_digest: Some(expected),
+                },
+                70_000,
+            ),
+            CanonicalTime(1),
+            policy(),
+        )
+        .unwrap();
+    let TermsOutcome::BondRequired(terms) = issued.manifest.terms_outcome.unwrap() else {
+        panic!("expected bonded terms");
+    };
+    let spec = AttemptSpec {
+        bond: BondId(70),
+        reserve: PersistenceReserveId(70),
+        attempt: AttemptId(70),
+        message: MessageId(70),
+        key_base: 70_100,
+    };
+    reserve(&engine, &spec, *terms, 2);
+
+    let outcome = engine
+        .execute(
+            sender(
+                ProtocolCommand::AdmitAttempt {
+                    bond_id: spec.bond,
+                    expected_bond_version: Version(0),
+                    content_ref: ContentRef(70),
+                    delivery_intent_ref: DeliveryIntentRef(70),
+                    declaration_digest: MessageDeclarationDigest([2; 32]),
+                    message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+                },
+                70_200,
+            ),
+            CanonicalTime(3),
+            policy(),
+        )
+        .unwrap();
+
+    assert!(
+        outcome
+            .manifest
+            .protocol_events
+            .iter()
+            .any(|event| { event.kind == ProtocolEventKind::DeclarationMismatch(spec.bond) })
+    );
+    assert!(matches!(
+        engine.snapshot().unwrap().state.bonds[&spec.bond].state,
+        BondState::CancelledUnadmitted { .. }
+    ));
+    assert_eq!(
+        engine.balance(sender_account()).unwrap(),
+        Money::from_minor_units(1_000)
+    );
+}
+
+#[test]
+fn expired_message_validity_cancels_and_fully_releases_value() {
+    let engine = engine_with_level(1);
+    let terms = issue_terms(&engine, 1, 71_000);
+    let spec = AttemptSpec {
+        bond: BondId(71),
+        reserve: PersistenceReserveId(71),
+        attempt: AttemptId(71),
+        message: MessageId(71),
+        key_base: 71_100,
+    };
+    reserve(&engine, &spec, terms, 2);
+
+    let outcome = engine
+        .execute(
+            sender(
+                ProtocolCommand::AdmitAttempt {
+                    bond_id: spec.bond,
+                    expected_bond_version: Version(0),
+                    content_ref: ContentRef(71),
+                    delivery_intent_ref: DeliveryIntentRef(71),
+                    declaration_digest: MessageDeclarationDigest([0; 32]),
+                    message_valid_until: MessageValidityUntil(CanonicalTime(2)),
+                },
+                71_200,
+            ),
+            CanonicalTime(3),
+            policy(),
+        )
+        .unwrap();
+
+    assert!(
+        outcome
+            .manifest
+            .protocol_events
+            .iter()
+            .any(|event| { event.kind == ProtocolEventKind::MessageValidityClosed(spec.bond) })
+    );
+    assert_eq!(
+        engine.balance(sender_account()).unwrap(),
+        Money::from_minor_units(1_000)
+    );
 }
 
 #[test]
@@ -794,7 +920,7 @@ fn concurrent_acceptance_and_reservation_leave_no_stranded_value() {
                     reserve_id: PersistenceReserveId(1),
                     attempt_id: AttemptId(1),
                     message_id: MessageId(1),
-                    terms,
+                    terms: Box::new(terms),
                 },
                 70_001,
             ),
@@ -838,7 +964,7 @@ fn concurrent_acceptance_and_reservation_leave_no_stranded_value() {
     );
     assert_eq!(snapshot.state.attempt.level, 0);
     assert_eq!(
-        engine.balance(Account::Sender(PRINCIPAL)).unwrap(),
+        engine.balance(sender_account()).unwrap(),
         Money::from_minor_units(1_000)
     );
 }
@@ -856,7 +982,7 @@ fn insufficient_funds_create_no_protocol_or_ledger_hold() {
                 reserve_id: PersistenceReserveId(1),
                 attempt_id: AttemptId(1),
                 message_id: MessageId(1),
-                terms,
+                terms: Box::new(terms),
             },
             80_001,
         ),
@@ -872,7 +998,7 @@ fn insufficient_funds_create_no_protocol_or_ledger_hold() {
     assert!(after.state.bonds.is_empty());
     assert!(after.state.reserves.is_empty());
     assert_eq!(
-        engine.balance(Account::Sender(PRINCIPAL)).unwrap(),
+        engine.balance(sender_account()).unwrap(),
         Money::from_minor_units(5)
     );
 }

@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use cs_mail_primitives::{
-    AuditRef, CanonicalTime, Duration, PrincipalRef, ProtocolIdentity, RetentionClassId,
+    AttemptSubjectRef, AuditRef, CanonicalTime, ContentScopeRef, Duration, LedgerAccountRef,
+    PrincipalRef, ProtocolIdentity, RelationshipRef, RetentionClassId,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,25 @@ impl PrivacyDeriver {
         ))
     }
 
+    pub fn relationship_ref(
+        &self,
+        derivation_version: u16,
+        service_domain: &[u8],
+        sender: ProtocolIdentity,
+        recipient: ProtocolIdentity,
+    ) -> RelationshipRef {
+        RelationshipRef::new(
+            derivation_version,
+            derive(
+                &self.relationship_secret,
+                b"cs-mail/relationship-ref/v1",
+                service_domain,
+                sender.0,
+                recipient.0,
+            ),
+        )
+    }
+
     pub fn principal_assertion(
         &self,
         service_domain: &[u8],
@@ -57,6 +77,62 @@ impl PrivacyDeriver {
             principal.0,
             recipient.0,
         ))
+    }
+
+    pub fn attempt_subject_ref(
+        &self,
+        derivation_version: u16,
+        service_domain: &[u8],
+        principal: PrincipalRef,
+        recipient: ProtocolIdentity,
+    ) -> AttemptSubjectRef {
+        AttemptSubjectRef::new(
+            derivation_version,
+            derive(
+                &self.principal_secret,
+                b"cs-mail/attempt-subject/v1",
+                service_domain,
+                principal.0,
+                recipient.0,
+            ),
+        )
+    }
+
+    pub fn ledger_account_ref(
+        &self,
+        derivation_version: u16,
+        service_domain: &[u8],
+        principal: PrincipalRef,
+    ) -> LedgerAccountRef {
+        LedgerAccountRef::new(
+            derivation_version,
+            derive(
+                &self.principal_secret,
+                b"cs-mail/ledger-account/v1",
+                service_domain,
+                principal.0,
+                0,
+            ),
+        )
+    }
+
+    pub fn content_scope_ref(
+        &self,
+        derivation_version: u16,
+        service_domain: &[u8],
+        sender: ProtocolIdentity,
+        recipient: ProtocolIdentity,
+    ) -> ContentScopeRef {
+        ContentScopeRef::new(
+            derivation_version,
+            derive(
+                &self.relationship_secret,
+                b"cs-mail/content-scope/v1",
+                service_domain,
+                sender.0,
+                recipient.0,
+            ),
+        )
     }
 }
 

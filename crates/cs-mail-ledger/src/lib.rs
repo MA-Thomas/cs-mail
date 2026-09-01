@@ -3,14 +3,14 @@
 use std::collections::BTreeMap;
 
 use cs_mail_primitives::{
-    BondId, Money, PersistenceReserveId, PrincipalRef, ProtocolIdentity, ProviderRef,
+    BondId, LedgerAccountRef, Money, PersistenceReserveId, ProtocolIdentity, ProviderRef,
     SettlementUnit,
 };
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Account {
-    Sender(PrincipalRef),
+    Sender(LedgerAccountRef),
     Recipient(ProtocolIdentity),
     RecipientProvider(ProviderRef),
     Bond(BondId),
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn a_failed_batch_has_no_partial_effect() {
-        let sender = Account::Sender(PrincipalRef(1));
+        let sender = Account::Sender(LedgerAccountRef::from_u128_for_test(1));
         let first = Account::Bond(BondId(1));
         let second = Account::Bond(BondId(2));
         let mut ledger = LedgerState::new(SettlementUnit(1));
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn transfers_conserve_total_value() {
-        let sender = Account::Sender(PrincipalRef(1));
+        let sender = Account::Sender(LedgerAccountRef::from_u128_for_test(1));
         let bond = Account::Bond(BondId(1));
         let mut ledger = LedgerState::new(SettlementUnit(1));
         ledger

@@ -18,7 +18,7 @@
 
 \title{\textit{cs-mail}: Permissioned Communication with Bonded First Contact}
 \author{C-SQD}
-\date{August 2026}
+\date{September 2026}
 
 \begin{document}
 \maketitle
@@ -336,6 +336,31 @@ it does not protect a device on which the recipient has opened the message. Devi
 security, authenticated software updates, key recovery, key rotation, and visible
 warnings for unexpected key changes are therefore part of the security model.
 
+\subsection{Authenticated Declarations and Recipient Policy}
+
+Encryption need not reduce every message to an undifferentiated ciphertext blob.
+A small authenticated envelope can carry a coarse declared purpose, accountable
+origin mode, message validity time, optional payload-schema identifier, and the
+capability reference required for delivery. These fields let a recipient apply
+explicit rules without exposing the subject, body, attachments, or structured
+payload to the provider.
+
+Their meaning must remain precise. A signature proves which authorized sender or
+gateway made a declaration; it does not prove that the ciphertext is truthfully
+about that purpose or that a human composed its words. A native sender signs its
+own declarations. A legacy gateway identifies itself as the declaration authority
+and cannot turn domain authentication into proof of purpose or human authorship.
+Recipients respond to dishonest declarations through reports, capability
+revocation, or blocking rather than provider inspection of native content.
+
+Policy likewise has more than one authority. Versioned protocol policy determines
+quotation and settlement inputs. Provider admission policy can evaluate the
+authenticated envelope, permission, capability, rate, and safety evidence visible
+at that boundary. Recipient presentation policy controls ranking, notifications,
+digests, and local content processing. Only authenticated protocol commands change
+relationships or money. An AI system may help the recipient author or execute
+local rules, but its inference is not itself protocol authority.
+
 \subsection{A Private Relationship Graph}
 
 The protocol should not represent a relationship throughout the system by
@@ -498,10 +523,12 @@ may need permission to communicate only about a transaction, appointment, accoun
 or bounded period.
 
 Recipients may therefore issue scoped capabilities defining an authorized sender,
-recipient, purpose or message class, validity interval, volume limit, and
-revocation conditions. A matching capability permits bond-free delivery without
-granting unrestricted standing permission. Capabilities preserve the same central
-principle: communication authority originates with the recipient.
+recipient, declared-purpose and optional origin constraints, acceptable
+declaration authority, validity interval, volume limit, and revocation conditions.
+A message whose authenticated declarations match the capability may be delivered
+without a bond, without claiming that the provider verified its encrypted meaning.
+This does not grant unrestricted standing permission. Capabilities preserve the
+same central principle: communication authority originates with the recipient.
 
 Express lanes implement this capability outside the settlement kernel. A
 capability-authorized message neither opens nor joins a relationship solicitation

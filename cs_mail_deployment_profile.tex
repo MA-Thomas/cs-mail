@@ -21,7 +21,7 @@
 \title{\textit{cs-mail} Deployment and Migration Profile\\
 \large Initial C-SQD Operation, Funding, SMTP, and Clearing}
 \author{C-SQD}
-\date{Draft 0.4 --- August 2026}
+\date{Draft 0.5 --- September 2026}
 
 \begin{document}
 \maketitle
@@ -166,9 +166,12 @@ this sequence:
     \item Obtain fresh signed terms and reserve the bond and any persistence
           reserve with a short admission deadline.
     \item Durably record the encrypted content and retryable delivery intent, then
-          admit the attempt through the same deterministic protocol command used
-          by a native client. If this does not happen before the admission
-          deadline, return $C+S+L_k$ in full.
+          construct an authenticated legacy envelope whose declaration authority
+          is the gateway and whose origin is legacy or unspecified unless separate
+          authenticated evidence supports a narrower value. Admit the attempt
+          through the same deterministic protocol command used by a native client.
+          If this does not happen before the admission deadline or message-validity
+          time, return $C+S+L_k$ in full.
     \item Return an authenticated admission result without implying inbox rank,
           recipient attention, or a guaranteed reply.
 \end{enumerate}
@@ -237,6 +240,46 @@ $C$ and provider minimum collateral, prohibit interfaces that hide timely
 acceptance, issue signed decision receipts, detect recipient-provider collusion,
 and provide dispute and suspension procedures.
 
+\subsection{Policy Layers and Decision Authority}
+
+C-SQD should expose three deliberately separate policy surfaces. Protocol policy
+supplies versioned, immutable inputs to quotation and settlement; once signed
+terms are issued, later configuration changes do not rewrite them. Provider
+admission policy evaluates authenticated envelope fields, current permission,
+capability scope, rate state, and independently available safety evidence. It
+does not receive native plaintext or create settlement effects outside an
+authenticated protocol command. Recipient presentation policy runs at an
+authorized endpoint and controls inbox placement, notifications, digests,
+ranking, and content-aware processing without changing protocol validity,
+relationship state, or ledger ownership.
+
+The product should describe declared purpose and origin as accountable sender or
+gateway statements, not verified descriptions of encrypted content or proof of
+human authorship. A native sender signs its declarations. A legacy gateway names
+itself as their authority, treats DMARC only as evidence of authorized domain use,
+and uses a legacy or unspecified origin unless another authenticated mechanism is
+available. Capability admission may match these declarations exactly, but misuse
+is handled through recipient reporting, revocation, and blocking rather than
+provider content inspection.
+
+Admission-visible declarations should use a small vocabulary and the least
+revealing value sufficient for the selected path. They require scoped storage,
+short documented retention, redacted logs, and access audit. Sender-facing errors
+should reveal an actionable constraint without exposing the recipient's complete
+policy or private signals. Rate limits and authorization should prevent errors,
+counterproposals, or policy probes from becoming enumeration and backscatter
+surfaces.
+
+Learned systems may help a recipient author rules or may execute local
+presentation policy. Their output is not protocol authority by itself. A decision
+that affects admission must reduce to a versioned, auditable rule over inputs
+available to that boundary. Neither admission nor presentation policy may impose
+a protocol bond while a directed relationship remains accepted; narrowing that
+permission requires an authenticated relationship change or a separately defined
+capability model.
+
+\subsection{Relationship Decisions and Presentation}
+
 The product should teach relationship consequences at the decision point. An
 accept, reject, or block control beside a message should state that the action
 applies to the directed sender identity, settles every decision-open admitted bond
@@ -284,9 +327,11 @@ granted through one universal administrator role.
 \section{Staged Launch}
 
 Express lanes are a launch extension outside settlement state. Their recipient-
-signed grants authorize only rate- and time-bounded bond-free communication, open
-no relationship solicitation, advance no repeated-attempt state, and remain
-subordinate to recipient blocking.
+signed grants authorize only purpose-, origin-, rate-, authority-, and time-bounded
+bond-free communication. Admission matches authenticated declarations without
+claiming to inspect encrypted content. Lane messages open no relationship
+solicitation, advance no repeated-attempt state, and remain subordinate to
+recipient blocking.
 
 A cautious deployment can proceed in five gates:
 
@@ -296,7 +341,9 @@ A cautious deployment can proceed in five gates:
     \item \textbf{Internal-value pilot.} Add the append-only ledger, transactional
           outbox, crash recovery, and synthetic or nonwithdrawable test value.
     \item \textbf{Native-client pilot.} Add endpoint encryption, key transparency,
-          recovery, privacy-domain credentials, retention, and verified deletion.
+          recovery, authenticated minimal message declarations, recipient-owned
+          presentation policy, privacy-domain credentials, retention, and verified
+          deletion.
     \item \textbf{Limited external funding and SMTP.} Introduce real rails and
           gateways under conservative limits, visible privacy downgrades, and
           staffed dispute operations.

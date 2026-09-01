@@ -15,6 +15,7 @@ members = [
     "crates/cs-mail-adapters",
     "crates/cs-mail-capabilities",
     "crates/cs-mail-smtp-gateway",
+    "crates/cs-mail-conformance",
 ]
 resolver = "2"
 

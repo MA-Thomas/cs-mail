@@ -1,16 +1,24 @@
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cs_mail_content::{ContentBinding, EncryptedContentRecord, EndpointSecretKey, encrypt};
+use cs_mail_content::{
+    ContentBinding, ContentCertificateDigest, EncryptedContentRecord, EndpointSecretKey, encrypt,
+    message_declaration_digest,
+};
 use cs_mail_primitives::{
-    AttemptId, BondId, CanonicalTime, ContentKeyRef, ContentRef, DeliveryIntentRef, Duration,
-    IdempotencyKey, MessageId, Money, OperationalKeyRef, PersistenceReserveId, PolicyVersion,
-    PrincipalRef, ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, SettlementUnit, Version,
+    AttemptId, AttemptSubjectRef, BondId, CanonicalTime, ContentKeyRef, ContentRef,
+    ContentScopeRef, DeclarationAuthority, DeclaredPurpose, DeliveryIntentRef, Duration,
+    IdempotencyKey, KnownPurpose, LedgerAccountRef, MessageDeclarations, MessageId,
+    MessageValidityUntil, Money, OperationalKeyRef, OriginDeclaration, OriginMode,
+    PersistenceReserveId, PolicyVersion, PrincipalRef, PrivacyProfileVersion, ProtocolIdentity,
+    ProtocolVersion, ProviderRef, QuoteId, RelationshipRef, RetentionPolicyVersion, SettlementUnit,
+    Version, WireVersion,
 };
-use cs_mail_protocol::{
-    ActorRef, Authorized, PolicySnapshot, ProtocolCommand, ProtocolState, TermsOutcome,
+use cs_mail_protocol::{ActorRef, PolicySnapshot, ProtocolCommand, ProtocolState, TermsOutcome};
+use cs_mail_security::{
+    CommandSigner, KeyRegistry, ProviderSigner, SignedCommandBytes, SigningScope,
 };
-use cs_mail_storage_postgres::{OutboxItem, PostgresEngine};
+use cs_mail_storage_postgres::{DurableExecutionOutcome, OutboxItem, PostgresEngine, StorageError};
 use cs_mail_worker::{DeliverySink, WorkerError, deliver_batch, run_schedule_batch};
 
 const PRINCIPAL: PrincipalRef = PrincipalRef(101);
@@ -18,13 +26,16 @@ const SENDER: ProtocolIdentity = ProtocolIdentity(102);
 const RECIPIENT: ProtocolIdentity = ProtocolIdentity(103);
 const PROVIDER: ProviderRef = ProviderRef(104);
 const UNIT: SettlementUnit = SettlementUnit(1);
+const DEPLOYMENT_DOMAIN: [u8; 32] = [7; 32];
 static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
 
-fn database_url() -> Option<String> {
-    std::env::var("CS_MAIL_TEST_DATABASE_URL").ok()
+fn database_url() -> String {
+    std::env::var("CS_MAIL_TEST_DATABASE_URL")
+        .expect("ignored PostgreSQL tests require CS_MAIL_TEST_DATABASE_URL")
 }
 
 fn engine(url: &str, label: &str) -> PostgresEngine {
+    let attempt_seed = if label == "delivery" { 1_001 } else { 1_002 };
     PostgresEngine::connect(
         url,
         format!(
@@ -32,7 +43,14 @@ fn engine(url: &str, label: &str) -> PostgresEngine {
             std::process::id(),
             NEXT_KEY.fetch_add(1, Ordering::Relaxed)
         ),
-        &ProtocolState::initial(PRINCIPAL, SENDER, RECIPIENT, CanonicalTime(0)),
+        &ProtocolState::initial_scoped(
+            RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
+            AttemptSubjectRef::from_u128_for_test(attempt_seed),
+            LedgerAccountRef::from_u128_for_test(PRINCIPAL.0),
+            SENDER,
+            RECIPIENT,
+            CanonicalTime(0),
+        ),
         UNIT,
         Money::from_minor_units(1_000),
     )
@@ -43,6 +61,8 @@ fn policy() -> PolicySnapshot {
     PolicySnapshot {
         protocol_version: ProtocolVersion(1),
         policy_version: PolicyVersion(1),
+        privacy_profile_version: PrivacyProfileVersion(1),
+        retention_policy_version: RetentionPolicyVersion(1),
         recipient_provider: PROVIDER,
         unit: UNIT,
         processing_charge: Money::from_minor_units(2),
@@ -56,13 +76,100 @@ fn policy() -> PolicySnapshot {
     }
 }
 
-fn sender(command: ProtocolCommand, idempotency: u128) -> Authorized<ProtocolCommand> {
-    Authorized::assume_verified(
-        command,
-        ActorRef::Sender(SENDER),
-        OperationalKeyRef(1),
-        IdempotencyKey(idempotency),
-    )
+fn sender_signer() -> CommandSigner {
+    CommandSigner::from_secret_bytes(ActorRef::Sender(SENDER), OperationalKeyRef(1), &[1; 32])
+}
+
+fn provider_signer() -> ProviderSigner {
+    ProviderSigner::from_secret_bytes(PROVIDER, OperationalKeyRef(2), &[2; 32])
+}
+
+fn signing_scope() -> SigningScope {
+    SigningScope {
+        deployment_domain: DEPLOYMENT_DOMAIN,
+        intended_provider: PROVIDER,
+        relationship: RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
+    }
+}
+
+fn registry() -> KeyRegistry {
+    let mut registry = KeyRegistry::default();
+    registry
+        .register(
+            OperationalKeyRef(1),
+            ActorRef::Sender(SENDER),
+            sender_signer().verifying_key_bytes(),
+            CanonicalTime(0),
+        )
+        .unwrap();
+    registry
+        .register(
+            OperationalKeyRef(2),
+            ActorRef::Provider(PROVIDER),
+            provider_signer().verifying_key_bytes(),
+            CanonicalTime(0),
+        )
+        .unwrap();
+    registry
+        .register(
+            OperationalKeyRef(99),
+            ActorRef::Scheduler(PROVIDER),
+            CommandSigner::from_secret_bytes(
+                ActorRef::Scheduler(PROVIDER),
+                OperationalKeyRef(99),
+                &[99; 32],
+            )
+            .verifying_key_bytes(),
+            CanonicalTime(0),
+        )
+        .unwrap();
+    registry
+}
+
+fn sender(command: ProtocolCommand, idempotency: u128) -> SignedCommandBytes {
+    sender_signer()
+        .sign(
+            signing_scope(),
+            ProtocolVersion(1),
+            IdempotencyKey(idempotency),
+            command,
+        )
+        .unwrap()
+}
+
+trait TestExecute {
+    fn execute(
+        &self,
+        command: SignedCommandBytes,
+        now: CanonicalTime,
+        policy: PolicySnapshot,
+    ) -> Result<DurableExecutionOutcome, StorageError>;
+}
+
+impl TestExecute for PostgresEngine {
+    fn execute(
+        &self,
+        command: SignedCommandBytes,
+        now: CanonicalTime,
+        policy: PolicySnapshot,
+    ) -> Result<DurableExecutionOutcome, StorageError> {
+        let outcome = self.execute_signed(&registry(), &command, DEPLOYMENT_DOMAIN, now, policy)?;
+        if let Some(TermsOutcome::BondRequired(terms)) = &outcome.manifest.terms_outcome {
+            self.attach_signed_quote(&provider_signer().sign_contact_terms((**terms).clone())?)?;
+        }
+        Ok(outcome)
+    }
+}
+
+fn declarations() -> MessageDeclarations {
+    MessageDeclarations {
+        purpose: DeclaredPurpose::Known(KnownPurpose::Transactional),
+        origin: OriginDeclaration {
+            mode: OriginMode::HumanInitiated,
+            authority: DeclarationAuthority::NativeSender(OperationalKeyRef(1)),
+        },
+        payload_schema: None,
+    }
 }
 
 fn reserve(engine: &PostgresEngine, id: u128) {
@@ -71,6 +178,7 @@ fn reserve(engine: &PostgresEngine, id: u128) {
             sender(
                 ProtocolCommand::IssueContactTerms {
                     quote_id: QuoteId(id),
+                    declaration_digest: None,
                 },
                 id * 10,
             ),
@@ -127,10 +235,9 @@ impl DeliverySink for TestSink {
 }
 
 #[test]
+#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 fn delivery_failure_is_retried_after_lease_expiry() {
-    let Some(url) = database_url() else {
-        return;
-    };
+    let url = database_url();
     let engine = engine(&url, "delivery");
     reserve(&engine, 1);
     let (sender_content_key, _) = EndpointSecretKey::generate(ContentKeyRef(2));
@@ -141,11 +248,18 @@ fn delivery_failure_is_retried_after_lease_expiry() {
                 &sender_content_key,
                 public,
                 ContentBinding {
+                    wire_version: WireVersion(1),
                     content_ref: ContentRef(1),
                     message_id: MessageId(1),
                     sender: SENDER,
                     recipient: RECIPIENT,
                     protocol_version: ProtocolVersion(1),
+                    relationship: RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
+                    content_scope: ContentScopeRef::from_u128_for_test(1),
+                    sender_certificate: ContentCertificateDigest([1; 32]),
+                    declarations: declarations(),
+                    message_valid_until: MessageValidityUntil(CanonicalTime(9)),
+                    capability: None,
                 },
                 b"private",
                 CanonicalTime(2),
@@ -162,6 +276,8 @@ fn delivery_failure_is_retried_after_lease_expiry() {
                     expected_bond_version: Version(0),
                     content_ref: ContentRef(1),
                     delivery_intent_ref: DeliveryIntentRef(1),
+                    declaration_digest: message_declaration_digest(&declarations()).unwrap(),
+                    message_valid_until: MessageValidityUntil(CanonicalTime(9)),
                 },
                 12,
             ),
@@ -192,10 +308,9 @@ fn delivery_failure_is_retried_after_lease_expiry() {
 }
 
 #[test]
+#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 fn due_admission_timeout_is_materialized_once() {
-    let Some(url) = database_url() else {
-        return;
-    };
+    let url = database_url();
     let engine = engine(&url, "schedule");
     reserve(&engine, 2);
     let report = run_schedule_batch(
@@ -209,10 +324,8 @@ fn due_admission_timeout_is_materialized_once() {
     )
     .unwrap();
     assert_eq!(report.completed, 1);
-    assert_eq!(
+    assert!(matches!(
         engine.snapshot().unwrap().state.bonds[&BondId(2)].state,
-        cs_mail_protocol::BondState::CancelledUnadmitted {
-            event: cs_mail_primitives::EventRef(cs_mail_primitives::JournalPosition(3))
-        }
-    );
+        cs_mail_protocol::BondState::CancelledUnadmitted { .. }
+    ));
 }

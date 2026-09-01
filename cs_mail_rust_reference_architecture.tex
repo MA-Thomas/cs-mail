@@ -60,7 +60,7 @@
 
 \title{\textit{cs-mail} Rust Reference Architecture}
 \author{C-SQD}
-\date{Draft 0.6 --- August 2026}
+\date{Draft 0.7 --- September 2026}
 
 \begin{document}
 \maketitle
@@ -349,6 +349,14 @@ $S$, $L_k$, admission-window duration, decision-window duration, and release rul
 remain fixed in its validated terms. Reservation materializes the admission
 deadline; admission later materializes the decision deadline.
 
+This \texttt{PolicySnapshot} is protocol policy, not a general inbox policy
+engine. Provider admission rules execute at the authenticated delivery boundary,
+and recipient presentation rules execute at an authorized endpoint. Neither may
+mutate settlement or canonical relationship state except by submitting an
+independently authenticated protocol command. Keeping these authorities distinct
+prevents a ranking model or notification preference from becoming hidden
+financial logic.
+
 \Needspace{25\baselineskip}
 \subsection{State Is Explicit and Exhaustive}
 
@@ -503,6 +511,49 @@ events, policies, and database schemas all have versions. One generic integer
 called \texttt{version} obscures which compatibility or concurrency rule is being
 checked. Small newtypes such as \texttt{RelationshipVersion},
 \texttt{PolicyVersion}, and \texttt{WireVersion} make the distinction visible.
+
+\subsection{Message Declarations Are Constrained Values}
+
+Purpose, origin, schema, and message validity participate in authentication and
+admission, so they should not be represented by unrelated strings or overloaded
+timestamps:
+
+\Needspace{20\baselineskip}
+\begin{lstlisting}
+pub enum DeclaredPurpose {
+    Unspecified,
+    Known(KnownPurpose),
+    Extension(NamespacedPurpose),
+}
+
+pub enum OriginMode {
+    HumanInitiated,
+    AgentDraftHumanApproved,
+    AutonomousAgent,
+    AutomatedSystem,
+    LegacyOrUnspecified,
+}
+
+pub struct OriginDeclaration {
+    pub mode: OriginMode,
+    pub authority: DeclarationAuthority,
+}
+
+pub struct MessageValidityUntil(CanonicalTime);
+pub struct PayloadSchemaId(NamespacedVersion);
+\end{lstlisting}
+
+The declaration authority identifies the sender key or legacy gateway that made
+the statement. A verified signature establishes accountability for the statement;
+it does not establish that a human wrote the text or that encrypted content is
+semantically truthful. Unknown noncritical schema identifiers remain transportable.
+Critical schemas are accepted only after explicit extension negotiation.
+
+The authenticated content binding carries these values, plus any capability
+reference, so a storage or delivery component cannot substitute declarations
+without invalidating the binding. \texttt{MessageValidityUntil} is checked only at
+admission. Content-retention expiry and bond decision deadlines retain their
+existing types and meanings.
 
 \section{Durable Execution}
 
@@ -815,9 +866,10 @@ It combines security evidence, a complete snapshot, and ledger posting types int
 a transition manifest. This is the deterministic kernel.
 
 The capabilities crate defines recipient-signed lane grants, native and legacy
-subjects, rate and lifetime enforcement, and canonical bond-free admission
-requests. Opaque handles identify native pairs but do not themselves confer
-authority.
+subjects, declared-purpose and optional origin constraints, rate and lifetime
+enforcement, and canonical bond-free admission requests. It compares authenticated
+declarations under versioned rules but never inspects encrypted content. Opaque
+handles identify native pairs but do not themselves confer authority.
 
 The PostgreSQL storage crate coordinates settlement manifests and bond-free
 admission under the same relationship aggregate lock. It validates durable
@@ -825,10 +877,14 @@ encrypted content, consumes lane allowance, advances the canonical journal, and
 writes delivery effects atomically. Blocking revokes a lane in the same database
 transaction as the relationship transition.
 
-The service, worker, wire, content, privacy, client, and adapter crates supply
-authenticated ingress, leased work, endpoint encryption, scoped references, and
-external boundaries. An adapter may fail because an external system is
-unavailable; it may not substitute a different protocol meaning.
+The wire layer validates canonical declaration encodings and extension
+criticality. The content layer binds those declarations, message validity, schema,
+and any capability reference to ciphertext authentication. The service admission
+boundary evaluates only provider-visible policy, while the client owns
+presentation, notification, digest, and content-aware rules. The worker, privacy,
+and adapter crates retain their leased-work, scoped-reference, and external-
+boundary roles. An adapter may fail because an external system is unavailable; it
+may not substitute a different protocol meaning.
 
 The binaries assemble these libraries for a deployment. During early development,
 several roles may run in one binary. Before real user data is accumulated, privacy-
@@ -840,6 +896,13 @@ independent reason to compile, test, reuse, or release. It should become another
 process when it needs a trust boundary, failure domain, scaling model, or separate
 operator. These are not the same decision. A crate does not stop its hosting
 process from reading every database.
+
+Provider admission policy and endpoint presentation policy should begin as
+separate interfaces beside their consumers, not as one broad
+\texttt{cs-mail-policy} crate. They have different inputs, authorities, privacy
+boundaries, and failure consequences. A shared crate is justified only if a small,
+stable decision vocabulary later emerges without granting either side the other's
+data or authority.
 
 \section{Privacy and Security Boundaries}
 
@@ -932,6 +995,15 @@ upload. The content service stores authenticated ciphertext and a scoped referen
 Authorized recipient devices decrypt it. Relationship and ledger events never
 contain plaintext content or content-derived search terms.
 
+The small authenticated envelope may expose a coarse declared purpose, origin
+mode, payload-schema identifier, message validity time, and capability reference
+when admission or recipient-controlled routing requires them. These are metadata
+with their own correlation and retention risk, not permission to expose structured
+payload fields. A native sender signs its declarations. A legacy gateway identifies
+itself as the declaration authority and uses legacy or unspecified origin unless it
+has separate authenticated evidence; DMARC alone proves neither purpose nor human
+authorship.
+
 Operational signing keys, message-content keys, pairwise derivation keys, and
 retention keys serve different purposes and should use separate hierarchies. Key
 transparency or an equivalent auditable mechanism makes silent operational-key
@@ -1016,6 +1088,14 @@ impl TryFrom<wire::V1AcceptRelationship>
 }
 \end{lstlisting}
 
+Message-envelope conversion additionally validates the versioned purpose and
+origin vocabulary, declaration authority, schema namespace, critical-extension
+support, message validity, and capability-reference scope. Unknown noncritical
+schemas survive conversion as opaque identifiers. Any declaration set that
+influenced contact terms is hashed canonically into those signed terms and checked
+again at admission, preventing a quote obtained under one declaration from being
+reused for another.
+
 Signatures cover one canonical byte representation. Signing-domain tags include
 protocol version, command type, deployment or federation domain, and intended
 provider where appropriate. Parsing and reserializing an ambiguous format before
@@ -1066,6 +1146,22 @@ releases only its active persistence reserves. The second identity remains
 unaccepted, its reserves remain scheduled, and the shared principal-level attempt
 state does not reset.
 
+Declaration tests alter purpose, origin, schema, validity, declaration authority,
+and capability reference independently and require content authentication or
+admission to fail. Capability tests require exact versioned declaration matching,
+consume no allowance on mismatch, distinguish a native sender declaration from a
+gateway declaration, and prove that neither one establishes the semantic truth of
+encrypted content. Validity tests reject late admission with a full unadmitted
+release while proving that post-admission validity expiry cannot shorten the bond
+decision window or change settlement. Wire tests preserve unknown noncritical
+schemas and reject unsupported critical extensions before admission.
+
+Policy-boundary tests prove that protocol policy is fixed in the transition
+context, provider admission policy sees no plaintext, and endpoint presentation
+policy cannot submit storage or ledger mutations directly. Any learned or
+probabilistic policy output remains a local recommendation until an independently
+authenticated command or deterministic admission decision authorizes an effect.
+
 Property-based tests generate sequences of quotes, reservations, cancellations,
 admissions, decisions, expiries, releases, revocations, blocks, and unblocks.
 After every transition they assert value conservation, bond finality, reserve
@@ -1114,7 +1210,8 @@ tests establish that the durable shell preserves kernel semantics.
 The third milestone establishes production privacy boundaries before substantial
 user data accumulates. Identity, relationship, content, ledger, and telemetry use
 scoped identifiers, separate credentials, separate keys, and executable retention.
-Native clients add endpoint encryption, key transparency, and recovery.
+Native clients add endpoint encryption, key transparency, recovery, authenticated
+minimal message declarations, and recipient-owned presentation policy.
 
 Express lanes implement scoped capabilities in the durable admission layer once
 the base admission and relationship semantics are stable. They bypass bonds

@@ -19,7 +19,7 @@
 \title{\textit{cs-mail}: Express Lanes for Transactional Mail\\
 \large A Pedagogical Memo}
 \author{C-SQD}
-\date{Draft 0.1 --- August 2026}
+\date{Draft 0.2 --- September 2026}
 
 \begin{document}
 \maketitle
@@ -130,11 +130,13 @@ you have chosen, bounded in purpose and time. Three properties make it safe.
 
 \paragraph{What it limits.}
 A lane controls \emph{who} may reach you, \emph{how much}, and for \emph{how
-long}---not \emph{what} they say. Because \textit{cs-mail} content is end-to-end
+long}. It can also constrain the authenticated purpose and automation mode that a
+sender is allowed to declare. Because \textit{cs-mail} content is end-to-end
 encrypted, no provider reads a message to confirm it is ``really about your
-account.'' ``Purpose'' is therefore a label, plus volume and time caps, plus your
-power to revoke---not content inspection. This is a deliberate limit, and an
-honest one.
+account'' or that a human wrote it. The lane enforces the sender's accountable
+declaration, not the semantic truth of the ciphertext. If a sender uses that scope
+dishonestly, you can report it and revoke or block the lane. This is a deliberate
+limit, and an honest one.
 
 \paragraph{What it binds to.}
 For a sender already on \textit{cs-mail}, the lane binds to the sender's
@@ -248,7 +250,7 @@ Revocation and blocking remain available and immediate, whatever the lifetime.
 
 \section{Implementation Constraints}
 
-Three constraints shape any implementation. Their details belong in a later
+Four constraints shape any implementation. Their details belong in a later
 specification; the constraints themselves are worth stating now because they are
 what make the concept real.
 
@@ -278,6 +280,15 @@ lanes adopt those rules unchanged. The launch extension adds the issuance flow
 DMARC-confirmed legacy grant), the domain-binding and expected-domain mismatch rules,
 and the activity-anchored lifetime with its persistent option. This changes no
 settlement or privacy meaning.
+
+\paragraph{Declarations remain minimal.}
+The authenticated envelope exposes only the coarse purpose, origin mode, validity,
+and capability reference required for admission or recipient-controlled routing.
+Structured message fields remain encrypted. A native sender signs its own
+declarations; a legacy gateway identifies itself as the declaration authority and
+does not turn DMARC into a claim about purpose or human authorship. These metadata
+receive the same minimization, compartmentalization, and retention discipline as
+other relationship signals.
 
 \section{Where This Leaves \textit{cs-mail}}
 

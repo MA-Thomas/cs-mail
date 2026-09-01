@@ -8,20 +8,30 @@ use std::convert::Infallible;
 use std::fmt;
 
 use cs_mail_primitives::{
-    AttemptId, BondId, CanonicalTime, ContentRef, DeliveryIntentRef, Duration, IdempotencyKey,
-    MessageId, Money, OperationalKeyRef, PersistenceReserveId, PolicyVersion, PrincipalRef,
-    ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, SettlementUnit, Version,
+    AttemptId, AttemptSubjectRef, BondId, CanonicalTime, ContentRef, DeliveryIntentRef, Duration,
+    IdempotencyKey, LedgerAccountRef, MessageDeclarationDigest, MessageId, MessageValidityUntil,
+    Money, OperationalKeyRef, PersistenceReserveId, PolicyVersion, PrivacyProfileVersion,
+    ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, RelationshipRef,
+    RetentionPolicyVersion, SettlementUnit, Version, WireVersion,
 };
 use cs_mail_protocol::{ActorRef, CancellationReason, ContactTerms, ProtocolCommand};
 use minicbor::{Decoder, Encoder};
 
 const SIGNING_DOMAIN: &str = "cs-mail/command";
+const QUOTE_SIGNING_DOMAIN: &str = "cs-mail/contact-terms";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandTarget {
+    Relationship(RelationshipRef),
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalCommandEnvelope {
+    pub wire_version: WireVersion,
     pub protocol_version: ProtocolVersion,
     pub deployment_domain: [u8; 32],
     pub intended_provider: ProviderRef,
+    pub target: CommandTarget,
     pub actor: ActorRef,
     pub operational_key: OperationalKeyRef,
     pub idempotency_key: IdempotencyKey,
@@ -47,9 +57,7 @@ impl fmt::Display for WireError {
                 write!(formatter, "unsupported protocol version {}", version.0)
             }
             Self::UnknownTag(tag) => write!(formatter, "unknown command tag {tag}"),
-            Self::InvalidIdentifier => {
-                formatter.write_str("identifier must contain exactly 16 bytes")
-            }
+            Self::InvalidIdentifier => formatter.write_str("identifier has an invalid width"),
             Self::TrailingData => formatter.write_str("trailing bytes after command envelope"),
         }
     }
@@ -76,10 +84,12 @@ impl From<minicbor::decode::Error> for WireError {
 /// Returns an error only if the in-memory CBOR encoder rejects a value.
 pub fn encode_command_envelope(envelope: &CanonicalCommandEnvelope) -> Result<Vec<u8>, WireError> {
     let mut encoder = Encoder::new(Vec::new());
-    encoder.array(8)?.str(SIGNING_DOMAIN)?;
+    encoder.array(10)?.str(SIGNING_DOMAIN)?;
+    encoder.u16(envelope.wire_version.0)?;
     encoder.u16(envelope.protocol_version.0)?;
     encoder.bytes(&envelope.deployment_domain)?;
     encode_id(&mut encoder, envelope.intended_provider.0)?;
+    encode_target(&mut encoder, envelope.target)?;
     encode_actor(&mut encoder, envelope.actor)?;
     encode_id(&mut encoder, envelope.operational_key.0)?;
     encode_id(&mut encoder, envelope.idempotency_key.0)?;
@@ -98,17 +108,20 @@ pub fn encode_command_envelope(envelope: &CanonicalCommandEnvelope) -> Result<Ve
 /// Returns an error for malformed, indefinite, unknown, or trailing input.
 pub fn decode_command_envelope(bytes: &[u8]) -> Result<CanonicalCommandEnvelope, WireError> {
     let mut decoder = Decoder::new(bytes);
-    expect_array(&mut decoder, 8)?;
+    expect_array(&mut decoder, 10)?;
     if decoder.str()? != SIGNING_DOMAIN {
         return Err(WireError::UnexpectedShape);
     }
+    let wire_version = WireVersion(decoder.u16()?);
     let protocol_version = ProtocolVersion(decoder.u16()?);
     let domain = decoder.bytes()?;
     let deployment_domain: [u8; 32] = domain.try_into().map_err(|_| WireError::UnexpectedShape)?;
     let envelope = CanonicalCommandEnvelope {
+        wire_version,
         protocol_version,
         deployment_domain,
         intended_provider: ProviderRef(decode_id(&mut decoder)?),
+        target: decode_target(&mut decoder)?,
         actor: decode_actor(&mut decoder)?,
         operational_key: OperationalKeyRef(decode_id(&mut decoder)?),
         idempotency_key: IdempotencyKey(decode_id(&mut decoder)?),
@@ -121,6 +134,29 @@ pub fn decode_command_envelope(bytes: &[u8]) -> Result<CanonicalCommandEnvelope,
         return Err(WireError::UnexpectedShape);
     }
     Ok(envelope)
+}
+
+fn encode_target(encoder: &mut Encoder<Vec<u8>>, target: CommandTarget) -> Result<(), WireError> {
+    encoder.array(2)?.u8(0)?;
+    let CommandTarget::Relationship(reference) = target;
+    encode_scoped_ref(
+        encoder,
+        reference.derivation_version(),
+        reference.as_bytes(),
+    )
+}
+
+fn decode_target(decoder: &mut Decoder<'_>) -> Result<CommandTarget, WireError> {
+    expect_array(decoder, 2)?;
+    match decoder.u8()? {
+        0 => {
+            let (version, bytes) = decode_scoped_ref(decoder)?;
+            Ok(CommandTarget::Relationship(RelationshipRef::new(
+                version, bytes,
+            )))
+        }
+        tag => Err(WireError::UnknownTag(u32::from(tag))),
+    }
 }
 
 fn encode_actor(encoder: &mut Encoder<Vec<u8>>, actor: ActorRef) -> Result<(), WireError> {
@@ -164,9 +200,13 @@ fn encode_command(
     command: &ProtocolCommand,
 ) -> Result<(), WireError> {
     match command {
-        ProtocolCommand::IssueContactTerms { quote_id } => {
-            encoder.array(2)?.u8(0)?;
+        ProtocolCommand::IssueContactTerms {
+            quote_id,
+            declaration_digest,
+        } => {
+            encoder.array(3)?.u8(0)?;
             encode_id(encoder, quote_id.0)?;
+            encode_optional_declaration_digest(encoder, *declaration_digest)?;
         }
         ProtocolCommand::ReserveAttempt {
             bond_id,
@@ -187,12 +227,16 @@ fn encode_command(
             expected_bond_version,
             content_ref,
             delivery_intent_ref,
+            declaration_digest,
+            message_valid_until,
         } => {
-            encoder.array(5)?.u8(2)?;
+            encoder.array(7)?.u8(2)?;
             encode_id(encoder, bond_id.0)?;
             encoder.u64(expected_bond_version.0)?;
             encode_id(encoder, content_ref.0)?;
             encode_id(encoder, delivery_intent_ref.0)?;
+            encoder.bytes(&declaration_digest.0)?;
+            encoder.u64(message_valid_until.0.0)?;
         }
         ProtocolCommand::CancelReservedAttempt {
             bond_id,
@@ -247,21 +291,29 @@ fn decode_command(decoder: &mut Decoder<'_>) -> Result<ProtocolCommand, WireErro
     let length = decoder.array()?.ok_or(WireError::UnexpectedShape)?;
     let tag = decoder.u8()?;
     match tag {
-        0 if length == 2 => Ok(ProtocolCommand::IssueContactTerms {
+        0 if length == 3 => Ok(ProtocolCommand::IssueContactTerms {
             quote_id: QuoteId(decode_id(decoder)?),
+            declaration_digest: decode_optional_declaration_digest(decoder)?,
         }),
         1 if length == 6 => Ok(ProtocolCommand::ReserveAttempt {
             bond_id: BondId(decode_id(decoder)?),
             reserve_id: PersistenceReserveId(decode_id(decoder)?),
             attempt_id: AttemptId(decode_id(decoder)?),
             message_id: MessageId(decode_id(decoder)?),
-            terms: decode_terms(decoder)?,
+            terms: Box::new(decode_terms(decoder)?),
         }),
-        2 if length == 5 => Ok(ProtocolCommand::AdmitAttempt {
+        2 if length == 7 => Ok(ProtocolCommand::AdmitAttempt {
             bond_id: BondId(decode_id(decoder)?),
             expected_bond_version: Version(decoder.u64()?),
             content_ref: ContentRef(decode_id(decoder)?),
             delivery_intent_ref: DeliveryIntentRef(decode_id(decoder)?),
+            declaration_digest: MessageDeclarationDigest(
+                decoder
+                    .bytes()?
+                    .try_into()
+                    .map_err(|_| WireError::UnexpectedShape)?,
+            ),
+            message_valid_until: MessageValidityUntil(CanonicalTime(decoder.u64()?)),
         }),
         3 if length == 4 => {
             let bond_id = BondId(decode_id(decoder)?);
@@ -315,11 +367,27 @@ fn encode_version_command(
 }
 
 fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &ContactTerms) -> Result<(), WireError> {
-    encoder.array(20)?;
+    encoder.array(26)?;
     encode_id(encoder, terms.quote_id.0)?;
     encoder.u16(terms.protocol_version.0)?;
     encoder.u64(terms.policy_version.0)?;
-    encode_id(encoder, terms.principal.0)?;
+    encoder.u16(terms.privacy_profile_version.0)?;
+    encoder.u16(terms.retention_policy_version.0)?;
+    encode_scoped_ref(
+        encoder,
+        terms.relationship.derivation_version(),
+        terms.relationship.as_bytes(),
+    )?;
+    encode_scoped_ref(
+        encoder,
+        terms.attempt_subject.derivation_version(),
+        terms.attempt_subject.as_bytes(),
+    )?;
+    encode_scoped_ref(
+        encoder,
+        terms.sender_account.derivation_version(),
+        terms.sender_account.as_bytes(),
+    )?;
     encode_id(encoder, terms.sender.0)?;
     encode_id(encoder, terms.recipient.0)?;
     encode_id(encoder, terms.recipient_provider.0)?;
@@ -334,23 +402,37 @@ fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &ContactTerms) -> Result<
     encoder.u64(terms.admission_window.0)?;
     encoder.u64(terms.decision_window.0)?;
     encoder.u64(terms.persistence_release_at.0)?;
+    encoder.u64(terms.earliest_final_expiry_at.0)?;
     encoder.u64(terms.issued_at.0)?;
     encoder.u64(terms.expires_at.0)?;
+    encode_optional_declaration_digest(encoder, terms.declaration_digest)?;
     Ok(())
 }
 
 fn decode_terms(decoder: &mut Decoder<'_>) -> Result<ContactTerms, WireError> {
-    expect_array(decoder, 20)?;
+    expect_array(decoder, 26)?;
+    let quote_id = QuoteId(decode_id(decoder)?);
+    let protocol_version = ProtocolVersion(decoder.u16()?);
+    let policy_version = PolicyVersion(decoder.u64()?);
+    let privacy_profile_version = PrivacyProfileVersion(decoder.u16()?);
+    let retention_policy_version = RetentionPolicyVersion(decoder.u16()?);
+    let (relationship_version, relationship_bytes) = decode_scoped_ref(decoder)?;
+    let (subject_version, subject_bytes) = decode_scoped_ref(decoder)?;
+    let (account_version, account_bytes) = decode_scoped_ref(decoder)?;
     Ok(ContactTerms {
-        quote_id: QuoteId(decode_id(decoder)?),
-        protocol_version: ProtocolVersion(decoder.u16()?),
-        policy_version: PolicyVersion(decoder.u64()?),
-        principal: PrincipalRef(decode_id(decoder)?),
+        quote_id,
+        protocol_version,
+        policy_version,
+        privacy_profile_version,
+        retention_policy_version,
+        relationship: RelationshipRef::new(relationship_version, relationship_bytes),
+        attempt_subject: AttemptSubjectRef::new(subject_version, subject_bytes),
+        sender_account: LedgerAccountRef::new(account_version, account_bytes),
         sender: ProtocolIdentity(decode_id(decoder)?),
         recipient: ProtocolIdentity(decode_id(decoder)?),
         recipient_provider: ProviderRef(decode_id(decoder)?),
-        relationship_version: Version(decoder.u64()?),
-        attempt_version: Version(decoder.u64()?),
+        relationship_version: Version(decoder.u64()?).into(),
+        attempt_version: Version(decoder.u64()?).into(),
         processing_charge: Money::from_minor_units(decoder.u64()?),
         collateral: Money::from_minor_units(decoder.u64()?),
         persistence: Money::from_minor_units(decoder.u64()?),
@@ -360,9 +442,70 @@ fn decode_terms(decoder: &mut Decoder<'_>) -> Result<ContactTerms, WireError> {
         admission_window: Duration(decoder.u64()?),
         decision_window: Duration(decoder.u64()?),
         persistence_release_at: CanonicalTime(decoder.u64()?),
+        earliest_final_expiry_at: CanonicalTime(decoder.u64()?),
         issued_at: CanonicalTime(decoder.u64()?),
         expires_at: CanonicalTime(decoder.u64()?),
+        declaration_digest: decode_optional_declaration_digest(decoder)?,
     })
+}
+
+fn encode_optional_declaration_digest(
+    encoder: &mut Encoder<Vec<u8>>,
+    digest: Option<MessageDeclarationDigest>,
+) -> Result<(), WireError> {
+    match digest {
+        Some(digest) => {
+            encoder.array(1)?.bytes(&digest.0)?;
+        }
+        None => {
+            encoder.array(0)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_optional_declaration_digest(
+    decoder: &mut Decoder<'_>,
+) -> Result<Option<MessageDeclarationDigest>, WireError> {
+    match decoder.array()? {
+        Some(0) => Ok(None),
+        Some(1) => Ok(Some(MessageDeclarationDigest(
+            decoder
+                .bytes()?
+                .try_into()
+                .map_err(|_| WireError::UnexpectedShape)?,
+        ))),
+        _ => Err(WireError::UnexpectedShape),
+    }
+}
+
+/// Encodes immutable provider-issued terms for signing.
+///
+/// # Errors
+///
+/// Returns an error if a field cannot be represented canonically.
+pub fn encode_contact_terms_artifact(terms: &ContactTerms) -> Result<Vec<u8>, WireError> {
+    let mut encoder = Encoder::new(Vec::new());
+    encoder.array(2)?.str(QUOTE_SIGNING_DOMAIN)?;
+    encode_terms(&mut encoder, terms)?;
+    Ok(encoder.into_writer())
+}
+
+fn encode_scoped_ref(
+    encoder: &mut Encoder<Vec<u8>>,
+    version: u16,
+    bytes: &[u8; 32],
+) -> Result<(), WireError> {
+    encoder.array(2)?.u16(version)?.bytes(bytes)?;
+    Ok(())
+}
+
+fn decode_scoped_ref(decoder: &mut Decoder<'_>) -> Result<(u16, [u8; 32]), WireError> {
+    expect_array(decoder, 2)?;
+    let version = decoder.u16()?;
+    let bytes = decoder.bytes()?;
+    let bytes = bytes.try_into().map_err(|_| WireError::InvalidIdentifier)?;
+    Ok((version, bytes))
 }
 
 fn encode_id(encoder: &mut Encoder<Vec<u8>>, value: u128) -> Result<(), WireError> {
@@ -389,9 +532,11 @@ mod tests {
 
     fn envelope(command: ProtocolCommand) -> CanonicalCommandEnvelope {
         CanonicalCommandEnvelope {
+            wire_version: WireVersion(2),
             protocol_version: ProtocolVersion(1),
             deployment_domain: [9; 32],
             intended_provider: ProviderRef(5),
+            target: CommandTarget::Relationship(RelationshipRef::from_u128_for_test(44)),
             actor: ActorRef::Recipient(ProtocolIdentity(2)),
             operational_key: OperationalKeyRef(3),
             idempotency_key: IdempotencyKey(4),
@@ -404,22 +549,27 @@ mod tests {
         let commands = [
             ProtocolCommand::IssueContactTerms {
                 quote_id: QuoteId(1),
+                declaration_digest: Some(MessageDeclarationDigest([1; 32])),
             },
             ProtocolCommand::ReserveAttempt {
                 bond_id: BondId(1),
                 reserve_id: PersistenceReserveId(2),
                 attempt_id: AttemptId(3),
                 message_id: MessageId(4),
-                terms: ContactTerms {
+                terms: Box::new(ContactTerms {
                     quote_id: QuoteId(5),
                     protocol_version: ProtocolVersion(1),
                     policy_version: PolicyVersion(2),
-                    principal: PrincipalRef(6),
+                    privacy_profile_version: PrivacyProfileVersion(1),
+                    retention_policy_version: RetentionPolicyVersion(1),
+                    relationship: RelationshipRef::from_u128_for_test(6),
+                    attempt_subject: AttemptSubjectRef::from_u128_for_test(23),
+                    sender_account: LedgerAccountRef::from_u128_for_test(24),
                     sender: ProtocolIdentity(7),
                     recipient: ProtocolIdentity(8),
                     recipient_provider: ProviderRef(9),
-                    relationship_version: Version(10),
-                    attempt_version: Version(11),
+                    relationship_version: Version(10).into(),
+                    attempt_version: Version(11).into(),
                     processing_charge: Money::from_minor_units(12),
                     collateral: Money::from_minor_units(13),
                     persistence: Money::from_minor_units(14),
@@ -431,13 +581,17 @@ mod tests {
                     persistence_release_at: CanonicalTime(20),
                     issued_at: CanonicalTime(21),
                     expires_at: CanonicalTime(22),
-                },
+                    earliest_final_expiry_at: CanonicalTime(122),
+                    declaration_digest: Some(MessageDeclarationDigest([2; 32])),
+                }),
             },
             ProtocolCommand::AdmitAttempt {
                 bond_id: BondId(1),
                 expected_bond_version: Version(2),
                 content_ref: ContentRef(3),
                 delivery_intent_ref: DeliveryIntentRef(4),
+                declaration_digest: MessageDeclarationDigest([3; 32]),
+                message_valid_until: MessageValidityUntil(CanonicalTime(40)),
             },
             ProtocolCommand::CancelReservedAttempt {
                 bond_id: BondId(1),

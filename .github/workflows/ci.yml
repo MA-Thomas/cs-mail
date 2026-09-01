@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cs_mail
+          POSTGRES_PASSWORD: cs_mail
+          POSTGRES_DB: cs_mail_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cs_mail -d cs_mail_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CS_MAIL_TEST_DATABASE_URL: postgres://cs_mail:cs_mail@localhost:5432/cs_mail_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace -- --ignored
