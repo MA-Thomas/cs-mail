@@ -1,0 +1,23 @@
+[package]
+name = "cs-mail-storage-postgres"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs-mail-capabilities = { path = "../cs-mail-capabilities" }
+cs-mail-content = { path = "../cs-mail-content" }
+cs-mail-ledger = { path = "../cs-mail-ledger" }
+cs-mail-primitives = { path = "../cs-mail-primitives" }
+cs-mail-protocol = { path = "../cs-mail-protocol" }
+cs-mail-security = { path = "../cs-mail-security" }
+postgres.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+cs-mail-adapters = { path = "../cs-mail-adapters" }
+ed25519-dalek.workspace = true
+
+[lints]
+workspace = true

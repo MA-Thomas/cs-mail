@@ -1,0 +1,15 @@
+[package]
+name = "cs-mail-worker"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs-mail-content = { path = "../cs-mail-content" }
+cs-mail-primitives = { path = "../cs-mail-primitives" }
+cs-mail-protocol = { path = "../cs-mail-protocol" }
+cs-mail-storage-postgres = { path = "../cs-mail-storage-postgres" }
+sha2.workspace = true
+
+[lints]
+workspace = true

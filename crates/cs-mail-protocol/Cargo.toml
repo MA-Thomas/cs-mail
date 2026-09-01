@@ -1,0 +1,13 @@
+[package]
+name = "cs-mail-protocol"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs-mail-ledger = { path = "../cs-mail-ledger" }
+cs-mail-primitives = { path = "../cs-mail-primitives" }
+serde.workspace = true
+
+[lints]
+workspace = true

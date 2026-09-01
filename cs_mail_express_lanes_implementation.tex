@@ -1,0 +1,388 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue
+}
+
+\title{\textit{cs-mail} Express Lanes --- Implementation Plan\\
+\large Recipient-Granted, Bond-Free Contact for Chosen Organizations}
+\author{C-SQD}
+\date{Draft 0.2 --- August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{\small\textbf{Nonnormative implementation plan.}
+This document records settled design decisions and a build order for
+\emph{express lanes}, the launch-feature form of the scoped-capability extension
+that the \textit{cs-mail Protocol Specification} marks deferred. It extends the
+\textit{Rust Reference Architecture} and is written against the current Rust
+workspace. It does not change the settlement or privacy semantics of the
+specification; where the two differ, the specification controls. The user-facing
+explanation of the feature is the companion memo, \textit{Express Lanes for
+Transactional Mail}.}}
+\end{center}
+
+\section{The Central Observation}
+
+{\sloppy
+The money kernel, \texttt{cs-mail-protocol::transition}, runs only when value
+moves. \texttt{IssueContactTerms} already returns
+\texttt{TermsOutcome::NoBondRequired} for an accepted relationship, but that
+quotation result is not itself delivery. The shared bond-free admission path
+therefore lives beside the kernel: it authenticates the sender, locks the directed
+relationship, validates durable encrypted content, verifies either acceptance or
+a lane, and writes the delivery outbox intent. An express lane is a sibling of
+accepted-sender admission, not a new settlement transition.\par}
+
+This single fact determines the shape of the whole feature: express lanes are
+implemented as a permission layer consulted \emph{beside} the kernel, and the
+deterministic settlement kernel is left unchanged.
+
+\section{Settled Design Decisions}
+
+\begin{enumerate}[leftmargin=2em]
+    \item \textbf{Edge subsystem, not kernel state.} A lane is evaluated at the
+    admission edge, before the kernel is consulted---mirroring how accepted
+    delivery already avoids the kernel. It follows the bounded, idempotent,
+    in-memory ``book'' pattern already used by \texttt{FundingBook} and
+    \texttt{FederationBook} in \texttt{cs-mail-adapters}, with a durable
+    PostgreSQL coordinator for production-shaped admission.
+    \item \textbf{Domain as identity, for legacy senders.} A DMARC-authenticated
+    sending domain resolves to a single synthetic sender protocol identity, so
+    every authenticated address at that domain shares one lane and the per-pair
+    aggregate is preserved.
+    \item \textbf{One lane type, a subject enum.} A lane's subject is either a
+    native opaque handle or a recipient-granted legacy domain scope. The handle
+    identifies the pair; a separate recipient signature authorizes the complete
+    grant. The same versioned record's subject can be swapped on adoption.
+    \item \textbf{DMARC verification as evidence-as-data.} Verification happens at
+    the edge and produces a \texttt{VerifiedDomain} value. A separately
+    versioned binding joins that proof to the recipient-granted lane domain, so
+    lane evaluation remains deterministic and testable without DNS.
+    \item \textbf{Lifetime on the existing scheduler.} Lanes are time-bound on a
+    sliding window anchored to last activity, bounded by the grant's hard
+    \texttt{not\_after}, using the shared \texttt{ScheduleTask} infrastructure,
+    \texttt{cs\_schedules}, and the \texttt{cs-mail-worker} lease.
+    \item \textbf{Block and lane are mutually exclusive.} A directed pair is at
+    most one of \{blocked, lane-authorized, neither\}. Blocking hard-revokes any
+    lane; granting a lane to a blocked pair requires an explicit unblock;
+    unblocking leaves the pair bonded, not re-lane'd.
+    \item \textbf{Issuance is recipient-initiated only.} Lanes are granted at
+    address handover (checkout, signup, booking) or by replying to an
+    organization first. The ``accept for receipts only'' first-contact path is
+    removed.
+    \item \textbf{Volume is enforced, purpose is disclosed.} Each lane carries a
+    maximum message count per interval that admission consumes atomically.
+    Purpose remains an honest display label because providers cannot inspect
+    encrypted content.
+    \item \textbf{The settlement transition is untouched.} With the first-contact
+    issuance path removed, no new settlement-bearing command is required. Every
+    change is additive.
+\end{enumerate}
+
+\section{The Admission Decision}
+
+Express lanes add one branch to the answer of a question the system already asks:
+does this inbound message require a bond? The ordered decision, evaluated for a
+directed \texttt{(sender, recipient)} pair at a single canonical boundary, is:
+
+\begin{enumerate}[leftmargin=2em]
+    \item if the pair is \texttt{Blocked}, refuse (\texttt{ContactBlocked});
+    \item else if the relationship is \texttt{Accepted}, deliver bond-free through
+    the existing accepted-sender path;
+    \item else if a valid, in-window lane authorizes the pair, deliver bond-free
+    through the lane path;
+    \item else require a bond and proceed through the kernel exactly as today.
+\end{enumerate}
+
+The second and third branches share one durable bond-free admission path. A lane
+admission produces no bond, moves no ledger value, opens no
+relationship solicitation episode, and advances no repeated-attempt state---the
+same properties the specification already requires of a capability-authorized
+message. Because it never calls \texttt{transition}, those properties hold by
+construction rather than by added kernel logic.
+
+\begin{verbatim}
+enum AdmissionOutcome {
+    Refused,          // blocked pair
+    BondFreeAccepted, // existing accepted-sender path
+    BondFreeLane,     // new: valid express lane
+    BondRequired,     // existing kernel settlement path
+}
+\end{verbatim}
+
+For native mail, the sender signs the complete bond-free admission request,
+including content reference, evidence, idempotency key, protocol version,
+deployment domain, and intended provider. A legacy SMTP sender cannot supply a
+native protocol signature: the trusted ingress service instead constructs the
+request only after its configured \texttt{DmarcVerifier} returns passing evidence.
+
+\section{The Lane Object and Its Store}
+
+A lane is a compact recipient-granted record. It carries no money and references
+no message content.
+
+\begin{verbatim}
+struct Lane {
+    subject: LaneSubject,        // native identity or verified domain
+    recipient: ProtocolIdentity,
+    purpose_label: PurposeLabel, // disclosed, not content-inspected
+    rate_limit: RateLimit,        // enforced atomically at admission
+    window: Duration,            // sliding lifetime
+    not_after: CanonicalTime,     // signed hard validity bound
+    last_activity: CanonicalTime,
+    mode: LaneMode,              // Expiring | Persistent
+    version: Version,
+}
+
+enum LaneSubject {
+    Native(ScopedHandle),        // opaque identifier from cs-mail-privacy
+    LegacyDomain(DomainIdentity), // recipient-granted domain scope
+}
+\end{verbatim}
+
+The stored lane is created only from a \texttt{SignedLaneGrant}. The recipient
+signature covers the subject, directed protocol pair, purpose label, rate limit,
+sliding lifetime, hard validity interval, mode, protocol version, deployment,
+intended provider, operational key, and grant version. \texttt{ScopedHandle}
+is an opaque identifier, not the signature or the authority by itself.
+
+The lane store is a new, compartmentalized access domain: its own database table,
+credentials, encryption keys, and access role, per the specification's
+relationship-graph privacy requirements. It is not a column on the relationship
+aggregate and not part of \texttt{protocol\_state}. A ledger or telemetry
+compromise must not yield the list of organizations a recipient trusts. Grant,
+renew, and revoke operations are idempotent record transitions with no ledger
+coupling, exactly like the existing adapter books.
+
+The storage coordinator enforces one invariant under the relationship aggregate
+lock: for any directed pair, at most one of \{blocked, lane-authorized\} holds at
+a time.
+
+\section{Legacy Senders: Domain as Identity}
+
+Most transactional senders will not be on \textit{cs-mail} at launch, so the
+common case is legacy email authenticated by DKIM and DMARC. The inbound edge
+verifies DMARC under RFC~9989 and produces a \texttt{VerifiedDomain}; lane evaluation
+consumes that value and never performs DNS or signature work itself. This keeps
+lane logic pure and unit-testable and confines the messy legacy-world
+cryptography to one edge boundary.
+
+{\sloppy
+A passing result keeps the RFC 5322 author domain, independent DKIM and SPF pass
+facts (each with its applicable strict or relaxed alignment mode), and canonical
+evaluation time as evidence. It does not claim that the verifier exposed a DMARC
+policy-record or organizational domain when the underlying library did not. Lane
+identity is instead the canonical IDNA-ASCII domain scope deliberately selected
+by the recipient's grant; it is never whichever DKIM or SPF identifier happened
+to pass. The authenticated author must be that domain or a subdomain of it. That
+lane domain resolves through a versioned, domain-separated mapping to
+a \emph{single} synthetic sender protocol identity.
+Consequently \texttt{statements@bank.com} and \texttt{alerts@bank.com} are one
+sender to the system, one lane covers both, and admission still keys to a single
+\texttt{(sender, recipient)} aggregate. A message that fails DMARC alignment to a
+lane's domain is simply not on the lane, regardless of its display name or
+local-part. DMARC resists unauthorized use of the expected domain; the separate
+expected-domain match rejects look-alike domains.\par}
+
+The workspace now has a dedicated \texttt{cs-mail-smtp-gateway} library. It pins
+Stalwart Labs' \texttt{mail-auth} 0.12.1 with default features disabled and the
+minimal Ring/Hickory DNS feature set. The gateway accepts the remote IP,
+EHLO identity, MAIL FROM (including the null reverse-path case), receiver hostname,
+raw message, and canonical receipt time. It bounds message size, header size and
+count, DKIM-signature count, and receipt/system-clock skew before performing
+DNS-backed verification. Temporary DNS failures remain distinguishable from
+authentication failure, malformed input, and resource exhaustion for SMTP policy.
+
+\section{Native Senders: Pairwise Handles}
+
+For a sender already on \textit{cs-mail}, the lane binds to the pairwise-scoped
+\texttt{ScopedHandle} already provided by \texttt{cs-mail-privacy}. The recipient
+signs the full lane grant containing that handle. The provider verifies the grant at admission
+without learning which organization it authorizes, so the native lane is fully
+private where the legacy lane must expose a domain. When a legacy sender adopts
+\textit{cs-mail}, its lane's subject is swapped from \texttt{LegacyDomain} to
+\texttt{Native}, upgrading the lane in place and preserving its history.
+
+Native identity also enables finer control that domain granularity cannot offer.
+Because a legacy domain is a single identity, block and lane are mutually
+exclusive at domain granularity---one cannot block a bank's marketing while
+keeping a lane for its fraud alerts. A native organization that uses distinct
+protocol identities for distinct purposes can be blocked on one and lane-granted
+on another.
+
+\section{Lifetime and Renewal}
+
+A lane's clock is its last authenticated message, not its issue time. Each
+admitted lane message bumps \texttt{last\_activity} and reschedules the lane's
+horizon; a lane in active use therefore never lapses on a timer, while a dormant
+one drifts toward expiry.
+
+Two modes cover the range the memo describes:
+
+\begin{itemize}[leftmargin=2em]
+    \item \texttt{Expiring} (default): at the horizon the recipient receives a
+    gentle re-confirm prompt rather than a silent deletion. The window is set per
+    sender.
+    \item \texttt{Persistent}: the same renew-on-activity behavior, but the horizon
+    keeps the lane active and emits a review reminder instead of lapsing it. The
+    signed \texttt{not\_after} remains a hard stop. This is the mode for a
+    bank's fraud alerts or a hospital's results, where a silently lapsed lane
+    would be costly.
+\end{itemize}
+
+Both modes reuse the leased \texttt{cs\_schedules} plus \texttt{cs-mail-worker}
+machinery: a scheduled task fires at \texttt{last\_activity + window} and either
+lapses the lane or emits a review effect through the outbox. The generic
+\texttt{ScheduleTask} and \texttt{ScheduleChange} types live in
+\texttt{cs-mail-primitives}; no second lease substrate is required.
+
+\section{Block and Lane Interaction}
+
+Block and lane are opposite ends of one recipient control, so the model treats
+them as mutually exclusive rather than as independent flags. The two directions
+are deliberately asymmetric:
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{Blocking hard-revokes the lane, unconditionally.} Block is the
+    most restrictive state and a deliberate protective action, so it tears down
+    any lane in the same commit that records the block. After a later unblock the
+    organization does \emph{not} regain its lane; it returns to a bonded stranger,
+    matching the kernel's existing \texttt{unblock} semantics.
+    \item \textbf{Granting a lane never silently unblocks.} Because issuance is
+    one-tap or automatic, an issuance flow must not silently defeat a block the
+    recipient deliberately set. A grant targeting a blocked pair surfaces the
+    block and requires an explicit unblock-and-allow confirmation.
+\end{itemize}
+
+This mutual-exclusion invariant also resolves the coordination question raised by
+placing lanes outside the kernel. Block state lives in the relationship aggregate;
+the lane lives in the edge store. Rather than reconciling two independent truths,
+blocking is one state transition that revokes the lane in the same commit, and
+lane admission reads the pair's block state transactionally---by taking the
+relationship aggregate's row lock, or by consulting a minimal transactional block
+flag---so a block that commits first is always observed. Domain-as-identity is
+what makes ``the pair'' well defined: blocking \texttt{bank.com} and holding a
+lane for \texttt{bank.com} concern the same directed identity pair.
+
+The reference implementation chooses the aggregate row lock. A future split-store
+deployment must preserve the same linearization contract through a narrowly
+authorized transactional coordinator.
+
+\section{Issuance}
+
+A lane is granted only by a deliberate recipient act:
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{At address handover} (checkout, signup, booking). The client
+    records the web origin it is on as the expected sending domain, then completes
+    the grant on the first DMARC-authenticated message from that domain, showing a
+    one-tap confirmation that names the \emph{authenticated} domain rather than
+    the display name. Seeding the expectation from the origin turns ``which
+    sender?'' into a match and lets the recipient catch a look-alike domain at
+    grant time.
+    \item \textbf{On replying first.} Writing to an organization auto-opens a
+    return lane, since the recipient has plainly invited a reply.
+\end{itemize}
+
+The first-contact ``accept for receipts only'' path is removed. A cold sender uses
+the ordinary bonded gate; it can be accepted as a full standing contact, rejected,
+or left to expire, but it is not granted a lane from that interaction. The
+consequence is minor and recoverable: an organization one would have preferred to
+keep on a narrow lane must instead be reached through handover or a reply, or
+accepted fully. The benefit is that issuance touches no money and no kernel state.
+
+\section{Changes by Crate}
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{\texttt{cs-mail-capabilities}} holds the lane ``book'': the
+    lane record, subject enum, and idempotent grant/renew/revoke transitions, with
+    no ledger coupling and the block/lane mutual-exclusion invariant.
+    \item \textbf{\texttt{cs-mail-adapters}} defines the async, library-neutral
+    SMTP authentication request, typed failures, and versioned evidence model,
+    alongside the existing outbound downgrade route.
+    \item \textbf{\texttt{cs-mail-smtp-gateway}} implements that boundary with
+    pinned Stalwart \texttt{mail-auth}, minimal crypto/DNS features, resource
+    limits, and receipt-time skew checks.
+    \item \textbf{\texttt{cs-mail-storage-postgres}} gains a migration for the
+    compartmentalized lane table under its own access role and keys, plus the
+    transactional block/lane coordination.\par
+    \item \textbf{\texttt{cs-mail-primitives}, \texttt{cs-mail-worker}, and
+    \texttt{cs\_schedules}} supply shared task types and the existing lease for
+    lane horizon tasks (lapse or review); no new scheduling substrate.
+    \item \textbf{\texttt{cs-mail-privacy}} supplies \texttt{ScopedHandle} as the
+    native pair identifier; \texttt{cs-mail-capabilities} supplies the separately
+    signed authority.
+    \item \textbf{Service and capability layers} add authenticated ingress and
+    domain-separated, versioned signing representations for grants and bond-free
+    admission.
+    \item \textbf{\texttt{cs-mail-protocol::transition}} (the settlement kernel)
+    is unchanged. Shared effect and scheduling representations grow additively.
+\end{itemize}
+
+\section{Build Order}
+
+Each stage is independently testable and none requires kernel work.
+
+\begin{enumerate}[leftmargin=2em]
+    \item \textbf{Native lanes, end to end (implemented).} The lane book, the admission branch,
+    grant and revoke, and the block/lane mutual-exclusion invariant with its
+    transactional coordination established the permission layer and its hardest
+    correctness property first.
+    \item \textbf{Lifetime and renewal (implemented).} Sliding window, the two modes, and the
+    scheduled lapse/re-confirm tasks on the existing worker lease.
+    \item \textbf{Legacy senders (implemented).} The inbound DMARC verifier,
+    domain-to-identity resolution, and the legacy subject, with independent SPF
+    and DKIM evidence and expected-domain mismatch enforcement.
+    \item \textbf{Issuance flows.} Address-handover with web-origin seeding and
+    confirm-on-first-authenticated-message, and reply-first auto-grant.
+\end{enumerate}
+
+\section{Open Questions and Risks}
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{Split-store linearization.} The reference implementation uses
+    the relationship aggregate row lock. Any future split-store deployment must
+    preserve that ordering contract with a narrowly authorized coordinator.
+    \item \textbf{Renewal signal.} An authenticated, admitted lane message renews
+    the sliding horizon using monotonic canonical time. Decide separately whether
+    recipient reads or replies should count.
+    \item \textbf{DMARC operations.} The reference selects pinned Stalwart
+    \texttt{mail-auth} and keeps DNS out of lane logic. A deployment must still
+    operate resolver policy, map typed failures to SMTP replies, monitor latency,
+    and keep its system clock within the configured receipt-time skew. Senders
+    without a DMARC pass receive no legacy lane; a weaker grant would be a
+    separately named and reviewed feature.
+    \item \textbf{Per-subject retention.} Native lane subjects are opaque; legacy
+    subjects expose a domain. Retention and audit rules differ per subject and
+    must be encoded in the store's retention classes.
+    \item \textbf{Issuance as a surface.} Rate-limit issuance confirmations and
+    prevent the lane store or its prompts from becoming an enumeration oracle.
+\end{itemize}
+
+\section{Documentation Status Changes}
+
+Shipping express lanes promotes scoped capabilities from a deferred optional
+extension to a launch feature. This is a status change across the whitepaper,
+specification, reference architecture, and deployment profile, not a change to
+their settlement or privacy meaning. The specification's existing capability
+rules---no solicitation, no repeated-attempt advancement, block overrides a
+capability---are satisfied here by construction, because a lane-authorized message
+never enters the settlement kernel. The companion memo remains the user-facing
+explanation of the feature.
+
+\end{document}

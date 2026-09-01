@@ -1,0 +1,573 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue
+}
+
+\title{\textit{cs-mail}: Permissioned Communication with Bonded First Contact}
+\author{C-SQD}
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\textit{cs-mail} is a communication protocol in which recipients control who may
+communicate with them without friction. An accepted sender communicates without
+paying per-message fees. A sender who has not been accepted must temporarily
+reserve a communication bond consisting of a processing charge and recipient
+collateral. Acceptance refunds every decision-open admitted bond for the directed
+relationship, fully cancels its unadmitted reservations, and grants standing
+communication permission. Rejection transfers the collateral
+to the recipient and the processing charge to the recipient provider. Silence
+returns the collateral but pays the processing charge to the provider. The design
+places cost on unsuccessful attempts to establish a relationship rather than on
+communication within an established relationship. This paper explains the
+problem, mechanism, incentives, identity model, privacy architecture, and path
+from a centralized deployment to an interoperable network. Native message content
+is end-to-end encrypted, while pairwise identifiers, compartmentalized services,
+and deliberate record expiration protect the communication graph and settlement
+history. Exact protocol requirements are defined separately in the
+\textit{cs-mail Protocol Specification}.
+\end{abstract}
+
+\paragraph{Reading guide.}
+Sections 1--3 introduce the protocol through one first contact before adding
+formal notation. Later sections add relationship-wide decisions, repeated
+attempts, privacy, incentives, settlement, and deployment. The accompanying
+protocol specification is normative; this paper explains the design and its
+tradeoffs.
+
+\section{The Communication-Permission Problem}
+
+Electronic mail allows anyone who knows an address to impose delivery, filtering,
+storage, and attention costs on that address. Spam filters attempt to predict
+whether a recipient wants each message, but they operate after the sender has
+already exercised an inexpensive right to transmit. Automation and generative
+systems continue to reduce the marginal cost of producing plausible unsolicited
+messages, while the recipient's time remains scarce.
+
+Charging for every message would address abundance by making ordinary
+communication expensive. That is the wrong boundary. Friends, colleagues, and
+organizations with an established reason to communicate should not incur a new
+financial toll each time they speak. The scarce event is not communication within
+a recognized relationship; it is an unknown sender's attempt to establish one.
+
+\textit{cs-mail} makes that boundary explicit. Permission is a persistent,
+directed relationship controlled by the recipient. Known and accepted senders
+communicate normally. Unknown, rejected, or revoked senders may still attempt
+contact, but they must place value behind the attempt. Rejection declines the
+present solicitation rather than permanently banning the sender: a later attempt
+may become eligible after the applicable backoff. A separate recipient-controlled
+block refuses future ordinary contact until the recipient removes it.
+
+\section{A First Contact, End to End}
+
+Alice has not yet been accepted by Bob. Bob's provider quotes a processing
+charge of $0.25$ settlement units and collateral of $4.75$ settlement units.
+Alice authorizes a temporary reservation of $5.00$ and sends one encrypted
+message. The provider admits it only after the encrypted content and its delivery
+intent are durably recorded. The reservation does not purchase Bob's attention or
+a response; admission makes the contact attempt valid under the protocol.
+
+Bob's relationship decision produces one of three outcomes:
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.13\textwidth}p{0.28\textwidth}p{0.24\textwidth}p{0.24\textwidth}@{}}
+\toprule
+\textbf{Outcome} & \textbf{Settlement of 5.00} & \textbf{Future permission} & \textbf{Meaning} \\
+\midrule
+Accept & All 5.00 returns to Alice. & Alice may communicate with Bob without future ordinary bonds. & Bob grants the directed relationship. \\
+Reject & 0.25 goes to Bob's provider; 4.75 goes to Bob. & Alice remains unaccepted and may retry only after backoff. & Bob declines this solicitation. \\
+Ignore & 0.25 goes to Bob's provider; 4.75 returns to Alice at expiry. & Alice remains unaccepted. & No relationship decision arrived in time. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The relationship is directed: Bob accepting Alice does not mean that Alice has
+accepted Bob. If Bob accepts while several Alice-to-Bob bonds remain open, the
+decision refunds all of them atomically. If Alice remains unaccepted and tries
+again, the later attempt may also require backoff and an additional refundable
+persistence reserve. Those refinements are introduced only after the basic
+first-contact rule below.
+
+\section{The Core Mechanism}
+
+Let sender $i$ attempt to contact recipient $j$. If $j$ has accepted $i$, no bond
+is required. Otherwise, the destination side publishes signed contact terms and
+the sender reserves
+
+\begin{equation}
+    B = C + S,
+\end{equation}
+
+where $C$ is a communication-processing charge and $S$ is collateral selected by
+the recipient, subject to any minimum established by the recipient provider.
+The quote fixes the amounts, settlement unit, duration, and policy version before
+the sender commits funds.
+
+The relationship may then be accepted, rejected, or left undecided until the
+bond expires:
+
+\begin{equation}
+\begin{array}{lll}
+\text{Accept} &:& C+S \rightarrow \text{sender},\\[3pt]
+\text{Ignore} &:& S \rightarrow \text{sender},\quad
+                  C \rightarrow \text{recipient provider},\\[3pt]
+\text{Reject} &:& S \rightarrow \text{recipient},\quad
+                  C \rightarrow \text{recipient provider}.
+\end{array}
+\end{equation}
+
+$C$ and $S$ serve different purposes. The processing charge compensates the
+destination service when an unsolicited attempt does not become an accepted
+relationship. Collateral creates a larger loss when the recipient affirmatively
+rejects the attempted relationship. A wanted first contact is costless apart from
+the temporary use of liquidity.
+
+Reservation is not admission. The quote supplies a short admission window, and
+the sender or an expiry worker may cancel a still-unadmitted reservation. If the
+message is not admitted before that window closes, the entire $C+S+L_k$ returns
+to the sender, no attempt level advances, and no recipient solicitation appears.
+The recipient's decision window begins at canonical admission time. This prevents
+abandoned uploads from locking funds or paying a processing charge for a message
+the recipient provider never admitted.
+
+\section{Relationships, Not Individual Messages}
+
+Permission is directed. If $j$ accepts $i$, that does not imply that $i$ has
+accepted $j$. It is also attached to visible protocol identities: accepting one
+address does not automatically accept every address controlled by the same person
+or organization.
+
+Most importantly, acceptance and rejection are decisions about the communicative
+relationship, not classifications of isolated messages. Several bonded attempts
+may be outstanding for the same directed identity pair. Acceptance therefore
+performs one atomic relationship transition. It
+
+\begin{itemize}[leftmargin=2em]
+    \item establishes permission for future communication;
+    \item refunds $C+S$ for every admitted, decision-open bond for the
+          relationship;
+    \item cancels and fully releases every reserved but unadmitted attempt for the
+          relationship;
+    \item releases active persistence reserves associated with attempts from the
+          accepted public identity; and
+    \item cancels the corresponding scheduled expiries.
+\end{itemize}
+
+Acceptance does not reset the repeated-attempt state shared by the sender's
+private principal and this recipient identity, nor does it release reserves
+associated with another public identity controlled by that principal. The
+accepted public identity bypasses that anti-abuse state while permission remains
+active. Other identities do not inherit its acceptance or forgiveness.
+
+Once the relationship is accepted, an older message cannot subsequently be
+rejected. Messages admitted after the transition require no bond. A concurrent
+reservation either linearizes before acceptance and is cancelled with a full
+release if still unadmitted, or linearizes afterward and is rejected as
+unnecessary without retaining value.
+
+Rejection is likewise relationship-wide. It settles all bonds that are pending at
+the rejection's canonical ordering point, leaves the sender outside the accepted
+set, and preserves the applicable repeated-attempt constraints. It declines the
+active solicitation, not all future contact: after the backoff, another eligible
+bonded attempt may open a new solicitation. The interface may present accept or
+reject beside a message, but the consequence applies to the directed relationship
+represented by that message.
+
+A permanent contact prohibition is a different recipient decision. Blocking
+closes the active solicitation, settles its decision-open admitted bonds under
+the rejection allocation, fully cancels unadmitted reservations, and prevents new
+ordinary contact terms or admission until the recipient unblocks the directed
+identity pair. Unblocking restores eligibility for future bonded attempts; it
+does not accept the relationship, erase the backoff, or reopen settled bonds.
+
+\subsection{One Solicitation, Potentially Several Messages}
+
+The recipient-facing request to establish a relationship is also scoped to the
+directed identity pair rather than to one message. The first admitted attempt for
+an unaccepted relationship opens a \emph{relationship solicitation episode} and
+generates one logical prompt or notification. Its presentation channel may depend
+on recipient settings. Later admitted attempts join that active episode. They may
+add messages or update a quiet count in the grouped
+presentation, but they do not generate another relationship-establishment prompt.
+
+This coalescing does not make the later attempts financially idempotent. Each is
+a distinct authenticated attempt with its own content, bond, deadline, and any
+required persistence reserve, and admission advances repeated-attempt state. Only
+an exact replay of the same command is idempotent. The user-facing solicitation is
+coalesced so that repeated messages cannot repeatedly demand a relationship
+decision.
+
+Acceptance, rejection, or blocking closes the active episode and applies to the
+relationship and every bond open at the decision's canonical time. Rejection
+allows a later eligible attempt after backoff; blocking does not. Silence is
+different: it is not an \texttt{IgnoreRelationship} command. The recipient simply
+makes no decision, and each bond expires under its own deadline. When no admitted
+bond in the episode remains decision-open, the episode lapses. A later eligible
+attempt, after the applicable backoff, may open a new episode and one new
+solicitation. Merely dismissing or hiding the prompt has no permission or
+settlement effect.
+
+\subsection{Acceptance Near Expiry}
+
+An explicit recipient decision should not lose merely because a background expiry
+worker happens to run at the same moment. At the same time, a settled payment
+cannot remain reversible indefinitely. \textit{cs-mail} resolves this tension with
+a canonical event order and a bounded finalization rule.
+
+The authoritative service durably timestamps and sequences an acceptance when it
+receives it. An acceptance received on or before a bond's decision deadline takes
+priority over mechanical expiry. Expiry settlement is finalized only after a
+short processing holdback has allowed timely, already-received decisions to enter
+the canonical journal. The recipient receives a signed receipt for the decision.
+
+An acceptance received after a bond's decision deadline may still grant future
+communication permission and settle every other bond whose decision window
+remains open. It does not reopen a bond that has already expired. Thus explicit
+intent wins a genuine processing race, while terminal ledger settlement remains
+final.
+
+\section{Repeated Attempts}
+
+A sender could otherwise treat repeated losses of $C$ as the cost of searching
+for eventual acceptance, particularly because silence returns $S$. The protocol
+therefore makes repeated attempts to the same unaccepted recipient progressively
+slower and more capital-intensive.
+
+At attempt level $k$, admission may require a backoff interval $\Delta_k$ and a
+refundable persistence reserve $L_k$, with
+
+\begin{equation}
+    \Delta_{k+1} \geq \Delta_k,
+    \qquad
+    L_{k+1} \geq L_k.
+\end{equation}
+
+The total reservation becomes
+
+\begin{equation}
+    R_k = C + S + L_k.
+\end{equation}
+
+$L_k$ is not a fee. It is never paid to the recipient or either provider.
+Acceptance releases active reserves associated with attempts by the accepted
+public identity. It does not release reserves attached to another identity of the
+same private principal. Following rejection or expiry, $L_k$ remains unavailable
+until its quoted release time and then returns to the sender. Cancellation before
+admission releases it immediately. This raises the liquidity required for
+persistent contact without creating an incentive for another party to encourage
+failed communication.
+
+The attempt level advances on admission rather than settlement, preventing a
+sender from opening many low-level attempts while the first remains unresolved.
+It is principal-scoped anti-abuse history and is not reset when one public
+identity is accepted. A reserved attempt cancelled before admission releases all
+funds and does not advance the level. An explicit policy may later decay old
+principal-level history, but acceptance of one identity is not that policy.
+
+\section{Identity, Privacy, and Security}
+
+The privacy objective of \textit{cs-mail} extends beyond hiding the words in a
+message. A communication system also reveals who attempted to contact whom,
+whether the recipient accepted the relationship, how frequently contact was
+attempted, and how money moved afterward. Taken together, those facts form a
+relationship graph. The graph can be as sensitive as message content, because it
+may reveal personal, professional, medical, political, or commercial associations
+without revealing a single sentence of correspondence.
+
+The initial C-SQD deployment therefore distinguishes a private principal from the
+public protocol identities through which that principal communicates. Alice may
+communicate as \texttt{alice@work.example} and
+\texttt{alice@personal.example}. These are two public protocol identities: they
+are the personas other participants can address, recognize, accept, or reject.
+Alice's provider may know that both identities are controlled by the same private
+principal. Bob normally sees only the identity Alice uses with him, not the
+private principal or the fact that her two identities are connected.
+
+The distinction serves two different purposes. Recipient permission follows the
+public protocol identity, because accepting Alice's work identity should not
+silently accept every other identity she controls. Repeated-attempt enforcement
+follows the private principal with respect to a particular recipient identity,
+because changing addresses or operational keys should not erase the history of
+unwanted attempts. A privacy-preserving continuity mechanism can carry that
+history across a provider change without turning the principal into a public
+identifier.
+
+A private principal is the provider-local subject to which control, recovery, and
+anti-abuse continuity are attached. It is not necessarily a verified human or
+legal person; depending on provider policy, it may represent a person, account,
+organization, or managed group. Its identifier is neither a public address nor a
+universal identifier shared among providers or recipients. Other domains receive
+only the narrowly scoped assertions they need, so acceptance of one identity does
+not expose or authorize the principal's other identities.
+
+\subsection{Content and Envelope Privacy}
+
+Native message content should be end-to-end encrypted from the sender's device to
+the recipient's device. Content includes the subject, body, inline media, and
+attachments. Providers store and transport ciphertext and do not possess the
+ordinary decryption keys. The encrypted content remains outside the relationship
+state and financial journal, so a ledger compromise cannot become a message
+archive and a content-store compromise cannot rewrite settlement.
+
+Delivery still requires a small envelope. The destination must be routable, the
+sender must be authenticated, and the recipient provider must be able to verify
+that a required bond exists. The envelope should disclose only those facts. A
+valid bond does not justify exposing the subject, content, legal identity,
+unrelated addresses, account balance, or history of other relationships.
+
+End-to-end encryption protects content from providers and storage compromise, but
+it does not protect a device on which the recipient has opened the message. Device
+security, authenticated software updates, key recovery, key rotation, and visible
+warnings for unexpected key changes are therefore part of the security model.
+
+\subsection{A Private Relationship Graph}
+
+The protocol should not represent a relationship throughout the system by
+repeating two email addresses or by hashing those addresses in a predictable way.
+It should assign the directed pair an opaque, pairwise-scoped handle. A sender's
+relationship with one recipient receives a handle that cannot be correlated with
+the handle used for another recipient. The handle means nothing outside the
+service and relationship context for which it was created.
+
+An accepted relationship can persist through such a handle or a recipient-issued
+capability. Delivery needs to know that the presented authority remains valid; it
+does not need a readable history of how the relationship was formed. Revocation
+invalidates the authority without publishing an address-book edge. Rejected,
+ignored, and pending attempts receive the same confidentiality as accepted ones.
+
+Pairwise handles reduce linkability but do not make traffic analysis impossible.
+Timing, message size, network addresses, and distinctive settlement amounts can
+still connect otherwise separated events. Providers should limit retention of
+these signals, avoid shared tracing identifiers across privacy domains, and use
+batching or aggregation where it does not weaken settlement correctness.
+
+\subsection{Separation and Minimal Disclosure}
+
+No ordinary subsystem needs the complete story of a communication. The identity
+service needs to know that a verified principal controls a protocol identity, but
+not the message content. The content service needs to store encrypted bytes, but
+not legal identity evidence or bond ownership. The relationship service needs an
+opaque directed-pair handle and its current state. The ledger needs opaque account,
+bond, and settlement references together with amounts. The delivery service needs
+a destination route and proof that the current permission or reservation rule has
+been satisfied. External financial rails need deposits and withdrawals, not a
+per-message history.
+
+This separation is meaningful only if the cross-references are protected as
+carefully as the underlying records. A central operator that retains every mapping
+and every key can reconstruct the graph even when the individual databases look
+opaque. C-SQD should therefore separate access roles, encryption keys, operational
+logs, and retention schedules so that routine service operation never assembles a
+global readable relationship graph. Exceptional reconstruction should be narrow,
+audited, and governed by an explicit policy.
+
+\subsection{The Lifecycle of Private Records}
+
+Privacy changes as an attempt moves through the protocol. While a bond is pending,
+the system needs enough short-lived linkage to admit the message, prevent replay,
+apply backoff, receive a decision, and settle correctly. After finality and any
+defined dispute period, most of that event detail is no longer operationally
+necessary. The settlement can be reduced to the minimum accounting record that
+must remain, while the readable connection among identity, relationship, message,
+and ledger records is removed.
+
+An accepted relationship may need to persist for years, but its history need not.
+The durable record can be limited to an opaque capability or pair handle, current
+permission state, version, and revocation information. It need not preserve every
+message that led to acceptance or make the two endpoints discoverable through a
+global index.
+
+Encryption alone is not forgetting while the operator retains a usable key and a
+mapping back to people. At the end of the applicable operational, dispute, and
+legally required retention periods, C-SQD should delete unnecessary records and
+destroy the keys that protect expired identifying linkages. This cryptographic
+erasure must cover replicas, backups, search indexes, observability systems, and
+derived datasets. Anonymous aggregate measurements may remain only when they can
+no longer be used to reconstruct a person or relationship.
+
+Historical linkage may also be protected by threshold encryption. For example, a
+sender share and a recipient share could both be required to reconstruct a private
+relationship archive. This is useful after the protocol no longer requires online
+identification of the parties. It is not a substitute for records that must remain
+available during settlement, fraud investigation, a dispute, or a legally required
+retention period. Any separately retained compliance record should contain the
+minimum necessary fields, use separate keys and access controls, expire under a
+documented schedule, and never include message content merely because a financial
+record must be preserved.
+
+The system can forget only what it controls. A sender and recipient may retain
+their own messages and receipts, and an endpoint compromise may reveal what that
+endpoint knows. The protocol promise is that C-SQD and participating providers do
+not create an unnecessary permanent archive of everyone else's communications and
+relationships.
+
+This model creates a substantial governance obligation. The identity repository,
+key infrastructure, recovery process, compliance archive, and access audit are
+sensitive systems. Their design must minimize disclosure and must also address
+participants for whom conventional bank-based or legal-identity verification is
+unavailable or inappropriate.
+
+\section{Economic Effects and Counter-Incentives}
+
+The mechanism creates four sender-side costs without taxing accepted
+communication:
+
+\begin{enumerate}[leftmargin=2em]
+    \item ignored attempts lose $C$;
+    \item rejected attempts lose $C+S$;
+    \item unsettled bonds consume liquidity; and
+    \item repeated attempts encounter increasing backoff and persistence reserves.
+\end{enumerate}
+
+A selective sender whose contacts are commonly accepted may therefore operate at
+low expected cost. Indiscriminate outreach faces direct losses and working-capital
+requirements that scale with unsuccessful volume.
+
+The design must also constrain recipient-side and provider-side incentives. A
+recipient can receive $S$ by rejecting, and a recipient provider receives $C$ when
+an attempt expires or is rejected. A mature deployment should therefore combine
+auditable settlement with clear pricing, prominent and easy acceptance controls,
+fraud detection, limits on manipulative solicitation, and dispute procedures.
+Providers should not be able to manufacture expiry through hidden decisions or
+ambiguous delivery. Signed admission and decision receipts make these behaviors
+observable, while governance must define permissible pricing and interface
+practices.
+
+A valid bond purchases a protocol-valid opportunity to communicate. It does not
+purchase a recipient's attention, a favorable inbox rank, a response, or a right
+to bypass safety controls. Malware, unlawful content, excessive volume, and other
+policy violations remain independently rejectable at the transport and service
+layers.
+
+\section{Ledger and Settlement}
+
+The financial ledger is part of protocol validity because a bonded attempt is not
+valid unless the required value has been reserved. Three layers nevertheless
+remain distinct:
+
+\begin{equation}
+\boxed{
+\text{protocol settlement semantics}
+\neq
+\text{ledger operator}
+\neq
+\text{banking rails}
+}
+\end{equation}
+
+Protocol semantics determine who owns reserved value after each event. The ledger
+operator maintains an append-only, auditable record of those obligations. Banks,
+card processors, and other regulated services fund and redeem ledger balances.
+Many message settlements can consequently occur internally without creating a
+bank transaction for each message.
+
+Federated providers may clear those internal obligations in aggregate. For
+example, if Provider A owes Provider B $10{,}000$ during a clearing period and
+Provider B owes Provider A $8{,}000$, an external rail may settle the $2{,}000$
+net obligation while both providers retain the individual authenticated protocol
+events needed for participant receipts, audit, and dispute handling. Netting
+changes how providers discharge obligations; it does not change the ownership
+result of any individual protocol transition.
+
+The journal should use double-entry accounting, conserve value in every
+transition, and make all commands idempotent. Relationship changes and their
+financial consequences must be atomic. A bond and a persistence reserve may each
+reach terminal settlement exactly once.
+
+\section{Launch Extension: Express Lanes for Scoped Communication}
+
+Permanent personal acceptance is not appropriate for every relationship. A
+merchant, airline, healthcare organization, public agency, or automated service
+may need permission to communicate only about a transaction, appointment, account,
+or bounded period.
+
+Recipients may therefore issue scoped capabilities defining an authorized sender,
+recipient, purpose or message class, validity interval, volume limit, and
+revocation conditions. A matching capability permits bond-free delivery without
+granting unrestricted standing permission. Capabilities preserve the same central
+principle: communication authority originates with the recipient.
+
+Express lanes implement this capability outside the settlement kernel. A
+capability-authorized message neither opens nor joins a relationship solicitation
+nor advances repeated-attempt state. A recipient block atomically invalidates
+previously issued capabilities for the directed identity pair.
+
+\section{Deployment Path}
+
+An initial deployment can be centralized without collapsing the logical roles in
+the design. C-SQD may operate identity verification, the canonical event journal,
+permission state, bond ledger, delivery infrastructure, and internal clearing,
+while external financial providers handle funding and withdrawal.
+
+The first implementation should focus on a deterministic protocol kernel. Given
+authenticated commands, explicit time, and prior state, the kernel computes the
+same relationship and ledger transitions without performing networking, database
+access, or external payments. Unit tests and property-based tests can then verify
+relationship-wide settlement, value conservation, replay safety, and expiry races.
+The surrounding services should be separated from the beginning into identity,
+relationship, encrypted content, ledger, and telemetry domains. Retrofitting that
+separation after a global identifier has entered every log and database would not
+recover the privacy that was already lost.
+
+SMTP gateways can support conventional senders during migration. Later federation
+can allow a sender provider to reserve funds and a recipient provider to verify
+the reservation, deliver the message, and produce authenticated decisions.
+Providers may net their obligations periodically while preserving the individual
+protocol events. Federation requires shared representations for identities,
+quotes, messages, bonds, decisions, receipts, and clearing obligations, but it
+does not require identical internal databases or banking partners.
+
+Operator-specific choices for identity enrollment, account funding, SMTP payment
+challenges, clearing, and staged launch are described separately in the
+\textit{cs-mail Deployment and Migration Profile}. They are not requirements of
+the protocol itself.
+
+\section{Conclusion}
+
+\textit{cs-mail} treats communication permission as durable protocol state and
+places economic friction at the first-contact boundary. Accepted communication is
+free of protocol message charges. Unaccepted communication carries a refundable
+bond whose settlement reflects whether the recipient accepts or rejects the
+relationship or instead makes no decision before individual bonds expire.
+
+The central mechanism is simple, but its implementation depends on precise
+semantics. Acceptance and rejection apply to relationships rather than isolated
+messages; rejection declines the current solicitation while a distinct block
+prohibits future ordinary contact. Relationship decisions atomically settle all
+eligible admitted bonds and fully cancel unadmitted reservations. A canonical
+ordering rule gives timely acceptance priority over mechanical expiry without
+weakening finality. Repeated-attempt controls attach to private principals, while
+visible permission and acceptance-side reserve release remain attached to public
+identities; accepting one identity does not reset the principal's shared history.
+One active solicitation groups repeated attempts so that they cannot repeatedly
+demand the same relationship decision.
+
+The same architecture treats privacy as a property of the communication graph as
+well as its content. Native content is end-to-end encrypted. Relationships and
+attempts use pairwise opaque references, and each service receives only the facts
+needed for its role. After settlement and the applicable retention period, the
+system removes unnecessary linkage and destroys expired keys rather than keeping
+a permanent readable history of who contacted whom.
+
+These rules provide a path from a centralized product to an interoperable
+communication network. The accompanying protocol specification turns them into
+versioned objects, commands, state transitions, error cases, and testable
+invariants.
+
+\end{document}

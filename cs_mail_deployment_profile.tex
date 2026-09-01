@@ -1,0 +1,321 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{tabularx}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue
+}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\title{\textit{cs-mail} Deployment and Migration Profile\\
+\large Initial C-SQD Operation, Funding, SMTP, and Clearing}
+\author{C-SQD}
+\date{Draft 0.4 --- August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document describes nonnormative choices for deploying the \textit{cs-mail}
+protocol. It separates the protocol's invariant meaning from operator policy:
+identity enrollment, account funding, risk controls, SMTP migration, provider
+clearing, privacy operations, and staged launch. The profile gives one plausible
+path for an initial centralized C-SQD service and later federation. It neither
+changes the settlement rules in the \textit{cs-mail Protocol Specification} nor
+requires another provider to adopt the same vendors, verification evidence,
+storage topology, or banking rails.
+\end{abstract}
+
+\section{Status and Document Boundary}
+
+The \textit{cs-mail Protocol Specification} is normative. It defines permission,
+bonds, repeated-attempt controls, canonical ordering, settlement, privacy, and
+invariants. The \textit{Rust Reference Architecture} explains one implementation
+shape. This profile addresses choices that a real operator must make but that do
+not belong in the portable protocol.
+
+In particular, this profile does not define a universal legal identity, mandate
+bank-based enrollment, select a payment processor, create an additional protocol
+fee, or weaken native end-to-end content encryption. Policies in this document
+must remain versioned, disclosed, auditable, and subordinate to protocol
+semantics.
+
+\section{Initial Deployment Shape}
+
+An initial deployment may place several logical roles under C-SQD while keeping
+their authority and data access separate. C-SQD may operate decision ingress,
+the canonical journal, relationship state, the internal ledger, native delivery,
+and internal clearing. External regulated providers may fund and redeem user
+balances.
+
+Central operation does not justify a universal database credential or identifier.
+Before meaningful user data accumulates, the deployment should establish separate
+access domains for:
+
+\begin{itemize}[leftmargin=2em]
+    \item principal evidence and account recovery;
+    \item public identities and directed relationships;
+    \item encrypted message content;
+    \item balances, bonds, reserves, and settlement;
+    \item delivery and abuse telemetry; and
+    \item separately required compliance or dispute records.
+\end{itemize}
+
+Each domain should have purpose-specific credentials, encryption keys, retention
+classes, and access audit. Translation among scoped references is an explicit
+operation. A central operator should not treat organizational ownership as a
+substitute for technical compartmentalization.
+
+\section{Identity Enrollment and Principal Policy}
+
+The protocol requires a continuing private principal for control, recovery, and
+repeated-attempt continuity. It does not require that every provider define that
+principal as a legally verified natural person. C-SQD should publish which kinds
+of principal it supports, what evidence each tier requires, and which functions
+depend on verification.
+
+One deployment might accept several enrollment profiles:
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}YY@{}}
+\toprule
+\textbf{Profile} & \textbf{Possible evidence} & \textbf{Policy considerations} \\
+\midrule
+Individual & Account authentication, recovery factors, and, where justified, legal name, date of birth, or a verified funding account. & Avoid collecting legal identity merely because it is conventional; document necessity and retention for each field. \\
+Organization & Organization name, jurisdiction or registry reference, institutional funding account, and evidence that an enrolling representative may act for it. & Support delegated administration, representative turnover, and recovery without making registry data part of ordinary messages. \\
+Managed group & Sponsoring organization, administrator authority, and member or role controls. & Define who owns protocol identities, receives funds, and may recover or revoke operational keys. \\
+Limited account & Provider-local account and strong recovery evidence without conventional bank or legal-identity verification. & Apply proportionate balance, withdrawal, or sending limits without exposing a public identity tier. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Exact evidence is a legal, risk, accessibility, and inclusion decision. People who
+cannot or should not use conventional bank-based verification need a documented
+path where feasible. Identity evidence and the provider-local principal reference
+must never appear in ordinary message envelopes, relationship records exposed to
+other users, or globally comparable federation assertions.
+
+Provider migration should use recipient-scoped continuity proofs for repeated-
+attempt enforcement. It should not export a stable universal principal identifier.
+
+\section{Funding, Withdrawal, and Financial Risk}
+
+Users may fund ledger balances periodically through cards, bank transfers, or
+other supported rails. Protocol settlement then occurs internally. A valid bond
+must remain fully backed even if an external provider later delays, reverses, or
+disputes a funding transaction.
+
+The operator therefore needs explicit policy for:
+
+\begin{itemize}[leftmargin=2em]
+    \item funding finality and any waiting period before deposited value may back
+          a bond;
+    \item withdrawal availability for returned collateral and received
+          settlement;
+    \item chargebacks, fraud losses, negative balances, account suspension, and
+          separately authorized compensating ledger entries;
+    \item limits by verification tier, settlement unit, jurisdiction, or risk;
+    \item sanctions, tax, money-transmission, consumer-protection, and abandoned-
+          property obligations where applicable; and
+    \item dispute windows and retention classes for evidence that must survive
+          longer than ordinary delivery data.
+\end{itemize}
+
+External reversals do not rewrite a terminal protocol event. If policy authorizes
+a later adjustment, the ledger records a new compensating batch with its own
+cause, authority, and audit trail.
+
+The sender-facing interface should distinguish available, reserved, pending-
+release, and withdrawable value. Before authorization it should show the full
+$C+S+L_k$ requirement, the short admission window, the decision-window duration
+that begins only after admission, the earliest final expiry time, and the
+persistence-reserve release condition. A still-unadmitted reservation should
+offer cancellation and explain that cancellation or admission timeout returns all
+reserved value.
+
+\section{SMTP Migration}
+
+SMTP is an edge compatibility mechanism, not the native trust or privacy model.
+The gateway should make the route and its privacy consequences visible.
+
+\subsection{Inbound Legacy Sender}
+
+When a conventional sender contacts a C-SQD recipient, the gateway can follow
+this sequence:
+
+\begin{enumerate}[leftmargin=2em]
+    \item Resolve whether the legacy sender maps to an accepted protocol identity.
+    \item If accepted-sender authority exists, apply ordinary accepted-sender and
+          safety policy.
+    \item Otherwise, return a standards-compatible challenge or a web link that
+          explains the recipient's current contact terms.
+    \item Authenticate or enroll the sender, present the complete reservation,
+          and fund the sender account if necessary.
+    \item Obtain fresh signed terms and reserve the bond and any persistence
+          reserve with a short admission deadline.
+    \item Durably record the encrypted content and retryable delivery intent, then
+          admit the attempt through the same deterministic protocol command used
+          by a native client. If this does not happen before the admission
+          deadline, return $C+S+L_k$ in full.
+    \item Return an authenticated admission result without implying inbox rank,
+          recipient attention, or a guaranteed reply.
+\end{enumerate}
+
+The web flow must bind the funded authorization to the exact sender, recipient,
+message, quote, amount, admission deadline, and later decision deadline. A
+reusable payment link or bearer token must not let another party substitute
+content or redirect a reservation.
+
+A legacy gateway may encounter plaintext before creating native ciphertext. The
+message must therefore be marked as outside the native endpoint-to-endpoint
+confidentiality guarantee. Transport TLS and provider encryption at rest are not
+equivalent to native end-to-end encryption.
+
+\subsection{Outbound Legacy Recipient}
+
+When a native user sends to a conventional recipient, the client should disclose
+that the destination cannot enforce native permission, settlement, graph privacy,
+or content confidentiality. The envelope and local history should record the
+downgrade. The system must not advertise a successful SMTP delivery as recipient
+acceptance of a \textit{cs-mail} relationship.
+
+\subsection{Gateway Abuse Controls}
+
+A payment challenge is itself a communication surface. Gateways should rate-limit
+challenges, prevent address enumeration, avoid leaking recipient pricing to
+unauthorized bulk probes, expire unfunded flows, and provide a way to report
+impersonation or malicious content. Gateway policy may reject malware, unlawful
+content, or excessive volume independently of financial validity.
+
+\section{Provider Clearing}
+
+Federation creates obligations between providers when recipient providers earn
+$C$ or recipients receive $S$. The persistence reserve $L_k$ remains sender
+property and never enters provider revenue or inter-provider clearing.
+
+Providers may preserve each authenticated protocol event while periodically
+netting external payment. Suppose Provider A owes Provider B $10{,}000$ during a
+clearing period and Provider B owes Provider A $8{,}000$. The external rail may
+settle a $2{,}000$ net obligation from A to B. The underlying events remain
+individually attributable through scoped settlement receipts so participants can
+verify their balances and authorized disputes can be resolved.
+
+A clearing agreement should define:
+
+\begin{itemize}[leftmargin=2em]
+    \item supported settlement units and no implicit foreign-exchange rule;
+    \item clearing intervals, collateral or credit limits, and default handling;
+    \item canonical cutoffs and treatment of late or disputed events;
+    \item reconciliation proofs and scoped audit references;
+    \item who bears external-rail fees without changing quoted protocol
+          settlement; and
+    \item suspension and orderly wind-down without stranding participant-owned
+          balances or pending protocol decisions.
+\end{itemize}
+
+Netting changes how providers discharge obligations. It does not change who owns
+value after any acceptance, rejection, expiry, or unadmitted-cancellation
+transition.
+
+\section{Operational Policy and User Experience}
+
+The recipient and recipient provider have economic incentives that require
+visible counter-controls. C-SQD should publish bounds or review procedures for
+$C$ and provider minimum collateral, prohibit interfaces that hide timely
+acceptance, issue signed decision receipts, detect recipient-provider collusion,
+and provide dispute and suspension procedures.
+
+The product should teach relationship consequences at the decision point. An
+accept, reject, or block control beside a message should state that the action
+applies to the directed sender identity, settles every decision-open admitted bond
+for that relationship, and fully cancels its unadmitted reservations. Acceptance
+releases persistence reserves only for attempts from that public identity; it
+does not reset principal-level backoff or release reserves belonging to another
+identity of the same principal. Rejection declines the active solicitation while
+preserving a later eligible retry after backoff. Blocking is the separate control
+for prohibiting future ordinary contact until the recipient removes the block. A
+late acceptance should distinguish prospective permission from older bonds whose
+decision windows are already closed.
+
+The sender-facing flow should distinguish reservation from admission. Closing the
+client, cancelling, or failing to make encrypted content and its delivery intent
+durable before the admission deadline returns $C+S+L_k$ in full, advances no
+backoff, and produces no recipient solicitation. The recipient decision window
+starts only at canonical admission.
+
+The first admitted attempt for an unaccepted directed relationship should open one
+grouped relationship solicitation. That group is the one logical establishment
+prompt; recipient settings may present it as a push, badge, banner, inbox row, or
+quiet equivalent. Later admitted messages join that active group.
+They may update its contents or ordinary unread count quietly, but must not
+repeatedly ask the recipient to establish the same relationship. This behavior is
+solicitation coalescing, not message idempotency: every attempt retains its own
+bond, deadline, content, and repeated-attempt consequence.
+
+Accept, reject, and block close the active solicitation and apply to the
+relationship. Reject permits a later eligible attempt after the applicable
+backoff. Block refuses future terms, reservations, any optional capability use,
+and admission until the recipient unblocks; unblocking does not accept the sender or erase
+backoff. Ignoring the solicitation means taking no action, so bonds still expire
+individually. Dismissing or hiding the prompt is a presentation preference and
+must not be represented as acceptance, rejection, blocking, or financial
+settlement. Once the final associated bond is no longer decision-open, the episode
+may lapse. A later eligible attempt may open one new episode after the applicable
+backoff unless the relationship is blocked.
+
+Operational dashboards should report service health without reconstructing a
+global relationship graph. Metrics should use short windows, aggregation, scoped
+trace references, and documented retention. Support access to identity,
+relationship, content, or ledger data should be separately authorized rather than
+granted through one universal administrator role.
+
+\section{Staged Launch}
+
+Express lanes are a launch extension outside settlement state. Their recipient-
+signed grants authorize only rate- and time-bounded bond-free communication, open
+no relationship solicitation, advance no repeated-attempt state, and remain
+subordinate to recipient blocking.
+
+A cautious deployment can proceed in five gates:
+
+\begin{enumerate}[leftmargin=2em]
+    \item \textbf{Closed deterministic kernel.} Execute every transition and
+          invariant in memory using fixed policy and explicit canonical time.
+    \item \textbf{Internal-value pilot.} Add the append-only ledger, transactional
+          outbox, crash recovery, and synthetic or nonwithdrawable test value.
+    \item \textbf{Native-client pilot.} Add endpoint encryption, key transparency,
+          recovery, privacy-domain credentials, retention, and verified deletion.
+    \item \textbf{Limited external funding and SMTP.} Introduce real rails and
+          gateways under conservative limits, visible privacy downgrades, and
+          staffed dispute operations.
+    \item \textbf{Federation.} Add independent providers only after golden
+          transition vectors, authenticated receipts, clearing reconciliation,
+          migration proofs, and adversarial failure tests are stable.
+\end{enumerate}
+
+Each gate should have measurable exit criteria. Volume growth is not evidence
+that value conservation, privacy deletion, decision timeliness, or dispute
+operations work correctly.
+
+\section{Conclusion}
+
+The first C-SQD deployment can be centralized without treating deployment policy
+as protocol law. Identity evidence, funding rails, SMTP behavior, risk controls,
+and clearing agreements should remain explicit profiles around the deterministic
+kernel. Preserving that boundary allows the product to evolve, jurisdictions to
+differ, and later providers to interoperate without changing the meaning of
+permission or settlement.
+
+\end{document}

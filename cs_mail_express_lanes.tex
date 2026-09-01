@@ -1,0 +1,293 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue
+}
+
+\title{\textit{cs-mail}: Express Lanes for Transactional Mail\\
+\large A Pedagogical Memo}
+\author{C-SQD}
+\date{Draft 0.1 --- August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{\small\textbf{Nonnormative memo.} This document
+explains a concept and motivates it for a reader new to the underlying ideas. It
+introduces \emph{express lanes}, the user-facing form of the scoped capabilities
+described in the \textit{cs-mail Protocol Specification}. The settlement and
+privacy semantics remain governed by that specification; the issuance, safety,
+and lifetime rules sketched here will be defined normatively in a later
+document.}}
+\end{center}
+
+\section{A First Week with a New Bank Account}
+
+{\sloppy
+You opened a checking account on Monday. By Friday your inbox holds a welcome note
+from \texttt{welcome@bank.com}, a statement notice from
+\texttt{statements@bank.com}, a fraud alert from \texttt{alerts@e.bank.com}, a
+marketing message you did not really ask for, and---indistinguishable at a
+glance---a message from ``Bank Security Team''
+\texttt{<security@\allowbreak bank-\allowbreak support-\allowbreak online.com>}
+urging you to confirm your login. The
+first three you wanted. The last is a phishing attempt. Every one of them arrived
+the same way: someone typed your address and pressed send.\par}
+
+\textit{cs-mail} already changed that story for strangers. An unknown person must
+post a refundable bond to reach you, and you accept or reject the relationship.
+But your bank is neither a stranger you want to charge nor a person you
+``accept'' as a standing contact. You chose to hear from it, for particular
+reasons, and it will write to you from many addresses for years. The two states
+\textit{cs-mail} already has---bonded stranger and accepted person---do not fit
+it. That gap is what this memo is about.
+
+\section{The Problem: Two Kinds of Wanted Mail}
+
+Wanted mail comes in two shapes. The first is people and ongoing relationships: a
+colleague, a friend, a new client. \textit{cs-mail} handles these by acceptance---
+you grant a person standing permission and they write freely thereafter. The
+second is organizations you have authorized for a bounded purpose: the bank's
+statements, the airline's boarding pass, the pharmacy's refill notice, the clinic's
+appointment reminder. Call this \emph{transactional mail}.
+
+Transactional mail does not fit acceptance, for four reasons:
+
+\begin{itemize}[leftmargin=2em]
+    \item It arrives from many addresses. One bank sends from
+    \texttt{statements@}, \texttt{alerts@}, and
+    \texttt{no-\allowbreak reply@\allowbreak e.bank.com}.
+    Accepting an address would mean accepting dozens, and missing the next one.
+    \item It arrives at volume and without your reply. You will never hand-curate
+    it.
+    \item It is narrow. You want the bank's fraud alerts; you did not necessarily
+    invite its marketing.
+    \item The sender usually is not on \textit{cs-mail} yet. Your bank still sends
+    ordinary email, and will for a long time.
+\end{itemize}
+
+So we need a third permission state: a way to grant a chosen organization a
+bounded, revocable, effortless right to reach you---one that resists
+impersonation and works \emph{before} the sender adopts \textit{cs-mail}. We call
+it an \emph{express lane}. Before describing it, two pieces of background make it
+comprehensible.
+
+\section{What You Need to Know First}
+
+\subsection{The ``From'' line is not identity}
+
+The sender shown on an email is like the return address handwritten on an
+envelope: a claim, not a proof. Anyone can write ``Your Bank'' as the sender name
+and \texttt{security@bank.com} as the address; nothing in ordinary email stops
+them. Phishing is precisely this move. An express lane therefore can never be
+granted to a display name or a typed address, because neither is evidence of who
+actually sent the message.
+
+\subsection{Mail can prove authorized domain use: SPF, DKIM, and DMARC}
+
+Two widely deployed standards let a receiving system check a message
+cryptographically, and most newcomers have never heard of them.
+
+\emph{DKIM} attaches a domain signature to a message; \emph{SPF} authenticates the
+domain responsible for the SMTP sending path. Either can authenticate a domain,
+but that domain is not necessarily the one visible to the reader.
+
+\emph{DMARC}, standardized by RFC~9989, ties a passing SPF or DKIM identity to the
+visible RFC 5322 author domain through strict or relaxed alignment. It also
+lets a domain publish its requested handling for failures.
+
+Together they answer one precise question: did the owner of the visible author
+domain authorize its use on this message? They do not say the message is friendly,
+wanted, legally from a particular company, or safe. A look-alike domain can pass
+DMARC for itself. The lane's separate expected-domain match supplies that missing
+decision.
+
+\subsection{What \textit{cs-mail} already provides}
+
+\textit{cs-mail} already gives us bonded first contact for strangers and the idea
+of recipient-granted permission. The protocol specification also already defines a
+general \emph{scoped capability}---a recipient-signed grant that lets a sender
+skip the bond for a bounded purpose. Express lanes are that launch capability, given the
+issuance, safety, and lifetime rules it needs to actually work.
+
+\section{The Solution: Express Lanes}
+
+An express lane is a recipient-granted, revocable, bond-free path for one sender
+you have chosen, bounded in purpose and time. Three properties make it safe.
+
+\paragraph{What it limits.}
+A lane controls \emph{who} may reach you, \emph{how much}, and for \emph{how
+long}---not \emph{what} they say. Because \textit{cs-mail} content is end-to-end
+encrypted, no provider reads a message to confirm it is ``really about your
+account.'' ``Purpose'' is therefore a label, plus volume and time caps, plus your
+power to revoke---not content inspection. This is a deliberate limit, and an
+honest one.
+
+\paragraph{What it binds to.}
+For a sender already on \textit{cs-mail}, the lane binds to the sender's
+cryptographic protocol identity, and the provider can honor it without even
+learning which organization it is. For a legacy sender---your bank today---the
+lane binds to the canonical \emph{organizational domain} established by a DMARC
+pass, \texttt{bank.com}, and honors a message only when its visible author domain
+falls under that identity. It never binds to a
+display name or a single address. So the same lane behaves sensibly across every
+case in the opening story:
+
+\begin{itemize}[leftmargin=2em]
+    \item the fraud alert from \texttt{alerts@e.bank.com} and the statement from
+    \texttt{statements@bank.com} both ride the lane, because both authentically
+    come from \texttt{bank.com};
+    \item ``Bank Security Team''
+    \texttt{<security@bank-support-online.com>} does not, because its
+    authenticated domain is not \texttt{bank.com};
+    \item \texttt{security@bank.com.evil.com} does not, because its authenticated
+    domain is \texttt{evil.com}.
+\end{itemize}
+
+The phishing message from Friday fails at exactly this line.
+
+\paragraph{Why it is safe to grant freely.}
+An express lane is trust you can withdraw in one tap. If it is abused---the bank
+floods you, or a lane is somehow misused---you revoke it, and the sender drops
+back to the ordinary bonded gate, where it must pay to reach you again. Because
+the cost of a mistake is a single tap, you can hand out lanes liberally without
+building a permanent, unmanageable allowlist. A block always overrides a lane.
+
+\medskip
+
+The three permission states now cover the whole of your inbox:
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.24\textwidth}p{0.30\textwidth}p{0.32\textwidth}@{}}
+\toprule
+\textbf{Who} & \textbf{How they reach you} & \textbf{How it is granted and ended}
+\\
+\midrule
+A stranger & Posts a refundable bond; you accept or reject. & Automatic on any
+first contact; settled by your decision. \\
+A person you accept & Writes freely, no bond. & You accept the relationship; you
+revoke it. \\
+An organization you chose & Travels a bond-free express lane, bounded in purpose
+and time. & Issued from a decision you already made; you revoke it or let it
+lapse. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{The legacy binding is a bridge.}
+Binding to a domain is a bridge, not the destination. The day your bank adopts
+\textit{cs-mail}, its lane re-binds to the bank's cryptographic identity, the
+DMARC dependency falls away, and the lane becomes fully private---the provider no
+longer needs to see \texttt{bank.com} to honor it. The bridge advertises its own
+obsolescence.
+
+\section{How You Get One: Issuance}
+
+An express lane should feel like a consequence of a decision you already made,
+never a settings screen you must remember to visit. Two moments cover almost
+everything:
+
+\begin{enumerate}[leftmargin=2em]
+    \item \textbf{When you hand over your address.} Signing up, checking out, or
+    booking---the moment you give the bank your address, the client offers, in
+    one line, to open an express lane for it.
+    \item \textbf{When you write first.} Emailing the bank yourself auto-opens a
+    return lane, since you have plainly invited a reply.
+\end{enumerate}
+
+For a legacy sender the grant cannot complete on a promise; it completes on proof.
+When you sign up on \texttt{bank.com}, the client remembers that you were on
+\texttt{bank.com} and expects mail from that domain. The first message that
+arrives claiming to be the bank is checked with DMARC; if it authentically comes
+from the expected domain, the client shows a one-tap confirmation naming the
+\emph{authenticated domain}---not the display name---and the lane opens. Seeding
+the expectation from the website you were actually on turns ``which bank?'' into a
+simple match, and lets you catch a look-alike domain at the very moment of
+granting.
+
+\section{How a Lane Ends: Lifetime and Renewal}
+
+A lane that lasted forever by default would rebuild the very allowlist we are
+trying to avoid. So lifetime is bounded, but bounded intelligently.
+
+\paragraph{Anchor on activity, not the calendar.}
+A lane's clock is its last authenticated message, not its issue date. A lane in
+active use stays open on its own; one that goes quiet drifts toward expiry. This
+captures most of the benefit of tying a lane to an event---a single flight,
+say---without asking anyone to define events.
+
+\paragraph{The default is a gentle re-confirm.}
+When an inactive lane reaches the end of its window, you get a light prompt---keep
+the airline's lane, or let it lapse?---rather than silent deletion. You set the
+window per sender.
+
+\paragraph{The exception that matters.}
+Some lanes should effectively never lapse. Your bank's fraud alerts and your
+hospital's test results are exactly the mail whose silent disappearance is most
+costly: a lapsed lane there means a missed fraud warning or a missed result,
+quietly rerouted to the bonded gate. For these you choose a \emph{persistent}
+lane: activity renews its ordinary horizon, and an inactive horizon produces a
+review reminder instead of a lapse. Even a persistent lane has a recipient-signed
+hard validity bound, after which a fresh grant is required.
+
+Revocation and blocking remain available and immediate, whatever the lifetime.
+
+\section{Implementation Constraints}
+
+Three constraints shape any implementation. Their details belong in a later
+specification; the constraints themselves are worth stating now because they are
+what make the concept real.
+
+\paragraph{Lanes live at the recipient's provider.}
+Only the provider sees inbound mail and runs the DMARC check, and the provider is
+already where an incoming message is either admitted or sent to the bonded gate.
+The lane must be evaluated there. A device cannot verify a domain on mail it never
+handled.
+
+\paragraph{The list of lanes is sensitive and must be compartmentalized.}
+Which organizations a person trusts, and for what---their bank, their hospital,
+their lawyer---is precisely the relationship profile that \textit{cs-mail}'s
+privacy model exists to protect. Lanes must therefore live in the relationship
+privacy domain, under their own keys and access role, not in a general table that
+a ledger or telemetry breach could read. For senders on \textit{cs-mail}, a lane
+can be a recipient-signed, pairwise-scoped grant that the provider verifies
+without learning the organization at all; for legacy senders the provider must see
+the domain to match DMARC, which is one more reason the native path is the more
+private destination.
+
+\paragraph{This promotes an existing feature rather than inventing settlement.}
+The protocol specification already defines scoped capabilities, already requires
+that a capability-authorized message open no relationship solicitation and advance
+no repeated-attempt state, and already lets a block override a capability. Express
+lanes adopt those rules unchanged. The launch extension adds the issuance flow
+(the two moments and the
+DMARC-confirmed legacy grant), the domain-binding and expected-domain mismatch rules,
+and the activity-anchored lifetime with its persistent option. This changes no
+settlement or privacy meaning.
+
+\section{Where This Leaves \textit{cs-mail}}
+
+With express lanes, the permission model reads as one sentence: strangers post a
+refundable bond to reach you, people you accept may write freely, and
+organizations you have chosen travel an express lane you can close at any time.
+Each state matches how the relationship actually feels---a stranger earning a
+first hearing, a person you know, an institution you deliberately signed up with.
+That is what mindful email means: not an inbox that guesses what you want, but one
+where reaching you is a permission you granted, on purpose, and can always take
+back.
+
+\end{document}
