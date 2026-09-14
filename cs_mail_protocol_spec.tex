@@ -25,1081 +25,485 @@
 \newcommand{\MAY}{\textbf{MAY}}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 
-\title{\textit{cs-mail} Protocol Specification\\
-\large Permission, Bonded Contact, and Relationship Settlement}
+\title{\textit{cs-mail} Protocol Specification\\\large Relationship Requests, Permission, and Financial Obligations}
 \author{C-SQD}
-\date{Draft 0.6 --- September 2026}
+\date{Draft 0.7 --- September 2026}
+
+\setlength{\emergencystretch}{1.5em}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-This document defines the normative state, commands, events, settlement rules,
-error conditions, and invariants of the \textit{cs-mail} protocol. The protocol
-represents communication permission as a directed relationship between public
-protocol identities. An unaccepted sender reserves a bond before attempting
-contact. Acceptance and rejection are relationship-level decisions that atomically
-settle every eligible admitted bond and fully cancel every unadmitted reservation
-for that relationship. Rejection declines one
-solicitation while preserving the possibility of a later attempt after backoff;
-a separate recipient block prohibits future ordinary contact until removed. The
-specification also distinguishes reservation from admission: an abandoned
-unadmitted reservation returns in full, and the recipient decision window begins
-only when the message is admitted. Repeated-attempt controls remain scoped to the
-private principal and are not reset by accepting one public identity. The
-specification further defines persistence reserves, expiry ordering, and the
-coalescing of repeated recipient solicitations. It separates protocol settlement,
-ledger operation, and external financial rails. It also defines a native
-privacy profile covering end-to-end content encryption, pairwise-scoped
-identifiers, compartmentalized protocol data, limited retention, and
-cryptographic erasure.
+The \textit{cs-mail} protocol makes permission to communicate a directed
+relationship. A sender who lacks permission may submit a relationship request
+with an initial encrypted message and one conditional charge. The recipient may
+accept, reject, or leave the request to expire. These outcomes determine refunds
+and forfeitures; permitted follow-up messages create no further charge. This
+specification defines the request lifecycle, authenticated decisions, financial
+obligations, and privacy boundaries. The C-SQD deployment adds a company-owned
+pool and quarterly equal member allocations under its financial-program profile.
 \end{abstract}
 
-\section{Status and Conformance}
-
-This is an initial protocol draft. It is intended to make the deterministic core
-implementable and testable; it does not select a wire encoding, signature suite,
-database, transport, banking partner, or jurisdiction-specific compliance model.
-
-The key words \MUST, \MUSTNOT, \SHOULD, \SHOULDNOT, and \MAY{} in this document
-describe conformance requirements. An implementation conforms to this version
-only if every externally visible transition preserves the state and financial
-invariants defined here.
-
-\section{Scope}
-
-This specification defines:
-
-\begin{itemize}[leftmargin=2em]
-    \item private principals and public protocol identities;
-    \item directed communication relationships;
-    \item signed contact terms;
-    \item bonded communication attempts and persistence reserves;
-    \item relationship acceptance, rejection, blocking, unblocking, and revocation;
-    \item unadmitted reservation cancellation and admitted-bond expiry;
-    \item repeated-attempt admission and principal-level continuity;
-    \item relationship-solicitation coalescing;
-    \item canonical event ordering, idempotency, and atomic settlement; and
-    \item native content confidentiality, relationship-graph privacy, record
-          lifecycle, minimum ledger semantics, and protocol invariants.
-\end{itemize}
-
-Message-body formats, content moderation, inbox ranking, user-interface design,
-external funding, withdrawal, foreign exchange, and inter-provider net settlement
-are outside the deterministic kernel. Those systems \MUSTNOT{} contradict the
-state and settlement consequences defined here.
-
-\section{Protocol Model at a Glance}
-
-\paragraph{Status of this section.}
-This section is nonnormative. It gives the reader a map of the interacting state
-before the following sections define it precisely. If this overview conflicts
-with a later requirement, the later normative requirement controls.
-
-\subsection{One First Contact}
-
-Alice's public protocol identity has not been accepted by Bob's public protocol
-identity. Bob's provider quotes $C=0.25$ and $S=4.75$ settlement units. On the
-first attempt, $L_0=0$, so Alice reserves $R_0=5.00$. After the encrypted message
-is admitted, Bob's relationship decision determines both permission and money:
-
-\begin{center}
-\small
-\begin{tabularx}{\textwidth}{@{}lYYY@{}}
-\toprule
-\textbf{Outcome} & \textbf{Bond settlement} & \textbf{Relationship effect} & \textbf{Repeated-attempt effect} \\
-\midrule
-Accept & Return $C+S$ to Alice. & Establish directed permission for Alice's public identity. & Release active $L_k$ for that identity; preserve principal-level history. \\
-Reject & Transfer $C$ to Bob's provider and $S$ to Bob. & Decline this solicitation; permit a later eligible attempt after backoff. & Preserve the advanced level; release each $L_k$ on schedule. \\
-Expire & Transfer $C$ to Bob's provider and return $S$ to Alice. & Leave the current relationship state unchanged. & Preserve the advanced level; release each $L_k$ on schedule. \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-Acceptance and rejection apply to the Alice-to-Bob relationship, not merely to
-the message beside which Bob acts. A timely decision therefore settles every
-eligible admitted bond for that directed identity pair. A reserved but unadmitted
-message is instead cancelled with a full return. The detailed definitions appear
-below. The first admitted attempt opens one relationship solicitation; later
-attempts join that grouped episode without generating another relationship-
-establishment signal.
-
-\subsection{Five Interacting Lifecycles}
-
-The protocol composes five related but distinct lifecycles:
-
-\begin{center}
-\small
-\begin{tabularx}{\textwidth}{@{}p{0.18\textwidth}YY@{}}
-\toprule
-\textbf{Lifecycle} & \textbf{States or stages} & \textbf{What changes it} \\
-\midrule
-Directed relationship & \texttt{unknown}, \texttt{accepted}, \texttt{rejected}, \texttt{revoked}, \texttt{blocked} & Recipient acceptance, rejection, revocation, blocking, or unblocking. \\
-Communication attempt & terms issued, value reserved, then admitted or cancelled & Sender authorization followed by durable admission, sender cancellation, or admission timeout. \\
-Bond & \texttt{reserved} or \texttt{admitted}, then one terminal state & Unadmitted cancellation, acceptance, rejection, blocking, or expiry. \\
-Persistence reserve & \texttt{reserved}, then \texttt{released} exactly once & Immediate release on unadmitted cancellation or identity-scoped acceptance; scheduled release after rejection, blocking, or expiry. \\
-Relationship solicitation & inactive, active generation, then closed & First admitted unaccepted attempt opens it; later attempts join it; a relationship decision or exhaustion of decision-open bonds closes it. \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-The relationship controls future communication. The bond settles one or more
-pending attempts. Repeated-attempt state controls when and with how much
-additional refundable liquidity another attempt may be admitted. The relationship
-solicitation controls whether the recipient receives a new request to establish
-the relationship or merely sees another attempt grouped into an existing request.
-The ledger records the ownership consequences. No one state is a substitute for
-another.
-
-\subsection{Identity and Reference Layers}
-
-A private principal $P_i$ is a provider-local control and anti-abuse subject. A
-public protocol identity $I_i$ is the visible persona to which permission is
-granted. An opaque relationship handle $H_{ij}$ represents a directed identity
-pair inside a limited service domain. Ledger, content, and telemetry systems use
-their own scoped references. These layers deliberately do not collapse into one
-global user identifier.
-
-\section{Terminology and Actors}
-
-\subsection{Actors}
-
-\begin{description}[leftmargin=2.2em,style=nextline]
-    \item[Sender] An authenticated private principal acting through a public
-    protocol identity to initiate a communication attempt.
-    \item[Recipient] The private principal controlling the destination protocol
-    identity and its directed communication relationship.
-    \item[Sender provider] The service that authenticates the sender and reserves
-    sender funds.
-    \item[Recipient provider] The service that publishes contact terms, admits the
-    message, records recipient decisions, and delivers to the recipient.
-    \item[Canonical journal] The authoritative, append-only ordering of protocol
-    and ledger events for a deployment or federated settlement domain.
-    \item[Ledger operator] The service maintaining canonical reservations,
-    transfers, releases, and balance projections.
-\end{description}
-
-One organization \MAY{} perform several roles in a centralized deployment. Their
-logical responsibilities remain distinct.
-
-\subsection{Identifiers}
-
-The following notation is used:
-
-\begin{itemize}[leftmargin=2em]
-    \item $P_i$: the private principal reference for sender $i$ within its
-    authoritative identity service;
-    \item $I_i$: sender $i$'s public protocol identity;
-    \item $I_j$: recipient $j$'s public protocol identity;
-    \item $A_{ij}$: permission state from $I_i$ to $I_j$; and
-    \item $(P_i,I_j)$: the private key for repeated-attempt state.
-\end{itemize}
-
-The notation $P_i$ denotes the continuing enforcement subject, not a portable or
-globally comparable identifier. An implementation \MUSTNOT{} disclose its local
-principal reference or underlying identity evidence in ordinary messages, public
-relationship records, or inter-provider envelopes. A federated assertion \MAY{}
-carry an opaque, scoped reference sufficient to address the correct
-repeated-attempt state.
-
-\subsection{Authenticated Message Declarations}
-
-A \emph{declared purpose} is a versioned, machine-readable statement by the
-authority that constructs the message envelope about the intended communication
-class. It is not a provider determination that the encrypted content truthfully
-belongs to that class. The base vocabulary \MUST{} include an explicit
-\texttt{unspecified} value; extensions \MUST{} use namespaced, versioned
-identifiers rather than uncoordinated free text.
-
-An \emph{origin declaration} identifies the accountable submission mode, such as
-human-initiated, agent-drafted and human-approved, autonomous-agent, automated-
-system, or legacy/unspecified. Authentication proves which authorized sender or
-gateway made the declaration. It does not prove that a human composed particular
-words or that the declared workflow occurred. Any stronger attestation is a
-separate, purpose-limited extension and \MUSTNOT{} place general legal-identity
-evidence in an ordinary message envelope.
-
-A \emph{payload-schema identifier} is an optional namespaced and versioned label
-for the structure of encrypted content. It exposes no payload field by itself.
-An unknown noncritical schema identifier \MUSTNOT{} invalidate otherwise valid
-base delivery. An extension that requires schema understanding \MUST{} be
-explicitly advertised and treated as critical before reservation or admission.
-
-The message validity time is the final canonical time at which the message may be
-admitted. It is distinct from the recipient decision deadline, application-level
-meaning inside encrypted content, and the retention or deletion time of stored
-ciphertext. Once admission succeeds, message validity expiry \MUSTNOT{} shorten a
-bond decision window, alter settlement, or authorize premature deletion.
-
-\subsection{Relationship-Level Decision}
-
-An acceptance, rejection, or block applies to a directed communicative
-relationship, not to one selected message. A user interface \MAY{} place the
-action beside a message, but the authenticated command \MUST{} identify the sender
-and recipient protocol identities and \MUST{} carry relationship-level
-consequences. Rejection declines the active solicitation and preserves the
-possibility of a later eligible attempt after backoff. Blocking separately
-prohibits future ordinary contact until the recipient removes the block.
-
-\subsection{Relationship Solicitation Episode}
-
-A relationship solicitation episode is the recipient-provider grouping of one or
-more admitted attempts from the same unaccepted sender protocol identity to the
-same recipient protocol identity. The first admitted attempt in a new episode
-produces exactly one logical
-relationship-establishment signal. Its delivery
-channel may follow recipient settings. Later admitted attempts join the active
-episode and do not produce another such signal.
-
-The episode is not a message, bond, permission state, or ledger account. Attempts
-inside it remain distinct and are not idempotent with one another. Each retains
-its own content, bond, decision deadline, and persistence reserve. Exact replay of
-one command remains governed by its idempotency key.
-
-Acceptance, rejection, or blocking closes the active episode. Rejection permits a
-later eligible admission after backoff; blocking does not. Silence is not a
-relationship command: each bond remains subject to its own expiry. An episode
-lapses when no associated admitted bond remains decision-open. A later eligible
-admission may open a new episode. A user-interface dismissal without an
-authenticated relationship decision has no protocol or settlement consequence.
-
-\section{Canonical Time and Event Ordering}
-
-Every state-changing command \MUST{} have one canonical linearization point in
-the journal. The journal \MUST{} assign a strictly ordered position and an
-authoritative receipt time. Implementations \MUSTNOT{} use a sender-controlled or
-recipient-device clock to determine whether a financial decision was timely.
-
-Commands that appear concurrent are resolved by canonical journal order. A
-transaction that reads a relationship or repeated-attempt version \MUST{} either
-commit against that version or fail without partial effects.
-
-For an authenticated recipient decision, the decision ingress service \MUST:
-
-\begin{enumerate}[leftmargin=2em]
-    \item authenticate the recipient and the targeted relationship;
-    \item durably record the command or an equivalent commitment;
-    \item assign its authoritative receipt time and ordering position; and
-    \item return a signed decision receipt.
-\end{enumerate}
-
-Federated deployments \MUST{} define which service is authoritative for decision
-ingress and how its signed receipts become canonical. A recipient provider
-\MUSTNOT{} earn an expiry settlement by discarding a decision for which it issued
-a valid timely receipt.
-
-\section{Protocol State}
-
-\subsection{Principal and Protocol Identity}
-
-A \emph{private principal} is a provider-local authorization and enforcement
-subject. It binds authentication, control of protocol identities, recovery state,
-and repeated-attempt continuity. It need not denote a verified human or legal
-person; provider policy \MAY{} use a person, account, organization, or managed
-group as the subject. A private principal record minimally contains a local,
-immutable reference, verification status where applicable, authorized public
-protocol identities, and recovery state.
-
-A \emph{public protocol identity} is a user-visible, protocol-facing persona
-through which a principal sends and receives communication. Its record minimally
-contains its identity value, controlling provider, authorized operational keys,
-status, and version. Directed relationships and communication permission are
-scoped to these protocol identities.
-
-One private principal \MAY{} control multiple public protocol identities.
-Acceptance of one identity \MUSTNOT{} imply acceptance of another identity
-controlled by the same principal. Conversely, changing protocol identities or
-operational keys \MUSTNOT{} by itself reset the private principal's
-repeated-attempt state for the same recipient.
-
-\pagebreak
-A private principal reference \MUSTNOT{} serve as a public address, relationship
-identifier, ledger identifier, telemetry identifier, or globally comparable
-inter-provider identifier. Outside the authoritative identity service, the
-principal \MUST{} be represented only by purpose-limited, scoped assertions as
-defined in the privacy requirements of this specification.
-
-\subsection{Directed Relationship}
-
-The directed relationship state is
-
-\begin{equation}
-    A_{ij} \in
-    \{\texttt{unknown},\texttt{accepted},\texttt{rejected},\texttt{revoked},
-      \texttt{blocked}\}.
-\end{equation}
-
-The relationship record \MUST{} contain $I_i$, $I_j$, the current state, a
-monotonically increasing version, the most recent canonical event position, and
-the transition time.
-
-A bond is required exactly when the relationship is not accepted and no valid
-scoped capability authorizes the message:
-
-\begin{equation}
-\operatorname{bond\_required}(I_i,I_j)=
-\begin{cases}
-0, & A_{ij}=\texttt{accepted},\\
-1, & A_{ij}\in
-     \{\texttt{unknown},\texttt{rejected},\texttt{revoked}\}.
-\end{cases}
-\end{equation}
-
-The function is intentionally undefined for \texttt{blocked}. A blocked
-relationship is ineligible for ordinary contact rather than eligible upon payment.
-The recipient provider \MUSTNOT{} issue ordinary contact terms or admit an ordinary
-attempt while the block remains active. A block also overrides previously issued
-scoped capabilities for the directed pair unless the recipient removes the block
-through an authenticated transition.
-
-\subsection{Repeated-Attempt State}
-
-Repeated-attempt state is keyed by $(P_i,I_j)$, not by a replaceable sender
-address, operational key, or provider account. It \MUST{} contain:
-
-\begin{itemize}[leftmargin=2em]
-    \item attempt level $k$;
-    \item earliest next-admission time;
-    \item active persistence-reserve references;
-    \item a monotonically increasing version; and
-    \item the most recent canonical event position and transition time.
-\end{itemize}
-
-Changing sender protocol identities, operational keys, or providers \MUSTNOT{}
-reset this state. Distinct recipient protocol identities retain distinct state.
-Acceptance of one public identity \MUSTNOT{} reset this principal-level state.
-While that identity remains accepted, its ordinary messages bypass the state;
-other public identities controlled by the principal remain subject to it. Any
-decay or forgiveness of old principal-level history \MUST{} be an explicit,
-versioned policy transition rather than an implicit effect of acceptance.
-
-\subsection{Contact Terms}
-
-Before reserving an unaccepted attempt, the sender \MUST{} obtain a signed quote
-from the recipient provider. A quote \MUST{} contain at least:
-
-\begin{itemize}[leftmargin=2em]
-    \item quote identifier and protocol version;
-    \item sender and recipient protocol-identity references;
-    \item recipient-provider identity;
-    \item an opaque repeated-attempt-state reference;
-    \item relationship and repeated-attempt versions;
-    \item processing charge $C$ and effective collateral $S$;
-    \item attempt level $k$, backoff eligibility time, and persistence reserve
-          $L_k$;
-    \item settlement unit;
-    \item admission-window duration, decision-window duration, and persistence-
-          reserve release conditions;
-    \item quote issue and expiry times;
-    \item when eligibility or quoted terms depend on authenticated message
-          declarations, a canonical digest binding those declarations;
-    \item privacy-profile and retention-policy versions;
-    \item policy version; and
-    \item provider signature.
-\end{itemize}
-
-The recipient provider establishes $C$ and \MAY{} establish minimum collateral
-$S^{\min}_{p(j)}$. If the recipient preference is $\widehat S_j$, the effective
-collateral is
-
-\begin{equation}
-    S=\max\{\widehat S_j,S^{\min}_{p(j)}\}.
-\end{equation}
-
-The complete required reservation is
-
-\begin{equation}
-    R_k=C+S+L_k.
-\end{equation}
-
-Outside the endpoint and routing boundary, the protocol-identity references
-\MUST{} be pairwise-scoped and opaque as defined in the privacy requirements
-below. The sender \MUST{} be shown $R_k$ before authorization. The quote \MUSTNOT{} add
-a sender-provider charge, delivery fee, or clearing fee to protocol settlement.
-Once a reservation is created, its incorporated terms \MUST{} remain immutable.
-The reservation command materializes an admission deadline from the quoted
-admission-window duration and canonical reservation time. Admission materializes
-the bond's decision deadline from the quoted decision-window duration and
-canonical admission time. Both additions \MUST{} use checked canonical-time
-arithmetic.
-
-\subsection{Bond}
-
-A bond \MUST{} contain a unique identifier, quote reference, opaque sender and
-recipient references sufficient to resolve the directed relationship, attempt and
-message references, $C$, $S$, settlement unit, creation time, admission deadline,
-optional canonical admission time and decision deadline, current state, and
-current version. The admission time and decision deadline are absent while the
-bond remains \texttt{reserved} and become immutable when it becomes
-\texttt{admitted}.
-
-Bond state is
-
-\begin{equation}
+\section{Reading the Protocol Through One Request}
+
+Alice wants to establish permission to write to Bob. Bob has not accepted her
+public identity, and no scoped capability authorizes her message. Alice obtains
+terms for a dollar-denominated relationship request: processing component $C=0.25$ and refundable
+collateral component $S=4.75$. She authorizes a charge of $5.00$ associated with
+that request. Admission occurs only after the payment requirement, encrypted
+content, and retryable delivery intent are durably satisfied.
+
+Bob sees one relationship request. If his settings permit follow-ups, Alice may
+add messages to it without another charge or a later decision deadline. Accepting
+Alice grants future permission and records a $5.00$ refund obligation. Rejecting
+her retains $0.25$ as processing revenue and records $4.75$ as pending forfeiture.
+Bob does not acquire a personal claim on that collateral. If the request expires
+without a timely decision, the processing amount is retained and $4.75$ is due
+back to Alice.
+
+Those are protocol outcomes. The external provider may confirm a refund later.
+Likewise, a forfeiture does not become immediately available for distribution:
+the C-SQD profile separates unresolved exposure, eligible forfeitures, the
+corporate allocation, restricted member funds, and finalized member payables.
+This separation explains the objects and transitions that follow.
+
+\section{Status, Scope, and Conformance}
+
+This draft replaces the earlier per-attempt bond model. Its command names and
+objects describe the revised target contract; they are not claims about existing
+Rust APIs or deployment readiness. The words \MUST, \MUSTNOT, \SHOULD,
+\SHOULDNOT, and \MAY{} describe conformance to this draft.
+
+The protocol governs directed permission, one charge per request, request
+outcomes, financial obligations, authenticated admission, replay, and privacy.
+The section titled \emph{C-SQD Financial Program} in the \textit{Deployment and
+Migration Profile} is normative for a deployment advertising that profile. It
+defines the company-owned pool and equal quarterly distribution rules. Parameters
+explicitly marked proposed there are not launch commitments. A live deployment
+\MUST{} publish a complete, versioned policy before accepting real charges.
+
+This document does not choose a banking partner, merchant arrangement, wire
+encoding, cryptographic suite, or jurisdiction-specific legal classification.
+The charge/refund structure and outsourcing of payments do not by themselves
+establish a regulatory exemption.
+
+An implementation \MUST{} identify the protocol and financial-policy versions
+used for every request. Old quotes and obligations \MUSTNOT{} be silently
+reinterpreted under this draft. Migration requires explicit treatment of existing
+requests, refunds, and entitlements; a changed document is not a migration event.
+
+\section{Permission, Requests, and Messages}
+
+\subsection{The identities involved}
+
+A public protocol identity $I_i$ is the addressable persona another participant
+can accept or block. Its controlling provider maintains authorized operational
+keys, status, and version. A provider-local private principal $P_i$ attaches
+control, recovery, and anti-abuse continuity to one or more public identities.
+A principal may represent a person, account, organization, or managed group;
+it is not automatically a verified distribution-program member.
+
+Permission is directed from $I_i$ to $I_j$. Accepting one identity \MUSTNOT{}
+accept another identity controlled by the same principal. Conversely, rotating
+identities, keys, devices, or providers \MUSTNOT{} erase principal-scoped
+request history for the same recipient. Outside its identity authority, the
+principal \MUST{} be represented by purpose-limited scoped assertions, never a
+globally comparable identifier.
+
+\subsection{The enduring relationship}
+
+The relationship has state
+\[
+A_{ij}\in\{\texttt{unknown},\texttt{accepted},\texttt{rejected},
+\texttt{revoked},\texttt{blocked}\}.
+\]
+Its record contains a scoped directed-pair handle, monotonically increasing
+version, latest canonical event position, and transition time. Accepted ordinary
+communication requires no request charge. A valid scoped capability can authorize
+narrower communication without establishing acceptance. Blocking overrides both.
+
+Unknown, rejected, and revoked relationships may be eligible for a new request
+under recipient and anti-abuse policy. Thus a request is needed when standing
+permission is absent, not only when no relationship record exists. Rejection
+declines a request; blocking prohibits further ordinary contact until removed.
+
+\subsection{The relationship request}
+
+A request is the economic unit. It \MUST{} have a unique scoped identifier,
+directed relationship and generation, immutable quote, initial-message binding,
+original charge reference, creation time, admission deadline, optional admission
+time and decision deadline, state, and version. Its state is
+\[
 \begin{split}
-\texttt{bond\_state}\in\{&\texttt{reserved},\texttt{admitted},
-\texttt{accepted},\texttt{rejected},\\
-&\texttt{expired},\texttt{cancelled\_unadmitted}\}.
+\texttt{request\_state}\in\{&\texttt{preparing},\texttt{open},
+\texttt{accepted},\\
+&\texttt{rejected},\texttt{expired},\texttt{cancelled}\}.
 \end{split}
-\end{equation}
+\]
+Only the first two states are nonterminal. At most one nonterminal request
+\MUST{} exist per directed public-identity pair. Creation and external-charge
+dispatch \MUST{} enforce that constraint even across devices or different
+idempotency keys. A second submission returns the existing request or a stable
+conflict; it does not authorize another charge.
 
-The first two states are nonterminal. The remaining states are terminal. A
-reserved bond whose admission deadline has passed is cancellation-eligible and
-never becomes financially expiry-eligible. An admitted bond whose decision
-deadline has passed without a timely relationship decision is logically expiry-
-eligible even if an expiry worker has not yet materialized its terminal journal
-entries.
+The charge purchases submission of a relationship request with an initial
+communication. It does not guarantee acceptance, attention, inbox prominence,
+or a response. Ordinary delivery recovery after admission does not undo the
+request. A sender cannot cancel an admitted request to avoid its outcome.
 
-Define the unadmitted reserved set
+\subsection{Messages within an open request}
 
-\begin{equation}
-\mathcal{R}_{ij}=
-\left\{b\;\middle|\;
-\begin{array}{l}
-b.\text{sender}=I_i,\ b.\text{recipient}=I_j,\\
-b.\text{state}=\texttt{reserved}
-\end{array}
-\right\}.
-\end{equation}
+The initial admission opens one logical solicitation. Later messages may join only
+when authenticated recipient follow-up policy permits them. Each message retains
+its own identifier, ciphertext, envelope validity, and delivery state. It does
+not acquire a new financial decision window.
 
-For canonical receipt time $t$, define the decision-open admitted set
+An allowed follow-up \MUSTNOT{} create another charge, solicitation generation,
+forfeiture, persistence commitment, or new-request history increment, and
+\MUSTNOT{} extend the request deadline. An exact replay returns the original
+admission result without consuming allowance twice. Recipient policy may disable
+follow-ups or bound count, rate, size, and declared scope. Its version and the
+allowance consumed \MUST{} be recorded at admission.
 
-\begin{equation}
-\mathcal{D}_{ij}(t)=
-\left\{b\;\middle|\;
-\begin{array}{l}
-b.\text{sender}=I_i,\ b.\text{recipient}=I_j,\\
-b.\text{state}=\texttt{admitted},\\
-t\leq b.\text{decision\_deadline}
-\end{array}
-\right\}.
-\end{equation}
+Follow-up permission is admission authority. Notification style, unread counts,
+ranking, and dismissing a prompt are presentation preferences and do not decide
+the request. A disabled follow-up \MUST{} fail without offering an automatic
+second charge against the open request.
 
-Relationship decisions financially settle bonds in $\mathcal{D}_{ij}(t)$.
-Bonds in $\mathcal{R}_{ij}$ are cancelled with a full return because no message
-was admitted. An admitted bond whose deadline precedes $t$ is logically expired
-and is in neither set.
+\section{Fixed Terms and Canonical Time}
 
-\subsection{Persistence Reserve}
+\subsection{What the sender authorizes}
 
-A persistence reserve \MUST{} contain a unique identifier, $(P_i,I_j)$ reference,
-the sender public-identity or directed-relationship reference, attempt and quote
-references, amount $L_k$, creation time, scheduled release time, state, and
-version. Its state is \texttt{reserved} or \texttt{released}.
+Before creating a request, the sender obtains signed terms containing the quote
+identifier; protocol, policy, and financial-program versions; scoped parties and
+service operator; relationship and request-history versions; $C$ and $S$;
+settlement unit; admission and decision durations; request eligibility time;
+quote issue and expiry times; and refund and forfeiture rules. The terms
+\MUST{} include the applicable corporate-share rate or an immutable reference
+to it. Any declaration-dependent pricing or eligibility \MUST{} bind a canonical
+digest of the initial message's authenticated declarations.
 
-$L_k$ remains sender property. It \MUSTNOT{} be transferred to a recipient or
-provider. Cancellation before admission releases it immediately. Acceptance
-releases every active reserve associated with attempts from the accepted public
-identity to the recipient identity; it \MUSTNOT{} release a reserve associated
-with another public identity controlled by the same principal. Following
-rejection, blocking, or expiry, it remains reserved until its quoted release time
-and is then returned exactly once.
+The base charge is
+\[
+Q=C+S.
+\]
+The service operator sets $C$ and may set a minimum collateral amount. A recipient
+may select a higher collateral preference under the published policy. The full
+amount and possible outcomes \MUST{} be disclosed before authorization. The
+corporate share is an allocation from eligible forfeitures, not an additional
+sender fee. Quoted financial terms \MUST{} remain immutable after creation.
 
-\subsection{Native Message Envelope and Encrypted Content}
+\paragraph{The earlier persistence reserve.}
+Prior drafts required an additional refundable $L_k$. Its retention is unresolved
+in this revision. The base profile uses $L_k=0$; enabling a nonzero reserve
+requires a separately versioned extension defining its charge, refund, and release
+lifecycle. Such an extension \MUST{} attach it only to a new request, disclose
+the complete $C+S+L_k$, and exclude it from forfeitures, corporate revenue, and
+member distributions. Follow-ups \MUSTNOT{} add or increase it.
 
-Plaintext message content is not protocol or ledger state. In the native privacy
-profile, content comprises the subject, body, inline media, attachments, and any
-content-derived search representation. It is encrypted by the sender endpoint and
-decrypted only by authorized recipient endpoints.
+\subsection{Time and receipt authority}
 
-The native message envelope contains only what is necessary to authenticate and
-route the attempt: a versioned opaque message identifier, scoped sender and
-recipient references, creation and validity times, an encrypted-content reference,
-a declared purpose, an origin declaration, an optional payload-schema identifier,
-and the permission, capability, quote, bond, or admission proofs required for that
-delivery. The declared purpose and origin declaration may use their explicit
-\texttt{unspecified} or legacy values. Every declaration, identifier, validity
-time, and proof that affects admission \MUST{} be covered by the authenticated
-envelope and cryptographically bound to the encrypted content.
+Every state-changing command \MUST{} have an authoritative receipt time and one
+canonical linearization position. Device clocks cannot determine financial
+timeliness. Authenticated recipient decisions \MUST{} be durably received before
+the provider issues a signed receipt or claims they were received.
 
-The envelope \MUST{} use the least revealing declaration sufficient for the
-advertised capability or recipient-controlled routing rule. It \MUSTNOT{} contain
-plaintext content, legal identity evidence, unrelated protocol identities, an
-account balance, relationship history, or content-derived classifications that
-are not required for the selected delivery path. A payload-schema identifier
-describes encrypted structure; it does not move structured payload fields into
-the envelope.
+Creation materializes the admission deadline from canonical creation time.
+Initial admission materializes one immutable decision deadline $T$ from canonical
+admission time. Arithmetic \MUST{} be checked for overflow. A message's separate
+validity deadline only gates that message's admission; it cannot shorten or
+extend $T$, alter an admitted request's outcome, or authorize early deletion of
+content still required for delivery.
 
-\subsection{Relationship Solicitation State}
+A decision is timely when durably received at or before $T$. Expiry \MUSTNOT{}
+become final until the journal establishes that no applicable timely decision
+remains unprocessed. A bounded processing holdback may permit sequencing of
+already received decisions; it does not extend the recipient's decision window.
 
-The recipient provider \MUST{} maintain or deterministically derive solicitation
-state for each directed unaccepted relationship. An active episode minimally
-contains an opaque episode identifier, the directed relationship handle, a
-monotonically increasing generation, associated admitted-attempt references, its
-open time, status, version, and the canonical position of its most recent change.
+\section{Financial Obligations and External Execution}
 
-When admission finds no active episode, it \MUST{} open the next generation and
-create exactly one authenticated logical relationship-solicitation effect. When
-admission finds an active episode, it \MUST{} associate the attempt with that episode and
-\MUSTNOT{} create another relationship-establishment effect. It \MAY{} update a
-grouped message count, unread state, or other quiet presentation.
+\subsection{One request, one charge}
 
-The logical effect \MUST{} use scoped references and \MUSTNOT{} contain plaintext
-message content, a legal identity, an account balance, or unrelated relationship
-history. Recipient settings may choose its delivery channel or suppress an
-interruptive push, but the active grouped solicitation remains available to the
-recipient.
+The service \MUST{} associate every charge operation with the authorized request
+and original payment reference. An uncertain provider result is not a failed
+charge: it \MUST{} be reconciled under the original operation key before any
+replacement is dispatched. Multiple messages, uploads, devices, or payment
+notifications \MUSTNOT{} multiply the authorized economic effect.
 
-Acceptance, rejection, and blocking \MUST{} close the active episode. Expiry of
-the final decision-open admitted bond in an episode \MUST{} cause the episode to
-lapse once the journal can determine that no timely decision applies. Closing or
-lapsing an episode moves no value by itself and does not change the settlement of
-any bond. Recipient presentation details other than the single-solicitation
-constraint remain outside the deterministic kernel.
+The deployment \MUST{} define the evidence required to admit a paid request.
+A local accounting entry alone is not evidence of external payment. Authorization,
+capture, settlement, dispute exposure, and refund confirmation are distinct
+facts. In particular, an authorization is not assumed to last throughout the
+recipient decision window. The C-SQD profile uses confirmed capture before
+initial admission, with recovery for captures that succeed after cancellation.
 
-\section{Financial Semantics}
+\subsection{The request outcome}
 
-The protocol bond is
-
-\begin{equation}
-    B=C+S,
-\end{equation}
-
-and the total attempt reservation is $R_k=B+L_k$. Ledger entries \MUST{} use
-double-entry accounting or an equivalent representation that proves value
-conservation. Available balance, reserved balance, and owned balance \MUST{} be
-distinguished.
-
-The ledger journal \MUST{} be append-only. Corrections \MUST{} be represented by
-new compensating entries authorized by a separate rule; historical entries
-\MUSTNOT{} be rewritten. No compensation rule \MAY{} silently violate terminal
-bond finality.
-
-Protocol settlement defines ownership changes. External deposits, withdrawals,
-chargebacks, or bank transfers do not alter the meaning of a protocol transition.
-An implementation \MUST{} prevent external funding failure from producing an
-unbacked valid reservation.
-
-\section{Commands and Transitions}
-
-The command subsections follow one reading pattern even where the normative text
-uses prose rather than identical headings:
-
-\begin{enumerate}[leftmargin=2em]
-    \item \textbf{Authority and inputs:} who may issue the command and which
-          canonical facts it carries;
-    \item \textbf{Preconditions:} versions, time, state, signatures, and funds
-          that must be valid before commitment;
-    \item \textbf{Atomic outcome:} the complete state and ownership result;
-    \item \textbf{Idempotency and concurrency:} how replay or a stale snapshot is
-          resolved; and
-    \item \textbf{Errors:} the stable failure described in Section 10.
-\end{enumerate}
-
-The following table is an index, not a replacement for the normative command
-definitions:
+The following table gives obligations created by a terminal outcome. ``Refund''
+means recording an amount due against the original charge and scheduling its
+external execution, not claiming immediate receipt by the sender's bank.
 
 \begin{center}
 \small
-\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}p{0.27\textwidth}Y@{}}
+\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}Y@{}}
 \toprule
-\textbf{Command} & \textbf{Principal gate} & \textbf{Atomic protocol result} \\
+Outcome & Financial consequence \\
 \midrule
-\texttt{IssueContactTerms} & Current relationship, policy, and attempt state & Signed fixed terms, or a no-bond result for an accepted relationship. \\
-\texttt{ReserveAttempt} & Valid current quote and sufficient available value & Reserve value and schedule the short admission deadline. \\
-\texttt{AdmitAttempt} & Admission window, durable content, and exact reservation verified & Admit the message, start its decision window, advance attempt state, and open or join one solicitation. \\
-\texttt{CancelReserved}\newline\texttt{Attempt} & Authenticated sender cancellation, admission timeout, or pre-admission failure & Return $C+S+L_k$ in full and do not advance attempt state. \\
-\texttt{AcceptRelationship} & Authenticated recipient decision at canonical time & Accept the public-identity relationship, settle admitted bonds, and fully cancel unadmitted reservations. \\
-\texttt{RejectRelationship} & Authenticated recipient decision while unaccepted & Decline the solicitation, settle decision-open admitted bonds, and fully cancel unadmitted reservations. \\
-\texttt{BlockRelationship} & Authenticated recipient decision for a directed pair & Prohibit future ordinary contact, settle admitted bonds, and fully cancel unadmitted reservations. \\
-\texttt{UnblockRelationship} & Authenticated recipient controls a blocked relationship & Return to rejected status without accepting, resetting backoff, or reopening bonds. \\
-\texttt{ExpireBond} & Deadline closed and no timely decision applies & Expire once, transfer $C$, return $S$, and retain $L_k$ until release. \\
-\texttt{ReleasePersistence}\newline\texttt{Reserve} & Scheduled release time reached & Return $L_k$ exactly once. \\
-\texttt{RevokeRelationship} & Authenticated recipient controls an accepted relationship & Revoke future bond-free communication without reopening settled bonds. \\
+Accepted in time & Refund $C+S$ to the original sender. \\
+Rejected in time & Retain $C$ as processing revenue; record $S$ as pending forfeiture. \\
+Blocked in time while open & Apply the rejection allocation and prohibit future contact. \\
+Expired without timely decision & Retain $C$; refund $S$. \\
+Cancelled before admission & Void an uncaptured authorization or refund the full captured amount. \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-\subsection{Issue Contact Terms}
-
-\texttt{IssueContactTerms} evaluates the authenticated sender identity, current
-relationship, repeated-attempt state, recipient policy, and provider policy.
-
-If any eligibility decision or quoted value depends on declared purpose, origin,
-schema requirements, or another authenticated envelope declaration, the request
-for terms \MUST{} supply the canonical declaration set and the signed terms
-\MUST{} bind its digest. A provider \MUSTNOT{} quote under one declaration set and
-admit a materially different set. The reference deployment does not vary bond
-economics merely to purchase priority, attention, or a response.
-
-If $A_{ij}=\texttt{accepted}$, the provider \SHOULD{} return a no-bond result and
-\MUSTNOT{} require $C$, $S$, or $L_k$.
-
-If $A_{ij}=\texttt{blocked}$, the provider \MUST{} return
-\texttt{ContactBlocked} and \MUSTNOT{} issue ordinary contact terms. This rule
-takes precedence over a previously issued scoped capability for the pair.
-
-For \texttt{unknown}, \texttt{rejected}, or \texttt{revoked}, the provider
-\MUST{} return signed terms consistent with the current relationship and
-repeated-attempt versions.
-
-For an initial attempt, $k=0$, $\Delta_0=0$, and $L_0=0$. Protocol policy \MUST{}
-define nondecreasing schedules
-
-\begin{equation}
-    \Delta_{k+1}\geq\Delta_k,
-    \qquad
-    L_{k+1}\geq L_k.
-\end{equation}
-
-\subsection{Reserve Attempt}
-
-\texttt{ReserveAttempt} consumes a valid quote and an idempotency key. It \MUST:
-
-\begin{enumerate}[leftmargin=2em]
-    \item verify the quote signature, version, identities, expiry, and settlement
-          unit;
-    \item verify that the relationship and repeated-attempt versions still match;
-    \item verify that the relationship remains bond-required;
-    \item verify that the sender has at least $R_k$ available;
-    \item atomically reserve exactly $C+S$ as a bond and $L_k$ as a separate
-          persistence reserve;
-    \item compute the admission deadline from canonical reservation time and the
-          quoted admission-window duration using checked arithmetic;
-    \item schedule idempotent cancellation at that deadline; and
-    \item return authenticated reservation evidence.
-\end{enumerate}
-
-A stale quote \MUST{} fail without retaining value. If acceptance linearized
-before this command, the command \MUST{} return \texttt{RelationshipAccepted}; any
-provisional hold \MUST{} be released.
-If blocking linearized before this command, it \MUST{} return
-\texttt{ContactBlocked} and release any provisional hold.
-
-\subsection{Admit Attempt}
-
-\texttt{AdmitAttempt} verifies the message envelope, quote, bond, persistence
-reserve, current relationship, repeated-attempt state, and durable encrypted-
-content evidence. For an unaccepted relationship it \MUST{} atomically:
-
-\begin{enumerate}[leftmargin=2em]
-    \item confirm that canonical admission time does not exceed the envelope's
-          message validity time;
-    \item verify the integrity and supported criticality of authenticated message
-          declarations and any declaration digest fixed by the quote;
-    \item confirm that the current time is not earlier than the quoted eligibility
-          time;
-    \item confirm that canonical admission time is not after the bond's admission
-          deadline;
-    \item confirm that exactly $C+S+L_k$ is reserved under the quoted terms;
-    \item confirm that the encrypted content and a retryable delivery intent can
-          be committed durably with this transition;
-    \item change the bond from \texttt{reserved} to \texttt{admitted};
-    \item record canonical admission time and compute the immutable decision
-          deadline from the quoted decision-window duration;
-    \item cancel the scheduled unadmitted-reservation timeout and schedule bond
-          expiry;
-    \item advance the repeated-attempt level;
-    \item establish the next eligibility time; and
-    \item open a new relationship solicitation episode and enqueue its single
-          relationship-establishment effect, or join the existing active episode
-          without another such effect; and
-    \item record authenticated admission evidence.
-\end{enumerate}
-
-Admission is the boundary after which ordinary delivery retries do not reverse
-the protocol attempt. Advancement occurs on admission, not later settlement.
-Duplicate admission with
-the same idempotency key \MUST{} return the original result. A conflicting replay
-\MUST{} fail.
-
-If the relationship became accepted after reservation but before admission, the
-reserved attempt \MUST{} be cancelled unadmitted and its full $C+S+L_k$ returned.
-The message \MAY{} then be admitted without a bond under ordinary accepted-sender
-policy. It \MUSTNOT{} advance repeated-attempt state or open an unaccepted-
-relationship solicitation episode.
-
-If the relationship became blocked after reservation but before admission, the
-block transition has already cancelled the unadmitted reservation and returned
-$C+S+L_k$ in full. Admission \MUST{} return \texttt{ContactBlocked}, create no
-message or solicitation effect, and perform no additional value movement.
-
-\subsection{Accept Relationship}
-
-\texttt{AcceptRelationship} is authenticated by the recipient and targets
-$(I_i,I_j)$. Let $t_a$ be its authoritative receipt time. In one atomic
-transition, the command \MUST:
-
-\begin{enumerate}[leftmargin=2em]
-    \item set $A_{ij}\leftarrow\texttt{accepted}$ and increment the relationship
-          version;
-    \item identify every bond in $\mathcal{D}_{ij}(t_a)$ and mark it
-          \texttt{accepted};
-    \item release exactly $C+S$ for each accepted bond to its sender and cancel
-          its scheduled expiry;
-    \item identify every bond in $\mathcal{R}_{ij}$, mark it
-          \texttt{cancelled\_unadmitted}, return its complete $C+S+L_k$, and
-          cancel its admission-timeout operation;
-    \item release every other active persistence reserve associated with an
-          attempt from $I_i$ to $I_j$, including reserves for earlier expired or
-          rejected attempts;
-    \item preserve the repeated-attempt level and backoff for $(P_i,I_j)$ and
-          preserve every reserve associated with another public identity
-          controlled by $P_i$;
-    \item close the active relationship solicitation episode and suppress any
-          not-yet-delivered relationship-establishment effect for it; and
-    \item append the relationship, solicitation, bond, reserve, and ledger events
-          as one atomic protocol outcome.
-\end{enumerate}
-
-Acceptance settles the relationship, not merely the message beside which the
-recipient acted. No bond included in the acceptance transition \MAY{} later be
-rejected or expired. No message from $I_i$ admitted after the transition \MAY{}
-require a bond while the relationship remains accepted.
-
-A bond whose decision deadline precedes $t_a$ is not in
-$\mathcal{D}_{ij}(t_a)$. It \MUST{} settle as expired if it has not already done
-so. The acceptance still grants future permission and settles every other
-decision-open admitted bond. It \MUSTNOT{} reopen a terminal or logically expired
-bond.
-
-Acceptance of $I_i$ \MUSTNOT{} accept another public identity controlled by
-$P_i$, reset the principal-level repeated-attempt state, or release persistence
-reserves associated with attempts from another public identity.
-
-\subsection{Reject Relationship}
-
-\texttt{RejectRelationship} is authenticated by the recipient and targets
-$(I_i,I_j)$. It is invalid while $A_{ij}=\texttt{accepted}$; an accepted
-relationship \MUST{} first be revoked. Let $t_r$ be the authoritative receipt time.
-In one atomic transition, rejection \MUST:
-
-\begin{enumerate}[leftmargin=2em]
-    \item set $A_{ij}\leftarrow\texttt{rejected}$ and increment the relationship
-          version;
-    \item identify every bond in $\mathcal{D}_{ij}(t_r)$;
-    \item mark each identified bond \texttt{rejected};
-    \item transfer each identified bond's $C$ to the recipient provider;
-    \item transfer each identified bond's $S$ to the recipient;
-    \item cancel scheduled expiry operations for those bonds;
-    \item identify every bond in $\mathcal{R}_{ij}$, mark it
-          \texttt{cancelled\_unadmitted}, return its complete $C+S+L_k$, and
-          cancel its admission-timeout operation;
-    \item preserve the advanced repeated-attempt level and backoff; and
-    \item retain each $L_k$ associated with an admitted bond settled by rejection
-          until its quoted release time; and
-    \item close the active relationship solicitation episode and suppress any
-          not-yet-delivered relationship-establishment effect for it.
-\end{enumerate}
-
-Rejection settles every decision-open admitted bond for the relationship at its
-canonical ordering point and fully cancels every unadmitted reservation. A
-selected message is evidence of which relationship the recipient means; it does
-not limit settlement to that message. A bond settled by rejection \MUSTNOT{} later
-be accepted or expired.
-
-Rejection is not a permanent contact prohibition. The rejected state remains
-bond-required, preserves the repeated-attempt level and backoff, and permits a
-later eligible sender attempt to obtain new terms and open a new solicitation.
-
-\subsection{Block Relationship}
-
-\texttt{BlockRelationship} is authenticated by the recipient and targets
-$(I_i,I_j)$. It \MAY{} be applied from any relationship state. Let $t_b$ be its
-authoritative receipt time. In one atomic transition, blocking \MUST:
-
-\begin{enumerate}[leftmargin=2em]
-    \item set $A_{ij}\leftarrow\texttt{blocked}$ and increment the relationship
-          version;
-    \item identify every bond in $\mathcal{D}_{ij}(t_b)$;
-    \item settle each identified bond under the rejection allocation by marking
-          it \texttt{rejected}, transferring $C$ to the recipient provider, and
-          transferring $S$ to the recipient;
-    \item cancel scheduled expiry operations for those bonds;
-    \item identify every bond in $\mathcal{R}_{ij}$, mark it
-          \texttt{cancelled\_unadmitted}, return its complete $C+S+L_k$, and
-          cancel its admission-timeout operation;
-    \item preserve the repeated-attempt level, backoff, and scheduled release of
-          every $L_k$ associated with an admitted bond settled by blocking;
-    \item invalidate scoped capabilities for the directed pair;
-    \item close the active relationship solicitation episode and suppress any
-          not-yet-delivered relationship-establishment effect for it; and
-    \item append the relationship, solicitation, bond, capability, reserve, and
-          ledger events as one atomic protocol outcome.
-\end{enumerate}
-
-While the relationship remains blocked, the recipient provider \MUSTNOT{} issue
-ordinary contact terms, accept a reservation, or admit an ordinary or
-capability-authorized attempt for the pair. An exact replay returns the recorded
-result without another settlement.
-
-\subsection{Unblock Relationship}
-
-\texttt{UnblockRelationship} is authenticated by the recipient. It \MUST{} change
-$A_{ij}$ from \texttt{blocked} to \texttt{rejected} and increment the relationship
-version. It \MUSTNOT{} accept the relationship, reset repeated-attempt state,
-release persistence reserves early, restore invalidated capabilities, reopen
-settled bonds, or create a solicitation. A future sender attempt remains subject
-to the preserved backoff and must obtain fresh contact terms.
-
-\subsection{Expire Bond}
-
-Only an admitted bond has a decision deadline $T_b$ and may be expired. A
-reserved bond is governed by its admission deadline and
-\texttt{CancelReservedAttempt}. A decision is timely for admitted bond $b$ when
-its authoritative receipt time is at or before $T_b$. Expiry \MUSTNOT{} become
-terminal until the canonical journal can determine that no timely acceptance,
-rejection, or blocking decision applies to the bond.
-
-An implementation \SHOULD{} use a bounded processing holdback after $T_b$ before
-materializing expiry. The holdback is not an extension of the recipient's decision
-window; it allows decisions already durably received by $T_b$ to be sequenced and
-observed. The quote or provider policy \MUST{} disclose the earliest time at which
-expiry settlement may be considered final.
-
-If a timely acceptance exists, acceptance settlement \MUST{} win. If a timely
-rejection exists and no earlier valid acceptance changed the relationship to
-accepted, rejection settlement \MUST{} win. A timely block uses the rejection
-allocation and then prohibits future contact. Conflicting recipient decisions are
-ordered by the canonical journal and relationship-version preconditions.
-
-If neither decision applies, \texttt{ExpireBond} \MUST{} atomically:
-
-\begin{enumerate}[leftmargin=2em]
-    \item mark the bond \texttt{expired};
-    \item transfer $C$ to the recipient provider;
-    \item release $S$ to the sender;
-    \item leave the current relationship state unchanged;
-    \item preserve the repeated-attempt level and backoff; and
-    \item retain the associated $L_k$ until its quoted release time; and
-    \item if no associated admitted bond remains decision-open, mark the active
-          relationship solicitation episode lapsed without moving value.
-\end{enumerate}
-
-The expiry command \MUST{} re-read bond state and relevant relationship decisions
-inside its settlement transaction. A stale expiry job encountering an accepted,
-rejected, expired, or unadmitted-cancelled bond \MUST{} produce no additional
-transfer.
-
-Expiry normally leaves an unknown, rejected, revoked, or blocked relationship in
-that state. If a late acceptance has already established prospective permission,
-expiry of an older decision-closed bond \MUSTNOT{} undo that acceptance.
-
-\subsection{Cancel Reserved Attempt}
-
-\texttt{CancelReservedAttempt} applies only while the bond remains
-\texttt{reserved}. It may be authenticated by the sender as a voluntary
-cancellation, by the provider as a verified pre-admission technical failure, or
-by a scheduled command whose canonical time is after the admission deadline. In
-one atomic transition it \MUST:
-
-\begin{enumerate}[leftmargin=2em]
-    \item mark the bond \texttt{cancelled\_unadmitted};
-    \item return the full $C+S+L_k$ to the sender;
-    \item cancel the admission-timeout operation;
-    \item leave repeated-attempt state unchanged; and
-    \item create no message, solicitation, decision deadline, or delivery effect.
-\end{enumerate}
-
-An exact replay returns the recorded result without another release. A scheduled
-timeout that encounters an admitted or terminal bond is a no-op. The sender
-\MAY{} cancel before the admission deadline; at or after the deadline the provider
-\MUST{} make the same full-return transition if the attempt remains reserved.
-
-After admission, ordinary delivery retry is an outbox concern and
-\texttt{CancelReservedAttempt} is invalid. Admission therefore \MUSTNOT{} commit
-until encrypted content and a retryable delivery intent are durable. A later
-accounting correction requires a separately authorized compensating journal
-entry; it does not erase the admitted attempt or roll back repeated-attempt state.
-
-\subsection{Release Persistence Reserve}
-
-At or after a reserve's scheduled release time, an idempotent
-\texttt{ReleasePersistenceReserve} command \MUST{} return $L_k$ to the sender if
-the reserve remains active. If identity-scoped acceptance or unadmitted
-cancellation already released it, the command \MUST{} return the original result
-without another ledger entry.
-
-\subsection{Revoke Relationship}
-
-\texttt{RevokeRelationship} is authenticated by the recipient. It \MUST{} change
-$A_{ij}$ from \texttt{accepted} to \texttt{revoked} and increment the relationship
-version. It \MUSTNOT{} alter previously settled bonds. Future ordinary messages
-require a new quote and bond unless a valid scoped capability authorizes them.
-
-\section{Concurrency Rules}
-
-\subsection{Acceptance and Concurrent Reservations}
-
-Acceptance and bond reservation for the same relationship \MUST{} serialize.
-A reservation ordered before acceptance is fully cancelled if it remains
-unadmitted, or belongs to the decision-open admitted set if admission also
-linearized before acceptance. A reservation ordered after acceptance \MUST{} fail
-as unnecessary and release any provisional hold. Rejection and blocking use the
-same ordering rule, except that decision-open admitted bonds use the rejection
-allocation.
-
-\subsection{Admission and Unadmitted Cancellation}
-
-Admission and cancellation for the same reserved attempt \MUST{} serialize. If
-admission commits at or before the admission deadline, it cancels the timeout,
-starts the decision window, and advances repeated-attempt state. If sender
-cancellation commits first, or the attempt remains reserved after the admission
-deadline, the full reservation returns and admission cannot later revive it.
-There is no state in which an attempt both advances repeated-attempt history and
-is cancelled as unadmitted.
-
-\subsection{Acceptance and Expiry}
-
-There is no undefined simultaneous outcome. If acceptance was durably received on
-or before a bond's deadline, it \MUST{} take priority even when an expiry worker
-began first. If acceptance was received after the deadline, the bond expires and
-acceptance applies prospectively and to other bonds whose windows remain open.
-Once either settlement commits, retries of the losing command are no-ops with
-respect to value.
-
-\subsection{Conflicting Relationship Decisions}
-
-Conflicting acceptance, rejection, blocking, unblocking, or revocation commands
-\MUST{} carry an expected relationship version or equivalent compare-and-set
-condition. The first command that commits changes the version. A conflicting
-stale command \MUST{} fail with \texttt{VersionConflict} and \MUSTNOT{} alter any
-bond. A recipient who wishes to decline a newly accepted relationship uses
-revocation; a recipient who wishes to prohibit future contact uses blocking.
-
-\subsection{Concurrent Admissions and Solicitation}
-
-Admissions for the same unaccepted directed relationship \MUST{} serialize on the
-solicitation generation or use an equivalent uniqueness constraint. Exactly one
-admission may change an inactive solicitation to active for a generation and
-create its relationship-establishment effect. Every concurrent admission ordered
-afterward joins that generation without creating another such effect. A retry of
-the winning admission returns its recorded result rather than opening a new
-generation.
-
-\subsection{Multiple Pending Bonds}
-
-Relationship settlement \MUST{} enumerate or deterministically derive the complete
-decision-open admitted set and the complete unadmitted reserved set at the
-transition's journal position. Pagination, sharding, or asynchronous projections
-\MUSTNOT{} cause partial relationship settlement or leave an unadmitted
-reservation stranded.
-Implementations \MAY{} use a transaction manifest or prepare/commit protocol, but
-the externally visible result \MUST{} be atomic.
-
-\section{Error Conditions}
-
-An implementation \MUST{} return a stable machine-readable error and \MUSTNOT{}
-retain or transfer funds except as explicitly stated below.
-
-\begin{longtable}{p{0.28\textwidth}p{0.62\textwidth}}
+Rejection \MUSTNOT{} establish a payment obligation to the rejecting recipient.
+Pending forfeitures become eligible for the C-SQD pool process only under the
+financial profile's maturity rules. Refundable amounts \MUSTNOT{} be counted
+as distributable resources, regardless of where cash is held.
+
+\subsection{The ledger and the outbox}
+
+The ledger \MUST{} use append-only double-entry accounting, checked integer
+amounts, and conservation within each settlement unit. It \MUST{} distinguish
+processor clearing, unresolved request amounts, refund obligations, processing
+revenue, pending forfeitures, corporate allocations, restricted member funds,
+and finalized member payables. These are accounting categories, not general
+user spending balances. Refunds and member payables \MUSTNOT{} fund another
+request, transfer between users, or become on-demand wallet withdrawals.
+
+A terminal request transition \MUST{} atomically commit its relationship effect,
+request outcome, ledger obligations, scheduled-work changes, and external-effect
+intents. Workers execute those intents after commit. A payment or refund remains
+pending until authenticated provider evidence and reconciliation establish its
+completion. Failed or delayed payment \MUSTNOT{} erase the obligation.
+
+Provider notifications \MUST{} be authenticated, associated with the correct
+operation and amount, and deduplicated. Out-of-order evidence cannot regress a
+confirmed outcome. A late capture of a cancelled request creates or updates the
+full refund obligation; it cannot revive admission. Later external reversals
+require separately authorized compensating entries, not rewritten protocol
+history or automatic deductions from member entitlements.
+
+\section{Commands Along the Request Lifecycle}
+
+Each command carries authenticated authority, expected versions, an idempotency
+key, and domain-separated signing context. Exact replay returns the recorded
+result; the same key with a different payload fails. Infrastructure retries
+\MUST{} preserve the original intent and query an uncertain outcome before
+creating another operation.
+
+\subsection{Issue terms and create the request}
+
+\texttt{IssueRequestTerms} checks relationship state, current request, recipient
+policy, and principal-scoped history. A blocked pair is refused. Accepted ordinary
+communication requires no request charge. An existing nonterminal request is
+returned as such; only an eligible new request receives a charge quote.
+
+\texttt{CreateRequest} validates the quote signature, expiry, unit, versions,
+initial-message binding, and sender authorization. Under the directed-pair
+uniqueness boundary it creates a \texttt{preparing} request, fixes its terms,
+schedules admission timeout, and records one external payment intent. It creates
+no recipient solicitation and does not advance request history.
+
+Stale terms, blocking, acceptance, or an already preparing/open request prevent a
+new charge. If an external operation was already in flight when such a state
+change occurred, its completion is reconciled and any resulting captured amount
+is refunded through the cancelled request rather than silently abandoned.
+
+\subsection{Admit the initial communication}
+
+\texttt{AdmitRequest} validates current permission, request and quote versions,
+payment evidence, admission and message-validity deadlines, authenticated
+declarations, and durable encrypted content. The admission transaction \MUST{}
+open the request, record its single decision deadline, advance principal-scoped
+new-request history, replace admission timeout with expiry, and store the initial
+delivery intent and one logical solicitation effect.
+
+If cancellation or timeout wins first, admission cannot revive the request. If
+acceptance occurs while it is preparing, cancel the request and return its full
+captured amount; the message may subsequently use accepted-sender admission.
+Blocking before admission cancels it in full and prevents delivery. No message
+becomes visible before its durable admission commits.
+
+\subsection{Admit a follow-up}
+
+\texttt{AdmitFollowup} identifies the exact open request and authenticates a new
+message under the same directed pair. At one canonical boundary it checks that
+the request is still decision-open, the pair is not blocked, current recipient
+follow-up policy permits the message, and content and declarations are valid.
+It consumes permitted allowance once, associates the message, and records the
+delivery intent. It leaves charge, financial deadline, and new-request history
+unchanged.
+
+Policy updates and follow-up admission \MUST{} serialize on a version or
+equivalent guard. A request that closes first cannot accept a follow-up under
+stale authority. If standing acceptance now permits delivery, the sender may use
+that path with authenticated admission; a failed follow-up must not silently
+become a newly charged request.
+
+\subsection{Accept the relationship}
+
+\texttt{AcceptRelationship} is authorized by the recipient for the directed
+public-identity pair. It establishes accepted permission. If the current request
+is open and the decision was timely, the same transition marks it accepted,
+records exactly one full refund obligation, closes the solicitation, and cancels
+expiry. If the request is preparing, acceptance cancels it in full instead.
+
+A late acceptance grants future permission but cannot reopen a logically expired
+or terminal request. Its expiry obligations must still be materialized. Accepting
+one public identity \MUSTNOT{} accept sibling identities or reset the private
+principal's new-request history. A versioned persistence extension, if enabled,
+must define any identity-scoped release without affecting other identities.
+
+\subsection{Reject, block, unblock, and revoke}
+
+\texttt{RejectRelationship} declines the current unaccepted relationship request.
+A timely open request becomes rejected with the allocation defined above; a
+preparing request is cancelled in full. Rejection closes the solicitation and
+preserves history and applicable retry cooldown. It is invalid for an accepted
+relationship, which must first be revoked. A rejection received after the request
+deadline does not replace its expiry allocation.
+
+\texttt{BlockRelationship} may operate from any relationship state. It sets the
+pair to blocked, invalidates capabilities, and closes any solicitation. A timely
+open request uses the rejection allocation; a preparing request is cancelled in
+full; a logically expired or terminal request keeps its existing outcome. An
+exact replay moves no further value.
+
+While blocked, terms, creation, initial admission, follow-ups, and capability
+admission \MUST{} be refused. \texttt{UnblockRelationship} returns the pair to
+rejected without accepting it, restoring a lane, erasing history, or reopening a
+request. \texttt{RevokeRelationship} changes accepted permission to revoked for
+future contact without altering prior request outcomes. New requests after either
+transition remain subject to current eligibility and recipient policy.
+
+\subsection{Expire or cancel}
+
+\texttt{ExpireRequest} acts only on an open request after the decision window
+and journal holdback rules permit finalization. It rechecks timely decisions,
+records expiry with processing revenue and collateral refund, closes the
+solicitation, and schedules the refund. It \MUSTNOT{} undo a later prospective
+acceptance. A stale job targeting a terminal request has no further effect.
+
+\texttt{CancelPreparingRequest} may be authorized by the sender, a verified
+pre-admission failure, or admission timeout. It marks the request cancelled,
+voids or refunds its payment, cancels timeout, and creates neither a solicitation
+nor a history increment. Cancellation is valid only before admission. Closing a
+client or losing a network connection is not itself a cancellation command.
+
+\section{Ordering, Retry, and Abuse Continuity}
+
+Creation, admission, follow-up policy changes, and recipient decisions \MUST{}
+serialize for the directed pair. Decisions carry an expected relationship
+version; the first valid committed decision changes it and stale conflicting
+decisions fail without partial effects. Admission and cancellation share the
+request version. No execution may both advance request history and cancel the
+same request as unadmitted.
+
+Timely receipt must survive queue delay. A worker cannot win an expiry race merely
+by running before a decision already durably received by the deadline. Conversely,
+a new late decision cannot retroactively change the request's financial outcome.
+Subsequent processing of an older request must preserve current permission.
+
+Request history is keyed by $(P_i,I_j)$ through a scoped assertion. It contains a
+new-request level, eligibility time, policy version, and canonical event position.
+Initial admission advances it atomically; follow-ups and cancelled preparation do
+not. Acceptance bypasses that history for the accepted public identity without
+erasing it for aliases. Cross-identity request creation \MUST{} observe the shared
+history boundary so concurrent aliases cannot all use stale initial terms.
+
+The deployment defines cooldowns after expiry and rejection, recipient overrides,
+and explicit invitation rules. Any decay or forgiveness of history requires a
+versioned policy event. Blocking remains effective regardless of willingness to
+pay. These controls limit renewed requests; follow-up limits govern messages
+inside the current one.
+
+\section{Stable Errors and Recovery}
+
+Errors \MUST{} distinguish a refused protocol operation from an unresolved
+external operation. In the following table, refusal creates no new charge or
+partial financial effect; an already captured cancelled request still requires
+its full refund.
+
+\begingroup
+\small
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.36\textwidth}>{\raggedright\arraybackslash}p{0.59\textwidth}@{}}
 \toprule
-\textbf{Condition} & \textbf{Required behavior}\\
+Condition & Required behavior \\
 \midrule
 \endhead
-\texttt{AuthenticationFailed} & Reject the command without state or ledger
-effects.\\
-\texttt{InvalidSignature} & Reject the quote, event, assertion, or receipt without
-state or ledger effects.\\
-\texttt{QuoteExpired} & Refuse new reservation; release any provisional hold.\\
-\texttt{QuoteVersionStale} & Refuse reservation or admission and require new
-contact terms.\\
-\texttt{RelationshipAccepted} & Do not create a bond; release any provisional hold
-and continue only under accepted-sender policy.\\
-\texttt{ContactBlocked} & Do not issue terms, reserve value, or admit an ordinary
-or capability-authorized attempt for the blocked directed pair. Release any
-provisional hold.\\
-\texttt{BackoffActive} & Refuse admission and report the next eligible time; do not
-advance the attempt level.\\
-\texttt{InsufficientFunds} & Create no bond or persistence reserve.\\
-\texttt{AmountMismatch} & Refuse reservation or admission; no underfunded bond is
-valid.\\
-\texttt{AdmissionWindowClosed} & If the bond remains reserved, cancel it,
-return $C+S+L_k$ in full, and do not admit or advance attempt state.\\
-\texttt{ReservedAttempt}\newline\texttt{Cancelled} & Return the recorded full-release result; do
-not admit, create a solicitation, or move value again.\\
-\texttt{DecisionWindowClosed} & Do not apply the decision to the closed bond; the
-relationship command \MAY{} still have prospective effect.\\
-\texttt{AlreadyTerminal} & Return the recorded terminal result without another
-transfer or release.\\
-\texttt{VersionConflict} & Apply no partial relationship or ledger effects; the
-caller \MUST{} refresh state before another command.\\
-\texttt{Duplicate} & Return the original result when payload and idempotency key
-match. A conflicting payload using the same key \MUST{} fail.\\
-\texttt{PrivacyScopeViolation} & Refuse an identifier translation, disclosure, or
-query that exceeds the caller's authorized relationship and purpose.\\
-\texttt{ContentKeyUnavailable} & Do not ask a provider to bypass end-to-end
-encryption. Return ciphertext or an endpoint recovery error without changing
-settlement.\\
-\texttt{MessageValidityClosed} & Refuse admission after the envelope validity
-time. Fully release any still-unadmitted reservation, create no solicitation, and
-do not advance repeated-attempt state.\\
-\texttt{CapabilityScope}\newline\texttt{Mismatch} & Do not consume capability allowance or admit
-through that capability. Ordinary bonded admission may proceed only through its
-own valid quote and reservation.\\
-\texttt{UnsupportedCritical}\newline\texttt{Extension} & Refuse reservation or admission that
-depends on an unsupported critical declaration or payload schema; release any
-provisional or still-unadmitted hold without advancing attempt state.\\
-\texttt{LinkageErased} & Report that expired identifying linkage cannot be
-reconstructed; do not restore it from analytics, logs, or an unrelated backup.\\
+\texttt{AuthenticationFailed}, \texttt{InvalidSignature} & Reject without state effects. \\
+\texttt{QuoteExpired}, \texttt{QuoteVersionStale} & Refuse new creation; obtain fresh terms only if no request exists. \\
+\texttt{RelationshipAccepted} & Use accepted-sender admission; do not charge. \\
+\texttt{RequestAlreadyExists} & Return the scoped existing request or conflict; do not create another charge. \\
+\texttt{ContactBlocked}, \texttt{BackoffActive} & Refuse contact or report eligible time without advancing history. \\
+\texttt{PaymentPending} & Query/reconcile the original operation; do not dispatch a replacement. \\
+\texttt{PaymentFailed}, \texttt{AmountMismatch} & Do not admit; reconcile and cancel/refund any captured amount under the original authorization. \\
+\texttt{AdmissionWindowClosed} & Cancel preparation and void/refund payment in full. \\
+\texttt{RequestClosed}, \texttt{FollowupNotAllowed} & Refuse the follow-up without a new charge. \\
+\texttt{DecisionWindowClosed} & Preserve expiry economics; acceptance may grant prospective permission. \\
+\texttt{AlreadyTerminal}, \texttt{Duplicate} & Return the recorded result for exact replay. A conflicting payload fails. \\
+\texttt{VersionConflict} & Refresh state; apply no partial outcome. \\
+\texttt{MessageValidityClosed} & Refuse this message; cancel a still-preparing initial request, but do not settle an open request because a follow-up is stale. \\
+\texttt{CapabilityScopeMismatch} & Consume no allowance and charge nothing automatically. \\
+\texttt{UnsupportedCriticalExtension} & Refuse admission dependent on the extension; unwind a still-preparing initial request. \\
+\texttt{PrivacyScopeViolation}, \texttt{LinkageErased} & Refuse excess disclosure or reconstruction of erased linkage. \\
+\texttt{ContentKeyUnavailable} & Return an endpoint recovery error; do not request provider decryption or change settlement. \\
 \bottomrule
 \end{longtable}
+\endgroup
 
-Provider timeouts, database retries, duplicate network delivery, and process
-crashes \MUST{} resolve to one of these deterministic outcomes. An unknown outcome
-\MUST{} be queried by idempotency key before the caller retries with a new key.
+\section{Authenticated Envelopes and Scoped Capabilities}
 
-\section{Launch Extension: Scoped Capabilities and Express Lanes}
+The native envelope contains a versioned opaque message identifier, scoped
+parties, creation and validity times, encrypted-content reference, declared
+purpose, accountable origin declaration, optional payload-schema identifier, and
+the request or permission proof needed for admission. Every admission-relevant
+field \MUST{} be authenticated and bound to the encrypted content.
 
-The base settlement kernel remains usable without scoped capabilities. The
-reference deployment advertises the express-lane capability extension at launch;
-an implementation that does not advertise it treats unaccepted ordinary
-communication under the bond rules above. When advertised, the following
-requirements apply.
+Purpose and origin use constrained, versioned values, including explicit
+unspecified and legacy values. Unknown noncritical schemas may remain opaque;
+unsupported critical extensions fail before admission. The envelope \MUSTNOT{}
+expose plaintext, legal identity evidence, unrelated identities, financial
+balances, or content-derived classifications unnecessary for the chosen path.
 
-A recipient \MAY{} issue a signed communication capability containing scoped
-sender and recipient references, a declared-purpose constraint, an optional
-origin constraint, validity interval, maximum count or rate, capability version,
-acceptable declaration authority, and revocation conditions. Outside the endpoint
-and routing boundary, those references \MUST{} be pairwise opaque.
+The reference deployment supports express lanes as recipient-signed scoped
+capabilities. Each grant \MUST{} bind its subject and recipient, declared-purpose
+constraint, optional origin constraint, acceptable declaration authority,
+hard validity interval, enforceable count or rate, version, and revocation rules.
+An opaque handle identifies the pair; it does not supply authority without the
+grant. Admission compares authenticated declarations exactly under versioned
+matching rules. It does not verify the semantic truth of encrypted content.
 
-An advertised express-lane capability \MUST{} contain a recipient signature, a
-hard validity interval, and an enforceable maximum count or rate. Admission
-\MUST{} compare the authenticated declared purpose and any constrained origin
-exactly under the capability's versioned matching rules. This comparison enforces
-what the sender or gateway declared; it \MUSTNOT{} be represented as provider
-inspection or verification of end-to-end encrypted content. A recipient endpoint
-\MAY{} report misuse and revoke or block the authority. A native opaque pair
-handle identifies the subject but is not authority without the signed grant.
+For legacy senders, a DMARC pass under RFC~9989 is evidence of authorized use of
+the visible author domain, not proof of purpose, safety, company identity, or
+human authorship. The gateway \MUST{} identify itself as declaration authority
+and use legacy/unspecified origin unless separate authenticated evidence supports
+more. The lane binds a recipient-selected canonical IDNA-ASCII domain scope,
+accepting the domain or its authorized subdomains under a consistent versioned
+mapping. A passing DKIM or SPF identifier cannot silently replace that scope.
 
-For a legacy sender, a DMARC pass under RFC~9989 is evidence that use of the
-RFC 5322 author domain was authorized; it is not evidence that a message is
-safe, that its content matches a declared purpose, that a human authored it, or
-that a look-alike domain belongs to an expected organization. A legacy ingress
-gateway that constructs the authenticated envelope \MUST{} identify itself as the
-declaration authority and use a legacy/unspecified origin unless it possesses
-separate authenticated evidence. A legacy capability \MUST{} explicitly state
-whether such gateway-originated purpose declarations satisfy its scope. A legacy
-lane \MUST{} bind separately to a canonical IDNA-ASCII organizational domain and
-\MUST{} apply the same versioned domain-to-protocol-identity mapping for grant,
-admission, blocking, and revocation. The aligned DKIM or SPF identifier
-\MUSTNOT{} silently replace that lane identity.
+The admission order is blocked refusal, accepted permission, valid capability,
+permitted follow-up on the identified open request, then eligible new-request
+creation with explicit sender authorization. If a request already exists but a
+follow-up is refused, the last branch is unavailable. Capability mismatch never
+silently converts a message into a charged request.
 
-A message whose authenticated declarations and other constraints match a valid
-capability \MAY{} be admitted without a bond while the relationship remains
-unaccepted. Capability validation \MUST{} be deterministic, auditable, scoped to
-the represented authority, and replay-safe. A declaration mismatch \MUSTNOT{}
-consume allowance. A capability
-\MUSTNOT{} silently create unrestricted standing acceptance. A capability-
-authorized message \MUSTNOT{} open or join a relationship solicitation and
-\MUSTNOT{} advance repeated-attempt state.
-A \texttt{blocked} relationship overrides a capability for the directed pair;
-blocking \MUST{} invalidate that authority until the recipient explicitly issues
-new authority after unblocking.
+Capability-authorized delivery creates no request, forfeiture, solicitation, or
+new-request history increment. Grant, renewal, expiry, and revocation do not
+settle an existing request. Blocking invalidates capability authority; unblocking
+does not restore it. The lane's activity clock cannot extend a request deadline
+or establish distribution-program activity by itself.
 
-\section{Security, Privacy, and Governance Requirements}
+\section{Security and Privacy Requirements}
 
-\subsection{Authentication and Replay}
-
-Every quote, reservation assertion, admission receipt, recipient decision,
-settlement receipt, and provider assertion \MUST{} be authenticated. Every
-state-changing command \MUST{} carry an idempotency key and domain separation
-sufficient to prevent reuse in another command type, relationship, or protocol
-version.
-
-Operational keys \MUST{} be rotatable without changing $P_i$. Recovery and key
-revocation \MUST{} prevent a compromised accepted identity from retaining
-indefinite bond-free authority.
+Operational signing keys must be rotatable without changing the private
+principal. Recovery and revocation \MUST{} prevent a compromised device from
+retaining accepted or capability authority. Neither recovery nor distribution
+verification authorizes provider access to native content keys.
 
 \subsection{Native Content Confidentiality}
 
@@ -1145,7 +549,7 @@ observability systems \SHOULD{} use separately scoped references so that one
 global identifier does not join all records without passing through a controlled
 translation boundary.
 
-The private repeated-attempt relationship $(P_i,I_j)$ similarly \MUST{} be
+The private new-request relationship $(P_i,I_j)$ similarly \MUST{} be
 represented outside the identity service by a recipient-scoped opaque assertion.
 That assertion \MUST{} allow the correct anti-persistence history to survive changes
 of sender address, key, or provider, while preventing unrelated recipients from
@@ -1154,7 +558,7 @@ comparing assertions to discover a common private principal.
 A provider migration \MUSTNOT{} export a globally stable principal identifier.
 Where continuity across providers is supported, the prior identity authority
 \MUST{} instead issue or authorize a migration proof scoped to the recipient and
-the repeated-attempt purpose. The receiving provider \MUSTNOT{} be able to use
+the new-request purpose. The receiving provider \MUSTNOT{} be able to use
 that proof to discover the principal's relationships with other recipients.
 
 There \MUSTNOT{} be a public or ordinary administrative interface that enumerates
@@ -1181,19 +585,19 @@ Within ordinary operation, the identity service \MAY{} know that a verified
 principal controls a public identity, but it need not receive message content.
 The relationship service \MAY{} know $H_{ij}$ and its state, but it need not receive
 legal identity evidence or plaintext content. The ledger \MAY{} know opaque account,
-bond, and settlement references together with amounts, but it need not receive a
+request, and settlement references together with amounts, but it need not receive a
 subject, content reference, public address pair, or private principal identifier.
 The content store \MAY{} know a ciphertext object and a scoped retrieval reference,
-but it need not receive a bond outcome or readable endpoint identities.
+but it need not receive a request outcome or readable endpoint identities.
 
 The delivery boundary necessarily learns enough to route to $I_j$ and to present
 $I_i$ to the recipient. It \MUST{} disclose no additional principal evidence,
 unrelated identities, balance information, or relationship history. A recipient
-provider \MUST{} verify the applicable reservation or capability, but it \MUSTNOT{}
-receive the sender's overall balance or unrelated settlement activity. External
-financial rails \SHOULD{} see account funding and withdrawal rather than
-individual message events. Internal transfers \SHOULD{} be netted or aggregated
-before external settlement when correctness and applicable obligations permit.
+provider \MUST{} verify the applicable request admission, follow-up authority,
+or capability without receiving unrelated financial activity. External providers
+\SHOULD{} receive only the request charge, original-payment refund, or member
+payment references and amounts needed for execution. They do not need message
+content, follow-up events, or a correspondence graph.
 
 Translation among scoped references is itself sensitive processing. Every
 translation \MUST{} be authorized for a specific protocol purpose and recorded in
@@ -1201,19 +605,29 @@ an access audit that does not reproduce the translated graph. Bulk translation,
 graph export, and use of relationship data for advertising, sale, or unrelated
 profiling are outside the protocol purpose and \MUSTNOT{} be enabled by default.
 
+\subsection{Membership and Obligation Privacy}
+
+Distribution verification \MUST{} use its own scoped member references, access
+roles, and retention policy. An eligibility assertion may establish one qualifying
+member without exposing legal evidence to delivery or the allocation engine.
+Activity evidence \MUST{} be limited to facts needed by the published rule;
+message content and unrelated correspondents are not eligibility inputs.
+Unpaid refunds and finalized payables retain necessary payment/audit evidence
+under their own retention classes even after ordinary message linkage expires.
+
 \subsection{Metadata Leakage and Traffic Analysis}
 
 Pairwise handles do not conceal every observable fact. Timing, network addresses,
-message sizes, uncommon bond amounts, and synchronized journal events can permit
+message sizes, uncommon request amounts, and synchronized journal events can permit
 correlation without a direct identifier. Implementations \MUST{} document which
 of these signals each actor can observe and \MUST{} retain them only while needed
 for routing, security, settlement, or a disclosed obligation.
 
 Where it does not compromise correctness, an implementation \SHOULD{} reduce
-correlation through coarse timestamps, batching, settlement netting, content
+correlation through coarse timestamps, payment batching, content
 padding, separation of network and account logs, and short retention of delivery
 telemetry. These protections \MUSTNOT{} alter quoted amounts, obscure a settlement
-from its owner, or make bond finality ambiguous.
+from its owner, or make request finality ambiguous.
 
 \subsection{Record Lifecycle and Retention}
 
@@ -1222,9 +636,9 @@ purpose, access domain, controlling key, operational lifetime, dispute lifetime,
 any separately applicable required-retention period, and deletion method. A vague
 interest in future analytics is not a protocol purpose for indefinite retention.
 
-While an attempt is pending, the protocol \MAY{} retain the scoped linkage required
-to authenticate admission, prevent replay, apply repeated-attempt policy, receive
-a decision, and settle the bond. Once the attempt is terminal and its defined
+While a request is pending, the protocol \MAY{} retain the scoped linkage required
+to authenticate admission, prevent replay, apply new-request policy, receive
+a decision, and settle the request. Once the request is terminal and its defined
 dispute period ends, the implementation \MUST{} remove fields and indexes that are
 not needed for continuing permission, accounting, fraud handling, or an applicable
 retention obligation. A durable accounting record \SHOULD{} contain only an
@@ -1290,253 +704,86 @@ removed; if scoped handles, rare amounts, precise timestamps, or auxiliary data
 permit practical reidentification, it remains protected relationship data and
 \MUST{} follow the corresponding access and retention rules.
 
-\subsection{Provider and Recipient Incentives}
+\section{Incentives and Policy Authority}
 
-A provider receiving $C$ has an economic interest in rejection or expiry. A
-recipient receiving $S$ may have an interest in attracting and rejecting bonded
-contact. Deployments \MUST{} make settlement auditable and \MUST{} define fraud,
-collusion, reversal, suspension, and dispute policies outside the deterministic
-kernel.
+The operator receives processing revenue on rejection or expiry and, under the
+C-SQD profile, a disclosed share of eligible forfeitures. Recipients do not earn
+a personal rejection bounty, but member duplication, fabricated activity, and
+operator manipulation remain relevant risks. Providers \MUST{} make acceptance
+available, issue signed decision receipts, and preserve timely decisions rather
+than manufacture expiry. Pricing and financial-program policies \MUST{} include
+review, dispute, correction, and audit procedures.
 
-Recipient providers \MUST{} present acceptance as an effective available action,
-\MUST{} provide signed decision receipts, and \MUSTNOT{} suppress a timely
-acceptance while claiming expiry. Pricing policy \SHOULD{} define bounds or review
-mechanisms for $C$ and provider-imposed minimum $S$.
+Protocol policy fixes request economics and deterministic transitions. Admission
+policy evaluates only authenticated envelopes, permission, recipient follow-up
+settings, rate/history state, and authorized safety evidence. Presentation policy
+runs for the recipient and controls ranking, notifications, digests, and local
+content processing. Neither latter policy may rewrite charge terms or terminal
+outcomes. A learned or probabilistic recommendation is not an authenticated
+relationship command. Admission decisions \MUST{} reduce to versioned, auditable
+rules over authorized inputs.
 
-\subsection{Delivery Meaning}
+Payment does not bypass content or safety controls, and those controls do not
+authorize decryption of native content. Providers may use recipient reports,
+endpoint evaluation, metadata, and deliberately disclosed evidence within their
+authorized purposes. Sender-facing errors should explain actionable constraints
+without exposing unrelated recipient rules or enabling enumeration.
 
-A valid bond authorizes a protocol-valid contact attempt. It does not guarantee
-inbox prominence, human attention, a response, or exemption from malware,
-harassment, unlawful-content, or safety controls. Providers \MUST{} distinguish
-financial validity from content and transport policy.
+\section{Interoperability and Migration}
 
-Those controls do not authorize provider decryption of native content. They \MAY{}
-operate on the authenticated envelope, endpoint evaluation, recipient reports,
-rate and relationship state, or content a participant deliberately discloses for
-investigation. Any disclosed plaintext \MUST{} be scoped to that purpose and its
-own retention class.
+Versioned exchanges \MUST{} cover identities, scoped continuity assertions,
+request terms and identifiers, payment/admission evidence, message envelopes,
+capabilities, recipient decisions, outcome receipts, and financial obligations.
+Equivalent canonical inputs must yield equivalent request outcomes. Signatures
+and idempotency domains \MUST{} prevent reuse across deployments and versions.
 
-\subsection{Policy Authority and Isolation}
+Federation must preserve scoped references, native encryption, request uniqueness,
+history continuity, and financial finality. It cannot assume that old direct
+recipient-collateral clearing applies to the company pool. A separate agreement
+must assign charge/refund responsibility, pool governance, membership uniqueness,
+clearing, default losses, and payment obligations before real federated value is
+enabled. SMTP downgrade must be visible before transmission and in the envelope.
 
-Implementations \MUST{} distinguish three policy authorities. \emph{Protocol
-policy} is a versioned, immutable input to deterministic quotation and settlement
-transitions. Terms derived from it remain fixed as specified above. \emph{Admission
-policy} runs at an authenticated provider or capability boundary and may use only
-the envelope, permission proofs, rate and relationship state, safety evidence, and
-other data deliberately available to that boundary. It \MUSTNOT{} decrypt native
-content or create unrecorded settlement effects. \emph{Presentation policy} runs
-for the recipient, preferably at an authorized endpoint, and may control inbox
-placement, notifications, digests, ranking, and local content processing. It
-\MUSTNOT{} change protocol validity, relationship state, bond ownership, or
-canonical history.
+\section{Required Invariants and Conformance Stories}
 
-Neither admission nor presentation policy \MAY{} impose a protocol bond on
-ordinary communication while the directed relationship remains accepted.
-Narrowing that permission requires an authenticated relationship transition or a
-separately versioned recipient-granted capability model. A policy implementation
-may be assisted by probabilistic or learned software, but such output is not by
-itself an authenticated protocol command. Any policy result that affects protocol
-admission \MUST{} reduce to a versioned, auditable decision over authorized inputs.
-
-Sender-facing explanations \SHOULD{} disclose the actionable constraint needed to
-correct a request while withholding unrelated recipient rules, private signals,
-and details that would enable enumeration or adaptive probing. Internal audit
-records receive their own scoped references and retention class.
-
-\section{Interoperability Requirements}
-
-A federated implementation \MUST{} provide versioned representations for:
-
-\begin{itemize}[leftmargin=2em]
-    \item provider and protocol identities;
-    \item contact-term quotes;
-    \item message envelopes and content references;
-    \item declared-purpose, origin-declaration, payload-schema, declaration-
-          authority, and extension-criticality representations;
-    \item bond and persistence-reserve commitments;
-    \item repeated-attempt assertions;
-    \item admission and unadmitted-cancellation receipts;
-    \item authenticated relationship decisions;
-    \item settlement receipts; and
-    \item provider-to-provider clearing obligations.
-\end{itemize}
-
-Federation \MUST{} preserve the native privacy profile across provider boundaries.
-A provider assertion identifying $P_i$ for repeated-attempt enforcement \MUST{} be
-scoped to $I_j$ or its recipient-provider privacy domain and \MUSTNOT{} provide a
-stable value that other recipients can compare. Settlement and admission receipts
-\MUST{} use the minimum scoped references needed by their verifiers. A downgrade
-to SMTP, provider-readable content, or a less private metadata profile \MUST{} be
-shown to the sender before transmission and represented in the message envelope.
-
-The sender provider \MUST{} prove reservation of the quoted $C+S+L_k$. The
-recipient provider \MUST{} verify that proof and the current quote state before
-admission. Inter-provider clearing transfers obligations created by $C$ and $S$;
-$L_k$ remains sender property and \MUSTNOT{} enter provider revenue or net clearing.
-
-Independent implementations \MAY{} use different storage engines, internal ledger
-software, and external financial rails, provided that identical canonical inputs
-produce equivalent protocol and ownership transitions.
-
-\section{Required Invariants}
-
-Every conforming implementation \MUST{} preserve all of the following:
-
-\begin{enumerate}[leftmargin=2em]
-    \item \textbf{Bond finality.} Each bond reaches at most one terminal state.
-    \item \textbf{Reserve finality.} Each persistence reserve is released exactly
-          once and is never transferred to a recipient or provider.
-    \item \textbf{Value conservation.} Every transition conserves ledger value.
-    \item \textbf{Exact funding.} An unaccepted ordinary attempt is not valid
-          unless exactly $C+S+L_k$ is reserved under valid fixed terms.
-    \item \textbf{Relationship-wide acceptance.} Acceptance atomically establishes
-          permission for $(I_i,I_j)$, refunds every decision-open admitted bond,
-          fully cancels every unadmitted reservation for the pair, and releases
-          active persistence reserves associated with attempts from $I_i$ to
-          $I_j$.
-    \item \textbf{No later rejection.} A bond or message included in acceptance
-          cannot subsequently be rejected or expired.
-    \item \textbf{Relationship-wide rejection.} Rejection atomically settles every
-          decision-open admitted bond for $(I_i,I_j)$ according to the rejection
-          allocation and fully cancels every unadmitted reservation for the pair.
-    \item \textbf{Retryable rejection.} Rejection preserves repeated-attempt
-          backoff and permits a later eligible bonded attempt; it is not a block.
-    \item \textbf{Recipient blocking.} Blocking settles every decision-open
-          admitted bond under the rejection allocation, fully cancels every
-          unadmitted reservation, and prevents terms, reservation, capability use,
-          and admission for the directed pair until authenticated unblocking.
-    \item \textbf{Unadmitted full return.} Cancellation before admission returns
-          exactly $C+S+L_k$, creates no solicitation or decision deadline, and
-          does not advance repeated-attempt state.
-    \item \textbf{Timely-decision priority.} A decision durably received by a
-          bond's deadline is observed before expiry becomes final.
-    \item \textbf{No retroactive reopening.} A later acceptance may grant future
-          permission but cannot reopen a terminal or logically expired bond.
-    \item \textbf{Atomic attempt advancement.} Admission and repeated-attempt
-          advancement occur atomically.
-    \item \textbf{Principal continuity.} Changing a sender address, key, or provider
-          does not reset $(P_i,I_j)$ attempt state.
-    \item \textbf{Identity-scoped permission.} Acceptance of one public identity
-          does not accept other identities controlled by the same principal,
-          reset principal-level attempt state, or release their persistence
-          reserves.
-    \item \textbf{Principal non-exportability.} A private principal reference is
-          not a public address or globally comparable inter-provider identifier;
-          other domains receive only purpose-limited, scoped assertions.
-    \item \textbf{Free accepted communication.} Accepted ordinary communication
-          requires no protocol bond and incurs no protocol message fee.
-    \item \textbf{Replay safety.} Duplicate commands, events, receipts, and expiry
-          jobs cannot duplicate value movement or state transition.
-    \item \textbf{Declaration integrity.} Every purpose, origin, schema,
-          declaration-authority, validity, and capability reference used for
-          admission is authenticated and bound to the admitted encrypted content.
-    \item \textbf{Fixed declaration-dependent terms.} When contact terms depend on
-          message declarations, reservation and admission use exactly the
-          declaration set fixed by those signed terms.
-    \item \textbf{Capability-scope enforcement.} A capability admits only messages
-          whose authenticated declarations match its constraints, and mismatch
-          consumes no allowance or settlement value.
-    \item \textbf{Message-validity isolation.} Envelope validity gates admission
-          but cannot shorten a decision window or rewrite settlement after
-          admission.
-    \item \textbf{Atomic visibility.} No observer may see permission change without
-          its required bond and reserve settlements, or vice versa.
-    \item \textbf{Native content blindness.} Providers cannot decrypt a native
-          message's subject, body, inline media, or attachments with
-          provider-controlled keys.
-    \item \textbf{Pairwise unlinkability.} An opaque handle or principal assertion
-          disclosed for one recipient cannot be used by another recipient to
-          recognize the same relationship or private principal.
-    \item \textbf{Graph non-enumerability.} No public or ordinary administrative
-          operation exposes the global relationship graph or contact-attempt
-          history.
-    \item \textbf{Data compartmentalization.} Routine access to content, identity,
-          relationships, the ledger, or telemetry does not automatically grant
-          access to the other privacy domains or their translation keys.
-    \item \textbf{Policy-authority isolation.} Presentation and admission policy
-          cannot mutate settlement or canonical relationship history except
-          through an independently authenticated protocol command.
-    \item \textbf{Bounded retention.} Every identifying field has a declared
-          purpose, retention class, expiration condition, and deletion path across
-          primary and derived storage.
-    \item \textbf{Honest erasure.} A record described as cryptographically erased
-          cannot be reconstructed from operator-held keys, key escrow, replicas,
-          logs, or backups.
-    \item \textbf{Rail minimization.} External funding and withdrawal systems do
-          not receive message content or a per-message relationship history from
-          the protocol.
-    \item \textbf{Solicitation coalescing.} One active solicitation generation for
-          a directed unaccepted relationship produces exactly one logical relationship-
-          establishment effect; later admitted attempts join it without another
-          such effect.
-    \item \textbf{Attempt distinctness.} Solicitation coalescing does not merge
-          bonds, deadlines, content, persistence reserves, or attempt advancement,
-          and closing an episode does not itself move value.
+Conformance \MUST{} preserve the following together:
+\begin{enumerate}[leftmargin=2em,nosep]
+\item One nonterminal request per directed pair, one authorized charge per request,
+      and no additional financial effect from follow-ups or retries.
+\item One request deadline fixed at admission; timely-decision priority and no
+      retroactive reopening of a terminal or logically expired request.
+\item Full return before admission; no ordinary cancellation after admission.
+\item Atomic permission, request outcome, ledger obligations, and outbox intent,
+      with external confirmation represented separately.
+\item Exact outcome allocation, integer value conservation, and no recipient
+      entitlement created by rejection.
+\item No distributable use of refundable amounts, no repeated corporate assessment
+      of carryforward, and no disappearance of unpaid finalized obligations.
+\item Directed public-identity permission with private principal history continuity,
+      including concurrent aliases, without public identity linkage.
+\item Blocking overrides every admission authority; unblocking does not accept,
+      restore capabilities, erase history, or reopen money.
+\item Authenticated declarations, current follow-up authorization, replay-safe
+      allowance consumption, and message-validity isolation.
+\item Native content confidentiality, pairwise scoping, compartmentalization,
+      bounded retention, and honest erasure across replicas and backups.
 \end{enumerate}
 
-\section{Reference Transition Summary}
+A reference suite should begin with one request and three permitted messages:
+acceptance creates one refund obligation and future permission. It should then
+exercise disabled follow-ups, concurrent creation, alias rotation, cancellation
+versus admission, a late capture after cancellation, timely decisions delayed in
+queues, late acceptance, duplicate and out-of-order provider evidence, and failed
+refund recovery. Profile tests must additionally exercise maturity exclusions,
+once-only corporate allocation, quarterly eligibility, integer rounding, zero
+eligible members, carryforward, and failed member payments.
 
-For all bonds in the applicable decision-open admitted set, the relationship
-outcomes are:
-
-\begin{equation}
-\begin{array}{lll}
-\text{Accept relationship} &:& C+S\rightarrow\text{sender},\\[3pt]
-\text{Reject relationship} &:& C\rightarrow\text{recipient provider},\quad
-                                  S\rightarrow\text{recipient},\\[3pt]
-\text{Block relationship} &:& C\rightarrow\text{recipient provider},\quad
-                                  S\rightarrow\text{recipient},\\[3pt]
-\text{Expire bond} &:& C\rightarrow\text{recipient provider},\quad
-                       S\rightarrow\text{sender}.
-\end{array}
-\end{equation}
-
-Every unadmitted reservation affected by cancellation or a relationship decision
-returns $C+S+L_k$ in full. Acceptance releases every other active $L_k$ associated
-with attempts from the accepted $I_i$ to $I_j$ and preserves principal-level
-attempt state. Rejection, blocking, and expiry retain the $L_k$ associated with
-admitted attempts until their scheduled release.
-The first admitted attempt in a solicitation generation creates exactly one
-logical relationship-establishment effect. Later attempts join that generation
-without a new solicitation. Acceptance, rejection, or blocking closes it;
-absence of a decision leaves each admitted bond to expire separately and the episode
-lapses when none remains decision-open. Rejection permits another eligible
-attempt after backoff; blocking prohibits one until the recipient unblocks.
-
-\section{Implementation Sequence}
-
-A reference implementation \SHOULD{} proceed in the following order:
-
-\begin{enumerate}[leftmargin=2em]
-    \item implement the in-memory deterministic relationship, bond, reserve, and
-          repeated-attempt transitions;
-    \item test full event sequences, concurrent decisions, and the required
-          invariants with unit and property-based tests;
-    \item add the append-only double-entry journal and idempotent settlement;
-    \item add signed identities, authenticated minimal message declarations,
-          endpoint content encryption, key transparency, quotes, admission
-          receipts, and decision receipts;
-    \item introduce pairwise handles and enforce the identity, relationship,
-          content, ledger, and telemetry access boundaries;
-    \item persist journal streams and materialized projections with retention
-          classes, key separation, and tested cryptographic erasure;
-    \item add delivery, encrypted content storage, solicitation coalescing, and
-          expiry processing;
-    \item add express-lane scoped capabilities without changing base settlement,
-          relationship, or repeated-attempt semantics;
-    \item add visibly downgraded SMTP compatibility gateways; and
-    \item add privacy-preserving federation and clearing after centralized
-          semantics are stable.
-\end{enumerate}
-
-The first milestone is complete only when it can deterministically execute quote,
-reservation, admission, relationship-wide acceptance and rejection, expiry,
-unadmitted cancellation and full release, deferred reserve release,
-principal-level attempt-state preservation, revocation, blocking, unblocking, and
-the opening, joining, and closing of solicitation episodes while preserving every
-invariant in this document. Scoped capabilities are not required inside this
-settlement milestone. A production milestone additionally requires native end-to-end content
-encryption, pairwise relationship references, compartmentalized access, and
-verified deletion across replicas and backups.
+The implementation sequence follows the same story: model request transitions
+and obligations; establish the transactional journal and outbox; add authenticated
+payment evidence and reconciliation; integrate encrypted delivery and follow-up
+controls; then validate the C-SQD financial program with simulated external
+effects. Live rails and federation follow only after their deployment policies
+are explicit. The desktop pilot may use a nonredeemable simulator without
+claiming that it has validated live payment operations.
 
 \end{document}

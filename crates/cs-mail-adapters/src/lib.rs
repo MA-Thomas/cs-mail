@@ -1,4 +1,4 @@
-//! Explicit edge adapters for funding, SMTP downgrade, and future federation.
+//! Explicit edge adapters for SMTP downgrade and future federation.
 
 use core::fmt;
 use std::collections::BTreeMap;
@@ -7,7 +7,7 @@ use std::net::IpAddr;
 use std::pin::Pin;
 
 use cs_mail_primitives::{
-    CanonicalTime, FederationTransactionRef, FundingRef, Money, ProtocolIdentity, SettlementUnit,
+    CanonicalTime, FederationTransactionRef, Money, ProtocolIdentity, SettlementUnit,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -262,109 +262,6 @@ pub trait DmarcVerifier: Send + Sync {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum FundingState {
-    Pending,
-    Available,
-    Reversed,
-}
-
-/// Contains no message, relationship, recipient, or content reference.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct FundingRecord {
-    pub reference: FundingRef,
-    pub opaque_account: [u8; 32],
-    pub amount: Money,
-    pub unit: SettlementUnit,
-    pub state: FundingState,
-    pub available_at: CanonicalTime,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FundingError {
-    DuplicateConflict,
-    MissingRecord,
-    NotFinal,
-    AlreadyReversed,
-}
-
-impl fmt::Display for FundingError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateConflict => formatter.write_str("funding reference conflict"),
-            Self::MissingRecord => formatter.write_str("funding record missing"),
-            Self::NotFinal => formatter.write_str("funding is not yet available"),
-            Self::AlreadyReversed => formatter.write_str("funding was already reversed"),
-        }
-    }
-}
-
-impl std::error::Error for FundingError {}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct FundingBook {
-    records: BTreeMap<FundingRef, FundingRecord>,
-}
-
-impl FundingBook {
-    /// Records an external deposit. Exact replay is idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the same reference names different funding facts.
-    pub fn record(&mut self, record: FundingRecord) -> Result<(), FundingError> {
-        match self.records.get(&record.reference) {
-            Some(existing) if *existing == record => Ok(()),
-            Some(_) => Err(FundingError::DuplicateConflict),
-            None => {
-                self.records.insert(record.reference, record);
-                Ok(())
-            }
-        }
-    }
-
-    /// Marks a deposit available only after its policy finality time.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for missing, early, or reversed deposits.
-    pub fn make_available(
-        &mut self,
-        reference: FundingRef,
-        now: CanonicalTime,
-    ) -> Result<FundingRecord, FundingError> {
-        let record = self
-            .records
-            .get_mut(&reference)
-            .ok_or(FundingError::MissingRecord)?;
-        if record.state == FundingState::Reversed {
-            return Err(FundingError::AlreadyReversed);
-        }
-        if now < record.available_at {
-            return Err(FundingError::NotFinal);
-        }
-        record.state = FundingState::Available;
-        Ok(record.clone())
-    }
-
-    /// Records a compensating external reversal without rewriting protocol settlement history.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for missing or already reversed funding.
-    pub fn reverse(&mut self, reference: FundingRef) -> Result<FundingRecord, FundingError> {
-        let record = self
-            .records
-            .get_mut(&reference)
-            .ok_or(FundingError::MissingRecord)?;
-        if record.state == FundingState::Reversed {
-            return Err(FundingError::AlreadyReversed);
-        }
-        record.state = FundingState::Reversed;
-        Ok(record.clone())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DowngradeConsent {
     pub accepted_at: CanonicalTime,
 }
@@ -606,34 +503,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(evidence.format_version, LegacyDmarcEvidence::FORMAT_VERSION);
-    }
-
-    #[test]
-    fn funding_waits_for_finality_and_reversal_is_compensating() {
-        let mut book = FundingBook::default();
-        let record = FundingRecord {
-            reference: FundingRef(1),
-            opaque_account: [7; 32],
-            amount: Money::from_minor_units(50),
-            unit: SettlementUnit(1),
-            state: FundingState::Pending,
-            available_at: CanonicalTime(10),
-        };
-        book.record(record).unwrap();
-        assert_eq!(
-            book.make_available(FundingRef(1), CanonicalTime(9)),
-            Err(FundingError::NotFinal)
-        );
-        assert_eq!(
-            book.make_available(FundingRef(1), CanonicalTime(10))
-                .unwrap()
-                .state,
-            FundingState::Available
-        );
-        assert_eq!(
-            book.reverse(FundingRef(1)).unwrap().state,
-            FundingState::Reversed
-        );
     }
 
     #[test]

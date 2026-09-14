@@ -18,351 +18,334 @@
 
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 
-\title{\textit{cs-mail} Deployment and Migration Profile\\
-\large Initial C-SQD Operation, Funding, SMTP, and Clearing}
+\title{\textit{cs-mail} Deployment and Migration Profile\\\large Request Payments and the C-SQD Member Program}
 \author{C-SQD}
-\date{Draft 0.5 --- September 2026}
+\date{Draft 0.6 --- September 2026}
+
+\setlength{\emergencystretch}{1.5em}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-This document describes nonnormative choices for deploying the \textit{cs-mail}
-protocol. It separates the protocol's invariant meaning from operator policy:
-identity enrollment, account funding, risk controls, SMTP migration, provider
-clearing, privacy operations, and staged launch. The profile gives one plausible
-path for an initial centralized C-SQD service and later federation. It neither
-changes the settlement rules in the \textit{cs-mail Protocol Specification} nor
-requires another provider to adopt the same vendors, verification evidence,
-storage topology, or banking rails.
+An initial C-SQD deployment can operate the communication service and its
+canonical ledger while external providers execute request-specific charges,
+refunds, and member payments. This profile follows those obligations from a
+sender's relationship request to a quarterly member distribution. It defines the
+C-SQD financial program, then explains the operational, privacy, and migration
+choices needed to deliver it. Company ownership of the pool does not make its
+member-restricted portion available for ordinary corporate spending.
 \end{abstract}
 
-\section{Status and Document Boundary}
+\section{What This Profile Controls}
 
-The \textit{cs-mail Protocol Specification} is normative. It defines permission,
-bonds, repeated-attempt controls, canonical ordering, settlement, privacy, and
-invariants. The \textit{Rust Reference Architecture} explains one implementation
-shape. This profile addresses choices that a real operator must make but that do
-not belong in the portable protocol.
+The \textit{Protocol Specification} defines permission, request outcomes, and
+the distinction between committed obligations and completed external payments.
+Section~\ref{sec:program}, the \emph{C-SQD Financial Program}, adds normative
+requirements for deployments advertising this profile. In that section,
+``must'' and ``must not'' are requirements. The remaining sections are deployment
+guidance. Values explicitly marked proposed are planning defaults, not approved
+live-payment terms.
 
-In particular, this profile does not define a universal legal identity, mandate
-bank-based enrollment, select a payment processor, create an additional protocol
-fee, or weaken native end-to-end content encryption. Policies in this document
-must remain versioned, disclosed, auditable, and subordinate to protocol
-semantics.
+This revision replaces periodic account funding, direct recipient collateral
+payouts, and withdrawals of spendable ledger balances. Its financial narrative
+is a conditional service charge for one relationship request, followed by an
+outcome-dependent refund or forfeiture and, separately, member distributions.
+The legal characterization and payment-provider arrangements still require
+assessment; these labels do not establish a money-transmission exemption.
 
-\section{Initial Deployment Shape}
+\section{A Request from Charge to Outcome}
 
-An initial deployment may place several logical roles under C-SQD while keeping
-their authority and data access separate. C-SQD may operate decision ingress,
-the canonical journal, relationship state, the internal ledger, native delivery,
-and internal clearing. External regulated providers may fund and redeem user
-balances.
+Alice has no standing permission to write to Bob. She reviews one request quote,
+authorizes $C+S$, and supplies her initial encrypted communication. C-SQD records
+one request and asks the external provider to capture that charge under a stable
+operation key. Once capture evidence and durable content are available, admission
+opens the request and starts its decision clock.
 
-Central operation does not justify a universal database credential or identifier.
-Before meaningful user data accumulates, the deployment should establish separate
-access domains for:
+Bob's follow-up setting governs additional messages during that clock. If he
+permits them, Alice may add messages under the same request. They cost no more,
+do not move the deadline, and do not generate another request prompt. If he does
+not permit them, C-SQD refuses the follow-up without selling another charge
+against the pending request.
 
-\begin{itemize}[leftmargin=2em]
-    \item principal evidence and account recovery;
-    \item public identities and directed relationships;
-    \item encrypted message content;
-    \item balances, bonds, reserves, and settlement;
-    \item delivery and abuse telemetry; and
-    \item separately required compliance or dispute records.
-\end{itemize}
+Acceptance records a full refund obligation and standing permission. Rejection
+records processing revenue $C$ and pending forfeiture $S$. Silence through expiry
+records $C$ as revenue and a refund obligation for $S$. Bob receives no personal
+entitlement from rejecting Alice. Each obligation remains visible until the
+external execution is reconciled, even if Alice or Bob closes an account.
 
-Each domain should have purpose-specific credentials, encryption keys, retention
-classes, and access audit. Translation among scoped references is an explicit
-operation. A central operator should not treat organizational ownership as a
-substitute for technical compartmentalization.
+Capture and admission cannot form one database transaction with a payment
+provider. Recovery must therefore complete the story. A cancelled or timed-out
+preparing request is not admitted when a delayed capture confirmation arrives;
+the captured amount is refunded in full. An uncertain capture is queried under
+its original key rather than retried as another charge. A failed refund remains
+an obligation and enters retry or review.
 
-\section{Identity Enrollment and Principal Policy}
+\section{C-SQD Financial Program}\label{sec:program}
 
-The protocol requires a continuing private principal for control, recovery, and
-repeated-attempt continuity. It does not require that every provider define that
-principal as a legally verified natural person. C-SQD should publish which kinds
-of principal it supports, what evidence each tier requires, and which functions
-depend on verification.
+\subsection{Ownership and the limits on its use}
 
-One deployment might accept several enrollment profiles:
+C-SQD is the service operator and owner of the company pool in this profile.
+It is responsible for request refunds and finalized member payments, while an
+external provider executes the underlying transactions. The live policy must
+identify the contracting entity, merchant/payment responsibilities, and applicable
+provider arrangements before charges begin.
 
-\begin{center}
-\small
-\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}YY@{}}
-\toprule
-\textbf{Profile} & \textbf{Possible evidence} & \textbf{Policy considerations} \\
-\midrule
-Individual & Account authentication, recovery factors, and, where justified, legal name, date of birth, or a verified funding account. & Avoid collecting legal identity merely because it is conventional; document necessity and retention for each field. \\
-Organization & Organization name, jurisdiction or registry reference, institutional funding account, and evidence that an enrolling representative may act for it. & Support delegated administration, representative turnover, and recovery without making registry data part of ordinary messages. \\
-Managed group & Sponsoring organization, administrator authority, and member or role controls. & Define who owns protocol identities, receives funds, and may recover or revoke operational keys. \\
-Limited account & Provider-local account and strong recovery evidence without conventional bank or legal-identity verification. & Apply proportionate balance, withdrawal, or sending limits without exposing a public identity tier. \\
-\bottomrule
-\end{tabularx}
-\end{center}
+The pool has no participant ownership shares and no earmarked claim linking a
+particular rejected request to its recipient. Before quarterly allocation, a
+member has no individually finalized claim to a fraction of its unallocated
+funds. At allocation, the ledger records an individual payment obligation for
+each qualifying member. This accounting distinction must be reflected in the
+published program terms rather than inferred from the word ``pool.''
 
-Exact evidence is a legal, risk, accessibility, and inclusion decision. People who
-cannot or should not use conventional bank-based verification need a documented
-path where feasible. Identity evidence and the provider-local principal reference
-must never appear in ordinary message envelopes, relationship records exposed to
-other users, or globally comparable federation assertions.
+Eligible forfeitures undergo one disclosed corporate allocation. The remainder
+is restricted to member distributions. C-SQD must not spend that remainder on
+operations, payout fees, or corporate losses, or assess it again in later
+quarters. Processing revenue and the corporate allocation fund those company
+costs. This rule qualifies the earlier proposal to devote all forfeitures to
+members; it does not authorize further undisclosed deductions.
 
-Provider migration should use recipient-scoped continuity proofs for repeated-
-attempt enforcement. It should not export a stable universal principal identifier.
+\subsection{When a forfeiture becomes eligible}
 
-\section{Funding, Withdrawal, and Financial Risk}
+Rejection is the beginning of the forfeiture process, not permission to distribute
+cash. Each pending lot must retain a scoped request cause, original payment
+reference, amount, unit, rate/policy version, maturity evidence, and assessment
+status. Before eligibility, the policy's capture/settlement, refund, dispute,
+and reserve conditions must be satisfied. Refund obligations and unresolved
+amounts must remain separately accounted for and unavailable to the pool.
 
-Users may fund ledger balances periodically through cards, bank transfers, or
-other supported rails. Protocol settlement then occurs internally. A valid bond
-must remain fully backed even if an external provider later delays, reverses, or
-disputes a funding transaction.
+Quarter end alone does not establish payment finality. A lot that fails maturity
+at cutoff stays pending until a later eligible quarter; it does not receive an
+estimated member allocation. A hold or dispute must identify the affected lot
+and its review condition. Reserve methodology, release conditions, and later-loss
+funding must be approved before live distribution, not invented by a worker.
 
-The operator therefore needs explicit policy for:
+C-SQD must record later external reversals through authorized compensating
+entries and fund the resulting obligations without silently taking restricted
+member funds or cancelling finalized payables. A final request outcome remains
+part of the journal even when a financial correction is necessary.
 
-\begin{itemize}[leftmargin=2em]
-    \item funding finality and any waiting period before deposited value may back
-          a bond;
-    \item withdrawal availability for returned collateral and received
-          settlement;
-    \item chargebacks, fraud losses, negative balances, account suspension, and
-          separately authorized compensating ledger entries;
-    \item limits by verification tier, settlement unit, jurisdiction, or risk;
-    \item sanctions, tax, money-transmission, consumer-protection, and abandoned-
-          property obligations where applicable; and
-    \item dispute windows and retention classes for evidence that must survive
-          longer than ordinary delivery data.
-\end{itemize}
+\subsection{The corporate allocation happens once}
 
-External reversals do not rewrite a terminal protocol event. If policy authorizes
-a later adjustment, the ledger records a new compensating batch with its own
-cause, authority, and audit trail.
+The proposed corporate rate is $\alpha=0.03$. The adopted rate and rounding
+policy must be disclosed through immutable request terms. A future rate change
+applies prospectively; the rate at a later maturity date does not replace the
+one attached to an existing request.
 
-The sender-facing interface should distinguish available, reserved, pending-
-release, and withdrawable value. Before authorization it should show the full
-$C+S+L_k$ requirement, the short admission window, the decision-window duration
-that begins only after admission, the earliest final expiry time, and the
-persistence-reserve release condition. A still-unadmitted reservation should
-offer cancellation and explain that cancellation or admission timeout returns all
-reserved value.
+At quarter $q$, group newly eligible, previously unassessed lots by settlement
+unit and quoted rate version $v$. Let $F_{qv}$ be a group's amount in integer
+minor units. The corporate amount and new member contribution are
+\[
+G_q=\sum_v\left\lfloor\alpha_v F_{qv}\right\rfloor,
+\qquad M_q=\sum_v F_{qv}-G_q.
+\]
+The floor is applied once per rate cohort and unit at the finalized quarter
+boundary, with any fractional corporate unit left for members. Each contributing
+lot must be marked assessed in the same atomic allocation record. Replays cannot
+assess it again. Calculations must use checked integer or exact rational
+arithmetic, never floating-point currency.
 
-\section{SMTP Migration}
+For example, $10{,}000$ units of newly eligible forfeitures at 3\% produce $300$
+of corporate revenue and $9{,}700$ for members. This assessment excludes $C$,
+refund obligations, unresolved request amounts, and any refundable persistence
+reserve. Previously assessed member funds and finalized unpaid allocations are
+also excluded. The sender is not charged an additional 3\%.
 
-SMTP is an edge compatibility mechanism, not the native trust or privacy model.
-The gateway should make the route and its privacy consequences visible.
+\subsection{Who qualifies for an equal share}
 
-\subsection{Inbound Legacy Sender}
+The program benefits qualifying active members generally. It must not weight a
+share by requests received, collateral contributed, rejections, messages sent,
+or correspondence with a particular sender. One qualifying member receives one
+share, irrespective of aliases, mailboxes, devices, or subscription seats.
 
-When a conventional sender contacts a C-SQD recipient, the gateway can follow
-this sequence:
+The distribution identity is distinct from the protocol's private principal and
+public communication identities. The program must prevent duplicate enrollment
+while keeping identity evidence out of delivery, relationship, and telemetry
+records. Eligibility requires program opt-in, the published membership/activity
+conditions, and required identity checks. Confirmed abuse or duplicate membership
+must be handled under a disclosed review and correction procedure.
 
-\begin{enumerate}[leftmargin=2em]
-    \item Resolve whether the legacy sender maps to an accepted protocol identity.
-    \item If accepted-sender authority exists, apply ordinary accepted-sender and
-          safety policy.
-    \item Otherwise, return a standards-compatible challenge or a web link that
-          explains the recipient's current contact terms.
-    \item Authenticate or enroll the sender, present the complete reservation,
-          and fund the sender account if necessary.
-    \item Obtain fresh signed terms and reserve the bond and any persistence
-          reserve with a short admission deadline.
-    \item Durably record the encrypted content and retryable delivery intent, then
-          construct an authenticated legacy envelope whose declaration authority
-          is the gateway and whose origin is legacy or unspecified unless separate
-          authenticated evidence supports a narrower value. Admit the attempt
-          through the same deterministic protocol command used by a native client.
-          If this does not happen before the admission deadline or message-validity
-          time, return $C+S+L_k$ in full.
-    \item Return an authenticated admission result without implying inbox rank,
-          recipient attention, or a guaranteed reply.
-\end{enumerate}
+The proposed initial eligibility policy is membership for at least 30 days by
+cutoff and intentional authenticated use on at least two distinct days of the
+quarter. Reading can count. Background synchronization, automated polling, and
+incoming lane traffic alone do not establish activity. Store minimal activity
+evidence, not message content or a history of correspondents. Whether legal
+entities or managed groups qualify independently remains unresolved; mail
+enrollment does not itself settle that question.
 
-The web flow must bind the funded authorization to the exact sender, recipient,
-message, quote, amount, admission deadline, and later decision deadline. A
-reusable payment link or bearer token must not let another party substitute
-content or redirect a reservation.
+\subsection{From quarter cutoff to fixed payables}
 
-A legacy gateway may encounter plaintext before creating native ciphertext. The
-message must therefore be marked as outside the native endpoint-to-endpoint
-confidentiality guarantee. Transport TLS and provider encryption at rest are not
-equivalent to native end-to-end encryption.
+Allocations occur quarterly. The program must publish its calendar, timezone,
+eligibility policy version, and cutoff rule before the period. A calendar quarter
+is represented as a half-open interval ending at the next quarter's start; an
+event at that boundary belongs to the new quarter. UTC is the proposed reference
+timezone. A review interval after cutoff can resolve already recorded evidence
+without admitting later activity into the closed quarter.
 
-\subsection{Outbound Legacy Recipient}
+At finalization, fix the qualifying membership snapshot and the eligible funding
+manifest. Let $U_{q-1}$ be unallocated, previously assessed member carryforward,
+and let $N_q$ be the qualifying member count. The amount available for equal
+allocation is $D_q=U_{q-1}+M_q$. For $N_q>0$,
+\[
+a_q=\left\lfloor D_q/N_q\right\rfloor,
+\qquad U_q=D_q-N_q a_q.
+\]
+Each member receives a payable of $a_q$ minor units. The remainder $U_q$ remains
+restricted carryforward. If $N_q=0$, no individual allocation is created and
+$U_q=D_q$. An empty pool creates no payment. Settlement units must be handled
+separately; no implicit foreign exchange is permitted.
 
-When a native user sends to a conventional recipient, the client should disclose
-that the destination cannot enforce native permission, settlement, graph privacy,
-or content confidentiality. The envelope and local history should record the
-downgrade. The system must not advertise a successful SMTP delivery as recipient
-acceptance of a \textit{cs-mail} relationship.
+The snapshot, manifest, assessment marks, payables, remainder, and journal entries
+must finalize as one visible outcome, using a prepared batch if necessary.
+An operator must not silently rerun the quarter with a different membership set.
+Corrections require a separate authorized record with a stated cause and funding
+source; they do not overwrite the finalized batch.
 
-\subsection{Gateway Abuse Controls}
+\subsection{Paying a member}
 
-A payment challenge is itself a communication surface. Gateways should rate-limit
-challenges, prevent address enumeration, avoid leaking recipient pricing to
-unauthorized bulk probes, expire unfunded flows, and provide a way to report
-impersonation or malicious content. Gateway policy may reject malware, unlawful
-content, or excessive volume independently of financial validity.
+Finalized payables are obligations, not available pool cash. A member with a
+failed payment, incomplete payout onboarding, or an amount below a disclosed
+minimum threshold retains that payable. It must not return to the next quarter's
+equal split. Several fixed payables may be paid together through one provider
+operation while preserving their individual accounting causes.
 
-\section{Provider Clearing}
+Payment requires a stable operation key and verified destination under the
+external provider's rules. The obligation is discharged only by reconciled
+payment confirmation. Retries, account closure, and quarter rollover do not
+erase it. The proposed operational target is payment initiation within 30 days
+after quarter end; this is distinct from a promise of provider completion.
 
-Federation creates obligations between providers when recipient providers earn
-$C$ or recipients receive $S$. The persistence reserve $L_k$ remains sender
-property and never enters provider revenue or inter-provider clearing.
+Member statements must separate finalized allocation, awaiting payment, confirmed
+payment, and any disclosed threshold carryforward. There is no spendable cs-mail
+balance and no transfer to another member. C-SQD must not deduct payout fees from
+the stated member allocation under this profile.
 
-Providers may preserve each authenticated protocol event while periodically
-netting external payment. Suppose Provider A owes Provider B $10{,}000$ during a
-clearing period and Provider B owes Provider A $8{,}000$. The external rail may
-settle a $2{,}000$ net obligation from A to B. The underlying events remain
-individually attributable through scoped settlement receipts so participants can
-verify their balances and authorized disputes can be resolved.
+\subsection{Published policy and program closure}
 
-A clearing agreement should define:
+The launch policy must resolve the proposed rate, eligibility thresholds, legal-
+entity eligibility, maturity/reserve criteria, payment thresholds, and review
+timelines. It must also define account closure, unclaimed obligations, residual
+restricted funds, and orderly program termination before collecting real value.
+Stopping the program cannot by itself convert member-restricted funds into
+unrestricted corporate revenue or extinguish unpaid obligations.
 
-\begin{itemize}[leftmargin=2em]
-    \item supported settlement units and no implicit foreign-exchange rule;
-    \item clearing intervals, collateral or credit limits, and default handling;
-    \item canonical cutoffs and treatment of late or disputed events;
-    \item reconciliation proofs and scoped audit references;
-    \item who bears external-rail fees without changing quoted protocol
-          settlement; and
-    \item suspension and orderly wind-down without stranding participant-owned
-          balances or pending protocol decisions.
-\end{itemize}
+The program should publish aggregate reconciliation: new eligible forfeitures,
+corporate allocation, member contribution, carryforward, qualifying member count,
+finalized payables, and payment completion. Individual correspondence or the
+amount a particular recipient rejected must not be disclosed through those
+reports.
 
-Netting changes how providers discharge obligations. It does not change who owns
-value after any acceptance, rejection, expiry, or unadmitted-cancellation
-transition.
+\section{Operating the Service Without a Wallet}
 
-\section{Operational Policy and User Experience}
+C-SQD can initially run one provider and ledger, but identity, relationship,
+ciphertext, accounting, membership verification, and telemetry need distinct
+credentials, keys, and access roles. The payment adapter receives scoped payment
+references and required amounts. It does not need message content, a recipient's
+contact graph, or events for every follow-up message.
 
-The recipient and recipient provider have economic incentives that require
-visible counter-controls. C-SQD should publish bounds or review procedures for
-$C$ and provider minimum collateral, prohibit interfaces that hide timely
-acceptance, issue signed decision receipts, detect recipient-provider collusion,
-and provide dispute and suspension procedures.
+The operational ledger should reconcile captures, unresolved requests, refunds,
+pending forfeitures, corporate revenue, restricted funds, and member payables
+against external statements. An operator investigates mismatches through narrowly
+authorized records and compensating commands, not arbitrary balance edits.
+Unknown outcomes stay visible until resolved. A processor outage must not become
+a duplicate charge or a claim that a refund has completed.
 
-\subsection{Policy Layers and Decision Authority}
+Communication enrollment may support individuals, organizations, managed groups,
+and limited accounts. Collect control and recovery evidence appropriate to each
+role; do not demand legal identity merely to populate an ordinary mailbox.
+Distribution verification is a separate purpose with its own access, retention,
+and eligibility rules. Provider migration should preserve recipient-scoped abuse
+continuity without exporting a universal principal identifier.
 
-C-SQD should expose three deliberately separate policy surfaces. Protocol policy
-supplies versioned, immutable inputs to quotation and settlement; once signed
-terms are issued, later configuration changes do not rewrite them. Provider
-admission policy evaluates authenticated envelope fields, current permission,
-capability scope, rate state, and independently available safety evidence. It
-does not receive native plaintext or create settlement effects outside an
-authenticated protocol command. Recipient presentation policy runs at an
-authorized endpoint and controls inbox placement, notifications, digests,
-ranking, and content-aware processing without changing protocol validity,
-relationship state, or ledger ownership.
+\section{The Recipient and Sender Experience}
 
-The product should describe declared purpose and origin as accountable sender or
-gateway statements, not verified descriptions of encrypted content or proof of
-human authorship. A native sender signs its declarations. A legacy gateway names
-itself as their authority, treats DMARC only as evidence of authorized domain use,
-and uses a legacy or unspecified origin unless another authenticated mechanism is
-available. Capability admission may match these declarations exactly, but misuse
-is handled through recipient reporting, revocation, and blocking rather than
-provider content inspection.
+The sender sees the price of one relationship request, its initial communication,
+the possible refunds, and the decision window. After submission, the interface
+shows preparing, awaiting decision, or the terminal outcome, with external refund
+status separately. It does not present available or withdrawable funds. A
+preparing request offers authenticated cancellation; closing the application
+does not imply that the charge was cancelled.
 
-Admission-visible declarations should use a small vocabulary and the least
-revealing value sufficient for the selected path. They require scoped storage,
-short documented retention, redacted logs, and access audit. Sender-facing errors
-should reveal an actionable constraint without exposing the recipient's complete
-policy or private signals. Rate limits and authorization should prevent errors,
-counterproposals, or policy probes from becoming enumeration and backscatter
-surfaces.
+The recipient sees one grouped request and the choices accept, reject, and block.
+The explanation starts with future permission, then the financial consequence.
+Rejecting does not earn the recipient that request's collateral. Dismissing the
+prompt is not a decision. A late acceptance grants future permission without
+reopening the closed request's refund outcome.
 
-Learned systems may help a recipient author rules or may execute local
-presentation policy. Their output is not protocol authority by itself. A decision
-that affects admission must reduce to a versioned, auditable rule over inputs
-available to that boundary. Neither admission nor presentation policy may impose
-a protocol bond while a directed relationship remains accepted; narrowing that
-permission requires an authenticated relationship change or a separately defined
-capability model.
+Follow-up controls belong beside request preferences and are enforced at
+admission. Recipients may disable follow-ups or set bounded counts and rates;
+changes affect subsequent admissions, not immutable financial terms. Accepted
+communication and valid express lanes retain their own authorization paths.
 
-\subsection{Relationship Decisions and Presentation}
+The proposed request policy uses a 30-day decision window, a 30-day cooldown
+after expiry, and a 90-day cooldown after rejection. Cooldowns run from the
+canonical decision deadline for expiry and the canonical timely rejection/block
+event for rejection allocation, subject to any later principal-history bound.
+These values remain proposals. A finalized policy must define recipient-imposed
+longer limits, explicit invitations that can shorten ordinary cooldowns, and
+behavior after revocation. Blocking always requires an authenticated unblock;
+an invitation cannot silently remove it. The prior nonzero persistence reserve
+is not enabled in the base draft and requires a separate decision and extension.
 
-The product should teach relationship consequences at the decision point. An
-accept, reject, or block control beside a message should state that the action
-applies to the directed sender identity, settles every decision-open admitted bond
-for that relationship, and fully cancels its unadmitted reservations. Acceptance
-releases persistence reserves only for attempts from that public identity; it
-does not reset principal-level backoff or release reserves belonging to another
-identity of the same principal. Rejection declines the active solicitation while
-preserving a later eligible retry after backoff. Blocking is the separate control
-for prohibiting future ordinary contact until the recipient removes the block. A
-late acceptance should distinguish prospective permission from older bonds whose
-decision windows are already closed.
+\section{SMTP and Express-Lane Migration}
 
-The sender-facing flow should distinguish reservation from admission. Closing the
-client, cancelling, or failing to make encrypted content and its delivery intent
-durable before the admission deadline returns $C+S+L_k$ in full, advances no
-backoff, and produces no recipient solicitation. The recipient decision window
-starts only at canonical admission.
+SMTP is a visibly identified compatibility route because its gateway may handle
+plaintext. A native message's end-to-end confidentiality must not be claimed for
+ordinary gateway-readable mail.
 
-The first admitted attempt for an unaccepted directed relationship should open one
-grouped relationship solicitation. That group is the one logical establishment
-prompt; recipient settings may present it as a push, badge, banner, inbox row, or
-quiet equivalent. Later admitted messages join that active group.
-They may update its contents or ordinary unread count quietly, but must not
-repeatedly ask the recipient to establish the same relationship. This behavior is
-solicitation coalescing, not message idempotency: every attempt retains its own
-bond, deadline, content, and repeated-attempt consequence.
+Inbound processing first checks blocking, standing acceptance, and an applicable
+recipient-granted lane. It then checks whether an authenticated message may join
+an identified open request. Only an eligible new request reaches the payment
+invitation flow. The web authorization binds the directed parties, request,
+initial content/declarations, amount, immutable terms, and deadlines. It never
+asks the sender to top up a general account.
 
-Accept, reject, and block close the active solicitation and apply to the
-relationship. Reject permits a later eligible attempt after the applicable
-backoff. Block refuses future terms, reservations, any optional capability use,
-and admission until the recipient unblocks; unblocking does not accept the sender or erase
-backoff. Ignoring the solicitation means taking no action, so bonds still expire
-individually. Dismissing or hiding the prompt is a presentation preference and
-must not be represented as acceptance, rejection, blocking, or financial
-settlement. Once the final associated bond is no longer decision-open, the episode
-may lapse. A later eligible attempt may open one new episode after the applicable
-backoff unless the relationship is blocked.
+Subsequent legacy mail must prove its association and satisfy current follow-up
+policy; an address or subject-line match alone is insufficient authority. A
+failed lane or follow-up cannot silently authorize a new charge. Invitations
+need rate limits, anti-enumeration controls, clear expiry, and abuse reporting.
+Outbound downgrade must be disclosed before the sender commits to that route.
 
-Operational dashboards should report service health without reconstructing a
-global relationship graph. Metrics should use short windows, aggregation, scoped
-trace references, and documented retention. Support access to identity,
-relationship, content, or ledger data should be separately authorized rather than
-granted through one universal administrator role.
+Express-lane messages carry no request charge or pool contribution. Granting or
+ending a lane does not settle a pending request. Domain-authentication evidence
+supports the lane's sender scope, not the truth of its declared purpose or a
+member's active-use eligibility.
 
-\section{Staged Launch}
+\section{Incentives, Review, and Later Federation}
 
-Express lanes are a launch extension outside settlement state. Their recipient-
-signed grants authorize only purpose-, origin-, rate-, authority-, and time-bounded
-bond-free communication. Admission matches authenticated declarations without
-claiming to inspect encrypted content. Lane messages open no relationship
-solicitation, advance no repeated-attempt state, and remain subordinate to
-recipient blocking.
+Equal member distributions remove a direct rejection bounty, but they do not
+remove economic incentives. C-SQD earns $C$ on unsuccessful requests and a share
+of eligible forfeitures. It should publish pricing controls and preserve signed
+decision evidence so neither the service nor a recipient can manufacture expiry
+by hiding acceptance. Review should address duplicate members, fabricated
+activity, abusive request patterns, collusion, and manipulated cutoff evidence.
 
-A cautious deployment can proceed in five gates:
+A single company-owned pool is the initial model. Independent-provider federation
+requires a new agreement assigning the merchant, refund debtor, pool owner,
+membership authority, duplicate-member controls, clearing, default losses, and
+payment responsibility. Netting may discharge valid obligations more efficiently;
+it cannot create new ownership rules or turn a rejected sender's collateral into
+a direct recipient payout. The centralized draft therefore does not promise that
+the former recipient-collateral clearing example transfers unchanged to federation.
 
-\begin{enumerate}[leftmargin=2em]
-    \item \textbf{Closed deterministic kernel.} Execute every transition and
-          invariant in memory using fixed policy and explicit canonical time.
-    \item \textbf{Internal-value pilot.} Add the append-only ledger, transactional
-          outbox, crash recovery, and synthetic or nonwithdrawable test value.
-    \item \textbf{Native-client pilot.} Add endpoint encryption, key transparency,
-          recovery, authenticated minimal message declarations, recipient-owned
-          presentation policy, privacy-domain credentials, retention, and verified
-          deletion.
-    \item \textbf{Limited external funding and SMTP.} Introduce real rails and
-          gateways under conservative limits, visible privacy downgrades, and
-          staffed dispute operations.
-    \item \textbf{Federation.} Add independent providers only after golden
-          transition vectors, authenticated receipts, clearing reconciliation,
-          migration proofs, and adversarial failure tests are stable.
-\end{enumerate}
+\section{A Staged Launch}
 
-Each gate should have measurable exit criteria. Volume growth is not evidence
-that value conservation, privacy deletion, decision timeliness, or dispute
-operations work correctly.
+Start with a deterministic model of one request and its outcomes. Add durable
+ordering, double-entry obligations, and recovery through a simulated external
+provider. A desktop pilot can use nonredeemable simulated amounts while testing
+real encryption, request/follow-up permission, deadlines, and failure behavior.
 
-\section{Conclusion}
+Before live value, the service needs approved payment and program policies,
+external reconciliation, capture-after-cancellation recovery, refund retries,
+maturity controls, reproducible quarterly snapshots, and failed-payout handling.
+The first distribution should be demonstrable end to end with duplicate provider
+events and a failed member payment before real members depend on it. Privacy
+tests must cover verification, activity evidence, payment records, and backups as
+well as messages.
 
-The first C-SQD deployment can be centralized without treating deployment policy
-as protocol law. Identity evidence, funding rails, SMTP behavior, risk controls,
-and clearing agreements should remain explicit profiles around the deterministic
-kernel. Preserving that boundary allows the product to evolve, jurisdictions to
-differ, and later providers to interoperate without changing the meaning of
-permission or settlement.
+SMTP and independent-provider federation are later operational gates. Each gate
+needs measurable exit evidence appropriate to its risks; a working communications
+pilot is not evidence that live financial operations or cross-provider pool
+governance are complete.
 
 \end{document}

@@ -574,13 +574,13 @@ pub struct LegacyBondFreeAdmission {
     pub purpose: DeclaredPurpose,
     pub payload_schema: Option<PayloadSchema>,
     pub message_valid_until: MessageValidityUntil,
-    pub capability: LaneId,
+    pub capability: Option<LaneId>,
     pub idempotency_key: IdempotencyKey,
     pub protocol_version: ProtocolVersion,
     pub deployment_domain: [u8; 32],
     pub intended_provider: ProviderRef,
-    /// Recipient-granted scope to which authenticated author domains are bound.
-    pub lane_domain: DomainIdentity,
+    /// Authenticated domain used for the stable legacy sender identity.
+    pub sender_domain: DomainIdentity,
 }
 
 impl BondFreeAdmission {
@@ -685,7 +685,7 @@ pub enum LaneHorizonEffect {
     ReviewReminder,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CapabilityError {
     InvalidGrant,
     InvalidPublicKey,
@@ -770,6 +770,73 @@ impl LaneBook {
     }
 }
 
+/// Evidence issued only by the gateway verification path, never deserialized from a request.
+/// Authentication evidence cannot be fabricated by deserializing caller data.
+/// ```compile_fail
+/// fn accepts_json<T: for<'de> serde::Deserialize<'de>>() {}
+/// accepts_json::<cs_mail_capabilities::VerifiedLegacyAdmission>();
+/// ```
+pub struct VerifiedLegacyAdmission {
+    admission: BondFreeAdmission,
+}
+impl VerifiedLegacyAdmission {
+    pub fn admission(&self) -> &BondFreeAdmission {
+        &self.admission
+    }
+}
+/// Authenticates legacy origin and binds its declared sender to the selected domain.
+/// # Errors
+/// Refuses DMARC failure, inconsistent evidence time or mismatched sender identity.
+pub async fn verify_legacy_admission<V: cs_mail_adapters::DmarcVerifier>(
+    verifier: &V,
+    authentication: cs_mail_adapters::SmtpAuthenticationRequest<'_>,
+    request: &LegacyBondFreeAdmission,
+    mapping_version: u16,
+) -> Result<VerifiedLegacyAdmission, CapabilityError> {
+    let at = authentication.received_at;
+    let evidence = verifier
+        .verify(authentication)
+        .await
+        .map_err(|_| CapabilityError::NotAuthorized)?;
+    if evidence.evaluated_at != at
+        || request
+            .sender_domain
+            .synthetic_protocol_identity(&request.deployment_domain, mapping_version)
+            != request.sender
+    {
+        return Err(CapabilityError::ScopeMismatch);
+    }
+    let evidence =
+        cs_mail_adapters::LegacyDmarcEvidence::new(request.sender_domain.clone(), evidence)
+            .map_err(|_| CapabilityError::NotAuthorized)?;
+    Ok(VerifiedLegacyAdmission {
+        admission: BondFreeAdmission {
+            wire_version: WireVersion(1),
+            sender: request.sender,
+            recipient: request.recipient,
+            message_id: request.message_id,
+            content_ref: request.content_ref,
+            delivery_intent_ref: request.delivery_intent_ref,
+            declarations: MessageDeclarations {
+                purpose: request.purpose.clone(),
+                payload_schema: request.payload_schema.clone(),
+                origin: cs_mail_primitives::OriginDeclaration {
+                    mode: cs_mail_primitives::OriginMode::LegacyOrUnspecified,
+                    authority: DeclarationAuthority::LegacyGateway(request.intended_provider),
+                },
+            },
+            message_valid_until: request.message_valid_until,
+            capability: request.capability,
+            evidence: Some(LaneEvidence::Legacy(evidence)),
+            idempotency_key: request.idempotency_key,
+            protocol_version: request.protocol_version,
+            deployment_domain: request.deployment_domain,
+            intended_provider: request.intended_provider,
+            authentication: AdmissionAuthentication::LegacyDmarc,
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,7 +850,7 @@ mod tests {
             subject: LaneSubject::LegacyDomain(DomainIdentity::parse_ascii("bank.com").unwrap()),
             sender: ProtocolIdentity(2),
             recipient: ProtocolIdentity(3),
-            protocol_version: ProtocolVersion(1),
+            protocol_version: ProtocolVersion(2),
             deployment_domain: [3; 32],
             intended_provider: ProviderRef(4),
             recipient_operational_key: OperationalKeyRef(5),
@@ -960,7 +1027,7 @@ mod tests {
             capability: Some(LaneId(1)),
             evidence: Some(evidence()),
             idempotency_key: IdempotencyKey(7),
-            protocol_version: ProtocolVersion(1),
+            protocol_version: ProtocolVersion(2),
             deployment_domain: [9; 32],
             intended_provider: ProviderRef(10),
             authentication: AdmissionAuthentication::NativeKey(OperationalKeyRef(11)),
@@ -1001,7 +1068,7 @@ mod tests {
             action: LaneControlAction::Revoke,
             expected_version: Version(2),
             idempotency_key: IdempotencyKey(13),
-            protocol_version: ProtocolVersion(1),
+            protocol_version: ProtocolVersion(2),
             deployment_domain: [3; 32],
             intended_provider: ProviderRef(4),
             recipient_operational_key: OperationalKeyRef(5),

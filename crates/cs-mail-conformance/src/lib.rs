@@ -3,10 +3,10 @@
 //! Domain-specific versions cannot be compared without an explicit conversion:
 //!
 //! ```compile_fail
-//! use cs_mail_primitives::{AttemptVersion, RelationshipVersion, Version};
+//! use cs_mail_primitives::{RequestHistoryVersion, RelationshipVersion, Version};
 //!
 //! let relationship = RelationshipVersion::from(Version(3));
-//! let attempt = AttemptVersion::from(Version(3));
+//! let attempt = RequestHistoryVersion::from(Version(3));
 //! assert_eq!(relationship, attempt);
 //! ```
 
@@ -14,16 +14,16 @@
 mod tests {
     use cs_mail_application::{EngineError, InMemoryEngine};
     use cs_mail_content::{ContentKeyCertificate, EndpointSecretKey};
+    use cs_mail_finance::PaymentProvider;
     use cs_mail_primitives::{
-        AttemptId, AttemptSubjectRef, BondId, CanonicalTime, ContentKeyRef, ContentKeyVersion,
-        ContentRef, DeliveryIntentRef, Duration, IdempotencyKey, JournalPosition, LedgerAccountRef,
-        MessageDeclarationDigest, MessageId, MessageValidityUntil, Money, OperationalKeyRef,
-        PersistenceReserveId, PolicyVersion, PrincipalRef, PrivacyProfileVersion, ProtocolIdentity,
-        ProtocolVersion, ProviderRef, QuoteId, ReceiptRef, RelationshipRef, RetentionPolicyVersion,
-        SettlementUnit, Version, WireVersion,
+        CanonicalTime, ContentKeyRef, ContentKeyVersion, ContentRef, DeliveryIntentRef, Duration,
+        IdempotencyKey, JournalPosition, MessageDeclarationDigest, MessageId, MessageValidityUntil,
+        Money, OperationalKeyRef, PolicyVersion, PrincipalRef, PrivacyProfileVersion,
+        ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, ReceiptRef, RelationshipRef,
+        RequestHistoryRef, RequestId, RetentionPolicyVersion, SettlementUnit, Version, WireVersion,
     };
     use cs_mail_protocol::{
-        ActorRef, Authorized, PolicySnapshot, ProtocolCommand, ProtocolError, ProtocolState,
+        ActorRef, KernelCommand, PolicySnapshot, ProtocolCommand, ProtocolError, ProtocolState,
         TermsOutcome,
     };
     use cs_mail_security::{
@@ -37,7 +37,7 @@ mod tests {
 
     fn policy() -> PolicySnapshot {
         PolicySnapshot {
-            protocol_version: ProtocolVersion(1),
+            protocol_version: ProtocolVersion(2),
             policy_version: PolicyVersion(1),
             privacy_profile_version: PrivacyProfileVersion(1),
             retention_policy_version: RetentionPolicyVersion(1),
@@ -48,13 +48,26 @@ mod tests {
             admission_window: Duration(10),
             decision_window: Duration(20),
             quote_lifetime: Duration(20),
-            persistence_duration: Duration(100),
             backoff: vec![Duration(0), Duration(5)],
-            persistence: vec![Money::ZERO, Money::from_minor_units(5)],
+            financial: cs_mail_finance::FinancialTerms {
+                scope: cs_mail_finance::FinancialScope::new(
+                    [7; 32],
+                    cs_mail_primitives::ProviderRef(30),
+                    cs_mail_primitives::ProgramRef(1),
+                    [9; 32],
+                    cs_mail_primitives::ProtocolVersion(2),
+                ),
+                policy_version: PolicyVersion(1),
+                corporate_basis_points: 300,
+                maturity_delay: Duration(10),
+            },
+            payment_provider_key: cs_mail_finance::SimulatedProvider::new([7; 32]).verifying_key(),
+            expiry_cooldown: Duration(30),
+            rejection_cooldown: Duration(90),
         }
     }
 
-    fn sender(command: ProtocolCommand, key: u128) -> Authorized<ProtocolCommand> {
+    fn sender(command: ProtocolCommand, key: u128) -> KernelCommand<ProtocolCommand> {
         sender_as(SENDER, command, key)
     }
 
@@ -62,8 +75,8 @@ mod tests {
         identity: ProtocolIdentity,
         command: ProtocolCommand,
         key: u128,
-    ) -> Authorized<ProtocolCommand> {
-        Authorized::assume_verified(
+    ) -> KernelCommand<ProtocolCommand> {
+        KernelCommand::new(
             command,
             ActorRef::Sender(identity),
             OperationalKeyRef(1),
@@ -95,9 +108,9 @@ mod tests {
                     intended_provider: PROVIDER,
                     relationship,
                 },
-                ProtocolVersion(1),
+                ProtocolVersion(2),
                 IdempotencyKey(1),
-                ProtocolCommand::IssueContactTerms {
+                ProtocolCommand::IssueRequestTerms {
                     quote_id: QuoteId(1),
                     declaration_digest: None,
                 },
@@ -107,7 +120,7 @@ mod tests {
             registry.verify(
                 &signed_command,
                 CanonicalTime(1),
-                ProtocolVersion(1),
+                ProtocolVersion(2),
                 SigningScope {
                     deployment_domain: [9; 32],
                     intended_provider: PROVIDER,
@@ -121,12 +134,22 @@ mod tests {
     #[test]
     fn issued_quote_remains_fixed_when_current_policy_changes() {
         let state = ProtocolState::initial(PrincipalRef(1), SENDER, RECIPIENT, CanonicalTime(0));
-        let engine =
-            InMemoryEngine::new(state, SettlementUnit(1), Money::from_minor_units(1_000)).unwrap();
+        let engine = InMemoryEngine::new(
+            state,
+            SettlementUnit(1),
+            cs_mail_finance::FinancialScope::new(
+                [7; 32],
+                cs_mail_primitives::ProviderRef(30),
+                cs_mail_primitives::ProgramRef(1),
+                [9; 32],
+                cs_mail_primitives::ProtocolVersion(2),
+            ),
+        )
+        .unwrap();
         let issued = engine
             .execute(
                 sender(
-                    ProtocolCommand::IssueContactTerms {
+                    ProtocolCommand::IssueRequestTerms {
                         quote_id: QuoteId(1),
                         declaration_digest: None,
                     },
@@ -136,7 +159,7 @@ mod tests {
                 policy(),
             )
             .unwrap();
-        let Some(TermsOutcome::BondRequired(terms)) = issued.manifest.terms_outcome else {
+        let Some(TermsOutcome::ChargeRequired(terms)) = issued.transition.terms_outcome else {
             panic!("unknown relationship must receive bond terms");
         };
         let mut changed = policy();
@@ -147,12 +170,12 @@ mod tests {
         engine
             .execute(
                 sender(
-                    ProtocolCommand::ReserveAttempt {
-                        bond_id: BondId(1),
-                        reserve_id: PersistenceReserveId(1),
-                        attempt_id: AttemptId(1),
+                    ProtocolCommand::CreateRequest {
+                        request_id: RequestId(1),
+
                         message_id: MessageId(1),
                         terms,
+                        payment_method: [9; 32],
                     },
                     2,
                 ),
@@ -164,32 +187,32 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn attempt_history_survives_public_identity_rotation() {
+    fn request_history_survives_public_identity_rotation() {
         let old_sender = ProtocolIdentity(10);
         let new_sender = ProtocolIdentity(11);
-        let attempt_subject = AttemptSubjectRef::from_u128_for_test(99);
-        let sender_account = LedgerAccountRef::from_u128_for_test(99);
+        let request_history = RequestHistoryRef::from_u128_for_test(99);
         let old_relationship = RelationshipRef::from_u128_for_test(1);
         let new_relationship = RelationshipRef::from_u128_for_test(2);
         let first_state = ProtocolState::initial_scoped(
             old_relationship,
-            attempt_subject,
-            sender_account,
+            request_history,
             old_sender,
             RECIPIENT,
             CanonicalTime(0),
         );
-        let first = InMemoryEngine::new(
-            first_state,
-            SettlementUnit(1),
-            Money::from_minor_units(1_000),
-        )
-        .unwrap();
+        let store = cs_mail_application::InMemoryStore::new(cs_mail_finance::FinancialScope::new(
+            [7; 32],
+            cs_mail_primitives::ProviderRef(30),
+            cs_mail_primitives::ProgramRef(1),
+            [9; 32],
+            cs_mail_primitives::ProtocolVersion(2),
+        ));
+        let first = store.register(first_state, SettlementUnit(1)).unwrap();
         let issued = first
             .execute(
                 sender_as(
                     old_sender,
-                    ProtocolCommand::IssueContactTerms {
+                    ProtocolCommand::IssueRequestTerms {
                         quote_id: QuoteId(1),
                         declaration_digest: None,
                     },
@@ -199,21 +222,41 @@ mod tests {
                 policy(),
             )
             .unwrap();
-        let Some(TermsOutcome::BondRequired(terms)) = issued.manifest.terms_outcome else {
+        let Some(TermsOutcome::ChargeRequired(terms)) = issued.transition.terms_outcome else {
             panic!("unknown relationship must receive bond terms");
         };
         first
             .execute(
                 sender_as(
                     old_sender,
-                    ProtocolCommand::ReserveAttempt {
-                        bond_id: BondId(1),
-                        reserve_id: PersistenceReserveId(1),
-                        attempt_id: AttemptId(1),
+                    ProtocolCommand::CreateRequest {
+                        request_id: RequestId(1),
+
                         message_id: MessageId(1),
                         terms,
+                        payment_method: [9; 32],
                     },
                     2,
+                ),
+                CanonicalTime(2),
+                policy(),
+            )
+            .unwrap();
+        let mut provider = cs_mail_finance::SimulatedProvider::new([7; 32]);
+        let op = first.snapshot().unwrap().payments[&RequestId(1)]
+            .capture
+            .clone();
+        let receipt = provider.submit(&op, false).unwrap();
+        first
+            .execute(
+                KernelCommand::new(
+                    ProtocolCommand::RecordPayment {
+                        request_id: RequestId(1),
+                        receipt,
+                    },
+                    ActorRef::Provider(PROVIDER),
+                    OperationalKeyRef(9),
+                    IdempotencyKey(900),
                 ),
                 CanonicalTime(2),
                 policy(),
@@ -223,9 +266,9 @@ mod tests {
             .execute(
                 sender_as(
                     old_sender,
-                    ProtocolCommand::AdmitAttempt {
-                        bond_id: BondId(1),
-                        expected_bond_version: Version(0),
+                    ProtocolCommand::AdmitRequest {
+                        request_id: RequestId(1),
+                        expected_request_version: Version(0),
                         content_ref: ContentRef(1),
                         delivery_intent_ref: DeliveryIntentRef(1),
                         declaration_digest: MessageDeclarationDigest([0; 32]),
@@ -238,95 +281,121 @@ mod tests {
             )
             .unwrap();
         let first_snapshot = first.snapshot().unwrap();
-        assert_eq!(first_snapshot.state.attempt.level, 1);
+        assert_eq!(first_snapshot.history.level, 1);
         assert_eq!(
-            first_snapshot.state.attempt.earliest_next_admission,
+            first_snapshot.history.earliest_next_admission,
             CanonicalTime(8)
         );
 
-        let mut rotated_state = ProtocolState::initial_scoped(
+        let rotated_state = ProtocolState::initial_scoped(
             new_relationship,
-            attempt_subject,
-            sender_account,
+            request_history,
             new_sender,
             RECIPIENT,
             CanonicalTime(4),
         );
-        rotated_state.attempt = first_snapshot.state.attempt;
-        let rotated = InMemoryEngine::new(
-            rotated_state,
-            SettlementUnit(1),
-            Money::from_minor_units(1_000),
-        )
-        .unwrap();
+        let rotated = store.register(rotated_state, SettlementUnit(1)).unwrap();
+        let denied = rotated.execute(
+            sender_as(
+                new_sender,
+                ProtocolCommand::IssueRequestTerms {
+                    quote_id: QuoteId(2),
+                    declaration_digest: None,
+                },
+                4,
+            ),
+            CanonicalTime(4),
+            policy(),
+        );
+        assert_eq!(
+            denied,
+            Err(EngineError::Protocol(ProtocolError::BackoffActive {
+                next_eligible: CanonicalTime(8)
+            }))
+        );
         let issued = rotated
             .execute(
                 sender_as(
                     new_sender,
-                    ProtocolCommand::IssueContactTerms {
+                    ProtocolCommand::IssueRequestTerms {
                         quote_id: QuoteId(2),
                         declaration_digest: None,
                     },
-                    4,
+                    5,
                 ),
-                CanonicalTime(4),
+                CanonicalTime(8),
                 policy(),
             )
             .unwrap();
-        let Some(TermsOutcome::BondRequired(terms)) = issued.manifest.terms_outcome else {
-            panic!("rotated identity must receive bonded terms");
+        let Some(TermsOutcome::ChargeRequired(terms)) = issued.transition.terms_outcome else {
+            panic!("eligible new identity needs terms")
         };
         assert_eq!(terms.relationship, new_relationship);
         assert_eq!(terms.sender, new_sender);
-        assert_eq!(terms.attempt_subject, attempt_subject);
-        assert_eq!(terms.attempt_level, 1);
-        assert_eq!(terms.persistence, Money::from_minor_units(5));
-        assert_eq!(terms.eligibility_time, CanonicalTime(8));
+        assert_eq!(terms.request_history, request_history);
+        assert_eq!(terms.request_level, 1);
         rotated
             .execute(
                 sender_as(
                     new_sender,
-                    ProtocolCommand::ReserveAttempt {
-                        bond_id: BondId(2),
-                        reserve_id: PersistenceReserveId(2),
-                        attempt_id: AttemptId(2),
+                    ProtocolCommand::CreateRequest {
+                        request_id: RequestId(2),
+
                         message_id: MessageId(2),
+                        payment_method: [9; 32],
                         terms,
                     },
-                    5,
+                    6,
                 ),
-                CanonicalTime(5),
+                CanonicalTime(8),
                 policy(),
             )
             .unwrap();
-        let admission = sender_as(
-            new_sender,
-            ProtocolCommand::AdmitAttempt {
-                bond_id: BondId(2),
-                expected_bond_version: Version(0),
-                content_ref: ContentRef(2),
-                delivery_intent_ref: DeliveryIntentRef(2),
-                declaration_digest: MessageDeclarationDigest([0; 32]),
-                message_valid_until: MessageValidityUntil(CanonicalTime(100)),
-            },
-            6,
-        );
-        assert_eq!(
-            rotated.execute(admission.clone(), CanonicalTime(7), policy()),
-            Err(EngineError::Protocol(ProtocolError::BackoffActive {
-                next_eligible: CanonicalTime(8),
-            }))
-        );
+        let op = rotated.snapshot().unwrap().payments[&RequestId(2)]
+            .capture
+            .clone();
+        let receipt = provider.submit(&op, false).unwrap();
         rotated
-            .execute(admission, CanonicalTime(8), policy())
+            .execute(
+                KernelCommand::new(
+                    ProtocolCommand::RecordPayment {
+                        request_id: RequestId(2),
+                        receipt,
+                    },
+                    ActorRef::Provider(PROVIDER),
+                    OperationalKeyRef(9),
+                    IdempotencyKey(901),
+                ),
+                CanonicalTime(8),
+                policy(),
+            )
             .unwrap();
-        assert_eq!(rotated.snapshot().unwrap().state.attempt.level, 2);
+        rotated
+            .execute(
+                sender_as(
+                    new_sender,
+                    ProtocolCommand::AdmitRequest {
+                        request_id: RequestId(2),
+                        expected_request_version: Version(0),
+                        content_ref: ContentRef(2),
+                        delivery_intent_ref: DeliveryIntentRef(2),
+                        declaration_digest: MessageDeclarationDigest([0; 32]),
+                        message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+                    },
+                    7,
+                ),
+                CanonicalTime(8),
+                policy(),
+            )
+            .unwrap();
+        assert_eq!(rotated.snapshot().unwrap().history.level, 2);
     }
 
     #[test]
     fn signed_receipt_commits_command_position_and_outcome() {
         let signer = ProviderSigner::from_secret_bytes(PROVIDER, OperationalKeyRef(9), &[8; 32]);
         let payload = ReceiptPayload {
+            deployment_domain: [7; 32],
             receipt_id: ReceiptRef(1),
             kind: ReceiptKind::ReservationCommitted,
             relationship: RelationshipRef::from_u128_for_test(1),
@@ -335,7 +404,7 @@ mod tests {
             received_at: CanonicalTime(4),
             outcome_digest: OutcomeDigest([5; 32]),
             provider: PROVIDER,
-            protocol_version: ProtocolVersion(1),
+            protocol_version: ProtocolVersion(2),
         };
         let mut receipt = signer.sign_receipt(payload).unwrap();
         receipt.verify(&signer.verifying_key_bytes()).unwrap();
@@ -367,7 +436,7 @@ mod tests {
         let certificate = signer
             .sign_content_key_certificate(ContentKeyCertificate {
                 wire_version: WireVersion(1),
-                protocol_version: ProtocolVersion(1),
+                protocol_version: ProtocolVersion(2),
                 deployment_domain: [9; 32],
                 intended_provider: PROVIDER,
                 relationship,
@@ -383,7 +452,7 @@ mod tests {
             .verify_content_key_certificate(
                 &certificate,
                 CanonicalTime(2),
-                ProtocolVersion(1),
+                ProtocolVersion(2),
                 SigningScope {
                     deployment_domain: [9; 32],
                     intended_provider: PROVIDER,
@@ -395,7 +464,7 @@ mod tests {
             registry.verify_content_key_certificate(
                 &certificate,
                 CanonicalTime(2),
-                ProtocolVersion(1),
+                ProtocolVersion(2),
                 SigningScope {
                     deployment_domain: [9; 32],
                     intended_provider: PROVIDER,

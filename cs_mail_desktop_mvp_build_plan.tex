@@ -62,947 +62,406 @@
 \title{\textit{cs-mail} Desktop MVP and CLI Administration\\
 \large AI-Agent Milestone and Build Plan}
 \author{C-SQD}
-\date{Draft 0.1 --- September 2026}
+\date{Draft 0.2 --- September 2026}
+
+\setlength{\emergencystretch}{1.5em}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-This document turns the existing \textit{cs-mail} protocol implementation into
-an ordered build guide for a working desktop minimum viable product, an operator
-administration CLI, and a reusable Rust client core suitable for later native
-mobile applications. It fixes the MVP product decisions, dependency direction,
-stability constraints, milestone scope, acceptance tests, live demonstrations,
-and stop conditions. The intended reader is an AI coding agent working under
-human review. The plan therefore distinguishes decisions that are already made
-from implementation details the agent may choose, and it defines evidence of
-completion rather than treating code production as completion.
+This plan develops a native desktop pilot, an operator administration CLI, and a
+reusable client core around the revised relationship-request model. Alice makes
+one simulated charge for a request to Bob, sends permitted follow-ups without
+another charge, and sees the outcome of his decision. The service then carries
+a simulated forfeiture through maturity, quarterly allocation, and payment
+recovery. Each milestone requires a usable journey and evidence of failure
+recovery. The pilot introduces no real redeemable value.
 \end{abstract}
 
-\paragraph{Status.}
-This is a nonnormative product and implementation plan. The \textit{cs-mail
-Protocol Specification} controls protocol meaning. The \textit{Rust Reference
-Architecture} controls the intended implementation shape where it is more
-specific than this plan. No milestone in this document authorizes a silent
-change to settlement, wire, privacy, or security semantics.
+\section{Start with the Revised Contract}
 
-\tableofcontents
-\newpage
+The \textit{Protocol Specification} governs requests and permission. The normative
+C-SQD financial-program section of the \textit{Deployment and Migration Profile}
+governs the pool, corporate allocation, and equal member distributions. The
+\textit{Rust Reference Architecture} explains the intended implementation shape.
+This plan is nonnormative and does not claim that the existing Rust code already
+implements the new contracts.
 
-\section{How to Use This Plan}
+Before product milestones begin, establish the revised semantic baseline:
+version the request and obligation contracts, document treatment of any old
+quotes or records, and replace superseded financial expectations with explicit
+conformance vectors. Preserve applicable security, privacy, ordering, and
+conservation guarantees. An old test requiring separate bonds for follow-up
+messages must not override the revised specification merely because it predates
+the change.
 
-The plan follows one product story. An operator starts a service and creates a
-small invite-only deployment. Alice enrolls through a desktop application and
-receives test credits. Bob enrolls independently. Alice makes encrypted bonded
-first contact. Bob accepts, rejects, or blocks the solicitation. Their next
-interaction reflects that decision. The system then survives restarts, retries,
-expiry, and an offline recipient. Finally, the platform-neutral Rust client core
-is exposed through a narrow mobile binding without rewriting protocol logic.
+The baseline must model request-specific payment operations, refunds against the
+original charge, pending forfeitures, restricted member funds, and finalized
+payables. One pending request permits at most one charge; recipient settings
+determine whether it admits more messages. The base draft uses no nonzero
+persistence reserve. Proposed rates, eligibility rules, and time periods use
+explicit simulation-policy versions and must not be presented as approved live
+terms.
 
-Each milestone is a complete vertical increment. An agent must implement it in
-the listed order unless a human explicitly changes the dependency graph. Every
-milestone contains seven elements:
+Once that baseline is established, product work extends it through small vertical
+slices. Further changes to value semantics, signatures, identity meaning, or
+privacy scope require a decision record explaining the user-visible need,
+affected contracts, compatibility, migration, and validation. Routine reversible
+implementation choices remain the agent's responsibility.
 
-\begin{enumerate}[leftmargin=2em]
-    \item the user-visible promise;
-    \item the allowed architectural change;
-    \item ordered work packages;
-    \item mandatory tests and failure cases;
-    \item a live demonstration script;
-    \item exit evidence; and
-    \item work deliberately deferred.
-\end{enumerate}
+\section{The Pilot We Are Building}
 
-\subsection{Source-of-truth order}
+The initial audience is an invite-only group of approximately 20--50 cooperative
+users. The product is a macOS desktop application plus an administration CLI,
+served by one provider, one region, and one PostgreSQL deployment. Windows follows
+after the macOS journey is stable. Later Swift and Kotlin clients reuse a
+platform-neutral Rust client core through a narrow binding.
 
-When sources disagree, the agent must stop and apply this order:
+The value model is a deterministic external-payment simulator. It can approve,
+decline, delay, or report an uncertain request charge; confirm or fail a refund;
+and execute or fail a finalized member payment. All amounts are explicitly
+nonredeemable. Users do not receive a generally spendable test-credit wallet,
+and the operator configures simulator scenarios rather than topping up accounts.
 
-\begin{enumerate}[leftmargin=2em]
-    \item protocol specification;
-    \item security, privacy, and wire invariants expressed by executable tests;
-    \item Rust reference architecture;
-    \item deployment profile;
-    \item this build plan;
-    \item issue text, comments, and local implementation convenience.
-\end{enumerate}
+Native content remains encrypted at endpoints. Devices hold revocable key
+authority, recovery uses user-held material or trusted-device transfer, and the
+provider cannot decrypt content. The desktop stores ciphertext and minimal
+metadata by default, with no persistent plaintext body or search index.
 
-The agent may resolve a lower-level ambiguity without asking only when the choice
-is reversible, does not cross a trust boundary, and does not alter an agreed MVP
-decision. Otherwise it must record the alternatives and request human direction.
+SMTP, independent-provider federation, public signup, live payments, a mobile
+release, and multi-region operation are outside this pilot. The financial
+simulation is included because it validates the revised business rules; it is
+not evidence that production payment operations are ready.
 
-\subsection{Meaning of completion}
+\section{Keep Shared Mechanics and Product Journeys Separate}
 
-A work package is complete only when code, automated tests, user-facing behavior,
-operator documentation, and failure behavior agree. Compiling is necessary but
-not sufficient. A milestone is complete only when its demonstration can be run
-from a clean checkout using documented commands.
-
-\section{Decisions Already Made}
-
-The following choices are product inputs, not prompts for an implementation
-agent to revisit.
-
-\begin{center}
-\small
-\begin{tabularx}{\textwidth}{@{}L{0.25\textwidth}Y@{}}
-\toprule
-\textbf{Decision} & \textbf{MVP commitment} \\
-\midrule
-Pilot audience & Invite-only deployment for approximately 20--50 cooperative users. \\
-Primary product & Desktop application plus operator administration CLI. \\
-Later clients & Native Swift and Kotlin applications reuse the Rust client core through a narrow FFI boundary. \\
-Core journey & Bonded first contact, recipient decision, then decision-dependent future communication. \\
-Value model & Nonredeemable test credits issued and inspected through authenticated administration. \\
-Identity model & One protocol identity may enroll multiple explicit devices; every device has revocable key authority. \\
-Recovery model & User-held recovery material plus trusted-device transfer; the provider cannot decrypt message content. \\
-Initial desktop platform & macOS first; Windows follows after the pilot path is stable. \\
-Deployment model & One provider, one region, and one PostgreSQL deployment. \\
-Protocol scope & Native \textit{cs-mail}; no SMTP interoperability, federation, real payments, or mobile release in the MVP. \\
-Local plaintext & Plaintext is not persisted by default. The desktop stores encrypted content and minimal metadata. \\
-Pilot success & No lost protocol effects, duplicate settlement, provider-visible plaintext, or unrecoverable routine restart failure. \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-Exact retention durations remain a human policy decision. Milestone~1 must make
-them explicit before user data is created. Until then, the agent may build
-versioned retention mechanisms but must not invent final policy periods.
-
-\section{Architecture and Stability Rules}
-
-\subsection{The hybrid organization}
-
-The existing repository is organized horizontally around protocol mechanics.
-That remains appropriate for the stable foundation. New product behavior is
-organized as vertical modules inside a small set of product crates.
+The stable foundation remains organized around primitives, authentication,
+ledger, request transitions, content, wire, storage, and workers. Product modules
+coordinate a user journey without implementing another version of those rules.
 
 \begin{lstlisting}[language={}]
 crates/
-  existing cs-mail-* crates       # stable horizontal foundation
-  cs-mail-api-types               # versioned transport DTOs
-  cs-mail-client-core             # platform-neutral client use cases
-  cs-mail-mobile-ffi              # later milestone only
+  existing cs-mail-* crates       # revised semantic foundation
+  cs-mail-api-types               # versioned transport contracts
+  cs-mail-client-core             # portable client use cases
+  cs-mail-mobile-ffi              # later portability milestone
 
 apps/
-  cs-mail-server                  # testable API library + cs-maild binary
-  cs-mail-admin-cli               # operator executable
-  cs-mail-desktop                 # Tauri shell + platform adapters
+  cs-mail-server                  # API library and cs-maild
+  cs-mail-admin-cli               # authenticated operator client
+  cs-mail-desktop                 # Tauri shell and platform adapters
 \end{lstlisting}
 
-The new directories remain members of the existing Cargo workspace. Shared
-dependency versions and lints remain defined at the workspace root.
+Dependencies point inward: applications use the shared core, which uses the
+foundation; foundation crates never depend on applications. API types should not
+depend on a web framework, desktop shell, concrete database, or operating-system
+keychain. Create another crate only for a stable reusable contract, dependency
+boundary, or independently built artifact, not for every new feature.
 
-\subsection{Dependency direction}
+Within client core and server, organize identity/device management, requests,
+messages, relationships, financial activity, distributions, recovery, and
+administration as vertical modules. Request orchestration handles quote,
+authorization, content upload, payment progress, admission, and retry. Financial
+views consume canonical obligation status; they do not reconstruct settlement
+from UI events. The member program consumes eligibility and funding evidence
+separately from message handling.
 
-Dependencies point inward. Existing stable crates must never depend on an
-application crate.
+The client core defines ports for key custody, local ciphertext storage,
+transport, clock, and notifications. Tauri, Swift, Kotlin, Keychain, SQLite, and
+concrete HTTP libraries belong in adapters. Use constrained, versioned DTOs and
+opaque canonical signed bytes for protocol mutations. An HTTP handler cannot
+translate a signed command into a different meaning.
 
-\begin{lstlisting}[language={}]
-cs-mail-desktop  ---> cs-mail-client-core ---> existing protocol/security/content crates
-cs-mail-mobile-ffi --> cs-mail-client-core
-cs-mail-admin-cli --> cs-mail-api-types
-cs-mail-server ---> cs-mail-api-types + existing service/storage/worker crates
-\end{lstlisting}
+\section{Contracts That Apply to Every Milestone}
 
-The API types crate must remain small. It may depend on serialization support
-and stable primitive identifiers, but it must not depend on Axum, Tauri,
-PostgreSQL, operating-system keychains, or a complete server implementation.
+Endpoint private keys use operating-system secure storage and never enter logs,
+configuration, SQLite, provider APIs, or diagnostics. Device enrollment and
+revocation require authenticated authority. Administrative credentials are distinct
+from user credentials, and the CLI invokes an authenticated API rather than
+writing canonical tables directly.
 
-\subsection{Vertical modules}
+Every visible outcome has a durable cause and stable retry identity. Unknown
+payment or commit outcomes remain distinguishable from failure. UI language
+separates charge preparation, an open request, a refund due, refund completion,
+finalized member allocation, and payment completion. No screen suggests that
+rejecting a sender pays the recipient or that a payable can fund another request.
 
-Inside \texttt{cs-mail-client-core} and \texttt{cs-mail-server}, product behavior
-is grouped by user journey:
+Use separate protocol, wire, API, event, policy, and database versions. Migrations
+are forward-only after merge. Logs contain safe scoped references and typed
+errors, not plaintext, secrets, identity mappings, full signed commands, or
+complete financial snapshots. Retention policy must be explicit before pilot
+data is created, including records needed for unsettled simulated obligations.
 
-\begin{itemize}[leftmargin=2em]
-    \item \texttt{identity}: enrollment, address resolution, and profile state;
-    \item \texttt{devices}: device keys, enrollment, listing, and revocation;
-    \item \texttt{first\_contact}: quote, reservation, content upload, and admission;
-    \item \texttt{messages}: encrypted inbox, delivery state, and local decryption;
-    \item \texttt{relationships}: accept, reject, block, unblock, and permission state;
-    \item \texttt{recovery}: recovery material and trusted-device transfer; and
-    \item \texttt{administration}: invites, test credits, policy, diagnostics, and migration status.
-\end{itemize}
-
-Each vertical owns orchestration, mapping to API types, product errors, and
-end-to-end tests. It reuses the protocol kernel; it does not restate transition
-rules.
-
-\subsection{Constraint on existing crates}
-
-The default is extension through new crates and additive APIs.
-
-\begin{center}
-\small
-\begin{tabularx}{\textwidth}{@{}L{0.28\textwidth}YY@{}}
-\toprule
-\textbf{Layer} & \textbf{Examples} & \textbf{Change rule} \\
-\midrule
-Normative core & primitives, ledger, protocol, wire, security & Effectively frozen. Change only with human approval, a decision record, specification alignment, and conformance tests. \\
-Implementation adapters & storage-postgres, service, worker, client, adapters & May evolve additively while preserving protocol meaning and existing public behavior. \\
-Product layer & API server, admin CLI, client core, desktop, later mobile FFI & Expected location for MVP work. \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-No change may silently break a public Rust API, signed wire representation,
-stored protocol format, database migration history, settlement invariant, or
-privacy scope. Database migrations are forward-only after merge.
-
-If an agent believes a normative-core change is necessary, it must first produce
-a short decision record containing:
-
-\begin{enumerate}[leftmargin=2em]
-    \item the user-visible blocker;
-    \item evidence that an adapter or new crate cannot solve it cleanly;
-    \item the smallest proposed semantic change;
-    \item affected specification sections, vectors, migrations, and consumers;
-    \item compatibility and rollback consequences; and
-    \item new conformance tests that fail before the change and pass afterward.
-\end{enumerate}
-
-\subsection{When to create another crate}
-
-Create a crate only when at least one condition is true: two products reuse it;
-it isolates secrets, platform APIs, or heavy dependencies; it exposes an
-independently versioned contract; it produces a separate executable; or compile-
-time dependency enforcement materially improves safety. Otherwise create a
-module.
-
-\section{Cross-Cutting Engineering Contracts}
-
-These contracts apply to every milestone.
-
-\subsection{Security and trust}
-
-\begin{itemize}[leftmargin=2em]
-    \item Private content and device private keys remain at endpoints.
-    \item Desktop secret keys use the operating-system keychain. They are never
-          written to logs, configuration, SQLite, crash reports, or provider APIs.
-    \item The provider accepts protocol commands only after canonical decoding,
-          signature verification, scope verification, and durable key-authority checks.
-    \item The admin CLI uses a distinct administrative authority. User command
-          credentials cannot perform administrative operations.
-    \item Sensitive values implement redacted debug output where accidental
-          formatting would otherwise expose them.
-    \item Every externally visible error is classified as safe to retry, terminal
-          user action, authentication failure, or operator intervention.
-\end{itemize}
-
-\subsection{API and versioning}
-
-The MVP uses HTTPS with versioned JSON resource DTOs for ordinary queries and
-opaque canonical signed command bytes for protocol mutations. The HTTP layer
-must not translate a signature-covered command into a semantically different
-representation.
-
-The initial API surface is organized around these capabilities:
-
-\begin{center}
-\small
-\begin{tabularx}{\textwidth}{@{}L{0.24\textwidth}YY@{}}
-\toprule
-\textbf{Capability} & \textbf{Client operation} & \textbf{Server responsibility} \\
-\midrule
-Enrollment & create identity and enroll device key & validate invite, create scoped identity, register device authority \\
-Resolution & resolve recipient handle & return public identity and provider scope without private principal data \\
-Commands & submit signed canonical command & verify, order, execute, persist, and return signed receipt \\
-Content & upload and fetch encrypted record & enforce size, scope, lifetime, and authorization \\
-Inbox & page encrypted delivery and solicitation summaries & expose cursor-stable minimized metadata \\
-Relationships & query directed permission and decision state & project canonical state without inventing new semantics \\
-Administration & issue invite, grant test credits, inspect health and policy & require separate admin authentication and audit \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-DTOs carry an explicit API version. Protocol version, wire version, policy
-version, privacy profile version, and retention policy version remain separate
-types and must never be inferred from the HTTP API version.
-
-\subsection{Client-core platform ports}
-
-The shared client core must not import Tauri, Swift, Kotlin, Keychain, Windows
-Credential Manager, SQLite bindings, or a concrete HTTP client in its domain
-modules. It defines narrow ports similar to the following illustrative shape:
-
-\begin{lstlisting}
-pub trait KeyVault {
-    fn create_device_keys(&self, identity: IdentityRef) -> Result<DeviceKeys, VaultError>;
-    fn sign(&self, key: OperationalKeyRef, payload: &[u8]) -> Result<Signature, VaultError>;
-    fn decrypt(&self, key: ContentKeyRef, record: &EncryptedContentRecord)
-        -> Result<Vec<u8>, VaultError>;
-}
-
-pub trait LocalStore {
-    fn save_ciphertext(&self, record: &EncryptedContentRecord) -> Result<(), StoreError>;
-    fn save_cursor(&self, cursor: InboxCursor) -> Result<(), StoreError>;
-}
-
-pub trait ProviderTransport {
-    fn submit_command(&self, command: SignedCommandBytes) -> Result<SignedReceipt, ApiError>;
-    fn upload_content(&self, record: EncryptedContentRecord) -> Result<(), ApiError>;
-}
-\end{lstlisting}
-
-Exact method names may change. The boundary is mandatory: platform adapters
-implement storage, transport, notification, and secret custody; use cases depend
-on traits and stable domain types.
-
-\subsection{Local data}
-
-The desktop may persist encrypted message records, minimized indexes, delivery
-cursors, relationship summaries, and nonsecret preferences in SQLite. Plaintext
-message bodies are decrypted for display and discarded when the view closes.
-Search over plaintext is out of scope for the MVP. A later explicit decision is
-required before introducing a local plaintext index.
-
-\subsection{Observability}
-
-Every service and CLI command uses structured tracing with a request or operation
-identifier. Logs may contain scoped public references, coarse status, durations,
-and typed error categories. They may not contain private principal mappings,
-message plaintext, private keys, full signed payloads, recovery material, or raw
-authentication evidence.
-
-\subsection{Repository-wide quality gate}
-
-Before every milestone handoff, the agent runs at least:
-
+At each implementation handoff, run the workspace quality gate:
 \begin{lstlisting}[language={}]
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 \end{lstlisting}
-
-PostgreSQL tests must also run in CI against an isolated database. Desktop smoke
-tests, API contract tests, migration-from-empty tests, and clean-install demo
-steps are added as their milestones introduce those surfaces.
+PostgreSQL integration tests run against an isolated database; ignored tests do
+not count as evidence. Add contract, migration, desktop smoke, and recovery tests
+as the relevant surfaces appear.
 
 \section{Milestone Map}
 
 \begin{center}
 \small
-\begin{tabularx}{\textwidth}{@{}L{0.08\textwidth}L{0.25\textwidth}YY@{}}
+\begin{tabularx}{\textwidth}{@{}L{0.09\textwidth}L{0.29\textwidth}Y@{}}
 \toprule
-\textbf{No.} & \textbf{Narrative outcome} & \textbf{Primary artifacts} & \textbf{Depends on} \\
+Stage & User-visible result & Exit evidence \\
 \midrule
-0 & Protect the foundation & decision records, workspace skeleton, dependency rules & existing repository \\
-1 & The service comes alive & API server, administration CLI, explicit pilot policy & 0 \\
-2 & Alice gets an identity & shared client core, desktop shell, endpoint key custody & 1 \\
-3 & Alice makes first contact & quote, test-credit reservation, encryption, upload, admission & 2 \\
-4 & Bob's decision matters & solicitation inbox, accept/reject/block, settlement display & 3 \\
-5 & Time and failure become real & workers, retry, expiry, retention, restart recovery & 4 \\
-6 & A small pilot can use it & packaging, TLS, onboarding, recovery, operations & 5 \\
-7 & The core is ready for mobile & FFI boundary and mobile proof harness & 6 \\
+Baseline & Revised request and financial contracts & Versioned decisions and conformance vectors \\
+0 & Product foundation is ready & Buildable skeleton and dependency checks \\
+1 & Operator starts the service & Bootstrap, simulator, CLI, and restart demo \\
+2 & Alice owns an identity & Enrollment, key custody, and reopen demo \\
+3 & Alice requests a relationship & One simulated charge and encrypted admission \\
+4 & Bob controls the request & Decisions, follow-up policy, and accurate activity views \\
+5 & Time and failure are recoverable & Deadline, provider-event, and crash matrix \\
+5b & The member cycle is demonstrable & Reproducible quarter and failed-payment recovery \\
+6 & A small pilot can use it & Signed builds, recovery, restore, and usability evidence \\
+7 & The core is portable & Swift/Kotlin binding parity harness \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-\section{Milestone 0: Protect the Foundation}
-
-\paragraph{Promise.}
-An agent can add product code without destabilizing the protocol foundation or
-inventing a second architecture.
-
-\paragraph{Allowed change.}
-Workspace metadata, new directories, new empty crates, documentation, CI checks,
-and test-only dependency-graph validation. No protocol behavior changes.
-
-\subsection*{Work packages}
-
-\begin{enumerate}[leftmargin=2em]
-    \item Create \texttt{crates/cs-mail-api-types},
-          \texttt{crates/cs-mail-client-core}, \texttt{apps/cs-mail-server},
-          \texttt{apps/cs-mail-admin-cli}, and \texttt{apps/cs-mail-desktop} as
-          minimal workspace packages. A product package may contain a library
-          target plus a thin binary target.
-    \item Add a short architecture decision record describing dependency
-          direction, the existing-crate stability rule, and the core-change
-          approval process.
-    \item Add automated dependency checks or a documented review command proving
-          that stable crates do not depend on \texttt{apps/*}.
-    \item Define workspace-wide package metadata, lints, and dependency versions
-          for newly introduced dependencies.
-    \item Add a root command or task runner entry that performs the complete
-          quality gate without hiding individual Cargo commands.
-\end{enumerate}
-
-\subsection*{Tests and failure cases}
-
-The workspace must compile with every new package present. Empty binaries must
-print version and help information. CI must fail if an application crate is added
-as a dependency of a stable core crate. Existing tests must remain unchanged and
-green.
-
-\subsection*{Demonstration}
-
-From a clean checkout, list workspace packages, build the workspace, run the
-server and CLI help commands, and show the dependency-direction decision record.
-
-\paragraph{Exit evidence.}
-One clean CI run; crate skeleton committed; dependency graph reviewed; no
-normative-core diff.
-
-\paragraph{Deferred.}
-No API listener, database connection, Tauri window, enrollment, or message flow.
-
-\section{Milestone 1: The Service Comes Alive}
-
-\paragraph{Promise.}
-An operator can start one provider deployment, initialize its database, inspect
-health, create invites, grant test credits, and view the active policy without
-editing SQL.
-
-\paragraph{Allowed change.}
-New API types, server, and CLI code; additive service/storage APIs when necessary;
-forward-only database migration. Normative semantics remain fixed.
-
-\subsection*{Concrete defaults}
-
-Use Tokio for the process runtime, Axum for HTTP routing, Rustls for TLS,
-\texttt{tracing} for structured diagnostics, and Clap for the administration
-CLI. Keep the existing synchronous storage adapter behind a bounded blocking
-execution boundary for the first vertical slice; do not block an async executor
-worker directly. Replace that bridge with a TLS-configurable pool only when the
-behavior is covered by the same integration tests.
-
-The CLI talks to an authenticated admin API for ordinary administration. A local
-server subcommand may apply migrations and perform first-deployment bootstrap.
-The CLI does not become a second application that writes arbitrary database rows.
-
-\subsection*{Work packages}
-
-\begin{enumerate}[leftmargin=2em]
-    \item Define versioned health, policy, invite, test-credit, and error DTOs in
-          \texttt{cs-mail-api-types}. Keep transport errors distinct from protocol errors.
-    \item Build \texttt{cs-mail-server} configuration with explicit bind address,
-          database URL, deployment domain, provider identity, public base URL,
-          content limits, and policy-version selection.
-    \item Add \texttt{cs-maild migrate}, \texttt{cs-maild bootstrap}, and
-          \texttt{cs-maild serve}. Bootstrap must be idempotent and must not
-          replace an existing key registry or provider identity.
-    \item Add authenticated admin endpoints for invite creation, test-credit
-          grants, policy inspection, migration status, and health diagnostics.
-    \item Build matching CLI commands with machine-readable JSON output and
-          concise human output. Mutating commands require explicit target display.
-    \item Decide and record exact pilot retention periods, content-size limits,
-          invite lifetime, test-credit ceiling, and per-identity rate limits.
-    \item Add redaction tests for configuration and error output.
-\end{enumerate}
-
-\subsection*{Mandatory tests}
-
-\begin{itemize}[leftmargin=2em]
-    \item migration from an empty PostgreSQL database and idempotent reapplication;
-    \item refusal to start with missing provider keys or ambiguous deployment domain;
-    \item admin authentication failure and separation from user command authority;
-    \item duplicate invite and duplicate credit-grant idempotency;
-    \item concurrent credit grants preserve ledger conservation; and
-    \item health distinguishes process availability, database readiness, and migration readiness.
-\end{itemize}
-
-\subsection*{Demonstration}
-
-Start a fresh database, bootstrap the provider, start the API, create two invites,
-grant test credits to a seeded account, inspect balances and policy, restart the
-server, and show that bootstrap and credits were not duplicated.
-
-\paragraph{Exit evidence.}
-Documented clean-start transcript, API contract tests, PostgreSQL integration
-tests, redacted logs, and an operator quick-start requiring no direct SQL.
-
-\paragraph{Deferred.}
-User enrollment UI, message content, recipient decisions, SMTP, real payment
-rails, federation, multi-region deployment, and automated account recovery.
-
-\section{Milestone 2: Alice Gets an Identity}
-
-\paragraph{Promise.}
-Alice installs the macOS desktop application, redeems an invite, creates a
-protocol identity and device keys, closes the application, and safely unlocks the
-same identity later.
-
-\paragraph{Allowed change.}
-Client-core use cases, identity/device API types and server routes, desktop shell,
-keychain and SQLite adapters, and additive service key-enrollment APIs.
-
-\subsection*{Work packages}
-
-\begin{enumerate}[leftmargin=2em]
-    \item Define client-core ports for provider transport, key vault, local store,
-          clock, and notification scheduling. Supply deterministic in-memory test adapters.
-    \item Implement invite redemption, identity enrollment, device-key creation,
-          signed enrollment proof, identity resolution, device listing, and device revocation.
-    \item Implement the macOS key-vault adapter using the operating-system
-          keychain. Store only key references in SQLite.
-    \item Create the local SQLite schema for identity profile, device metadata,
-          encrypted content records, inbox cursors, minimized relationship
-          summaries, and preferences. No plaintext body column is permitted.
-    \item Build a thin Tauri desktop shell with screens for welcome, invite
-          redemption, identity creation, unlock, settings, and device list.
-    \item Make desktop commands call client-core use cases rather than protocol
-          crates directly. UI components do not construct signed commands.
-    \item Add an explicit identity export/recovery placeholder that explains what
-          is not yet recoverable. Do not imply provider-assisted content recovery.
-\end{enumerate}
-
-\subsection*{Mandatory tests}
-
-\begin{itemize}[leftmargin=2em]
-    \item key material never appears in SQLite, logs, API payloads, or snapshots;
-    \item duplicate invite redemption is idempotent for the same request and conflicts for another identity;
-    \item a device key cannot enroll under another identity or provider scope;
-    \item revoked devices cannot authenticate new commands after canonical revocation time;
-    \item local schema upgrades preserve ciphertext and cursors; and
-    \item close/reopen and simulated keychain denial produce safe, understandable behavior.
-\end{itemize}
-
-\subsection*{Demonstration}
-
-On a clean macOS user account, install the app, redeem Alice's invite, create an
-identity, inspect the provider's public enrollment record, quit, reopen, unlock,
-and list the enrolled device. Show that the database contains no private key or
-message plaintext.
-
-\paragraph{Exit evidence.}
-Signed development build, keychain integration test, local migration test,
-identity enrollment end-to-end test, and a screen-recordable demo path.
-
-\paragraph{Deferred.}
-Sending, inbox, recovery completion, second-device transfer, Windows adapter,
-background notifications, and mobile bindings.
-
-\section{Milestone 3: Alice Makes Encrypted First Contact}
-
-\paragraph{Promise.}
-Alice resolves Bob, sees the quoted test-credit commitment, encrypts a message at
-her endpoint, submits bonded first contact, and receives durable provider evidence.
-The provider never receives plaintext.
-
-\paragraph{Allowed change.}
-First-contact and message verticals in client core and server; encrypted content
-and inbox API surfaces; additive adapters around existing content, security,
-service, and storage crates.
-
-\subsection*{Work packages}
-
-\begin{enumerate}[leftmargin=2em]
-    \item Enroll Bob using the Milestone~2 flow and publish the required endpoint
-          content-key certificate through an authenticated device operation.
-    \item Implement recipient resolution returning only provider-scoped public
-          identity and active public encryption evidence.
-    \item Implement quote request and display. The UI shows processing charge,
-          collateral, persistence reserve, total held value, expiry, and the
-          difference between held, transferred, and refunded value.
-    \item Implement the client-core first-contact state machine: quote, validate,
-          reserve, encrypt, upload ciphertext, admit, and persist signed receipt.
-    \item Preserve ordering: content may be uploaded before admission, but no
-          recipient delivery becomes visible before durable admission.
-    \item Add an encrypted inbox feed with stable cursors and minimized metadata.
-          Bob's desktop fetches ciphertext and decrypts only for display.
-    \item Expose retry state without allowing a user to create a second economic
-          effect from the same idempotency key.
-\end{enumerate}
-
-\subsection*{Mandatory tests}
-
-\begin{itemize}[leftmargin=2em]
-    \item provider-side storage and logs contain no plaintext fixture fragments;
-    \item ciphertext tampering, wrong recipient key, wrong relationship, and wrong declaration binding fail;
-    \item insufficient test credits produce no hold, quote consumption, or message delivery;
-    \item expired quote, expired content, and closed message-validity window settle or cancel exactly as specified;
-    \item network failure after each step can be retried without duplicate reservation or admission; and
-    \item Alice's displayed balance and receipt match the canonical ledger and journal.
-\end{itemize}
-
-\subsection*{Demonstration}
-
-Alice selects Bob, types a message, reviews a quote, confirms first contact, and
-sees a pending decision. Bob refreshes his inbox and decrypts the message. An
-operator inspects provider records and demonstrates that only ciphertext,
-bounded metadata, signed evidence, and ledger effects are present.
-
-\paragraph{Exit evidence.}
-One automated Alice-to-Bob end-to-end test, one interrupted-network matrix, one
-plaintext-absence test, and a receipt/ledger reconciliation assertion.
-
-\paragraph{Deferred.}
-Recipient decisions, conversations, attachments, search, rich text, SMTP,
-external notifications, and real currency.
-
-\section{Milestone 4: Bob's Decision Matters}
-
-\paragraph{Promise.}
-Bob can understand and decide the solicitation. Acceptance enables future bond-
-free communication; rejection settles the attempt but preserves later eligible
-contact; blocking prevents ordinary future contact until Bob unblocks it.
-
-\paragraph{Allowed change.}
-Relationship use cases, solicitation UI, relationship projections, and receipt
-display. No new decision semantics.
-
-\subsection*{Work packages}
-
-\begin{enumerate}[leftmargin=2em]
-    \item Build a solicitation inbox distinct from the ordinary accepted-message
-          inbox. Group messages according to the existing relationship episode semantics.
-    \item Explain accept, reject, and block in plain language, including the
-          immediate settlement consequence and future-contact consequence.
-    \item Submit recipient decisions as signed canonical commands and display the
-          provider-signed receipt after durable commitment.
-    \item Add relationship status and a compact balance activity view for both users.
-    \item Implement accepted-message sending through the existing bond-free path.
-          Do not simulate acceptance by issuing a zero-value quote.
-    \item Implement block and unblock management in settings, including the
-          distinction between rejection history and reversible blocking.
-    \item Ensure all UI projections are rebuilt from canonical server state after
-          restart or local cache deletion.
-\end{enumerate}
-
-\subsection*{Mandatory tests}
-
-\begin{itemize}[leftmargin=2em]
-    \item acceptance settles every eligible open bond for the accepted public identity;
-    \item acceptance does not forgive another public identity of the same principal;
-    \item rejection preserves repeated-attempt backoff across public-identity rotation;
-    \item block cancels unadmitted reservations and prevents later ordinary admission;
-    \item concurrent decisions serialize to one canonical outcome; and
-    \item the second accepted message is bond-free and still end-to-end encrypted.
-\end{itemize}
-
-\subsection*{Demonstration}
-
-Run three short stories: Bob accepts Alice and receives a second bond-free
-message; Bob rejects a fresh test identity and the balances settle visibly; Bob
-blocks and later unblocks another identity. Reopen both desktop apps and show the
-same canonical state.
-
-\paragraph{Exit evidence.}
-Decision matrix tests, concurrency test, projection-rebuild test, and reviewed UI
-copy explaining value movement without ambiguous words such as ``fee'' for a hold.
-
-\paragraph{Deferred.}
-Group communication, contact import, sophisticated abuse review, external
-funding, and federation.
-
-\section{Milestone 5: Time and Failure Become Real}
-
-\paragraph{Promise.}
-Routine service failure, network interruption, duplicate requests, offline
-recipients, and elapsed deadlines do not lose messages, duplicate settlement, or
-strand value.
-
-\paragraph{Allowed change.}
-Worker executable modes, leases, operational scheduler authority, notification
-polling, retention execution, pooling/TLS improvements, and operational tests.
-
-\subsection*{Work packages}
-
-\begin{enumerate}[leftmargin=2em]
-    \item Run outbox delivery, scheduled deadlines, lane horizons, and retention
-          deletion as supervised worker loops in \texttt{cs-maild} or a separate
-          worker binary from the same server package.
-    \item Configure a distinct scheduler operational key and prove that only
-          opaque, live database claims can trigger unsigned system-derived commands.
-    \item Add bounded exponential retry with typed transient and terminal errors.
-          Protocol idempotency, not timing luck, prevents duplicate effects.
-    \item Add TLS-configurable PostgreSQL connections and a bounded connection
-          pool without changing storage semantics.
-    \item Implement desktop inbox polling and local notifications that reveal no
-          message plaintext on a locked screen by default.
-    \item Execute retention rules and emit deletion manifests. Protect ciphertext
-          still required by an undelivered outbox item.
-    \item Add graceful shutdown: stop accepting new work, finish or release
-          claims, flush logs, and close database connections within a bounded time.
-\end{enumerate}
-
-\subsection*{Mandatory tests}
-
-\begin{itemize}[leftmargin=2em]
-    \item terminate the service after each durable boundary and recover correctly;
-    \item reclaim expired worker leases without double acknowledgement;
-    \item reject forged, foreign, expired, or wrong-scheduler claims;
-    \item materialize admission timeout, bond expiry, and persistence release exactly once;
-    \item preserve undelivered ciphertext through retention and delete it afterward;
-    \item tolerate recipient offline periods and cursor replay; and
-    \item run a sustained concurrency test with invariant checks on ledger conservation and journal order.
-\end{itemize}
-
-\subsection*{Demonstration}
-
-Pause Bob's desktop, send a message, kill the worker during delivery, restart the
-service, reconnect Bob, and show one recipient-visible message and one canonical
-economic outcome. Run a short-deadline attempt and show automatic cancellation or
-expiry plus the correct balance movement.
-
-\paragraph{Exit evidence.}
-Failure-injection report, lease tests against PostgreSQL, graceful-shutdown test,
-retention test, TLS database configuration, and a documented recovery procedure.
-
-\paragraph{Deferred.}
-Multi-region failover, high-availability control plane, mobile push delivery,
-large-scale load targets, and external incident automation.
-
-\section{Milestone 6: A Small Pilot Can Use It}
-
-\paragraph{Promise.}
-A small invited group can install, understand, use, recover, and receive support
-for the product without a developer manually repairing normal state.
-
-\paragraph{Allowed change.}
-Packaging, code signing, onboarding polish, recovery completion, multi-device
-enrollment, diagnostics, backups, pilot operations, and Windows adapter work after
-the macOS path is stable.
-
-\subsection*{Work packages}
-
-\begin{enumerate}[leftmargin=2em]
-    \item Package and sign the macOS application. Produce deterministic server and
-          CLI release artifacts with embedded version information.
-    \item Complete user-held recovery material generation, confirmation, secure
-          display, and restoration. Recovery must not grant the provider content
-          decryption authority.
-    \item Implement trusted-device enrollment: an existing device authorizes a
-          new device, users can list devices, and revocation has canonical time semantics.
-    \item Add onboarding explanations for test credits, first-contact holds,
-          recipient decisions, encryption, recovery responsibility, and device loss.
-    \item Add safe diagnostics export containing versions, coarse timings, typed
-          failures, and request references but no secrets or plaintext.
-    \item Document backups and conduct restore exercises for PostgreSQL,
-          configuration, provider public authority, and separately protected
-          provider private keys.
-    \item Define pilot support, abuse-report intake, account deletion, retention,
-          incident escalation, and release rollback procedures.
-    \item Add Windows key-vault, installer, notification, and local-store adapters
-          only after the macOS acceptance suite is platform-neutral.
-\end{enumerate}
-
-\subsection*{Mandatory tests}
-
-\begin{itemize}[leftmargin=2em]
-    \item clean install, upgrade, uninstall, and reinstall on supported macOS versions;
-    \item recovery from user-held material on a new clean device;
-    \item trusted-device addition and immediate revoked-device refusal;
-    \item backup restore followed by receipt, balance, relationship, and inbox reconciliation;
-    \item diagnostics export secret scan; and
-    \item pilot-scale soak test with 50 identities, offline intervals, decisions, retries, and restarts.
-\end{itemize}
-
-\subsection*{Demonstration}
-
-Give two nondeveloper testers clean machines and only the pilot documentation.
-They install, enroll, fund through an operator, exchange first contact, decide,
-send again, add or recover a device, and export safe diagnostics. The operator
-restores a staged backup and reconciles the canonical state.
-
-\paragraph{Exit evidence.}
-Signed installers, release manifest, recovery ceremony transcript, restore
-report, support runbook, pilot policy, and human usability findings with critical
-issues resolved.
-
-\paragraph{Deferred.}
-Public signup, production financial value, SMTP, federation, mobile release,
-large attachments, rich collaboration, and broad compliance automation.
-
-\section{Milestone 7: The Core Is Ready for Mobile}
-
-\paragraph{Promise.}
-The product's protocol and client behavior can move into native mobile
-applications without copying business logic or weakening endpoint key custody.
-
-\paragraph{Allowed change.}
-Client-core portability improvements, a narrow FFI crate, generated bindings,
-and a proof harness. No production mobile application is required.
-
-\subsection*{Work packages}
-
-\begin{enumerate}[leftmargin=2em]
-    \item Audit \texttt{cs-mail-client-core} for desktop, filesystem, threading,
-          and UI assumptions. Replace them with explicit ports where necessary.
-    \item Define an FFI-safe facade using bounded value types, stable error codes,
-          cancellation, and explicit memory ownership. Do not expose internal Rust
-          structs or cryptographic secret bytes as a convenience API.
-    \item Generate Swift and Kotlin bindings for identity summary, inbox page,
-          message decryption request, first-contact quote, send progress, decision,
-          and device management.
-    \item Build mock iOS and Android adapter harnesses for secure-key operations,
-          transport, local ciphertext storage, and notifications.
-    \item Run the same client-core conformance scenarios through direct Rust,
-          Swift binding, and Kotlin binding entry points.
-    \item Document platform responsibilities: Keychain or Keystore custody,
-          biometric policy, background notification handling, screen privacy, and
-          recovery-material presentation.
-\end{enumerate}
-
-\subsection*{Mandatory tests}
-
-\begin{itemize}[leftmargin=2em]
-    \item deterministic behavior parity across Rust, Swift, and Kotlin harnesses;
-    \item no secret value crosses the FFI boundary except into an approved platform key operation;
-    \item cancellation and process termination do not leave a half-recorded local operation;
-    \item malformed or oversized FFI input returns typed errors without panic; and
-    \item bindings build in clean platform CI environments.
-\end{itemize}
-
-\subsection*{Demonstration}
-
-From a minimal Swift harness and a minimal Kotlin harness, unlock a test identity
-through a mock secure-key adapter, fetch one encrypted message, decrypt through
-the Rust core, and return a display-safe result. Show identical receipt and error
-interpretation on both platforms.
-
-\paragraph{Exit evidence.}
-Versioned FFI surface, generated bindings, parity suite, platform responsibility
-document, and no Tauri dependency in the client core or mobile FFI graph.
-
-\paragraph{Deferred.}
-App Store and Play Store releases, production push notifications, polished mobile
-UI, mobile account recovery ceremony, and tablet-specific design.
-
-\section{Agent Execution Protocol}
-
-An agent assigned a milestone must work in thin, demonstrable slices. It should
-not implement every server route before connecting one end-to-end user action.
-
-\subsection{Required loop for each work package}
-
-\begin{enumerate}[leftmargin=2em]
-    \item \textbf{Inspect.} Read applicable specifications, existing APIs, tests,
-          migrations, and local repository instructions.
-    \item \textbf{State the slice.} Name one user-visible outcome and its exact
-          acceptance evidence.
-    \item \textbf{Map impact.} List new crates/modules, additive existing-crate
-          APIs, migrations, trust boundaries, and consumers.
-    \item \textbf{Implement inward-out.} Start with contract tests and domain use
-          case, then adapters, then transport, then UI.
-    \item \textbf{Test failure first.} Cover replay, expiry, wrong scope,
-          interruption, concurrency, and redaction relevant to the slice.
-    \item \textbf{Demonstrate.} Run the smallest real path using actual binaries
-          and PostgreSQL where the slice crosses persistence.
-    \item \textbf{Handoff.} Report behavior delivered, evidence, remaining risks,
-          deferred work, and any decision requiring a human.
-\end{enumerate}
-
-\subsection{Prohibited shortcuts}
-
-An agent must not:
-
-\begin{itemize}[leftmargin=2em]
-    \item bypass signed durable execution to simplify tests or UI integration;
-    \item persist plaintext or private keys because secure storage is incomplete;
-    \item make the UI reconstruct protocol settlement rules;
-    \item write directly to canonical tables from the admin CLI;
-    \item reuse protocol, wire, policy, privacy, and API version numbers interchangeably;
-    \item silently rewrite an applied migration;
-    \item treat ignored PostgreSQL tests as evidence that database behavior passed;
-    \item introduce real monetary value or SMTP scope without a new human decision; or
-    \item declare a milestone complete without its clean-checkout demonstration.
-\end{itemize}
-
-\subsection{Decision record threshold}
-
-The agent may choose names, internal module organization, reversible UI details,
-query structure, test fixtures, and comparable libraries within the fixed
-architecture. It must request approval before changing identity/device meaning,
-recovery authority, retention policy, value semantics, supported platform order,
-deployment topology, cryptographic suite, wire format, protocol state, or the
-existing-crate stability rule.
-
-\section{End-to-End Acceptance Matrix}
-
-The following matrix is cumulative. A later milestone must continue to pass all
-earlier rows.
-
-\begin{center}
-\small
-\begin{tabularx}{\textwidth}{@{}L{0.22\textwidth}L{0.14\textwidth}YY@{}}
-\toprule
-\textbf{Journey} & \textbf{Introduced} & \textbf{Success evidence} & \textbf{Critical failure assertion} \\
-\midrule
-Fresh deployment & M1 & migrate, bootstrap, serve, health, restart & no duplicate authority or migration \\
-Invite and test credit & M1 & CLI creates invite and auditable credit & no direct arbitrary ledger write \\
-Identity enrollment & M2 & reopenable endpoint identity and device list & no key in provider or SQLite \\
-Bonded first contact & M3 & Bob decrypts; Alice has receipt and correct hold & provider has no plaintext; replay has no second hold \\
-Acceptance & M4 & second message is encrypted and bond-free & other public identity remains unaccepted \\
-Rejection and retry & M4 & settlement and later eligible quote reflect history & identity rotation does not reset attempt history \\
-Block and unblock & M4 & ordinary admission refused until unblock & unblocking does not erase history \\
-Worker recovery & M5 & one outcome after crash and lease reclaim & no duplicate delivery acknowledgement or settlement \\
-Retention & M5 & eligible ciphertext deleted with manifest & undelivered ciphertext not deleted early \\
-Recovery and device transfer & M6 & clean device regains authorized access & provider still cannot decrypt \\
-Mobile binding parity & M7 & Swift/Kotlin harness matches Rust behavior & no secret leakage or panic across FFI \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-\section{Risk Register and Stop Conditions}
-
-\begin{center}
-\small
-\begin{tabularx}{\textwidth}{@{}L{0.22\textwidth}YY@{}}
-\toprule
-\textbf{Risk} & \textbf{Early control} & \textbf{Stop condition} \\
-\midrule
-Core semantic drift & frozen-core rule, decision records, conformance tests & product work requires an unexplained protocol change \\
-Secret leakage & key-vault port, redaction, plaintext-absence tests & key or plaintext appears in server, logs, SQLite, or diagnostics \\
-Duplicate economics & signed idempotent commands and failure matrix & retry produces a second hold, transfer, or decision \\
-Misleading UX & reviewed quote and decision copy tied to ledger evidence & UI describes held value as transferred or hides settlement consequence \\
-Operational fragility & restart, lease, backup, and restore tests & clean restart or restore cannot reconcile journal, ledger, and inbox \\
-Crate proliferation & crate threshold and inward dependencies & feature crates duplicate domain types or create cycles \\
-Premature platform spread & macOS-first exit gate & Windows or mobile work delays the first complete macOS journey \\
-Policy ambiguity & versioned explicit pilot policy & user data would be created without retention and deletion periods \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-If a stop condition occurs, the agent must preserve evidence, avoid broad
-workarounds, and request human direction. It must not weaken the test that exposed
-the condition.
-
-\section{MVP Completion Definition}
-
-The desktop MVP and administration CLI are complete when all of the following
-are true:
-
-\begin{enumerate}[leftmargin=2em]
-    \item a clean deployment can be migrated, bootstrapped, operated, backed up,
-          restored, and diagnosed without direct database edits;
-    \item two clean macOS installations can enroll independent identities and
-          retain private keys only through endpoint-controlled custody;
-    \item Alice can make encrypted bonded first contact and Bob can decrypt it;
-    \item Bob can accept, reject, block, and unblock with correct visible and
-          canonical settlement effects;
-    \item accepted follow-up communication is bond-free and encrypted;
-    \item retries, duplicates, restarts, offline delivery, expiry, and retention
-          pass the cumulative acceptance matrix;
-    \item recovery and trusted-device transfer work without granting provider
-          content access;
-    \item the signed installer, server, worker, and CLI have documented release
-          and rollback procedures;
-    \item the pilot policy states retention, test-credit, limits, abuse, support,
-          and account-deletion behavior; and
-    \item a nondeveloper can complete the primary journey from the documentation.
-\end{enumerate}
-
-This completion definition intentionally excludes real payments, SMTP,
-federation, public signup, multi-region operation, and a production mobile app.
-Those are later product programs, not hidden requirements for declaring the
-native desktop pilot successful.
-
-\section{Recommended First Agent Assignment}
-
-The first assignment should be Milestone~0 followed by only the walking skeleton
-of Milestone~1. A suitable bounded objective is:
-
-\begin{quote}
-Create the agreed product-crate skeleton, enforce inward dependency direction,
-and deliver a server binary plus administration CLI that can report version and
-health against a migrated development database. Do not add enrollment, content,
-or message behavior. Preserve every existing test and make no normative-core
-change. Finish with clean-checkout commands, automated tests, and a concise
-decision record describing the new crate boundaries.
-\end{quote}
-
-That assignment proves the build plan itself: the agent must create a small,
-working vertical path while respecting the architecture and stability constraints
-before it receives authority to build user identity or messaging.
+Each stage depends on the preceding one. A milestone is complete when its
+demonstration runs from a clean checkout and its relevant failure cases pass,
+not merely when the new code compiles.
+
+\section{Milestone 0: Establish the Product Foundation}
+
+After the semantic baseline, create the product packages and enforce inward
+dependencies. Define shared package metadata, lints, and dependency versions.
+Document the architecture boundary and add a command that runs the full quality
+gate without hiding individual checks. Empty server and CLI binaries should
+report version and help.
+
+Demonstrate the workspace build and dependency graph from a clean checkout.
+The exit evidence is a passing baseline suite, reviewed dependency rules, and a
+small package skeleton. No enrollment, API listener, desktop workflow, or further
+semantic change is part of this stage.
+
+\section{Milestone 1: Bring the Service and Simulator to Life}
+
+The operator can migrate an empty database, bootstrap one provider idempotently,
+start the API, create invites, inspect policy, and select simulation scenarios
+without editing SQL. Use Tokio, Axum, Rustls, structured tracing, and Clap as the
+initial process, HTTP, TLS, diagnostics, and CLI choices. Keep synchronous storage
+behind a bounded blocking boundary until a tested replacement is appropriate.
+
+Configuration identifies the deployment domain, provider authority, public URL,
+database, content limits, retention versions, and simulation mode. Ordinary
+administration uses an authenticated API. A local bootstrap/migration command
+may initialize the deployment, but cannot silently replace an existing identity
+or key registry.
+
+The simulator persists operation identities and supports controlled delayed,
+duplicate, out-of-order, and failed results. Its scenario changes are audited
+and separate from canonical financial writes. No live provider credentials or
+redeemable amounts are enabled.
+
+Tests cover migration from empty, repeated bootstrap, missing keys, user/admin
+authority separation, invite replay, simulator-operation idempotency, and readiness
+that distinguishes process health from database readiness. Demonstrate restart
+without duplicate authority or simulated operations. Exit evidence includes a
+clean-start transcript, API contracts, database tests, and redacted diagnostics.
+
+\section{Milestone 2: Give Alice an Identity She Controls}
+
+Alice installs the macOS application, redeems an invite, creates a protocol
+identity and device keys, and reopens the same identity after quitting. Client
+use cases coordinate identity resolution, enrollment, device listing, and
+revocation through portable ports. The Tauri shell remains thin.
+
+Store only key references, ciphertext, cursors, minimized relationship metadata,
+and nonsecret preferences in SQLite. Use the macOS keychain for secrets. Explain
+the recovery capabilities that are available at this stage without implying
+provider access to old content.
+
+Tests reject foreign-scope or revoked device authority, conflicting invite reuse,
+and secret leakage to storage or logs. Local schema upgrades preserve ciphertext
+and cursors. Demonstrate enrollment, keychain denial, quit/reopen, and device
+listing on a clean user account. Sending and completed recovery remain deferred.
+
+\section{Milestone 3: Submit One Encrypted Relationship Request}
+
+Alice resolves Bob and reviews $C$, $S$, the total conditional charge, the request
+deadline rule, and possible refunds. The UI identifies the value as simulated.
+She authorizes one request, encrypts the initial message, and obtains signed
+evidence of admission after the simulator confirms capture and delivery
+preparation is durable.
+
+The client state machine persists the request and operation references across
+quote, create, payment preparation, ciphertext upload, and admission. An existing
+preparing or open request is resumed instead of charged again. No delivery is
+visible before durable admission. Bob receives an encrypted inbox record and
+decrypts at his endpoint.
+
+Test two-device creation with distinct command keys, capture failure, uncertainty,
+expired terms, wrong scope, modified declarations, ciphertext tampering, and
+network loss at each boundary. A declined charge admits nothing; an unknown
+charge is reconciled under its original identity. Alice's request activity must
+match the ledger and receipt, without a spendable balance view.
+
+Demonstrate the complete encrypted path and recovery after an interrupted charge
+response. Exit evidence is an end-to-end request test, a payment-step retry
+matrix, and plaintext-absence checks. Attachments, search, rich text, SMTP, and
+real currency remain deferred.
+
+\section{Milestone 4: Make Bob's Decision and Follow-Up Controls Real}
+
+Bob sees one request with its grouped messages and a clear decision deadline.
+Acceptance grants future communication and records one full refund obligation;
+rejection records processing revenue and pending forfeiture; blocking additionally
+prevents contact. The UI explains permission first, then money, and never
+describes rejection as a payment to Bob.
+
+Implement recipient follow-up preferences with bounded count/rate controls and
+canonical admission enforcement. Alice can add a message only when the identified
+request and current policy allow it. Its own delivery state remains visible, but
+the charge and common deadline remain unchanged. Closing or dismissing the
+recipient's prompt is not a decision.
+
+Show request charges and refund status separately from member distribution
+statements. Accepted sending uses standing permission rather than a zero-value
+quote. Block/unblock management preserves the difference between rejection and
+prohibition, and projection rebuild after restart reproduces canonical state.
+
+Tests cover one request with three messages and one refund, disabled follow-ups,
+allowance replay, policy-change races, decision races, alias history, and block
+before versus after admission. A follow-up refusal must not start another charge.
+Demonstrate accept, reject, block/unblock, and allowed/disabled follow-ups from
+both clients. Exit evidence includes reviewed financial wording and encrypted
+accepted-message delivery.
+
+\section{Milestone 5: Recover Across Time and Failure}
+
+Run scheduled request deadlines, outbox delivery, payment reconciliation, and
+retention through supervised leased workers. Jobs recheck current state and use
+stable operation identities. Configure a distinct scheduler authority, bounded
+retries, graceful shutdown, database TLS, and a bounded connection pool without
+changing the revised semantics.
+
+This milestone makes uncertainty visible. Kill the service after capture but
+before its response is recorded; cancel a preparing request before delayed capture
+confirmation; replay provider notifications out of order; and fail a refund before
+retrying it. The request stays cancelled when appropriate, all captured money is
+returned once, and a terminal obligation does not disappear during recovery.
+
+Exercise timely acceptance delayed behind expiry processing and late acceptance
+after a closed window. Preserve current permission while materializing old
+financial outcomes. Offline recipients and cursor replay must not duplicate
+delivery or financial effects. Retention must protect content still needed by
+undelivered work while eventually deleting eligible records.
+
+Demonstrate restart, lease reclaim, deadline processing, delayed-provider recovery,
+and one visible message/economic outcome after retries. Exit evidence is a
+failure-injection matrix, scheduler-authority tests, a sustained concurrency run,
+and an operator reconciliation procedure.
+
+\section{Milestone 5b: Complete a Simulated Quarter}
+
+The operator can demonstrate how a rejected request eventually benefits members
+without paying its recipient directly. Create simulated forfeiture lots with
+different maturity and quoted-rate versions, and a synthetic membership set with
+explicit activity and verification evidence. These fixture policies are visibly
+provisional; they do not settle live legal-entity eligibility or identity checks.
+
+Prepare a quarter from fixed funding and eligibility manifests. Apply the
+financial profile's once-only corporate calculation, equal minor-unit allocation,
+and restricted remainder. Publish the finalized batch atomically and show an
+aggregate reconciliation plus each member's own statement. Operator access must
+not expose the correspondence behind another member's funding or eligibility.
+
+Test refundable and immature exclusions, duplicate members and aliases, exact
+cutoff boundaries, multiple rate cohorts, zero eligible members, empty funding,
+rounding, and replay after partial preparation. The next quarter must not assess
+previously assessed funds again. A delayed or below-threshold payable remains
+assigned to its member and cannot become spendable request funding.
+
+Finally fail one simulated payout, cross the quarter boundary, and recover it.
+The member's fixed entitlement remains intact throughout. Exit evidence includes
+reproducible manifests, conservation checks, a failed-payment demo, and a clear
+distinction between unallocated carryforward and unpaid finalized obligations.
+Live payouts and production verification remain deferred.
+
+\section{Milestone 6: Run a Small Supported Pilot}
+
+Package and sign the macOS application and versioned server/CLI artifacts.
+Complete user-held recovery and trusted-device enrollment, with explicit device
+revocation and no provider content-decryption authority. Add understandable
+onboarding for requests, refunds, simulated distributions, follow-up preferences,
+encryption, recovery, and device loss.
+
+Provide scoped diagnostics export, support and abuse intake, deletion procedures,
+backup and restore, incident escalation, and release rollback instructions.
+Backups and retained obligation records must respect separate keys and access
+roles. Windows adapters follow only after the core macOS acceptance path is
+stable and platform-neutral.
+
+Tests cover clean installation and upgrade, recovery on a new device, revoked
+device refusal, diagnostics secret scans, and restore followed by reconciliation
+of requests, refunds, quarter manifests, payables, and inbox state. Run a
+50-identity soak with offline periods, decisions, retries, and restarts.
+
+Give nondeveloper testers clean machines and the pilot guide. They should enroll,
+request a relationship, use follow-up settings, decide, inspect financial status,
+recover a device, and export safe diagnostics without direct database repair.
+Exit evidence includes signed releases, restore and recovery records, and resolved
+critical usability findings. Public signup and production financial value remain
+outside this milestone.
+
+\section{Milestone 7: Prove Mobile Portability}
+
+Expose a narrow FFI facade for identity, request progress, decisions, encrypted
+inbox, financial status, distribution statements, and device management. It uses
+bounded values, stable error codes, cancellation, and explicit ownership rather
+than exporting internal domain structs or secret bytes.
+
+Generate Swift and Kotlin bindings and provide mock platform adapters for secure
+keys, transport, ciphertext storage, and notifications. Run the same client-core
+stories through Rust and each binding, including a pending refund and failed
+member payment. Malformed input returns typed errors rather than panics, and
+process termination cannot leave an unknown operation represented as completed.
+
+The exit evidence is a versioned facade, clean binding builds, and behavior parity
+without Tauri in the shared dependency graph. Store releases, mobile push, and a
+polished mobile UI are separate work.
+
+\section{How an Implementation Agent Should Proceed}
+
+For each slice, read the applicable revised contracts and local instructions,
+name one user-visible outcome, identify its trust and persistence boundaries,
+then implement contracts, domain orchestration, adapters, and UI in that order.
+Use a real end-to-end path early; do not build every route before demonstrating
+one request. Report what changed, what was demonstrated, and what remains open.
+
+Do not bypass signed execution, write canonical tables from the CLI, persist
+plaintext for convenience, hide an uncertain charge, reinterpret old migrations,
+or weaken a conformance test merely to finish a milestone. Changes to the approved
+baseline require an explicit decision and corresponding new evidence. Scope must
+not expand to live value or SMTP simply because an adapter is available.
+
+If reconciliation fails, preserve the affected evidence and investigate the
+specific obligation. If secrets leak, stop accumulating affected user data until
+the boundary is repaired. If a policy parameter is unresolved, use an explicitly
+versioned simulation fixture and keep the live deployment gate closed rather
+than presenting that fixture as a business commitment.
+
+\section{Completion and the First Assignment}
+
+The pilot is complete when clean installations can enroll and recover identities,
+exchange encrypted relationship requests and accepted messages, enforce follow-up
+preferences, survive deadlines and failures, and reproduce a simulated quarter
+with correct unpaid obligations. The operator can deploy, reconcile, restore,
+and support it without arbitrary database edits. The published pilot policy
+states simulation limits, retention, abuse review, and deletion behavior.
+
+The first assignment is therefore to establish the revised semantic baseline
+and its conformance vectors. After that, Milestone~0 and the smallest service/CLI
+walking skeleton provide a bounded product start. Preserving the earlier
+per-message bond model is not a prerequisite for this revised plan; preserving
+the agreed guarantees under the new request model is.
 
 \end{document}

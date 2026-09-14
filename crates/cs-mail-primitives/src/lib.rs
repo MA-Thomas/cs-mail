@@ -22,11 +22,8 @@ id_type!(PrincipalRef);
 id_type!(ProtocolIdentity);
 id_type!(ProviderRef);
 id_type!(QuoteId);
-id_type!(BondId);
-id_type!(PersistenceReserveId);
-id_type!(AttemptId);
+id_type!(RequestId);
 id_type!(MessageId);
-id_type!(EpisodeId);
 id_type!(ContentRef);
 id_type!(ContentKeyRef);
 id_type!(DeliveryIntentRef);
@@ -35,6 +32,12 @@ id_type!(IdempotencyKey);
 id_type!(AuditRef);
 id_type!(RetentionClassId);
 id_type!(FundingRef);
+id_type!(PaymentOperationId);
+id_type!(MemberId);
+id_type!(ProgramRef);
+id_type!(AllocationId);
+id_type!(QuarterId);
+id_type!(FinancialEventId);
 id_type!(FederationTransactionRef);
 id_type!(RecoveryFactorRef);
 id_type!(RecoveryAttemptRef);
@@ -91,8 +94,7 @@ macro_rules! scoped_ref_type {
 }
 
 scoped_ref_type!(RelationshipRef);
-scoped_ref_type!(AttemptSubjectRef);
-scoped_ref_type!(LedgerAccountRef);
+scoped_ref_type!(RequestHistoryRef);
 scoped_ref_type!(ContentScopeRef);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -208,9 +210,8 @@ macro_rules! version_type {
 }
 
 version_type!(RelationshipVersion);
-version_type!(AttemptVersion);
-version_type!(BondVersion);
-version_type!(ReserveVersion);
+version_type!(RequestHistoryVersion);
+version_type!(RequestVersion);
 version_type!(LaneVersion);
 version_type!(AggregateRevision);
 version_type!(ContentKeyVersion);
@@ -533,9 +534,8 @@ pub struct EventRef(pub JournalPosition);
 /// its task variant and the command or state transition materialized from it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ScheduleTask {
-    AdmissionTimeout(BondId),
-    BondExpiry(BondId),
-    PersistenceRelease(PersistenceReserveId),
+    AdmissionTimeout(RequestId),
+    RequestExpiry(RequestId),
     LaneHorizon(LaneId),
 }
 

@@ -10,7 +10,7 @@ use cs_mail_primitives::{
     CanonicalTime, JournalPosition, OperationalKeyRef, ProtocolVersion, ProviderRef, ReceiptRef,
     RecoveryAttemptRef, RecoveryFactorRef, RelationshipRef, Version, WireVersion,
 };
-use cs_mail_protocol::{ActorRef, Authorized, ContactTerms, ProtocolCommand};
+use cs_mail_protocol::{ActorRef, KernelCommand, ProtocolCommand, RequestTerms};
 use cs_mail_wire::{
     CanonicalCommandEnvelope, CommandTarget, WireError, decode_command_envelope,
     encode_command_envelope, encode_contact_terms_artifact,
@@ -183,9 +183,14 @@ fn hash_actor(hasher: &mut Sha256, actor: ActorRef) {
     }
 }
 
+/// Authentication evidence cannot be fabricated by deserializing caller data.
+/// ```compile_fail
+/// fn accepts_json<T: for<'de> serde::Deserialize<'de>>() {}
+/// accepts_json::<cs_mail_security::VerifiedCommand>();
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedCommand {
-    authorized: Authorized<ProtocolCommand>,
+    authorized: KernelCommand<ProtocolCommand>,
     target: RelationshipRef,
     digest: CommandDigest,
     canonical_bytes: Vec<u8>,
@@ -204,7 +209,7 @@ impl VerifiedCommand {
         &self.canonical_bytes
     }
 
-    pub fn into_authorized(self) -> Authorized<ProtocolCommand> {
+    pub fn into_command(self) -> KernelCommand<ProtocolCommand> {
         self.authorized
     }
 }
@@ -302,7 +307,7 @@ impl CommandSigner {
         command: ProtocolCommand,
     ) -> Result<SignedCommandBytes, SecurityError> {
         let payload = encode_command_envelope(&CanonicalCommandEnvelope {
-            wire_version: WireVersion(2),
+            wire_version: WireVersion(5),
             protocol_version,
             deployment_domain: scope.deployment_domain,
             intended_provider: scope.intended_provider,
@@ -512,7 +517,7 @@ impl KeyRegistry {
         expected_scope: SigningScope,
     ) -> Result<VerifiedCommand, SecurityError> {
         let envelope = decode_command_envelope(&signed.payload)?;
-        if envelope.wire_version != WireVersion(2) {
+        if envelope.wire_version != WireVersion(5) {
             return Err(SecurityError::WireVersionMismatch);
         }
         if envelope.protocol_version != expected_protocol_version {
@@ -550,7 +555,7 @@ impl KeyRegistry {
             .map_err(|_| SecurityError::InvalidSignature)?;
         let digest = CommandDigest(Sha256::digest(&signed.payload).into());
         Ok(VerifiedCommand {
-            authorized: Authorized::assume_verified(
+            authorized: KernelCommand::new(
                 envelope.command,
                 envelope.actor,
                 envelope.operational_key,
@@ -607,13 +612,15 @@ impl KeyRegistry {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignedContactTerms {
-    pub terms: ContactTerms,
+    pub terms: RequestTerms,
     pub provider_operational_key: OperationalKeyRef,
     pub signature: [u8; 64],
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ReceiptKind {
+    Refused,
+    NoChange,
     ContactTermsIssued,
     ReservationCommitted,
     AdmissionCommitted,
@@ -623,6 +630,7 @@ pub enum ReceiptKind {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReceiptPayload {
+    pub deployment_domain: [u8; 32],
     pub receipt_id: ReceiptRef,
     pub kind: ReceiptKind,
     pub relationship: RelationshipRef,
@@ -679,7 +687,7 @@ impl ProviderSigner {
     /// Returns an error when the terms name another provider or cannot be encoded.
     pub fn sign_contact_terms(
         &self,
-        terms: ContactTerms,
+        terms: RequestTerms,
     ) -> Result<SignedContactTerms, SecurityError> {
         if terms.recipient_provider != self.provider {
             return Err(SecurityError::SigningScopeMismatch);
@@ -746,9 +754,12 @@ impl SignedReceipt {
 
 fn receipt_signing_bytes(payload: &ReceiptPayload) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(192);
-    bytes.extend_from_slice(b"cs-mail/receipt/v1");
+    bytes.extend_from_slice(b"cs-mail/receipt/v2");
+    bytes.extend_from_slice(&payload.deployment_domain);
     bytes.extend_from_slice(&payload.receipt_id.0.to_be_bytes());
     bytes.push(match payload.kind {
+        ReceiptKind::Refused => 5,
+        ReceiptKind::NoChange => 6,
         ReceiptKind::ContactTermsIssued => 0,
         ReceiptKind::ReservationCommitted => 1,
         ReceiptKind::AdmissionCommitted => 2,
@@ -879,7 +890,7 @@ mod tests {
         let signed_command = command_signer
             .sign(
                 scope(),
-                ProtocolVersion(1),
+                ProtocolVersion(2),
                 IdempotencyKey(3),
                 ProtocolCommand::AcceptRelationship {
                     expected_version: Version(0),
@@ -890,24 +901,24 @@ mod tests {
             .verify(
                 &signed_command,
                 CanonicalTime(1),
-                ProtocolVersion(1),
+                ProtocolVersion(2),
                 scope(),
             )
             .unwrap();
         assert_eq!(
             verified.digest().0,
             [
-                176, 80, 145, 19, 216, 248, 133, 53, 25, 254, 152, 147, 21, 255, 202, 71, 74, 252,
-                74, 23, 156, 25, 10, 76, 249, 231, 232, 74, 212, 6, 164, 137,
+                210, 99, 97, 242, 168, 156, 191, 142, 203, 131, 61, 118, 138, 54, 75, 103, 32, 224,
+                232, 228, 236, 249, 168, 64, 210, 115, 178, 94, 32, 194, 118, 112
             ]
         );
         assert_eq!(
             signed_command.signature,
             [
-                175, 205, 16, 160, 216, 68, 115, 141, 91, 13, 52, 219, 98, 73, 184, 218, 27, 128,
-                172, 133, 84, 198, 72, 156, 75, 233, 70, 78, 209, 74, 116, 75, 200, 130, 90, 145,
-                10, 14, 209, 19, 69, 33, 181, 228, 219, 238, 168, 188, 51, 205, 98, 90, 246, 26,
-                68, 143, 224, 169, 229, 109, 139, 148, 89, 9,
+                28, 24, 13, 134, 185, 204, 111, 71, 20, 161, 9, 90, 52, 68, 146, 97, 79, 202, 84,
+                44, 240, 195, 88, 169, 151, 69, 49, 16, 32, 95, 36, 55, 221, 107, 234, 76, 98, 226,
+                101, 0, 244, 109, 227, 23, 197, 189, 54, 243, 94, 14, 201, 189, 130, 131, 160, 23,
+                216, 86, 217, 170, 132, 21, 245, 13
             ]
         );
         assert_eq!(
@@ -918,7 +929,7 @@ mod tests {
             registry.verify(
                 &signed_command,
                 CanonicalTime(1),
-                ProtocolVersion(1),
+                ProtocolVersion(2),
                 SigningScope {
                     deployment_domain: [8; 32],
                     intended_provider: ProviderRef(5),
@@ -932,7 +943,7 @@ mod tests {
         let last = modified.payload.len() - 1;
         modified.payload[last] ^= 1;
         assert_eq!(
-            registry.verify(&modified, CanonicalTime(1), ProtocolVersion(1), scope()),
+            registry.verify(&modified, CanonicalTime(1), ProtocolVersion(2), scope()),
             Err(SecurityError::InvalidSignature)
         );
     }
@@ -950,8 +961,8 @@ mod tests {
             )
             .unwrap();
         let payload = encode_command_envelope(&CanonicalCommandEnvelope {
-            wire_version: WireVersion(1),
-            protocol_version: ProtocolVersion(1),
+            wire_version: WireVersion(4),
+            protocol_version: ProtocolVersion(2),
             deployment_domain: scope().deployment_domain,
             intended_provider: scope().intended_provider,
             target: CommandTarget::Relationship(scope().relationship),
@@ -969,7 +980,7 @@ mod tests {
         };
 
         assert_eq!(
-            registry.verify(&signed, CanonicalTime(1), ProtocolVersion(1), scope()),
+            registry.verify(&signed, CanonicalTime(1), ProtocolVersion(2), scope()),
             Err(SecurityError::WireVersionMismatch)
         );
     }
@@ -999,7 +1010,7 @@ mod tests {
         let old_command = old
             .sign(
                 scope(),
-                ProtocolVersion(1),
+                ProtocolVersion(2),
                 IdempotencyKey(3),
                 ProtocolCommand::AcceptRelationship {
                     expected_version: Version(0),
@@ -1008,11 +1019,11 @@ mod tests {
             .unwrap();
         assert!(
             registry
-                .verify(&old_command, CanonicalTime(10), ProtocolVersion(1), scope())
+                .verify(&old_command, CanonicalTime(10), ProtocolVersion(2), scope())
                 .is_ok()
         );
         assert_eq!(
-            registry.verify(&old_command, CanonicalTime(11), ProtocolVersion(1), scope()),
+            registry.verify(&old_command, CanonicalTime(11), ProtocolVersion(2), scope()),
             Err(SecurityError::KeyNotValidAtReceipt)
         );
         registry
@@ -1021,7 +1032,7 @@ mod tests {
         let new_command = new
             .sign(
                 scope(),
-                ProtocolVersion(1),
+                ProtocolVersion(2),
                 IdempotencyKey(4),
                 ProtocolCommand::BlockRelationship {
                     expected_version: Version(0),
@@ -1030,11 +1041,11 @@ mod tests {
             .unwrap();
         assert!(
             registry
-                .verify(&new_command, CanonicalTime(19), ProtocolVersion(1), scope())
+                .verify(&new_command, CanonicalTime(19), ProtocolVersion(2), scope())
                 .is_ok()
         );
         assert_eq!(
-            registry.verify(&new_command, CanonicalTime(20), ProtocolVersion(1), scope()),
+            registry.verify(&new_command, CanonicalTime(20), ProtocolVersion(2), scope()),
             Err(SecurityError::KeyNotValidAtReceipt)
         );
         assert!(registry.transparency().verify());

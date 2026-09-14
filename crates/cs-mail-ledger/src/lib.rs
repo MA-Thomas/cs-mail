@@ -1,60 +1,64 @@
-//! A small double-entry ledger whose batches conserve value by construction.
-
-use std::collections::BTreeMap;
-
-use cs_mail_primitives::{
-    BondId, LedgerAccountRef, Money, PersistenceReserveId, ProtocolIdentity, ProviderRef,
-    SettlementUnit,
-};
+//! Conserved journal transfers for request obligations and restricted member funds.
+//!
+//! Clearing accounts represent the other side of an external or inter-ledger
+//! movement and may be negative. Every other account is nonnegative. There are
+//! no spendable sender or recipient accounts.
+use cs_mail_primitives::{AllocationId, Money, PaymentOperationId, SettlementUnit};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Account {
-    Sender(LedgerAccountRef),
-    Recipient(ProtocolIdentity),
-    RecipientProvider(ProviderRef),
-    Bond(BondId),
-    PersistenceReserve(PersistenceReserveId),
+    ProcessorClearing,
+    ProgramClearing(PaymentOperationId),
+    RequestEscrow(PaymentOperationId),
+    RefundPayable(PaymentOperationId),
+    ProcessingRevenue,
+    PendingForfeiture(PaymentOperationId),
+    CorporatePoolRevenue,
+    RestrictedMemberFunds,
+    MemberPayable(AllocationId),
+    CorporateLossClearing,
 }
-
+impl Account {
+    const fn permits_negative(self) -> bool {
+        matches!(
+            self,
+            Self::ProcessorClearing | Self::ProgramClearing(_) | Self::CorporateLossClearing
+        )
+    }
+}
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Transfer {
     pub from: Account,
     pub to: Account,
     pub amount: Money,
 }
-
 impl Transfer {
     pub const fn new(from: Account, to: Account, amount: Money) -> Self {
         Self { from, to, amount }
     }
 }
-
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LedgerBatch {
     transfers: Vec<Transfer>,
 }
-
 impl LedgerBatch {
     pub fn new() -> Self {
         Self::default()
     }
-
     pub fn transfer(&mut self, from: Account, to: Account, amount: Money) {
         if !amount.is_zero() {
             self.transfers.push(Transfer::new(from, to, amount));
         }
     }
-
     pub fn transfers(&self) -> &[Transfer] {
         &self.transfers
     }
-
     pub fn is_balanced(&self) -> bool {
-        self.transfers.iter().all(|entry| entry.from != entry.to)
+        self.transfers.iter().all(|t| t.from != t.to)
     }
 }
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum LedgerError {
     InsufficientFunds {
@@ -66,131 +70,127 @@ pub enum LedgerError {
     InvalidBatch,
     VersionConflict,
 }
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LedgerView {
     pub revision: u64,
     pub unit: SettlementUnit,
-    balances: BTreeMap<Account, Money>,
+    // A sequence serializes complex account keys without lossy JSON object keys.
+    balances: Vec<(Account, i128)>,
 }
-
 impl LedgerView {
     pub fn from_balances(
         revision: u64,
         unit: SettlementUnit,
-        balances: BTreeMap<Account, Money>,
+        balances: BTreeMap<Account, i128>,
     ) -> Self {
         Self {
             revision,
             unit,
-            balances,
+            balances: balances.into_iter().collect(),
         }
     }
-
-    pub fn balances(&self) -> &BTreeMap<Account, Money> {
+    pub fn balances(&self) -> &[(Account, i128)] {
         &self.balances
     }
-
-    pub fn balance(&self, account: Account) -> Money {
-        self.balances.get(&account).copied().unwrap_or(Money::ZERO)
+    pub fn signed_balance(&self, account: Account) -> i128 {
+        self.balances
+            .iter()
+            .find(|(a, _)| *a == account)
+            .map_or(0, |(_, v)| *v)
     }
-
-    /// Applies a complete batch to a copy of this view.
-    ///
+    /// Nonnegative obligation balance. Use `signed_balance` for clearing accounts.
+    pub fn balance(&self, account: Account) -> Money {
+        Money::from_minor_units(
+            u64::try_from(self.signed_balance(account).max(0)).unwrap_or(u64::MAX),
+        )
+    }
+    /// Applies a complete balanced batch to a copy, with no partial mutation.
     /// # Errors
-    ///
-    /// Returns an error when the batch is invalid, an account is underfunded,
-    /// or checked arithmetic overflows.
+    /// Rejects invalid transfers, insufficient obligations, and arithmetic overflow.
     pub fn apply(&self, batch: &LedgerBatch) -> Result<Self, LedgerError> {
+        self.total_value()?;
         if !batch.is_balanced() {
             return Err(LedgerError::InvalidBatch);
         }
-        let mut next = self.clone();
-        for transfer in batch.transfers() {
-            let available = next.balance(transfer.from);
-            let Some(remaining) = available.checked_sub(transfer.amount) else {
+        let mut balances: BTreeMap<_, _> = self.balances.iter().copied().collect();
+        for t in batch.transfers() {
+            let available = *balances.get(&t.from).unwrap_or(&0);
+            let remaining = available
+                .checked_sub(i128::from(t.amount.minor_units()))
+                .ok_or(LedgerError::ArithmeticOverflow)?;
+            if remaining < 0 && !t.from.permits_negative() {
                 return Err(LedgerError::InsufficientFunds {
-                    account: transfer.from,
-                    available,
-                    required: transfer.amount,
+                    account: t.from,
+                    available: Money::from_minor_units(
+                        u64::try_from(available).map_err(|_| LedgerError::InvalidBatch)?,
+                    ),
+                    required: t.amount,
                 });
-            };
-            let destination = next.balance(transfer.to);
-            let Some(destination) = destination.checked_add(transfer.amount) else {
+            }
+            let destination = balances
+                .get(&t.to)
+                .copied()
+                .unwrap_or(0)
+                .checked_add(i128::from(t.amount.minor_units()))
+                .ok_or(LedgerError::ArithmeticOverflow)?;
+            if (!t.to.permits_negative() && destination > i128::from(u64::MAX))
+                || remaining < -i128::from(u64::MAX)
+            {
                 return Err(LedgerError::ArithmeticOverflow);
-            };
-            next.balances.insert(transfer.from, remaining);
-            next.balances.insert(transfer.to, destination);
+            }
+            balances.insert(t.from, remaining);
+            balances.insert(t.to, destination);
         }
-        next.revision = next
-            .revision
-            .checked_add(1)
-            .ok_or(LedgerError::ArithmeticOverflow)?;
+        let next = Self::from_balances(
+            self.revision
+                .checked_add(1)
+                .ok_or(LedgerError::ArithmeticOverflow)?,
+            self.unit,
+            balances,
+        );
+        next.total_value()?;
         Ok(next)
     }
-
-    /// Returns the value held by every account.
-    ///
+    /// Checks that all signed journal balances sum to zero.
     /// # Errors
-    ///
-    /// Returns an error if summing all balances overflows.
+    /// Rejects a nonconserved or overflowing ledger.
     pub fn total_value(&self) -> Result<Money, LedgerError> {
-        self.balances
-            .values()
-            .try_fold(Money::ZERO, |total, amount| {
-                total
-                    .checked_add(*amount)
-                    .ok_or(LedgerError::ArithmeticOverflow)
-            })
+        let mut accounts = std::collections::BTreeSet::new();
+        for (account, value) in &self.balances {
+            if !accounts.insert(*account) || (!account.permits_negative() && *value < 0) {
+                return Err(LedgerError::InvalidBatch);
+            }
+            if *value > i128::from(u64::MAX) || *value < -i128::from(u64::MAX) {
+                return Err(LedgerError::ArithmeticOverflow);
+            }
+        }
+        let sum = self.balances.iter().try_fold(0_i128, |sum, (_, v)| {
+            sum.checked_add(*v).ok_or(LedgerError::ArithmeticOverflow)
+        })?;
+        if sum != 0 {
+            return Err(LedgerError::InvalidBatch);
+        }
+        Ok(Money::ZERO)
     }
 }
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LedgerState {
     view: LedgerView,
 }
-
 impl LedgerState {
     pub const fn from_view(view: LedgerView) -> Self {
         Self { view }
     }
     pub fn new(unit: SettlementUnit) -> Self {
         Self {
-            view: LedgerView {
-                revision: 0,
-                unit,
-                balances: BTreeMap::new(),
-            },
+            view: LedgerView::from_balances(0, unit, BTreeMap::new()),
         }
     }
-
-    /// Credits bootstrap value before protocol execution begins.
-    ///
-    /// This exists for the in-memory reference adapter and its tests; a
-    /// production ledger would use an authenticated funding-rail journal entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the resulting balance overflows.
-    pub fn fund_for_test(&mut self, account: Account, amount: Money) -> Result<(), LedgerError> {
-        let balance = self.view.balance(account);
-        let updated = balance
-            .checked_add(amount)
-            .ok_or(LedgerError::ArithmeticOverflow)?;
-        self.view.balances.insert(account, updated);
-        Ok(())
-    }
-
     pub fn view(&self) -> LedgerView {
         self.view.clone()
     }
-
-    /// Atomically applies a batch at the expected ledger revision.
-    ///
     /// # Errors
-    ///
-    /// Returns an error for a stale revision, invalid or underfunded batch, or
-    /// arithmetic overflow. The ledger remains unchanged on error.
+    /// Rejects stale revisions or invalid journal batches.
     pub fn apply(
         &mut self,
         expected_revision: u64,
@@ -202,57 +202,59 @@ impl LedgerState {
         self.view = self.view.apply(batch)?;
         Ok(())
     }
-
     pub fn balance(&self, account: Account) -> Money {
         self.view.balance(account)
     }
-
-    /// Returns the value held by every account.
-    ///
     /// # Errors
-    ///
-    /// Returns an error if summing all balances overflows.
+    /// Returns an error if the ledger is not conserved.
     pub fn total_value(&self) -> Result<Money, LedgerError> {
         self.view.total_value()
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn a_failed_batch_has_no_partial_effect() {
-        let sender = Account::Sender(LedgerAccountRef::from_u128_for_test(1));
-        let first = Account::Bond(BondId(1));
-        let second = Account::Bond(BondId(2));
+    fn failed_batch_is_atomic_and_cannot_spend_refunds_twice() {
+        let id = PaymentOperationId(1);
+        let account = Account::RefundPayable(id);
         let mut ledger = LedgerState::new(SettlementUnit(1));
-        ledger
-            .fund_for_test(sender, Money::from_minor_units(5))
-            .unwrap();
+        let mut capture = LedgerBatch::new();
+        capture.transfer(
+            Account::ProcessorClearing,
+            account,
+            Money::from_minor_units(5),
+        );
+        ledger.apply(0, &capture).unwrap();
         let before = ledger.clone();
         let mut batch = LedgerBatch::new();
-        batch.transfer(sender, first, Money::from_minor_units(4));
-        batch.transfer(sender, second, Money::from_minor_units(4));
-        assert!(matches!(
-            ledger.apply(0, &batch),
-            Err(LedgerError::InsufficientFunds { .. })
-        ));
+        batch.transfer(
+            account,
+            Account::ProcessorClearing,
+            Money::from_minor_units(4),
+        );
+        batch.transfer(
+            account,
+            Account::ProcessorClearing,
+            Money::from_minor_units(4),
+        );
+        assert!(ledger.apply(1, &batch).is_err());
         assert_eq!(ledger, before);
+        assert_eq!(ledger.total_value(), Ok(Money::ZERO));
     }
-
     #[test]
-    fn transfers_conserve_total_value() {
-        let sender = Account::Sender(LedgerAccountRef::from_u128_for_test(1));
-        let bond = Account::Bond(BondId(1));
+    fn overflow_and_stale_revision_leave_ledger_unchanged() {
         let mut ledger = LedgerState::new(SettlementUnit(1));
-        ledger
-            .fund_for_test(sender, Money::from_minor_units(10))
-            .unwrap();
-        let total = ledger.total_value().unwrap();
         let mut batch = LedgerBatch::new();
-        batch.transfer(sender, bond, Money::from_minor_units(7));
+        batch.transfer(
+            Account::ProcessorClearing,
+            Account::ProcessingRevenue,
+            Money::from_minor_units(u64::MAX),
+        );
         ledger.apply(0, &batch).unwrap();
-        assert_eq!(ledger.total_value().unwrap(), total);
+        let before = ledger.clone();
+        assert!(ledger.apply(0, &batch).is_err());
+        assert!(ledger.apply(1, &batch).is_err());
+        assert_eq!(before, ledger);
     }
 }

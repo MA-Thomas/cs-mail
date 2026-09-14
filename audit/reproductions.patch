@@ -1,0 +1,61 @@
+--- a/crates/cs-mail-application/tests/protocol_sequences.rs
++++ b/crates/cs-mail-application/tests/protocol_sequences.rs
+@@ -706,3 +706,58 @@
+     assert_eq!(s.state.attempt.level, 0);
+     assert!(s.state.requests[&RequestId(1)].refund.is_some());
+ }
++
++
++#[test]
++fn audit_prepared_alias_must_observe_new_shared_cooldown() {
++    let mut first = Fixture::new();
++    first.open(); // admitted at 3; initially eligible for another request at 8
++    let mut alias_state = ProtocolState::initial(
++        PrincipalRef(1), ProtocolIdentity(11), ProtocolIdentity(20), CanonicalTime(0));
++    alias_state.attempt = first.engine.snapshot().unwrap().state.attempt;
++    let alias = InMemoryEngine::new(alias_state, SettlementUnit(1)).unwrap();
++    let sender = ActorRef::Sender(ProtocolIdentity(11));
++    let run = |command, actor, key| alias.execute(
++        Authorized::assume_verified(command, actor, OperationalKeyRef(1), IdempotencyKey(key)),
++        CanonicalTime(8), policy());
++    let terms = run(ProtocolCommand::IssueRequestTerms {
++        quote_id: QuoteId(2), declaration_digest: None }, sender, 1).unwrap();
++    let Some(TermsOutcome::ChargeRequired(terms)) = terms.manifest.terms_outcome else { panic!() };
++    run(ProtocolCommand::CreateRequest {
++        request_id: RequestId(2), attempt_id: AttemptId(2), message_id: MessageId(2),
++        payment_method: [9;32], terms }, sender, 2).unwrap();
++    let operation = alias.snapshot().unwrap().state.requests[&RequestId(2)].capture.clone();
++    let receipt = first.provider.submit(&operation, false).unwrap();
++    run(ProtocolCommand::RecordPayment {request_id: RequestId(2), receipt}, ActorRef::Provider(ProviderRef(30)), 3).unwrap();
++    first.decision(false, 9); // shared cooldown is now 99
++    let mut snapshot = alias.snapshot().unwrap();
++    // Materialize exactly the shared-history projection that PostgreSQL loads under its lock.
++    snapshot.state.attempt = first.engine.snapshot().unwrap().state.attempt;
++    snapshot.state.attempt.preparing_payment = Some(operation.id);
++    assert_eq!(snapshot.state.attempt.earliest_next_admission, CanonicalTime(99));
++    let result = transition(&snapshot, &Authorized::assume_verified(
++        ProtocolCommand::AdmitRequest {
++            request_id: RequestId(2), expected_request_version: Version(0),
++            content_ref: ContentRef(2), delivery_intent_ref: DeliveryIntentRef(2),
++            declaration_digest: MessageDeclarationDigest([0;32]),
++            message_valid_until: MessageValidityUntil(CanonicalTime(1000)) },
++        sender, OperationalKeyRef(1), IdempotencyKey(4)),
++        &TransitionContext {now:CanonicalTime(10), journal_position:JournalPosition(10),
++            protocol_version:ProtocolVersion(2), policy:policy()});
++    assert!(result.is_err(), "alias admitted before shared cooldown; new eligibility = {:?}",
++        result.as_ref().map(|m|m.next_state.attempt.earliest_next_admission));
++}
++
++#[test]
++fn audit_stale_followup_should_have_message_validity_error() {
++    let mut f=Fixture::new();
++    f.open();
++    f.execute(ActorRef::Recipient(ProtocolIdentity(20)), ProtocolCommand::SetFollowupPolicy {
++        expected_version:Version(0), policy:FollowupPolicy {version:Version(0),max_messages:3,max_per_interval:3,interval:Duration(20)}
++    },4).unwrap();
++    let result=f.sender(ProtocolCommand::AdmitFollowup {
++        request_id:RequestId(1),message_id:MessageId(2),content_ref:ContentRef(2),delivery_intent_ref:DeliveryIntentRef(2),
++        declaration_digest:MessageDeclarationDigest([0;32]),message_valid_until:MessageValidityUntil(CanonicalTime(5)),expected_policy_version:Version(1)
++    },6);
++    assert!(format!("{result:?}").contains("MessageValidityClosed"), "an open request with deadline 53 is reported as: {result:?}");
++}

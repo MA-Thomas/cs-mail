@@ -60,1186 +60,343 @@
 
 \title{\textit{cs-mail} Rust Reference Architecture}
 \author{C-SQD}
-\date{Draft 0.7 --- September 2026}
+\date{Draft 0.8 --- September 2026}
+
+\usepackage{tabularx}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\setlength{\emergencystretch}{1.5em}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-This document explains a Rust architecture for the \textit{cs-mail} protocol by
-following one recipient acceptance from arrival through final settlement. The
-central operation is a pure transition: authenticated intent and a complete state
-snapshot become a settlement manifest. One atomic transaction then applies the
-relationship change, settles every eligible bond, releases persistence reserves,
-preserves principal-level repeated-attempt state, records balanced ledger entries,
-and schedules external effects. The architecture also gives reserved but
-unadmitted attempts a short cancellation window with full release. The same
-execution model provides the organizing principle for Rust types, crate
-boundaries, persistence, concurrency, privacy, encryption, testing, and eventual
-federation.
+This architecture follows one relationship request from charge preparation to
+recipient decision, then follows a forfeiture into the quarterly member program.
+A pure transition computes the required state and accounting obligations. A
+transaction commits them with an outbox; external providers confirm payment
+effects afterward. This division gives the revised protocol a small deterministic
+center while keeping delivery, payment uncertainty, and member eligibility in
+explicitly bounded services.
 \end{abstract}
 
-\paragraph{Reading guide.}
-The protocol specification defines what every conforming implementation must do.
-This document explains one way to preserve those semantics in Rust. It begins
-with a complete acceptance, names the architectural vocabulary, then moves from
-the pure kernel to durable execution, crate boundaries, privacy domains,
-federation, and testing. Code fragments are illustrative rather than a wire or
-storage API commitment.
+\paragraph{Status and reading order.}
+The \textit{Protocol Specification} and the normative financial-program section
+of the \textit{Deployment and Migration Profile} control the rules. This document
+explains their intended implementation shape. Names and fragments below are
+illustrative target interfaces, not assertions that the current Rust workspace
+already implements the revised model. The desktop build plan describes how to
+reach that target through a simulated pilot.
 
-\section{One Acceptance from Beginning to End}
+\section{One Request, Three Messages, One Decision}
 
-Alice has not yet been accepted by Bob. She has made three contact attempts, each
-with a valid bond. All three bonds are still within their decision windows. Bob
-opens one of the messages and chooses to accept Alice.
+Alice creates a relationship request to Bob. The signed quote fixes $C+S$ and
+the request's policy versions. Creation stores one payment intent; a worker
+obtains capture confirmation from the external provider. Initial admission then
+commits the encrypted content reference, delivery intent, common decision
+deadline, and one recipient solicitation. The public-identity pair has one
+nonterminal request, even if Alice submits from several devices.
 
-The first admitted attempt opened one relationship solicitation for Alice's
-visible identity. The second and third attempts joined that solicitation. They
-may have updated its grouped contents or unread count, but they did not produce
-two more requests asking Bob to establish the same relationship.
+Bob permits follow-ups, so Alice adds two messages. Each has distinct ciphertext,
+authenticated declarations, and delivery state. Admission consumes Bob's permitted
+allowance, but creates no additional charge or request-history increment and
+does not move the decision deadline.
 
-Although the interface places the action beside one message, Bob is accepting a
-communicative relationship. The system must establish permission from Alice's
-visible protocol identity $I_A$ to Bob's visible protocol identity $I_B$. It must
-also refund $C+S$ for all three decision-open admitted bonds, release every active persistence
-reserve associated with attempts from $I_A$ to $I_B$, preserve the repeated-
-attempt state shared by Alice's private principal and Bob's identity, and cancel
-the three scheduled expiries. Acceptance of $I_A$ does not forgive attempts made
-through another public identity controlled by Alice.
-
-Those effects form one protocol outcome. If permission becomes visible while one
-bond remains available for later rejection, the implementation has contradicted
-the protocol. If the money is refunded but permission remains unknown, it has done
-the same. This relationship-wide outcome is the architectural center of the Rust
-implementation.
+When Bob accepts, the system grants permission and records one refund obligation
+for $C+S$. It closes the request and cancels expiry in the same transaction. A
+worker then executes the refund. Alice may write under standing acceptance while
+the provider is still confirming that refund: permission and the obligation are
+already committed, although external payment completion remains pending.
 
 \begin{figure}[ht]
 \centering
 \begin{tikzpicture}[
-    node distance=0.34cm,
-    flow/.style={
-        draw=black!45,
-        rounded corners=2pt,
-        fill=flowblue,
-        minimum width=9.2cm,
-        minimum height=0.72cm,
-        align=center,
-        font=\small
-    },
-    arrow/.style={-{Latex[length=2.2mm]},thick,draw=black!55}
-]
-\node[flow] (receive) {Receive and authenticate Bob's acceptance};
-\node[flow,below=of receive] (snapshot) {Load one complete settlement snapshot};
-\node[flow,below=of snapshot] (transition) {Compute a pure relationship transition};
-\node[flow,below=of transition] (manifest) {Produce one complete settlement manifest};
-\node[flow,below=of manifest] (commit) {Commit state, ledger, schedules, and outbox atomically};
-\node[flow,below=of commit] (effects) {Perform idempotent external effects after commit};
-\draw[arrow] (receive) -- (snapshot);
-\draw[arrow] (snapshot) -- (transition);
-\draw[arrow] (transition) -- (manifest);
-\draw[arrow] (manifest) -- (commit);
-\draw[arrow] (commit) -- (effects);
+node distance=0.35cm,
+flow/.style={draw=black!45,rounded corners=2pt,fill=flowblue,
+minimum width=10cm,minimum height=0.7cm,align=center,font=\small},
+arrow/.style={-{Latex[length=2mm]},thick,draw=black!55}]
+\node[flow] (a) {Authenticate the decision and durably record receipt time};
+\node[flow,below=of a] (b) {Load versioned relationship, request, and financial facts};
+\node[flow,below=of b] (c) {Compute the complete transition manifest};
+\node[flow,below=of c] (d) {Commit permission, outcome, obligations, and outbox};
+\node[flow,below=of d] (e) {Execute the refund and reconcile provider confirmation};
+\draw[arrow] (a)--(b); \draw[arrow] (b)--(c);
+\draw[arrow] (c)--(d); \draw[arrow] (d)--(e);
 \end{tikzpicture}
-\caption{The execution path of one relationship decision.}
+\caption{The commit establishes the obligation; external confirmation discharges it.}
 \end{figure}
 
-\subsection{The Acceptance Arrives}
+\section{The Pure Transition and Its Durable Boundary}
 
-Bob's client sends an \texttt{AcceptRelationship} command. The command names the
-directed relationship, carries Bob's expected relationship version and an
-idempotency key, and is signed by an authorized operational key. The ingress
-service verifies that signature and durably records when the command arrived.
+\subsection{Authority enters as evidence}
 
-That receipt time is authoritative. Bob's device clock may be wrong, so the client
-timestamp cannot decide whether a bond beat its deadline. The ingress service
-returns a signed receipt and passes an authenticated command onward. From this
-point, the implementation works with a fact---Bob authorized this exact command at
-canonical time $t_a$---rather than a boolean claiming that someone authenticated
-something.
+Wire decoding first checks versions, sizes, and canonical structure. Signature
+verification then binds the exact command digest to an authorized actor, key,
+deployment, provider, and receipt. Finally, domain conversion checks scope and
+command-specific constraints. An authenticated wrapper should have private
+constructors; a public boolean claiming authentication cannot carry this meaning.
 
-\subsection{The Application Loads One Complete View}
+The recipient's device time is not authoritative. Ingress durably records
+authenticated receipt before returning evidence to the client. That record lets a
+timely acceptance beat an expiry worker even when decision processing is delayed.
 
-The application begins a protected database transaction and loads the facts that
-the acceptance can change. These are the current relationship, every nonterminal
-bond for $(I_A,I_B)$, the repeated-attempt state for Alice's private principal
-$P_A$ and Bob's identity $I_B$, every active persistence reserve for
-$(P_A,I_B)$ with its originating public-identity reference, and the scoped ledger
-ownership references needed for settlement.
+\subsection{A snapshot contains the facts that can change}
 
-Canonical state and time partition the bonds. A reserved bond is unadmitted and
-must be cancelled with a full $C+S+L_k$ return. An admitted bond with
-$t_a\leq\text{decision deadline}$ is decision-open and must have $C+S$ refunded
-by this acceptance. An admitted bond whose deadline precedes $t_a$ is logically
-expired and cannot be reopened, even when its background expiry worker has not
-yet written the final ledger entries.
+For acceptance, the snapshot contains the relationship, its current request if
+any, request-history context, relevant payment/refund facts, and ledger references.
+It carries versions and enough completeness evidence to distinguish no current
+request from a missing projection. Historical pending refunds may still exist
+after a request closes; they remain separate obligations rather than additional
+open relationship requests.
 
-Completeness matters financially. Loading the first hundred bonds while silently
-omitting the hundred-and-first would not be an acceptable performance compromise.
-It would under-refund Alice. The storage layer must prove that the snapshot contains
-the complete nonterminal set for the relationship at the transaction boundary.
-
-\subsection{The Protocol Computes the Meaning}
-
-The application passes the authenticated command and complete snapshot to a pure,
-synchronous Rust function. The function reads no database, asks no service for the
-time, sends no message, and moves no money. It validates the command against the
-snapshot and computes what the entire relationship decision means.
-
-Its result is a \emph{transition manifest}. For this acceptance, the manifest says
-that the relationship becomes accepted; all three decision-open bonds become
-terminally accepted; each bond's $C+S$ returns to Alice; every active persistence
-reserve associated with attempts from $I_A$ to $I_B$ is released; principal-level
-repeated-attempt state is preserved; and the scheduled expiries are cancelled. If
-the snapshot also contained a reserved but unadmitted attempt for the pair, the
-manifest would cancel it and return its entire $C+S+L_k$. It also contains the
-balanced journal postings, authenticated protocol events, and post-commit work
-implied by those changes.
-
-The application does not receive a small result such as
-\texttt{RelationshipState::Accepted} and then independently rediscover all the
-financial consequences. If it did, acceptance semantics would be duplicated
-across controllers, workers, and storage code. The manifest is complete precisely
-so that infrastructure cannot accidentally invent a second interpretation.
-
-\subsection{One Transaction Commits the Outcome}
-
-Before applying the manifest, storage verifies its preconditions. The relationship,
-bonds, reserves, attempt state, quote versions, and completeness boundary must be
-the same versions used by the pure transition. A concurrent reservation or
-recipient decision changes one of those versions and causes the entire command to
-reload rather than allowing a partial commit.
-
-The transaction then appends the balanced ledger batch, updates protocol state,
-records authenticated events, changes scheduled work, and inserts transactional
-outbox records. It commits all of them together. Until that commit succeeds, no
-other provider is told that Alice is accepted and no notification is sent.
-
-After commit, workers deliver receipts, notifications, and any federated effects
-described by the outbox. Those workers may retry. Stable idempotency keys ensure
-that a crash after sending but before acknowledgement cannot repeat a settlement
-or create a second external effect.
-
-The full execution can now be summarized in one sentence: an authenticated
-relationship command and a complete snapshot produce one deterministic manifest,
-which infrastructure commits atomically before performing retryable external work.
-The rest of the architecture makes that sentence precise.
-
-\section{The Small Vocabulary}
-
-Six ideas recur throughout the implementation. Their distinctions are more
-important than their names.
-
-\subsection{A Command Expresses Intent}
-
-A command says what an actor is asking the protocol to do. Bob asks to accept a
-relationship. A sender asks to reserve or admit an attempt. A scheduled worker asks
-to expire a bond. A command is not permission to mutate a row directly; it must be
-authenticated, validated against current state, and interpreted by the transition
-logic.
-
-\subsection{A Snapshot Describes Prior Facts}
-
-A snapshot is the complete versioned state required to evaluate one command. It is
-not an arbitrary cache of convenient objects. Its completeness and transaction
-boundary are part of correctness. The same command evaluated against a different
-relationship version is a different protocol situation.
-
-\subsection{A Transition Computes Meaning}
-
-A transition is the pure calculation that combines intent and prior facts. It
-either returns a protocol error or a complete proposed outcome. Because time,
-policy, authentication evidence, and prior state are explicit inputs, identical
-inputs produce identical results.
-
-\subsection{A Manifest Describes the Whole Proposed Outcome}
-
-A manifest collects every change that must appear atomically: domain updates,
-ledger postings, schedule changes, events, and post-commit intentions. It is still
-data. Creating a manifest does not mean any effect has happened.
-
-\subsection{A Commit Makes the Outcome Durable}
-
-The commit checks that the manifest's preconditions remain true and then makes all
-of its durable consequences visible together. The commit boundary is where a
-proposed transition becomes canonical protocol history.
-
-\subsection{An Effect Happens After Commit}
-
-An effect communicates with the outside world: delivering content, sending a
-notification, presenting a receipt, or contacting another provider. Effects are
-driven from a transactional outbox and are idempotent because the application may
-need to repeat them after a crash or timeout.
-
-This vocabulary prevents a common architectural confusion. An event records what
-the committed protocol says happened. An outbox intent asks a worker to do
-something because it happened. The two may share a cause identifier, but they are
-not interchangeable.
-
-\section{The Pure Rust Kernel}
-
-The protocol kernel is a synchronous library whose public center is approximately
-the following function:
-
-\Needspace{12\baselineskip}
+The pure function has a compact shape:
 \begin{lstlisting}
 pub fn transition(
-    snapshot: &SettlementSnapshot,
-    command: Authorized<ProtocolCommand>,
+    snapshot: &RequestSnapshot,
+    command: Authorized<RequestCommand>,
     context: &TransitionContext,
-) -> Result<TransitionManifest, ProtocolError> {
-    // Validate state and derive the complete atomic consequence.
-    // Perform no I/O here.
-}
+) -> Result<TransitionManifest, ProtocolError>;
 \end{lstlisting}
+It performs no I/O and reads no implicit clock or live policy service. Time,
+versions, immutable terms, and authenticated evidence are inputs. Its result
+describes the complete consequence, not just a new relationship-state enum.
 
-Synchronous does not mean that the surrounding server is synchronous. It means
-this function performs finite CPU and memory work without yielding to a clock,
-database, queue, or network. An asynchronous application can call it inside an
-ordinary transaction workflow.
+\Needspace{19\baselineskip}
+\subsection{The manifest owns the whole consequence}
 
-Purity makes the protocol easier to reason about. A test can place acceptance one
-nanosecond before a deadline without mocking a global clock. A property test can
-replay the same sequence and require the same manifest. A federated implementation
-in another language can compare its result with a Rust reference vector.
-
-\subsection{Authenticated Commands Are Values}
-
-Wire bytes pass through three gates before reaching the kernel. A versioned decoder
-first checks structural validity and size limits. The security layer then verifies
-the signature, signing domain, key status, and canonical receipt. Finally, a
-conversion validates the domain form: identifier scope, amount representation,
-expected versions, and command-specific fields.
-
-The result can be represented by a wrapper whose constructor is unavailable to
-ordinary application code:
-
-\Needspace{11\baselineskip}
-\begin{lstlisting}
-pub struct Authorized<T> {
-    command: T,
-    actor: ActorRef,
-    key: OperationalKeyRef,
-    command_digest: CommandDigest,
-    receipt: CanonicalReceipt,
-}
-\end{lstlisting}
-
-The wrapper binds a particular command digest to a verified actor and receipt. A
-field such as \texttt{is\_authenticated: true} would not provide the same safety;
-any caller able to construct the value could assert it.
-
-\subsection{Context Makes Hidden Inputs Visible}
-
-The transition context contains values that are authoritative for this evaluation
-but are not persistent relationship objects:
-
-\Needspace{10\baselineskip}
-\begin{lstlisting}
-pub struct TransitionContext {
-    pub now: CanonicalTime,
-    pub journal_position: ProposedJournalPosition,
-    pub protocol_version: ProtocolVersion,
-    pub policy: PolicySnapshot,
-}
-\end{lstlisting}
-
-The policy snapshot is immutable for the transition. The kernel does not query a
-live configuration service halfway through acceptance. Each bond's quoted $C$,
-$S$, $L_k$, admission-window duration, decision-window duration, and release rule
-remain fixed in its validated terms. Reservation materializes the admission
-deadline; admission later materializes the decision deadline.
-
-This \texttt{PolicySnapshot} is protocol policy, not a general inbox policy
-engine. Provider admission rules execute at the authenticated delivery boundary,
-and recipient presentation rules execute at an authorized endpoint. Neither may
-mutate settlement or canonical relationship state except by submitting an
-independently authenticated protocol command. Keeping these authorities distinct
-prevents a ranking model or notification preference from becoming hidden
-financial logic.
-
-\Needspace{25\baselineskip}
-\subsection{State Is Explicit and Exhaustive}
-
-Relationship and bond states fit naturally into Rust enums:
-
-\begin{lstlisting}
-pub enum RelationshipState {
-    Unknown,
-    Accepted,
-    Rejected,
-    Revoked,
-    Blocked,
-}
-
-pub enum BondState {
-    Reserved,
-    Admitted,
-    Accepted { event: EventRef },
-    Rejected { event: EventRef },
-    Expired { event: EventRef },
-    CancelledUnadmitted { event: EventRef },
-}
-\end{lstlisting}
-
-Exhaustive matching forces a new protocol version to confront every transition
-site. The fields should remain private to the protocol module so that callers can
-inspect a terminal state but cannot assign it without producing the required
-ledger and event consequences.
-
-\texttt{Rejected} and \texttt{Blocked} deliberately encode different recipient
-intent. Rejection settles the active solicitation but allows a later eligible
-bonded attempt after backoff. Blocking settles current decision-open admitted
-bonds under the same allocation, fully cancels unadmitted reservations, and
-prevents terms, reservation, optional capability use, and admission until an
-authenticated unblock returns the pair to \texttt{Rejected}. It does not silently
-accept the relationship or reset attempt state.
-
-A separate Rust type for every state can make a local object lifecycle elegant,
-but it becomes cumbersome when a relationship decision hydrates and settles a
-heterogeneous collection of bonds. A private enum combined with centralized
-transition authority preserves clarity without turning storage reconstruction into
-a web of typestate conversions.
-
-\subsection{The Manifest Is Concrete}
-
-The transition result gathers the whole proposed outcome:
-
-\Needspace{18\baselineskip}
 \begin{lstlisting}
 pub struct TransitionManifest {
-    pub preconditions: Preconditions,
-    pub relationship_update: Option<RelationshipUpdate>,
-    pub bond_updates: Vec<BondUpdate>,
-    pub attempt_update: Option<AttemptUpdate>,
-    pub reserve_updates: Vec<ReserveUpdate>,
-    pub solicitation_update: Option<SolicitationUpdate>,
-    pub ledger_batch: LedgerBatch,
-    pub schedule_changes: Vec<ScheduleChange>,
-    pub protocol_events: Vec<ProtocolEvent>,
-    pub outbox_intents: Vec<EffectIntent>,
+    preconditions: Preconditions,
+    relationship: Option<RelationshipUpdate>,
+    request: Option<RequestUpdate>,
+    history: Option<RequestHistoryUpdate>,
+    obligations: Vec<ObligationUpdate>,
+    ledger: LedgerBatch,
+    schedules: Vec<ScheduleChange>,
+    events: Vec<DomainEvent>,
+    effects: Vec<EffectIntent>,
 }
 \end{lstlisting}
-
-Private constructors validate relationships among these fields. An acceptance
-manifest must represent every decision-open admitted bond, exactly one $C+S$
-refund for each, full cancellation of every reserved but unadmitted attempt,
-exactly one release for each active persistence reserve associated with the
-accepted public identity, preservation of principal-level attempt state and other
-identities' reserves, a balanced ledger batch, an accepted relationship version,
-closure of the active solicitation, and cancellation of the appropriate timeout
-and expiry operations. It cannot be assembled incrementally by unrelated
-handlers.
-
-\section{Types That Carry Protocol Meaning}
-
-Rust's type system is useful when it expresses distinctions already present in the
-protocol. It should prevent category errors without trying to encode the entire
-state machine as an unreadable type exercise.
-
-\subsection{Identifiers Belong to Privacy Domains}
-
-An address shown to a user, a private principal, a relationship handle, a ledger
-bond reference, and a content reference all identify something. They are not
-interchangeable identifiers.
-
-\Needspace{12\baselineskip}
-\begin{lstlisting}
-pub struct ProtocolIdentity(String);
-pub struct PrincipalRef([u8; 32]);
-pub struct RelationshipHandle([u8; 32]);
-pub struct AttemptPairRef([u8; 32]);
-pub struct LedgerBondRef([u8; 32]);
-pub struct ContentRef([u8; 32]);
-\end{lstlisting}
-
-The real fields should be private and construction should validate length, scope,
-and domain. Sensitive identifiers should implement a redacted \texttt{Debug}, or
-no \texttt{Debug} at all. An error logged with \texttt{\{:?\}} must not expose a
-principal or cross-domain mapping.
-
-A relationship service handle need not be the reference used by the ledger or
-telemetry. Requiring explicit translation at an authorized boundary is safer than
-passing one universal event or user identifier through every subsystem.
-
-\subsection{Money Is Checked Integer Arithmetic}
-
-Protocol money uses an integer number of the smallest supported unit together with
-an explicit settlement unit:
-
-\Needspace{15\baselineskip}
-\begin{lstlisting}
-pub struct MinorUnits(u64);
-
-pub enum SettlementUnit {
-    UsdCent,
-    // New units require an explicit protocol version.
-}
-
-pub struct Money {
-    units: MinorUnits,
-    settlement_unit: SettlementUnit,
-}
-\end{lstlisting}
-
-The equation $R_k=C+S+L_k$ becomes checked addition that rejects overflow and
-mismatched settlement units. A validated quote stores the proven total rather than
-asking every caller to reproduce the arithmetic. Floating-point amounts have no
-place in protocol settlement.
-
-\subsection{Different Clocks Have Different Types}
-
-A device's claimed timestamp and the canonical ingress time have different
-authority and should not share a Rust type:
-
-\Needspace{10\baselineskip}
-\begin{lstlisting}
-pub struct ClientTimestamp(i64);
-pub struct CanonicalTime(i64);
-pub struct AdmissionDeadline(CanonicalTime);
-pub struct DecisionDeadline(CanonicalTime);
-pub struct ScheduledReleaseAt(CanonicalTime);
-\end{lstlisting}
-
-The compiler can then prevent accidental comparison of a client timestamp with a
-financial deadline. Conversion is possible only at a boundary that explicitly
-defines what the conversion means.
-
-\subsection{Versions Also Describe Different Things}
-
-Relationship state, repeated-attempt state, wire formats, protocol semantics,
-events, policies, and database schemas all have versions. One generic integer
-called \texttt{version} obscures which compatibility or concurrency rule is being
-checked. Small newtypes such as \texttt{RelationshipVersion},
-\texttt{PolicyVersion}, and \texttt{WireVersion} make the distinction visible.
-
-\subsection{Message Declarations Are Constrained Values}
-
-Purpose, origin, schema, and message validity participate in authentication and
-admission, so they should not be represented by unrelated strings or overloaded
-timestamps:
-
-\Needspace{20\baselineskip}
-\begin{lstlisting}
-pub enum DeclaredPurpose {
-    Unspecified,
-    Known(KnownPurpose),
-    Extension(NamespacedPurpose),
-}
-
-pub enum OriginMode {
-    HumanInitiated,
-    AgentDraftHumanApproved,
-    AutonomousAgent,
-    AutomatedSystem,
-    LegacyOrUnspecified,
-}
-
-pub struct OriginDeclaration {
-    pub mode: OriginMode,
-    pub authority: DeclarationAuthority,
-}
-
-pub struct MessageValidityUntil(CanonicalTime);
-pub struct PayloadSchemaId(NamespacedVersion);
-\end{lstlisting}
-
-The declaration authority identifies the sender key or legacy gateway that made
-the statement. A verified signature establishes accountability for the statement;
-it does not establish that a human wrote the text or that encrypted content is
-semantically truthful. Unknown noncritical schema identifiers remain transportable.
-Critical schemas are accepted only after explicit extension negotiation.
-
-The authenticated content binding carries these values, plus any capability
-reference, so a storage or delivery component cannot substitute declarations
-without invalidating the binding. \texttt{MessageValidityUntil} is checked only at
-admission. Content-retention expiry and bond decision deadlines retain their
-existing types and meanings.
-
-\section{Durable Execution}
-
-The pure kernel knows what should happen. The application and storage layers make
-that outcome durable without changing its meaning.
-
-\subsection{Reservation Is a Short-Lived Pre-Admission Hold}
-
-\texttt{ReserveAttempt} moves $C+S+L_k$ from available to reserved ownership and
-records an admission deadline. It does not create a recipient solicitation,
-advance repeated-attempt state, or start the recipient's decision window. The
-same transaction schedules an idempotent \texttt{CancelReservedAttempt} command.
-
-\texttt{AdmitAttempt} may commit only at or before that deadline and only when the
-encrypted content and a retryable delivery intent become durable in the same
-transaction. It records canonical admission time, derives the decision deadline
-from the quoted duration, replaces the cancellation schedule with an expiry
-schedule, advances repeated-attempt state, and opens or joins the solicitation.
-After that commit, an outbox retry is delivery recovery rather than grounds for
-rolling back the protocol attempt.
-
-Sender cancellation, admission timeout, or verified pre-admission technical
-failure all produce the same terminal result:
-\texttt{CancelledUnadmitted}. The full $C+S+L_k$ returns, no decision deadline or
-solicitation exists, and attempt state does not advance. Admission and
-cancellation serialize on the reserved bond version, so neither can commit after
-the other.
-
-\subsection{A Snapshot Carries Completeness Evidence}
-
-The settlement snapshot contains all nonterminal bonds rather than only the bonds
-that a convenient page of results happened to return:
-
-\Needspace{14\baselineskip}
-\begin{lstlisting}
-pub struct SettlementSnapshot {
-    pub relationship: Versioned<Relationship>,
-    pub nonterminal_bonds: CompleteSet<Versioned<Bond>>,
-    pub attempt_state: Versioned<RepeatedAttemptState>,
-    pub active_reserves: CompleteSet<Versioned<PersistenceReserve>>,
-    pub ownership: SettlementOwnership,
-}
-\end{lstlisting}
-
-\texttt{CompleteSet} is not a decorative wrapper around \texttt{Vec}. The storage
-adapter constructs it only after reading from an index and transaction boundary
-that prove completeness for the directed pair. The protocol kernel can refuse a
-partial collection whose completeness has not been established.
-
-The snapshot includes every nonterminal bond because state and canonical time must
-divide it into reserved-but-unadmitted, decision-open admitted, and logically
-expired admitted bonds. A relationship decision fully cancels the first group,
-settles the second, and cannot reopen the third.
-
-\paragraph{A practical partitioning starting point.}
-Relationship state and its nonterminal-bond index can be partitioned by recipient
-protocol identity and directed relationship handle. Repeated-attempt state and
-active persistence-reserve indexes can be partitioned by the recipient-scoped
-$(P_i,I_j)$ assertion, but each reserve also retains its originating public-
-identity relationship so acceptance can release only the matching subset. Ledger
-accounts and reservations can be partitioned by ledger ownership. This layout is
-guidance, not protocol meaning. The storage adapter must still prove that a
-relationship decision sees the complete nonterminal-bond set and the complete
-identity-filterable active-reserve set at one protected boundary. Pagination,
-sharding, or an asynchronously updated index cannot excuse partial settlement.
-Co-location may make the initial transaction simpler; a later distributed design
-must preserve the same manifest and atomic visibility.
-
-\Needspace{26\baselineskip}
-\subsection{The Transaction Applies a Manifest, Not Business Logic}
-
-The application workflow is intentionally mechanical:
-
-\Needspace{22\baselineskip}
-\begin{lstlisting}
-store.transaction(|tx| {
-    let snapshot = tx.load_settlement_snapshot(&scope)?;
-    let manifest = protocol::transition(
-        &snapshot,
-        authorized_command,
-        &context,
-    )?;
-
-    tx.verify(&manifest.preconditions)?;
-    tx.ledger().append(&manifest.ledger_batch)?;
-    tx.apply_protocol_updates(&manifest)?;
-    tx.enqueue_effects(&manifest.outbox_intents)?;
-    tx.apply_schedule_changes(&manifest.schedule_changes)?;
-    tx.commit()
-})
-\end{lstlisting}
-
-The transaction does not contain another switch statement explaining what
-acceptance means. It verifies and applies the complete result returned by the
-kernel. In the initial deployment, a serializable database transaction or an
-equivalently protected version-and-lock strategy is the simplest correct choice.
-
-The relevant rows include the relationship, its nonterminal-bond index, the
-principal--recipient attempt state, active reserves, and affected ledger accounts.
-A later distributed design may replace this local transaction with a prepared
-manifest and distributed commit, but it must preserve the same atomic result.
-
-\subsection{The Ledger Is Authoritative for Money}
-
-The ledger journal is append-only and double-entry. Available and reserved
-balances may be fast materialized projections, but the journal remains the
-authoritative account of ownership changes.
-
-\Needspace{16\baselineskip}
-\begin{lstlisting}
-pub struct LedgerBatch {
-    pub batch_id: LedgerBatchId,
-    pub cause: SettlementCause,
-    pub postings: Vec<Posting>,
-}
-
-pub struct Posting {
-    pub account: LedgerAccountRef,
-    pub side: DebitOrCredit,
-    pub money: Money,
-}
-\end{lstlisting}
-
-The ledger verifies that postings balance within each settlement unit, reserved
-value exists before it is released or transferred, an idempotency key identifies
-one payload, and a terminal bond cause has not already been posted. The protocol
-chooses the settlement meaning; the ledger proves its accounting structure.
-
-A terminal protocol event is never rewritten. If an external funding reversal or
-later adjudication requires an accounting correction, a separately authorized
-compensating batch records that new fact. It does not pretend the original
-acceptance, rejection, or expiry never occurred.
-
-Ledger records use scoped account and bond references. They do not contain email
-addresses, subjects, content references shared with content storage, or private
-principal identifiers.
-
-\subsection{The Outbox Separates Commit from Communication}
-
-Notifications, delivery requests, federated messages, and settlement receipts are
-external effects. Performing one before the database commit can expose a state the
-protocol later fails to record. The transaction therefore stores an
-\texttt{EffectIntent} in the outbox alongside the state and ledger changes.
-
-An asynchronous worker reads committed intents and performs them. Each intent has
-a stable idempotency key derived from its committed protocol cause. A receiver
-returns the original result for an exact replay and rejects a different payload
-using the same key.
-
-The same model applies to scheduled work. Unadmitted-reservation cancellation,
-admitted-bond expiry, deferred reserve release, and retention cleanup are
-represented by records containing the target, earliest execution time, expected
-version, and idempotency key. A worker wakes and submits an ordinary command
-against current state. It never assumes that state remained unchanged because a
-job was scheduled earlier.
-
-No permanently running actor or Rust task is needed for every possible sender--
-recipient pair. Relationship state remains passive data. Queues distribute finite
-work, and indexes locate the state required for each command.
-
-\subsection{Relationship Solicitation Is a Coalesced Effect}
-
-The first admission for an unaccepted directed relationship opens a solicitation
-generation. The transition manifest records that state change and one outbox
-intent asking the recipient surface to present a relationship-establishment
-request. Later admissions update the active solicitation projection but produce no
-second establishment intent:
-
-\Needspace{15\baselineskip}
-\begin{lstlisting}
-pub struct SolicitationProjection {
-    pub relationship: RelationshipHandle,
-    pub generation: SolicitationGeneration,
-    pub status: SolicitationStatus,
-    pub admitted_attempts: CompleteSet<AttemptRef>,
-    pub notification_emitted: bool,
-    pub version: SolicitationVersion,
-}
-\end{lstlisting}
-
-The storage transaction serializes admissions on the relationship and
-solicitation version, or enforces an equivalent unique open-generation key. The
-establishment effect uses an idempotency key derived from the relationship handle,
-generation, and effect type. A crash, replay, or concurrent second admission can
-therefore neither open a duplicate generation nor emit another establishment
-request.
-
-The establishment effect contains only scoped relationship and presentation
-references. It does not carry a plaintext subject, content preview, legal identity,
-balance, or unrelated relationship history. Recipient settings may choose a quiet
-inbox presentation instead of an interruptive push without allowing later
-attempts to manufacture repeated establishment requests.
-
-This is effect coalescing, not attempt idempotency. Every admitted message retains
-its own content reference, bond, decision deadline, persistence reserve, and
-attempt-level consequence. A recipient surface may quietly update the grouped
-messages or unread count. Dismissing that surface is not an authenticated
-relationship decision and changes no settlement.
-
-Acceptance, rejection, and blocking close the generation in the same manifest as
-the relationship and financial outcome. Rejection allows a later eligible attempt
-after backoff; blocking prevents one until the recipient unblocks. Expiry closes
-the generation only after the complete episode projection shows that no associated
-admitted bond remains decision-open. A later eligible attempt may open the next
-generation and one new establishment effect.
-
-\subsection{Acceptance and Expiry Share One Ordering Rule}
-
-An expiry worker is not the authority on whether Bob acted in time. It is the
-mechanical materializer of an outcome implied by canonical time and the decision
-journal. Before expiry becomes terminal, the worker must re-read current bond state
-and check for a decision durably received by the deadline.
-
-If Bob's acceptance was received on or before a bond's deadline, acceptance wins
-even when an expiry worker began first. If acceptance arrived afterward, the old
-bond expires, but the relationship can still become accepted prospectively and
-newer decision-open admitted bonds can still be refunded. Expiry of the older bond
-must not undo the later accepted relationship.
-
-Concurrent reservation follows the relationship version boundary. A reservation
-that commits before acceptance belongs to the complete nonterminal set. If still
-unadmitted, acceptance cancels it and returns $C+S+L_k$; if admission also
-committed first, acceptance settles it only when decision-open. A reservation
-ordered afterward sees an accepted relationship, creates no bond, and releases
-any provisional hold.
-
-\subsection{Selective Event Sourcing Is Enough}
-
-Explicit protocol events are valuable, but every current value need not be rebuilt
-by replaying a global history. Relationship and repeated-attempt state can be
-stored as versioned current records with append-only authenticated audit streams.
-The ledger journal remains authoritative for money. Snapshots and projections can
-be rebuilt within bounded partitions.
-
-Storage interfaces should describe these real operations. A generic
-\texttt{Repository<T>} often hides the difference between loading one relationship,
-proving a complete nonterminal-bond set, and appending a balanced ledger batch.
-Purpose-specific interfaces make their transaction guarantees reviewable.
-
-\subsection{Errors Preserve Uncertainty Honestly}
-
-A protocol error such as \texttt{QuoteExpired}, \texttt{BackoffActive},
-\texttt{VersionConflict}, or \texttt{AlreadyTerminal} is a deterministic result of
-command and state. An infrastructure error says the application could not obtain
-or commit that result because storage, a queue, or a remote provider was
-unavailable.
-
-An unknown commit outcome must not be converted into a new command automatically.
-The application first queries the original idempotency key. If the transaction
-committed, it returns the recorded result. If it provably did not, the identical
-payload may be retried.
-
-Public errors expose a stable code, safe explanation, retry classification, and
-scoped correlation reference. They do not contain content, keys, principal
-evidence, complete state snapshots, or SQL parameters.
-
-\section{How the Codebase Is Divided}
-
-The runtime path now gives the crate boundaries a reason to exist. The reference
-workspace separates the stable concerns:
-
-\begin{verbatim}
-crates/
-    cs-mail-primitives
-    cs-mail-security
-    cs-mail-ledger
-    cs-mail-protocol
-    cs-mail-application
-    cs-mail-capabilities
-    cs-mail-privacy
-    cs-mail-content
-    cs-mail-wire
-    cs-mail-storage-postgres
-    cs-mail-service
-    cs-mail-worker
-    cs-mail-client
-    cs-mail-adapters
-\end{verbatim}
-
-The dependency direction is
-
-\begin{equation}
-\begin{array}{c}
-\texttt{cs-mail-application}\\
-\uparrow\\
-\texttt{cs-mail-protocol}\\
-\uparrow\\
-\texttt{cs-mail-security}\quad
-\texttt{cs-mail-ledger}\\
-\uparrow\\
-\texttt{cs-mail-primitives}.
-\end{array}
-\end{equation}
-
-The arrows describe dependency, not data flow. The primitives crate defines
-constrained money, time, versions, and scoped references. It contains no database,
-network, asynchronous runtime, or business workflow.
-
-The security crate verifies signatures and signing domains, constructs pairwise
-identifiers, supports key rotation and transparency, and provides client-side
-content-encryption building blocks. It turns authenticated bytes into evidence. It
-does not decide the semantic effect of an acceptance.
-
-The ledger crate defines accounts, reservations, journal batches, postings, and
-balance projections. It validates conservation and idempotency. It does not decide
-which allocation acceptance or rejection requires.
-
-The protocol crate defines commands, state, invariants, and the pure transition.
-It combines security evidence, a complete snapshot, and ledger posting types into
-a transition manifest. This is the deterministic kernel.
-
-The capabilities crate defines recipient-signed lane grants, native and legacy
-subjects, declared-purpose and optional origin constraints, rate and lifetime
-enforcement, and canonical bond-free admission requests. It compares authenticated
-declarations under versioned rules but never inspects encrypted content. Opaque
-handles identify native pairs but do not themselves confer authority.
-
-The PostgreSQL storage crate coordinates settlement manifests and bond-free
-admission under the same relationship aggregate lock. It validates durable
-encrypted content, consumes lane allowance, advances the canonical journal, and
-writes delivery effects atomically. Blocking revokes a lane in the same database
-transaction as the relationship transition.
-
-The wire layer validates canonical declaration encodings and extension
-criticality. The content layer binds those declarations, message validity, schema,
-and any capability reference to ciphertext authentication. The service admission
-boundary evaluates only provider-visible policy, while the client owns
-presentation, notification, digest, and content-aware rules. The worker, privacy,
-and adapter crates retain their leased-work, scoped-reference, and external-
-boundary roles. An adapter may fail because an external system is unavailable; it
-may not substitute a different protocol meaning.
-
-The binaries assemble these libraries for a deployment. During early development,
-several roles may run in one binary. Before real user data is accumulated, privacy-
-sensitive roles need separate credentials, keys, and storage access even when one
-organization operates all of them.
-
-A concern should become another crate when it has a stable interface and an
-independent reason to compile, test, reuse, or release. It should become another
-process when it needs a trust boundary, failure domain, scaling model, or separate
-operator. These are not the same decision. A crate does not stop its hosting
-process from reading every database.
-
-Provider admission policy and endpoint presentation policy should begin as
-separate interfaces beside their consumers, not as one broad
-\texttt{cs-mail-policy} crate. They have different inputs, authorities, privacy
-boundaries, and failure consequences. A shared crate is justified only if a small,
-stable decision vocabulary later emerges without granting either side the other's
-data or authority.
-
-\section{Privacy and Security Boundaries}
-
-The architecture protects message content, relationship state, contact-attempt
-outcomes, and their financial linkage. Achieving that goal requires both Rust type
-boundaries and deployed access boundaries.
-
-\begin{figure}[ht]
-\centering
-\begin{tikzpicture}[
-    privacydomain/.style={
-        draw=black!45,
-        rounded corners=2pt,
-        fill=flowblue,
-        minimum width=2.75cm,
-        text width=2.55cm,
-        minimum height=1.35cm,
-        align=center,
-        font=\small
-    },
-    boundary/.style={
-        draw=black!60,
-        rounded corners=2pt,
-        fill=black!4,
-        minimum width=6.0cm,
-        minimum height=0.9cm,
-        align=center,
-        font=\small\bfseries
-    },
-    privacyarrow/.style={-{Latex[length=2mm]},draw=black!50}
-]
-\node[privacydomain] (identity) at (-6.4,0) {Identity\\principal control and evidence};
-\node[privacydomain] (relationship) at (-3.2,0) {Relationship\\pair handle and state};
-\node[privacydomain] (content) at (0,0) {Content\\ciphertext and scoped reference};
-\node[privacydomain] (ledger) at (3.2,0) {Ledger\\accounts, bonds, and amounts};
-\node[privacydomain] (telemetry) at (6.4,0) {Telemetry\\short-lived rotated traces};
-\node[boundary] (translation) at (0,-2.25) {Purpose-bound translation and audited authority};
-\draw[privacyarrow] (identity) -- (translation);
-\draw[privacyarrow] (relationship) -- (translation);
-\draw[privacyarrow] (content) -- (translation);
-\draw[privacyarrow] (ledger) -- (translation);
-\draw[privacyarrow] (telemetry) -- (translation);
-\end{tikzpicture}
-\caption{Each privacy domain retains its own references, credentials, and keys.
-Cross-domain translation is an explicit privileged operation, not a shared global
-identifier.}
-\end{figure}
-
-\subsection{No Routine Component Sees the Whole Story}
-
-The identity domain knows that a verified private principal controls a public
-protocol identity. The relationship domain sees a pairwise handle and current
-permission. The content domain stores ciphertext under a content-scoped reference.
-The ledger sees ledger-scoped accounts, bonds, and amounts. Telemetry uses short-
-lived rotated trace references.
-
-Each operation receives the smallest authority and reference set it needs. A
-global \texttt{UserContext} containing legal identity, every address, ledger
-account, relationship handles, and tracing identifiers would defeat this design
-even if every field had a strong Rust type.
-
-The different domains should use separate database credentials, encryption keys,
-and access roles. Translation among scoped references is a privileged operation
-performed for a specific purpose and recorded in an audit trail that does not
-itself reproduce the graph.
-
-\subsection{Pairwise Handles Resist Graph Reconstruction}
-
-The relationship between $I_A$ and $I_B$ is represented outside the routing and
-display boundary by an opaque pairwise handle. Alice's relationship with another
-recipient uses an unrelated handle, and the reverse relationship from Bob to Alice
-uses another. A publicly testable hash of two addresses is not opaque because an
-observer can guess addresses and recompute it.
-
-Repeated-attempt enforcement needs continuity across Alice's addresses, so the
-identity domain creates a recipient-scoped assertion for $(P_A,I_B)$. Bob's
-provider can address the correct anti-persistence history without learning a
-stable principal value that other recipients can compare.
-
-Pairwise handles reduce direct linking but do not eliminate traffic analysis.
-Precise timestamps, network addresses, message sizes, distinctive bond amounts,
-and synchronized logs can reconnect events. Retention should be short, tracing
-identifiers should not cross privacy domains, and batching or aggregation should
-be used where it does not weaken settlement correctness.
-
-\subsection{Native Content Encryption Ends at User Devices}
-
-The sender client encrypts the subject, body, inline media, and attachments before
-upload. The content service stores authenticated ciphertext and a scoped reference.
-Authorized recipient devices decrypt it. Relationship and ledger events never
-contain plaintext content or content-derived search terms.
-
-The small authenticated envelope may expose a coarse declared purpose, origin
-mode, payload-schema identifier, message validity time, and capability reference
-when admission or recipient-controlled routing requires them. These are metadata
-with their own correlation and retention risk, not permission to expose structured
-payload fields. A native sender signs its declarations. A legacy gateway identifies
-itself as the declaration authority and uses legacy or unspecified origin unless it
-has separate authenticated evidence; DMARC alone proves neither purpose nor human
-authorship.
-
-Operational signing keys, message-content keys, pairwise derivation keys, and
-retention keys serve different purposes and should use separate hierarchies. Key
-transparency or an equivalent auditable mechanism makes silent operational-key
-substitution detectable. Account recovery restores authority through an explicit
-authenticated protocol; it is not a hidden provider key for decrypting old native
-messages.
-
-An SMTP gateway may necessarily handle provider-readable content. The client and
-wire envelope must present that route as a privacy downgrade. Transport TLS and
-provider-managed encryption at rest are not equivalent to native end-to-end
-encryption.
-
-\subsection{Retention Is Executable Policy}
-
-Every stored category has a retention class describing purpose, controlling key,
-operational lifetime, dispute lifetime, separately required retention, and
-deletion procedure:
-
-\Needspace{15\baselineskip}
-\begin{lstlisting}
-pub struct RetentionClass {
-    pub id: RetentionClassId,
-    pub purpose: RetentionPurpose,
-    pub operational_until: ExpirationRule,
-    pub dispute_until: Option<ExpirationRule>,
-    pub required_until: Option<ExpirationRule>,
-    pub key_scope: RetentionKeyScope,
-    pub deletion: DeletionPlan,
-}
-\end{lstlisting}
-
-After settlement and the applicable dispute period, the system removes unnecessary
-quote detail, delivery telemetry, and cross-domain linkage. A continuing accepted
-relationship retains the opaque current permission and revocation material it
-needs, not every event that formed the relationship. A required financial record
-may remain longer under a separate key and access role.
-
-Cryptographic erasure is complete only when replicas, backups, wrapped-key tables,
-recovery escrow, and debug exports cannot restore the destroyed linkage. A
-deletion worker records a nonsecret deletion manifest, and immutable backups lose
-the relevant keys or expire on a bounded schedule.
-
-A consent-locked archive can exist as a separate encrypted user object whose
-reconstruction requires sender and recipient shares. Live permission, revocation,
-backoff, and pending settlement cannot depend on both parties retaining those
-shares. Any independently decryptable compliance record is a separate retention
-class and must not be described as two-party-only.
-
-\subsection{Logs Are Part of the Privacy Model}
-
-Sensitive structures should omit \texttt{Debug} or implement a redacted form.
-Structured logging accepts deliberately safe event types rather than serializing
-commands or state indiscriminately. Logs contain no plaintext message content, raw
-keys, private identity evidence, full balances, or reusable global relationship
-identifier.
-
-Tests should capture logs and error reports and prove those absences. An
-observability system with every identifier can reconstruct the graph even when the
-primary databases are carefully separated.
-
-\section{Wire Formats and Federation}
-
-Wire representations are untrusted input and should not double as internal domain
-types. A Protobuf, CBOR, or JSON value may be missing, oversized, noncanonical, or
-associated with an unsupported version. Decoding produces a versioned DTO, not a
-valid protocol command.
-
-Conversion performs semantic validation:
-
-\Needspace{15\baselineskip}
-\begin{lstlisting}
-impl TryFrom<wire::V1AcceptRelationship>
-    for AcceptRelationship
-{
-    type Error = ValidationError;
-
-    fn try_from(dto: wire::V1AcceptRelationship)
-        -> Result<Self, Self::Error>
-    {
-        // Validate scope, lengths, versions, and canonical forms.
-    }
-}
-\end{lstlisting}
-
-Message-envelope conversion additionally validates the versioned purpose and
-origin vocabulary, declaration authority, schema namespace, critical-extension
-support, message validity, and capability-reference scope. Unknown noncritical
-schemas survive conversion as opaque identifiers. Any declaration set that
-influenced contact terms is hashed canonically into those signed terms and checked
-again at admission, preventing a quote obtained under one declaration from being
-reused for another.
-
-Signatures cover one canonical byte representation. Signing-domain tags include
-protocol version, command type, deployment or federation domain, and intended
-provider where appropriate. Parsing and reserializing an ambiguous format before
-verification must not allow signer and verifier to authorize different meanings.
-
-Federation reuses the centralized transition semantics. A sender provider prepares
-a reservation commitment. A recipient provider verifies scoped assertions and
-admits the message. Authenticated decisions create settlement obligations, and
-providers clear them without revealing content or a globally stable private
-principal.
-
-The centralized manifest is the reference meaning of a transition. A future
-distributed prepare-and-commit protocol may change how providers reach finality;
-it must not change which bonds acceptance refunds or where rejection transfers
-value. Golden vectors allow independent implementations to compare signing bytes,
-pairwise handle derivations, transition outcomes, and ledger postings.
-
-\section{Testing the Architecture}
-
-The first tests should tell the same story as the opening section. Given an unknown
-relationship and three decision-open admitted bonds, acceptance establishes
-permission and refunds all three. Given one reserved bond, one logically expired
-admitted bond, and two decision-open admitted bonds, acceptance fully cancels the
-first, expires the second, refunds the other two, grants permission, and never
-reopens the expired bond. Given a duplicate command, the second execution moves no
-value.
-
-Reservation tests cancel before the admission deadline, time out after it, and
-race admission against cancellation. Cancellation always returns $C+S+L_k$,
-creates no solicitation or decision deadline, and leaves repeated-attempt state
-unchanged. Winning admission makes encrypted content and a delivery intent
-durable, starts the decision window, advances attempt state, and makes the
-cancellation job a no-op.
-
-Solicitation tests admit three distinct messages for the same unaccepted directed
-relationship and require one establishment effect, one active generation, three
-distinct attempts, and three independently correct bond deadlines. They then
-accept, reject, block, or expire the complete sequence and require the generation
-to close exactly once. After rejection, a later eligible attempt may open the next
-generation. After blocking, terms, reservation, and admission fail until an
-authenticated unblock; unblocking preserves backoff and opens no episode by
-itself. An exact replay of any earlier admission creates neither a new attempt nor
-a new effect.
-
-Identity-scope tests give one principal two public identities. Accepting the first
-settles only its bonds, fully cancels only its unadmitted reservations, and
-releases only its active persistence reserves. The second identity remains
-unaccepted, its reserves remain scheduled, and the shared principal-level attempt
-state does not reset.
-
-Declaration tests alter purpose, origin, schema, validity, declaration authority,
-and capability reference independently and require content authentication or
-admission to fail. Capability tests require exact versioned declaration matching,
-consume no allowance on mismatch, distinguish a native sender declaration from a
-gateway declaration, and prove that neither one establishes the semantic truth of
-encrypted content. Validity tests reject late admission with a full unadmitted
-release while proving that post-admission validity expiry cannot shorten the bond
-decision window or change settlement. Wire tests preserve unknown noncritical
-schemas and reject unsupported critical extensions before admission.
-
-Policy-boundary tests prove that protocol policy is fixed in the transition
-context, provider admission policy sees no plaintext, and endpoint presentation
-policy cannot submit storage or ledger mutations directly. Any learned or
-probabilistic policy output remains a local recommendation until an independently
-authenticated command or deterministic admission decision authorizes an effect.
-
-Property-based tests generate sequences of quotes, reservations, cancellations,
-admissions, decisions, expiries, releases, revocations, blocks, and unblocks.
-After every transition they assert value conservation, bond finality, reserve
-finality, complete relationship-wide settlement, and replay safety. Generators
-emphasize admission and decision boundary timestamps, maximum integer values,
-zero components where permitted, many pending bonds, and duplicate commands.
-
-The ledger has its own algebraic tests. Every batch balances by settlement unit.
-No reserve releases twice. Balances rebuilt from the journal equal stored
-projections.
-
-Concurrency tests run admission against cancellation and run acceptance,
-rejection, blocking, unblocking, expiry, reservation, and revocation against the
-same versions in different orders. Exactly one conflicting transaction commits;
-the other reloads or becomes a no-op. Fault injection crashes after each
-transactional step and external effect to prove that the journal, outbox, and
-idempotency rules recover without partial settlement.
-
-Privacy tests show that a \texttt{PrincipalRef} cannot be passed where a
-\texttt{LedgerAccountRef} is required, service credentials cannot query another
-privacy domain, and captured logs contain no prohibited data. Retention tests
-advance canonical time, run deletion, exercise eligible backup restoration, and
-prove that expired linkage cannot be reconstructed.
-
-Wire decoders, canonical encoders, signature verification, and encrypted-content
-handling should be fuzzed. Unsafe Rust should remain absent from protocol and
-ledger code unless a narrowly reviewed dependency requires it. Memory safety is a
-foundation; it does not by itself prove authorization, accounting, privacy, or
-transaction correctness.
-
-\section{Implementation Sequence}
-
-The first milestone is an in-memory model of the pure kernel and ledger. It accepts
-explicit state, authenticated commands, canonical time, and fixed policy, then
-produces manifests, including unadmitted cancellation, identity-scoped
-acceptance, principal-level history preservation, and the distinct reject, block,
-and unblock transitions. Scoped capabilities are deliberately absent from the
-settlement kernel. Story tests and property tests establish the protocol before a database
-can obscure mistakes.
-
-The second milestone places the same kernel inside one transactional deployment.
-It adds the append-only ledger, versioned current state, a complete nonterminal-
-bond index, scheduled commands, and the transactional outbox. Concurrency and crash
-tests establish that the durable shell preserves kernel semantics.
-
-The third milestone establishes production privacy boundaries before substantial
-user data accumulates. Identity, relationship, content, ledger, and telemetry use
-scoped identifiers, separate credentials, separate keys, and executable retention.
-Native clients add endpoint encryption, key transparency, recovery, authenticated
-minimal message declarations, and recipient-owned presentation policy.
-
-Express lanes implement scoped capabilities in the durable admission layer once
-the base admission and relationship semantics are stable. They bypass bonds
-without opening a solicitation or advancing repeated-attempt state, and a
-recipient block atomically revokes them. SMTP compatibility follows as an explicit edge adapter. Federation follows after
-the centralized semantics, privacy boundaries, and settlement invariants are
-stable. It introduces genuinely independent providers and adversarial failure
-assumptions rather than microservices that share one administrator credential and
-database.
-
-\section{Conclusion}
-
-The architecture is easiest to understand through one acceptance. Bob's
-authenticated command and a complete state snapshot enter a pure Rust transition.
-The transition produces a complete settlement manifest. One transaction commits
-permission, bonds, identity-scoped persistence-reserve effects, preserved
-principal-level repeated-attempt state, ledger postings, schedules, and outbox
-intentions. Idempotent workers communicate the committed result afterward.
-
-The remaining choices support that flow. Strong types keep identities, money,
-time, and versions distinct. Purpose-specific storage proves completeness and
-atomicity. Append-only accounting coexists with direct current-state projections.
-Async Rust performs I/O around the domain rather than becoming the domain.
-
-Privacy follows the same discipline of explicit boundaries. Endpoints own content
-keys. Services receive scoped references and only the facts required for their
-roles. Logs do not become a hidden graph. Retention is executable, and expired
-linkage is actually destroyed. The resulting codebase can remain small and
-readable while preserving a credible path toward secure, private federation.
+Private constructors enforce agreement among these fields. An acceptance cannot
+grant permission without its required request outcome and refund obligation.
+A rejection cannot credit the recipient. Follow-up admission cannot introduce a
+charge simply because it uses the same storage transaction machinery.
+
+Storage verifies preconditions and commits the manifest atomically. In the
+initial single-provider deployment, a serializable transaction or equivalent
+lock/version discipline is a practical boundary. Application controllers do not
+recompute financial consequences after the kernel returns. Transactional outbox
+records make every post-commit operation recoverable.
+
+\section{Objects That Keep Different Lifecycles Apart}
+
+The relationship persists across requests. A request progresses from preparing
+to open and then accepted, rejected, expired, or cancelled before admission.
+A payment operation separately tracks external preparation, dispatch, uncertain
+outcome, and confirmed facts. A refund obligation can remain unpaid after its
+request is terminal. These distinctions should appear in domain types rather
+than a single overloaded status field.
+
+Use separate scoped identifiers for the relationship, request, message, payment
+operation, refund obligation, forfeiture lot, quarter allocation, and member
+payable. A member reference is not a public identity or a general principal
+reference. Translation among domains requires explicit authority.
+
+Money remains integer minor units with an explicit settlement unit. Checked
+arithmetic rejects overflow and mixed-unit operations. Corporate rates use exact
+rational or basis-point representations. Different clocks also deserve distinct
+types: admission deadline, request decision deadline, message validity, maturity
+cutoff, and quarter boundary do different work.
+
+Quoted financial-policy versions remain fixed for a request. Current follow-up
+policy may change and is checked at each admission under a versioned guard.
+Changing notification preferences has neither authority. A future nonzero
+persistence reserve needs an explicit extension; the base draft uses zero and
+does not silently recycle the old reserve semantics.
+
+\section{Payment Work Is a Recoverable Conversation}
+
+\subsection{Create before dispatch}
+
+Creation claims the unique nonterminal request for the directed pair and records
+one authorized payment intent before calling a provider. A database uniqueness
+constraint or equivalent aggregate guard prevents two devices with different
+keys from dispatching two charges for the same pending relationship request.
+The worker's external idempotency key derives from that committed operation,
+not from a fresh network retry.
+
+An external timeout means uncertainty. The worker queries the original operation
+or repeats it under the provider's idempotency contract; it cannot assume failure
+and invent a replacement. Admission waits for the profile's verified capture
+evidence and durable content. The platform does not rely on an authorization
+remaining open throughout the decision window.
+
+\subsection{Cancellation can precede confirmation}
+
+If admission timeout or sender cancellation commits first, the request stays
+cancelled. The payment adapter voids an uncaptured authorization or refunds a
+capture. If a capture confirmation arrives afterward, the reconciler records the
+financial fact and schedules the full refund without reopening the request.
+This is a normal recoverable sequence, not an exceptional database rollback.
+
+Provider notifications are authenticated evidence. Deduplicate them by provider
+event and economic operation, check amount, unit, and destination scope, and
+reconcile out-of-order facts without regressing confirmed state. Both polling
+and webhooks may discover the same event; neither may duplicate a refund.
+
+\subsection{Completion is separate from obligation}
+
+Refund and payout workers read durable obligations and execute stable operations.
+Failure leaves an obligation pending or under review. Success records reconciled
+confirmation and the corresponding ledger effect. A chargeback or adjudicated
+correction appends a separately authorized batch. It does not overwrite a
+recipient decision or confiscate a finalized member allocation.
+
+The ledger therefore projects request charges, refunds due and completed,
+pending forfeitures, corporate revenue, restricted member funds, and payables.
+It does not expose a user wallet. A refund or payable cannot be applied as
+available funds for another request.
+
+\section{From a Rejection to a Quarterly Allocation}
+
+Bob's rejection terminally records the request outcome, processing revenue $C$,
+and a pending forfeiture lot for $S$. The lot retains the request's quoted rate
+version. No immediate recipient payout is created, and no distribution worker
+can treat that new lot as mature merely because a quarter ended.
+
+Maturity evaluation is a separate deterministic decision over verified financial
+facts and approved policy. It excludes refunds, unresolved disputes, and required
+reserves. At cutoff, a funding manifest identifies the exact newly eligible lots.
+A membership manifest independently fixes the qualifying active members. The
+financial profile defines the once-only corporate calculation, equal allocation,
+and integer remainder; the architecture reuses those formulas rather than
+maintaining another interpretation.
+
+Quarter finalization should produce a reproducible batch with input digests,
+policy versions, assessment marks, corporate amount, member contribution,
+individual payables, and unallocated carryforward. A large population can be
+prepared in bounded chunks, but readers must not see a partially finalized
+quarter. A commit marker or equivalent atomic manifest makes the prepared result
+visible once and prevents a retry from assessing the same lots again.
+
+Payout execution then follows the same obligation/outbox pattern as refunds.
+Failed payments and below-threshold amounts remain assigned to their members.
+They are not included in the following quarter's unallocated pool. Corrections
+to eligibility or external losses require authorized new entries with a funding
+source and audit cause; recomputing the old snapshot in place is not recovery.
+
+\section{Admission, Scheduling, and Concurrency}
+
+All delivery paths observe blocking under the directed-pair transaction boundary.
+Standing acceptance and valid lanes authorize delivery without a request charge.
+An authenticated follow-up additionally identifies an open request and consumes
+the recipient's current allowance. Only eligible new-request creation may start
+a new payment operation, and it requires explicit sender authorization.
+
+Follow-up policy updates, request closure, and delivery admission serialize.
+Content and a retryable delivery effect must be durable before admission commits.
+Message validity is checked independently of the request's common deadline.
+Lanes retain their signed scope and hard validity limits; granting or revoking a
+lane does not settle a request or create member activity.
+
+Scheduled work includes preparing-request timeout, request expiry, payment
+reconciliation, maturity review, quarter preparation, payout retry, and retention.
+Each job carries a target, earliest execution time, version/evidence preconditions,
+and stable operation identity. Leased workers submit commands against current
+state. They do not assume that a row remains unchanged because a job was queued.
+
+Principal-scoped new-request history needs its own concurrency guard shared by
+aliases. It advances only at initial admission. A follow-up, cancelled preparation,
+or key rotation cannot bypass that distinction. Late acceptance changes future
+permission while old expiry processing preserves that permission and materializes
+only the old request's financial obligation.
+
+\section{Responsibility Boundaries in the Workspace}
+
+The existing separation of primitives, security, ledger, protocol, application,
+storage, and adapters remains useful. The semantic revision changes their
+contracts before product layers rely on them. Primitives define constrained money,
+time, versions, and scoped references. Security produces verified evidence.
+The request kernel computes outcomes; the ledger proves accounting conservation.
+Application and storage apply complete manifests. Payment adapters translate
+provider evidence and execute operations without inventing settlement rules.
+
+The member program is a separate domain module for eligibility, maturity, and
+quarter finalization. It may reuse ledger, scheduling, and outbox contracts but
+should not be embedded in message controllers. A separate crate is warranted
+only when it supplies a stable independently useful boundary. A separate process
+is warranted by credentials, data access, failure isolation, or scale; a crate
+alone does not enforce privacy.
+
+Content and wire modules retain authenticated encryption and declaration binding.
+Capability admission remains a permission path beside financial transitions.
+The client owns presentation and endpoint secrets; it consumes signed outcomes
+instead of reconstructing financial rules. API, wire, event, protocol, database,
+and financial-policy versions remain distinct.
+
+\section{Privacy Extends to the Member Program}
+
+No routine component needs the entire story. The identity service knows control
+and recovery evidence. The relationship service sees scoped permission and request
+state. Content storage sees ciphertext. The ledger sees scoped financial causes
+and amounts. Membership verification sees the evidence needed to establish one
+qualifying member, while the allocation engine can consume a minimal eligibility
+assertion. Telemetry receives short-lived, rotated references.
+
+Use separate access roles, keys, and credentials, including for financial and
+membership records that must outlive ordinary delivery data. Public identities
+and private principals must not become universal ledger or telemetry join keys.
+Native content is encrypted at endpoints; a payment or membership check does
+not authorize provider decryption. Authenticated purpose and origin remain
+accountable declarations, not proof of plaintext truth.
+
+Eligibility activity should record only the minimal facts required by policy.
+Background synchronization and inbound lane traffic are not substitutes for
+intentional use. The payment provider receives required transaction references
+and amounts, not message content or the user's unrelated relationships.
+
+Retention classes define purpose, key scope, operational lifetime, dispute or
+required retention, and deletion method. A settled request can lose unnecessary
+message linkage while an unpaid refund or member payable retains enough evidence
+for payment and audit. Continuing permission does not justify retaining its
+formation history forever. Cryptographic erasure must cover wrapped keys,
+replicas, backups, logs, and derived indexes; separately retained records must
+not be described as erased or two-party-only archives.
+
+Logs and errors use safe event types and redacted identifiers. They must contain
+no plaintext, secrets, complete financial snapshots, or private identity evidence.
+Pairwise scoping reduces direct linkage but does not eliminate timing or amount
+correlation, so retention and access discipline remain necessary.
+
+\section{Migration and Evidence of Correctness}
+
+First establish a new protocol/version baseline and document how any existing
+quotes, requests, and obligations would be treated. Do not reinterpret stored
+per-message bonds by renaming their fields. Old financial expectations need
+explicit replacement vectors, while applicable authentication, privacy, ordering,
+and conservation guarantees remain protected.
+
+The first story test uses one charged request and three permitted messages.
+Acceptance creates one refund obligation, and provider confirmation completes it
+once. Variants reject into pending forfeiture, expire into a collateral refund,
+disable follow-ups, and race policy changes with admission. Other tests exercise
+two-device creation, alias history, cancellation followed by late capture,
+duplicate/out-of-order notifications, and unknown commit recovery.
+
+Financial-program tests reproduce a quarter from fixed input manifests, exclude
+refundable and immature funds, assess each eligible lot once, preserve quoted
+rate cohorts, and allocate equal integer shares. Include zero members, small
+amounts, unallocated remainder, below-threshold payables, failed payments, and
+quarter retries after a crash. A later quarter must not assess old member funds
+or redistribute already assigned obligations.
+
+Property and concurrency tests check conservation, finality, uniqueness, scope,
+and recovery at durable boundaries. Privacy tests exercise cross-domain credential
+denial, captured-log redaction, and deletion through backup restoration. Fuzz
+canonical decoding, signatures, and content bindings.
+
+Independent-provider federation follows only after a financial agreement assigns
+pool governance, membership uniqueness, refund and payout obligations, clearing,
+and losses. The local manifest remains useful as a reference outcome, but the
+old direct-recipient clearing model is not carried forward automatically.
 
 \end{document}

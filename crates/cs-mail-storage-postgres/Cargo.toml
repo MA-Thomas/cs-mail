@@ -5,11 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-finance = { path = "../cs-mail-finance" }
 cs-mail-capabilities = { path = "../cs-mail-capabilities" }
 cs-mail-content = { path = "../cs-mail-content" }
 cs-mail-ledger = { path = "../cs-mail-ledger" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
 cs-mail-protocol = { path = "../cs-mail-protocol" }
+cs-mail-wire = { path = "../cs-mail-wire" }
 cs-mail-security = { path = "../cs-mail-security" }
 postgres.workspace = true
 serde.workspace = true
@@ -17,6 +19,7 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+cs-mail-privacy = { path = "../cs-mail-privacy" }
 cs-mail-adapters = { path = "../cs-mail-adapters" }
 ed25519-dalek.workspace = true
 

@@ -1,1004 +1,1144 @@
-use std::sync::Arc;
-use std::thread;
-
-use cs_mail_application::{EngineError, InMemoryEngine, initial_state};
+use cs_mail_application::{EngineError, InMemoryEngine};
+use cs_mail_finance::{
+    FinancialTerms, PaymentError, PaymentOutcome, PaymentProvider, SimulatedProvider,
+};
 use cs_mail_ledger::Account;
-use cs_mail_primitives::{
-    AttemptId, BondId, CanonicalTime, ContentRef, DeliveryIntentRef, Duration, IdempotencyKey,
-    LedgerAccountRef, MessageDeclarationDigest, MessageId, MessageValidityUntil, Money,
-    OperationalKeyRef, PersistenceReserveId, PolicyVersion, PrincipalRef, PrivacyProfileVersion,
-    ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, RetentionPolicyVersion,
-    SettlementUnit, Version,
-};
-use cs_mail_protocol::{
-    ActorRef, Authorized, BondState, CancellationReason, EffectIntent, PolicySnapshot,
-    ProtocolCommand, ProtocolError, ProtocolEventKind, RelationshipState, ReserveState,
-    SolicitationStatus, TermsOutcome,
-};
-
-const PRINCIPAL: PrincipalRef = PrincipalRef(1);
-const SENDER: ProtocolIdentity = ProtocolIdentity(10);
-const RECIPIENT: ProtocolIdentity = ProtocolIdentity(20);
-const PROVIDER: ProviderRef = ProviderRef(30);
-const UNIT: SettlementUnit = SettlementUnit(1);
+use cs_mail_primitives::*;
+use cs_mail_protocol::*;
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
-        protocol_version: ProtocolVersion(1),
+        protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
         privacy_profile_version: PrivacyProfileVersion(1),
         retention_policy_version: RetentionPolicyVersion(1),
-        recipient_provider: PROVIDER,
-        unit: UNIT,
+        recipient_provider: ProviderRef(30),
+        unit: SettlementUnit(1),
         processing_charge: Money::from_minor_units(2),
         collateral: Money::from_minor_units(8),
         admission_window: Duration(10),
         decision_window: Duration(50),
         quote_lifetime: Duration(20),
-        persistence_duration: Duration(200),
-        backoff: vec![Duration(0), Duration(5), Duration(10)],
-        persistence: vec![
-            Money::ZERO,
-            Money::from_minor_units(5),
-            Money::from_minor_units(9),
-        ],
+        backoff: vec![Duration(0), Duration(5)],
+        financial: FinancialTerms {
+            scope: cs_mail_finance::FinancialScope::new(
+                [7; 32],
+                cs_mail_primitives::ProviderRef(30),
+                cs_mail_primitives::ProgramRef(1),
+                [9; 32],
+                cs_mail_primitives::ProtocolVersion(2),
+            ),
+            policy_version: PolicyVersion(1),
+            corporate_basis_points: 300,
+            maturity_delay: Duration(10),
+        },
+        payment_provider_key: SimulatedProvider::new([7; 32]).verifying_key(),
+        expiry_cooldown: Duration(30),
+        rejection_cooldown: Duration(90),
     }
 }
-
-fn sender_account() -> Account {
-    Account::Sender(LedgerAccountRef::from_u128_for_test(PRINCIPAL.0))
+struct Fixture {
+    engine: InMemoryEngine,
+    provider: SimulatedProvider,
+    policy: PolicySnapshot,
+    next_key: u128,
 }
-
-fn engine_with_level(level: u32) -> InMemoryEngine {
-    let mut state = initial_state(PRINCIPAL, SENDER, RECIPIENT, CanonicalTime(0));
-    state.attempt.level = level;
-    InMemoryEngine::new(state, UNIT, Money::from_minor_units(1_000)).unwrap()
-}
-
-fn sender(command: ProtocolCommand, key: u128) -> Authorized<ProtocolCommand> {
-    Authorized::assume_verified(
-        command,
-        ActorRef::Sender(SENDER),
-        OperationalKeyRef(1),
-        IdempotencyKey(key),
-    )
-}
-
-fn recipient(command: ProtocolCommand, key: u128) -> Authorized<ProtocolCommand> {
-    Authorized::assume_verified(
-        command,
-        ActorRef::Recipient(RECIPIENT),
-        OperationalKeyRef(2),
-        IdempotencyKey(key),
-    )
-}
-
-fn scheduler(command: ProtocolCommand, key: u128) -> Authorized<ProtocolCommand> {
-    Authorized::assume_verified(
-        command,
-        ActorRef::Scheduler(PROVIDER),
-        OperationalKeyRef(3),
-        IdempotencyKey(key),
-    )
-}
-
-fn issue_terms(engine: &InMemoryEngine, at: u64, key: u128) -> cs_mail_protocol::ContactTerms {
-    let outcome = engine
-        .execute(
-            sender(
-                ProtocolCommand::IssueContactTerms {
-                    quote_id: QuoteId(key),
+impl Fixture {
+    fn new() -> Self {
+        Self {
+            engine: InMemoryEngine::new(
+                ProtocolState::initial(
+                    PrincipalRef(1),
+                    ProtocolIdentity(10),
+                    ProtocolIdentity(20),
+                    CanonicalTime(0),
+                ),
+                SettlementUnit(1),
+                cs_mail_finance::FinancialScope::new(
+                    [7; 32],
+                    cs_mail_primitives::ProviderRef(30),
+                    cs_mail_primitives::ProgramRef(1),
+                    [9; 32],
+                    cs_mail_primitives::ProtocolVersion(2),
+                ),
+            )
+            .unwrap(),
+            provider: SimulatedProvider::new([7; 32]),
+            policy: policy(),
+            next_key: 1,
+        }
+    }
+    fn execute(
+        &mut self,
+        actor: ActorRef,
+        command: ProtocolCommand,
+        at: u64,
+    ) -> Result<cs_mail_application::ExecutionOutcome, EngineError> {
+        let key = IdempotencyKey(self.next_key);
+        self.next_key += 1;
+        self.engine.execute(
+            KernelCommand::new(command, actor, OperationalKeyRef(1), key),
+            CanonicalTime(at),
+            self.policy.clone(),
+        )
+    }
+    fn sender(
+        &mut self,
+        command: ProtocolCommand,
+        at: u64,
+    ) -> Result<cs_mail_application::ExecutionOutcome, EngineError> {
+        let sender = self
+            .engine
+            .snapshot()
+            .unwrap()
+            .state
+            .relationship
+            .key
+            .sender;
+        self.execute(ActorRef::Sender(sender), command, at)
+    }
+    fn create(&mut self, id: u128, at: u64) -> RequestTerms {
+        let result = self
+            .sender(
+                ProtocolCommand::IssueRequestTerms {
+                    quote_id: QuoteId(id),
                     declaration_digest: None,
                 },
-                key,
-            ),
-            CanonicalTime(at),
-            policy(),
+                at,
+            )
+            .unwrap();
+        let TermsOutcome::ChargeRequired(terms) = result.transition.terms_outcome.unwrap() else {
+            panic!("expected new request terms")
+        };
+        self.sender(
+            ProtocolCommand::CreateRequest {
+                request_id: RequestId(id),
+
+                message_id: MessageId(id),
+                payment_method: [9; 32],
+                terms: terms.clone(),
+            },
+            at,
         )
         .unwrap();
-    match outcome.manifest.terms_outcome.unwrap() {
-        TermsOutcome::BondRequired(terms) => *terms,
-        TermsOutcome::NoBondRequired => panic!("expected bonded terms"),
+        *terms
+    }
+    fn payment(&mut self, id: u128, refund: bool, at: u64) {
+        let snapshot = self.engine.snapshot().unwrap();
+        let r = &snapshot.payments[&RequestId(id)];
+        let op = if refund {
+            r.refund().operation().unwrap().clone()
+        } else {
+            r.capture.clone()
+        };
+        let cancel =
+            !refund && r.capture_status() == cs_mail_finance::CaptureStatus::CancellationRequested;
+        let receipt = self
+            .provider
+            .lookup(op.id)
+            .unwrap()
+            .unwrap_or_else(|| self.provider.submit(&op, cancel).unwrap());
+        self.execute(
+            ActorRef::Provider(ProviderRef(30)),
+            ProtocolCommand::RecordPayment {
+                request_id: RequestId(id),
+                receipt,
+            },
+            at,
+        )
+        .unwrap();
+    }
+    fn admit(
+        &mut self,
+        id: u128,
+        at: u64,
+    ) -> Result<cs_mail_application::ExecutionOutcome, EngineError> {
+        let v = self.engine.snapshot().unwrap().state.requests[&RequestId(id)].version;
+        self.sender(
+            ProtocolCommand::AdmitRequest {
+                request_id: RequestId(id),
+                expected_request_version: v.into(),
+                content_ref: ContentRef(id),
+                delivery_intent_ref: DeliveryIntentRef(id),
+                declaration_digest: MessageDeclarationDigest([0; 32]),
+                message_valid_until: MessageValidityUntil(CanonicalTime(1000)),
+            },
+            at,
+        )
+    }
+    fn open(&mut self) {
+        self.create(1, 1);
+        self.payment(1, false, 2);
+        self.admit(1, 3).unwrap();
+    }
+    fn decision(&mut self, accept: bool, at: u64) {
+        let v = self.engine.snapshot().unwrap().state.relationship.version;
+        let cmd = if accept {
+            ProtocolCommand::AcceptRelationship {
+                expected_version: v.into(),
+            }
+        } else {
+            ProtocolCommand::RejectRelationship {
+                expected_version: v.into(),
+            }
+        };
+        self.execute(ActorRef::Recipient(ProtocolIdentity(20)), cmd, at)
+            .unwrap();
+    }
+    fn cancel(&mut self, at: u64) {
+        let v = self.engine.snapshot().unwrap().state.requests[&RequestId(1)].version;
+        self.sender(
+            ProtocolCommand::CancelPreparingRequest {
+                request_id: RequestId(1),
+                expected_request_version: v.into(),
+                reason: CancellationReason::SenderRequested,
+            },
+            at,
+        )
+        .unwrap();
     }
 }
+#[test]
+fn one_request_one_charge_and_quote_cannot_be_reused() {
+    let mut f = Fixture::new();
+    let terms = f.create(1, 1);
+    let before = f.engine.snapshot().unwrap();
+    assert!(matches!(
+        f.sender(
+            ProtocolCommand::CreateRequest {
+                request_id: RequestId(2),
 
-#[derive(Clone, Copy)]
-struct AttemptSpec {
-    bond: BondId,
-    reserve: PersistenceReserveId,
-    attempt: AttemptId,
-    message: MessageId,
-    key_base: u128,
-}
-
-fn reserve(
-    engine: &InMemoryEngine,
-    spec: &AttemptSpec,
-    terms: cs_mail_protocol::ContactTerms,
-    at: u64,
-) {
-    engine
-        .execute(
-            sender(
-                ProtocolCommand::ReserveAttempt {
-                    bond_id: spec.bond,
-                    reserve_id: spec.reserve,
-                    attempt_id: spec.attempt,
-                    message_id: spec.message,
-                    terms: Box::new(terms),
-                },
-                spec.key_base + 1,
-            ),
-            CanonicalTime(at),
-            policy(),
+                message_id: MessageId(2),
+                payment_method: [9; 32],
+                terms: Box::new(terms)
+            },
+            2
+        ),
+        Err(EngineError::Protocol(ProtocolError::RequestAlreadyExists))
+    ));
+    assert_eq!(f.engine.snapshot().unwrap(), before);
+    let result = f
+        .sender(
+            ProtocolCommand::IssueRequestTerms {
+                quote_id: QuoteId(2),
+                declaration_digest: None,
+            },
+            2,
         )
         .unwrap();
+    assert_eq!(
+        result.transition.terms_outcome,
+        Some(TermsOutcome::ExistingRequest(RequestId(1)))
+    );
+    assert_eq!(
+        f.engine
+            .outbox()
+            .unwrap()
+            .iter()
+            .filter(|i| matches!(i, EffectIntent::ExecutePayment { .. }))
+            .count(),
+        1
+    );
 }
-
-fn admit(engine: &InMemoryEngine, spec: &AttemptSpec, at: u64) {
-    engine
-        .execute(
-            sender(
-                ProtocolCommand::AdmitAttempt {
-                    bond_id: spec.bond,
-                    expected_bond_version: Version(0),
-                    content_ref: ContentRef(spec.key_base),
-                    delivery_intent_ref: DeliveryIntentRef(spec.key_base),
-                    declaration_digest: MessageDeclarationDigest([0; 32]),
-                    message_valid_until: MessageValidityUntil(CanonicalTime(u64::MAX)),
-                },
-                spec.key_base + 2,
-            ),
-            CanonicalTime(at),
-            policy(),
+#[test]
+fn admission_requires_verified_capture_and_policy_changes_do_not_reprice() {
+    let mut f = Fixture::new();
+    f.create(1, 1);
+    assert!(matches!(
+        f.admit(1, 2),
+        Err(EngineError::Protocol(ProtocolError::PaymentNotConfirmed))
+    ));
+    f.policy.policy_version = PolicyVersion(2);
+    f.policy.processing_charge = Money::from_minor_units(900);
+    f.policy.backoff = vec![Duration(0), Duration(900)];
+    f.payment(1, false, 2);
+    f.admit(1, 3).unwrap();
+    let s = f.engine.snapshot().unwrap();
+    assert_eq!(
+        s.payments[&RequestId(1)].capture.amount,
+        Money::from_minor_units(10)
+    );
+    assert_eq!(s.history.earliest_next_admission, CanonicalTime(8));
+}
+#[test]
+fn acceptance_records_full_refund_until_provider_confirms() {
+    let mut f = Fixture::new();
+    f.open();
+    f.decision(true, 4);
+    let s = f.engine.snapshot().unwrap();
+    let request = &s.state.requests[&RequestId(1)];
+    let refund = s.payments[&request.id].refund().operation().unwrap();
+    assert!(!matches!(
+        s.payments[&request.id].refund(),
+        cs_mail_finance::RefundStatus::Confirmed(_)
+    ));
+    assert_eq!(
+        s.ledger.balance(Account::RefundPayable(refund.id)),
+        Money::from_minor_units(10)
+    );
+    f.payment(1, true, 5);
+    f.payment(1, true, 6);
+    assert_eq!(f.provider.operation_count(), 2);
+    assert!(matches!(
+        f.engine.snapshot().unwrap().payments[&RequestId(1)].refund(),
+        cs_mail_finance::RefundStatus::Confirmed(_)
+    ));
+    assert_eq!(f.engine.total_value().unwrap(), Money::ZERO);
+}
+#[test]
+fn rejection_exports_pending_forfeiture_and_starts_cooldown() {
+    let mut f = Fixture::new();
+    f.open();
+    f.decision(false, 40);
+    let s = f.engine.snapshot().unwrap();
+    assert_eq!(s.history.earliest_next_admission, CanonicalTime(130));
+    assert_eq!(
+        s.ledger.balance(Account::ProcessingRevenue),
+        Money::from_minor_units(2)
+    );
+    assert!(s.payments[&RequestId(1)].refund().operation().is_none());
+    let program = f.engine.financial_program().unwrap();
+    assert_eq!(
+        program.ledger().balance(Account::PendingForfeiture(
+            s.payments[&RequestId(1)].capture.id
+        )),
+        Money::from_minor_units(8)
+    );
+    assert_eq!(
+        program.ledger().balance(Account::RestrictedMemberFunds),
+        Money::ZERO
+    );
+    assert!(matches!(
+        f.sender(
+            ProtocolCommand::IssueRequestTerms {
+                quote_id: QuoteId(2),
+                declaration_digest: None
+            },
+            41
+        ),
+        Err(EngineError::Protocol(ProtocolError::BackoffActive { .. }))
+    ));
+}
+#[test]
+fn uncaptured_cancellation_voids_without_advancing_history() {
+    let mut f = Fixture::new();
+    f.create(1, 1);
+    f.cancel(2);
+    f.payment(1, false, 3);
+    let s = f.engine.snapshot().unwrap();
+    assert!(s.payments[&RequestId(1)].capture_voided());
+    assert_eq!(s.history.level, 0);
+    assert!(s.payments[&RequestId(1)].refund().operation().is_none());
+    assert!(f.admit(1, 4).is_err());
+}
+#[test]
+fn late_capture_after_cancellation_creates_full_refund_without_reopening() {
+    let mut f = Fixture::new();
+    f.create(1, 1);
+    let op = f.engine.snapshot().unwrap().payments[&RequestId(1)]
+        .capture
+        .clone();
+    let receipt = f.provider.submit(&op, false).unwrap();
+    f.cancel(2);
+    f.execute(
+        ActorRef::Provider(ProviderRef(30)),
+        ProtocolCommand::RecordPayment {
+            request_id: RequestId(1),
+            receipt,
+        },
+        3,
+    )
+    .unwrap();
+    f.payment(1, true, 4);
+    let s = f.engine.snapshot().unwrap();
+    let r = &s.state.requests[&RequestId(1)];
+    assert!(matches!(r.lifecycle, RequestLifecycle::Cancelled { .. }));
+    assert_eq!(
+        s.payments[&r.id].refund().operation().unwrap().amount,
+        Money::from_minor_units(10)
+    );
+    assert!(matches!(
+        s.payments[&r.id].refund(),
+        cs_mail_finance::RefundStatus::Confirmed(_)
+    ));
+    assert_eq!(s.history.level, 0);
+}
+#[test]
+fn ambiguous_capture_response_is_reconciled_with_original_operation() {
+    let mut f = Fixture::new();
+    f.create(1, 1);
+    let op = f.engine.snapshot().unwrap().payments[&RequestId(1)]
+        .capture
+        .clone();
+    f.provider.lose_next_response();
+    assert_eq!(
+        f.provider.submit(&op, false),
+        Err(PaymentError::Unavailable)
+    );
+    f.payment(1, false, 2);
+    f.admit(1, 3).unwrap();
+    assert_eq!(f.provider.operation_count(), 1);
+}
+#[test]
+fn capture_and_refund_evidence_cannot_change_amount_or_provider() {
+    let mut f = Fixture::new();
+    f.create(1, 1);
+    let mut op = f.engine.snapshot().unwrap().payments[&RequestId(1)]
+        .capture
+        .clone();
+    op.amount = Money::from_minor_units(1);
+    let receipt = f.provider.submit(&op, false).unwrap();
+    let before = f.engine.snapshot().unwrap();
+    assert!(
+        f.execute(
+            ActorRef::Provider(ProviderRef(30)),
+            ProtocolCommand::RecordPayment {
+                request_id: RequestId(1),
+                receipt
+            },
+            2
         )
+        .is_err()
+    );
+    assert_eq!(before, f.engine.snapshot().unwrap());
+}
+#[test]
+fn expiry_refunds_collateral_once_and_late_acceptance_only_changes_permission() {
+    let mut f = Fixture::new();
+    f.open();
+    f.decision(true, 54);
+    let s = f.engine.snapshot().unwrap();
+    let r = &s.state.requests[&RequestId(1)];
+    assert!(matches!(r.lifecycle, RequestLifecycle::Expired { .. }));
+    assert_eq!(
+        s.payments[&r.id].refund().operation().unwrap().amount,
+        Money::from_minor_units(8)
+    );
+    assert_eq!(s.history.earliest_next_admission, CanonicalTime(83));
+    assert_eq!(s.state.relationship.state, RelationshipState::Accepted);
+    f.payment(1, true, 55);
+    assert_eq!(
+        f.engine
+            .snapshot()
+            .unwrap()
+            .ledger
+            .balance(Account::ProcessingRevenue),
+        Money::from_minor_units(2)
+    );
+}
+#[test]
+fn followups_use_current_policy_without_changing_charge_deadline_or_history() {
+    let mut f = Fixture::new();
+    f.open();
+    f.execute(
+        ActorRef::Recipient(ProtocolIdentity(20)),
+        ProtocolCommand::SetFollowupPolicy {
+            expected_version: Version(0),
+            policy: FollowupPolicy {
+                version: Version(0),
+                max_messages: 2,
+                max_per_interval: 1,
+                interval: Duration(5),
+            },
+        },
+        4,
+    )
+    .unwrap();
+    let initial = f.engine.snapshot().unwrap();
+    let command = |message| ProtocolCommand::AdmitFollowup {
+        request_id: RequestId(1),
+        message_id: MessageId(message),
+        content_ref: ContentRef(message),
+        delivery_intent_ref: DeliveryIntentRef(message),
+        declaration_digest: MessageDeclarationDigest([0; 32]),
+        message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+        expected_policy_version: Version(1),
+    };
+    f.sender(command(2), 5).unwrap();
+    assert!(matches!(
+        f.sender(command(3), 6),
+        Err(EngineError::Protocol(ProtocolError::FollowupNotAllowed))
+    ));
+    f.sender(command(3), 10).unwrap();
+    assert!(f.sender(command(4), 15).is_err());
+    let final_state = f.engine.snapshot().unwrap();
+    assert_eq!(initial.history, final_state.history);
+    assert_eq!(
+        initial.state.requests[&RequestId(1)]
+            .lifecycle
+            .admission()
+            .unwrap()
+            .decision_deadline,
+        final_state.state.requests[&RequestId(1)]
+            .lifecycle
+            .admission()
+            .unwrap()
+            .decision_deadline
+    );
+    assert_eq!(f.provider.operation_count(), 1);
+    f.decision(true, 16);
+    assert!(f.sender(command(5), 17).is_err());
+}
+#[test]
+fn exact_replay_and_conflicting_decisions_are_atomic() {
+    let mut f = Fixture::new();
+    f.open();
+    let command = KernelCommand::new(
+        ProtocolCommand::AcceptRelationship {
+            expected_version: Version(0),
+        },
+        ActorRef::Recipient(ProtocolIdentity(20)),
+        OperationalKeyRef(1),
+        IdempotencyKey(900),
+    );
+    let first = f
+        .engine
+        .execute(command.clone(), CanonicalTime(4), policy())
         .unwrap();
+    let second = f
+        .engine
+        .execute(command, CanonicalTime(5), policy())
+        .unwrap();
+    assert_eq!(first.transition, second.transition);
+    assert!(second.replayed);
+    let before = f.engine.snapshot().unwrap();
+    assert!(
+        f.execute(
+            ActorRef::Recipient(ProtocolIdentity(20)),
+            ProtocolCommand::RejectRelationship {
+                expected_version: Version(0)
+            },
+            5
+        )
+        .is_err()
+    );
+    assert_eq!(before, f.engine.snapshot().unwrap());
+}
+#[test]
+fn unauthorized_decisions_and_invalid_policy_are_rejected() {
+    let mut f = Fixture::new();
+    f.open();
+    assert!(
+        f.sender(
+            ProtocolCommand::AcceptRelationship {
+                expected_version: Version(0)
+            },
+            4
+        )
+        .is_err()
+    );
+    f.policy.financial.corporate_basis_points = 10_001;
+    assert!(matches!(
+        f.sender(
+            ProtocolCommand::IssueRequestTerms {
+                quote_id: QuoteId(2),
+                declaration_digest: None
+            },
+            5
+        ),
+        Err(EngineError::Protocol(ProtocolError::PolicyInvalid))
+    ));
+}
+#[test]
+fn reversal_is_compensating_and_cannot_rewrite_final_outcome() {
+    let mut f = Fixture::new();
+    f.open();
+    f.decision(false, 4);
+    let before = f.engine.snapshot().unwrap();
+    let id = before.payments[&RequestId(1)].capture.id;
+    let receipt = f.provider.reversal(id, FinancialEventId(901)).unwrap();
+    assert_eq!(receipt.evidence.outcome, PaymentOutcome::Reversed);
+    f.execute(
+        ActorRef::Provider(ProviderRef(30)),
+        ProtocolCommand::RecordPayment {
+            request_id: RequestId(1),
+            receipt,
+        },
+        5,
+    )
+    .unwrap();
+    let after = f.engine.snapshot().unwrap();
+    assert_eq!(
+        before.state.requests[&RequestId(1)].lifecycle,
+        after.state.requests[&RequestId(1)].lifecycle
+    );
+    assert_eq!(before.state.relationship, after.state.relationship);
+    assert_eq!(
+        after.ledger.signed_balance(Account::CorporateLossClearing),
+        -10
+    );
 }
 
 #[test]
-fn unadmitted_cancellation_returns_everything_without_advancing() {
-    let engine = engine_with_level(1);
-    let terms = issue_terms(&engine, 1, 100);
-    let spec = AttemptSpec {
-        bond: BondId(1),
-        reserve: PersistenceReserveId(1),
-        attempt: AttemptId(1),
-        message: MessageId(1),
-        key_base: 200,
-    };
-    reserve(&engine, &spec, terms, 2);
-    assert_eq!(
-        engine.balance(sender_account()).unwrap(),
-        Money::from_minor_units(985)
-    );
-
-    engine
-        .execute(
-            sender(
-                ProtocolCommand::CancelReservedAttempt {
-                    bond_id: spec.bond,
-                    expected_bond_version: Version(0),
-                    reason: CancellationReason::SenderRequested,
-                },
-                300,
-            ),
-            CanonicalTime(3),
-            policy(),
+fn concurrent_creations_commit_only_one_charge_intent() {
+    use std::sync::{Arc, Barrier};
+    let mut f = Fixture::new();
+    let issued = f
+        .sender(
+            ProtocolCommand::IssueRequestTerms {
+                quote_id: QuoteId(1),
+                declaration_digest: None,
+            },
+            1,
         )
         .unwrap();
-
-    let snapshot = engine.snapshot().unwrap();
-    assert!(matches!(
-        snapshot.state.bonds[&spec.bond].state,
-        BondState::CancelledUnadmitted { .. }
-    ));
-    assert!(matches!(
-        snapshot.state.reserves[&spec.reserve].state,
-        ReserveState::Released { .. }
-    ));
-    assert_eq!(snapshot.state.attempt.level, 1);
-    assert!(snapshot.state.solicitation.is_none());
-    assert!(engine.outbox().unwrap().is_empty());
-    assert_eq!(
-        engine.balance(sender_account()).unwrap(),
-        Money::from_minor_units(1_000)
-    );
-}
-
-#[test]
-fn admissions_coalesce_and_acceptance_is_relationship_wide() {
-    let engine = engine_with_level(0);
-    let first = AttemptSpec {
-        bond: BondId(1),
-        reserve: PersistenceReserveId(1),
-        attempt: AttemptId(1),
-        message: MessageId(1),
-        key_base: 1_000,
+    let TermsOutcome::ChargeRequired(terms) = issued.transition.terms_outcome.unwrap() else {
+        panic!("expected terms")
     };
-    let first_terms = issue_terms(&engine, 1, 900);
-    reserve(&engine, &first, first_terms, 2);
-    admit(&engine, &first, 3);
+    let engine = Arc::new(f.engine);
+    let barrier = Arc::new(Barrier::new(2));
+    let threads: Vec<_> = (1..=2)
+        .map(|id| {
+            let engine = engine.clone();
+            let barrier = barrier.clone();
+            let terms = terms.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                engine.execute(
+                    KernelCommand::new(
+                        ProtocolCommand::CreateRequest {
+                            request_id: RequestId(id),
 
-    let second = AttemptSpec {
-        bond: BondId(2),
-        reserve: PersistenceReserveId(2),
-        attempt: AttemptId(2),
-        message: MessageId(2),
-        key_base: 2_000,
-    };
-    let second_terms = issue_terms(&engine, 4, 1_900);
-    reserve(&engine, &second, second_terms, 5);
-    admit(&engine, &second, 8);
-
-    let establishment_count = engine
-        .outbox()
-        .unwrap()
-        .iter()
-        .filter(|intent| {
-            matches!(
-                intent,
-                EffectIntent::EstablishRelationshipSolicitation { .. }
-            )
+                            message_id: MessageId(id),
+                            payment_method: [9; 32],
+                            terms,
+                        },
+                        ActorRef::Sender(ProtocolIdentity(10)),
+                        OperationalKeyRef(1),
+                        IdempotencyKey(100 + id),
+                    ),
+                    CanonicalTime(2),
+                    policy(),
+                )
+            })
         })
-        .count();
-    assert_eq!(establishment_count, 1);
+        .collect();
+    let outcomes: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert_eq!(outcomes.iter().filter(|o| o.is_ok()).count(), 1);
+    assert_eq!(engine.snapshot().unwrap().state.requests.len(), 1);
     assert_eq!(
         engine
             .outbox()
             .unwrap()
             .iter()
-            .filter(|intent| matches!(intent, EffectIntent::DeliverMessage { .. }))
-            .count(),
-        2
-    );
-
-    let version = engine.snapshot().unwrap().state.relationship.version;
-    engine
-        .execute(
-            recipient(
-                ProtocolCommand::AcceptRelationship {
-                    expected_version: version.into(),
-                },
-                3_000,
-            ),
-            CanonicalTime(9),
-            policy(),
-        )
-        .unwrap();
-
-    let snapshot = engine.snapshot().unwrap();
-    assert_eq!(
-        snapshot.state.relationship.state,
-        RelationshipState::Accepted
-    );
-    assert_eq!(snapshot.state.attempt.level, 2);
-    assert!(
-        snapshot
-            .state
-            .bonds
-            .values()
-            .all(|bond| matches!(bond.state, BondState::Accepted { .. }))
-    );
-    assert!(
-        snapshot
-            .state
-            .reserves
-            .values()
-            .all(|reserve| matches!(reserve.state, ReserveState::Released { .. }))
-    );
-    assert_eq!(
-        snapshot.state.solicitation.unwrap().status,
-        SolicitationStatus::Closed
-    );
-    assert_eq!(
-        engine.balance(sender_account()).unwrap(),
-        Money::from_minor_units(1_000)
-    );
-    assert_eq!(
-        engine.total_value().unwrap(),
-        Money::from_minor_units(1_000)
-    );
-}
-
-#[test]
-fn rejection_preserves_backoff_and_defers_persistence_release() {
-    let engine = engine_with_level(1);
-    let spec = AttemptSpec {
-        bond: BondId(1),
-        reserve: PersistenceReserveId(1),
-        attempt: AttemptId(1),
-        message: MessageId(1),
-        key_base: 4_000,
-    };
-    let terms = issue_terms(&engine, 1, 3_900);
-    let release_at = terms.persistence_release_at;
-    reserve(&engine, &spec, terms, 2);
-    admit(&engine, &spec, 3);
-    engine
-        .execute(
-            recipient(
-                ProtocolCommand::RejectRelationship {
-                    expected_version: Version(0),
-                },
-                5_000,
-            ),
-            CanonicalTime(4),
-            policy(),
-        )
-        .unwrap();
-
-    let snapshot = engine.snapshot().unwrap();
-    assert_eq!(
-        snapshot.state.relationship.state,
-        RelationshipState::Rejected
-    );
-    assert_eq!(snapshot.state.attempt.level, 2);
-    assert!(matches!(
-        snapshot.state.reserves[&spec.reserve].state,
-        ReserveState::Reserved
-    ));
-    assert_eq!(
-        engine
-            .balance(Account::RecipientProvider(PROVIDER))
-            .unwrap(),
-        Money::from_minor_units(2)
-    );
-    assert_eq!(
-        engine.balance(Account::Recipient(RECIPIENT)).unwrap(),
-        Money::from_minor_units(8)
-    );
-    assert_eq!(
-        engine
-            .balance(Account::PersistenceReserve(spec.reserve))
-            .unwrap(),
-        Money::from_minor_units(5)
-    );
-
-    engine
-        .execute(
-            scheduler(
-                ProtocolCommand::ReleasePersistenceReserve {
-                    reserve_id: spec.reserve,
-                    expected_reserve_version: Version(0),
-                },
-                5_100,
-            ),
-            release_at,
-            policy(),
-        )
-        .unwrap();
-    assert_eq!(
-        engine
-            .balance(Account::PersistenceReserve(spec.reserve))
-            .unwrap(),
-        Money::ZERO
-    );
-    assert_eq!(
-        engine.total_value().unwrap(),
-        Money::from_minor_units(1_000)
-    );
-}
-
-#[test]
-fn block_cancels_unadmitted_attempts_and_unblock_does_not_reset_history() {
-    let engine = engine_with_level(0);
-    let first = AttemptSpec {
-        bond: BondId(1),
-        reserve: PersistenceReserveId(1),
-        attempt: AttemptId(1),
-        message: MessageId(1),
-        key_base: 6_000,
-    };
-    let terms = issue_terms(&engine, 1, 5_900);
-    reserve(&engine, &first, terms, 2);
-    admit(&engine, &first, 3);
-    let second = AttemptSpec {
-        bond: BondId(2),
-        reserve: PersistenceReserveId(2),
-        attempt: AttemptId(2),
-        message: MessageId(2),
-        key_base: 7_000,
-    };
-    let terms = issue_terms(&engine, 4, 6_900);
-    reserve(&engine, &second, terms, 5);
-
-    engine
-        .execute(
-            recipient(
-                ProtocolCommand::BlockRelationship {
-                    expected_version: Version(0),
-                },
-                8_000,
-            ),
-            CanonicalTime(6),
-            policy(),
-        )
-        .unwrap();
-    let blocked = engine.snapshot().unwrap();
-    assert_eq!(blocked.state.relationship.state, RelationshipState::Blocked);
-    assert!(matches!(
-        blocked.state.bonds[&first.bond].state,
-        BondState::Rejected { .. }
-    ));
-    assert!(matches!(
-        blocked.state.bonds[&second.bond].state,
-        BondState::CancelledUnadmitted { .. }
-    ));
-    assert_eq!(blocked.state.attempt.level, 1);
-    assert!(matches!(
-        engine.execute(
-            sender(
-                ProtocolCommand::IssueContactTerms {
-                    quote_id: QuoteId(99),
-                    declaration_digest: None,
-                },
-                8_100
-            ),
-            CanonicalTime(7),
-            policy()
-        ),
-        Err(EngineError::Protocol(ProtocolError::ContactBlocked))
-    ));
-
-    engine
-        .execute(
-            recipient(
-                ProtocolCommand::UnblockRelationship {
-                    expected_version: Version(1),
-                },
-                8_200,
-            ),
-            CanonicalTime(8),
-            policy(),
-        )
-        .unwrap();
-    let unblocked = engine.snapshot().unwrap();
-    assert_eq!(
-        unblocked.state.relationship.state,
-        RelationshipState::Rejected
-    );
-    assert_eq!(unblocked.state.attempt.level, 1);
-    assert_eq!(
-        unblocked.state.solicitation.unwrap().status,
-        SolicitationStatus::Closed
-    );
-}
-
-#[test]
-fn exact_replay_returns_the_original_result_without_a_second_effect() {
-    let engine = engine_with_level(0);
-    let command = sender(
-        ProtocolCommand::IssueContactTerms {
-            quote_id: QuoteId(1),
-            declaration_digest: None,
-        },
-        9_000,
-    );
-    let first = engine
-        .execute(command.clone(), CanonicalTime(1), policy())
-        .unwrap();
-    let journal_len = engine.journal().unwrap().len();
-    let second = engine
-        .execute(command, CanonicalTime(999), policy())
-        .unwrap();
-    assert!(!first.replayed);
-    assert!(second.replayed);
-    assert_eq!(first.manifest, second.manifest);
-    assert_eq!(engine.journal().unwrap().len(), journal_len);
-}
-
-#[test]
-fn conflicting_recipient_decisions_serialize_on_relationship_version() {
-    let engine = Arc::new(engine_with_level(0));
-    let accept_engine = Arc::clone(&engine);
-    let block_engine = Arc::clone(&engine);
-    let accept = thread::spawn(move || {
-        accept_engine.execute(
-            recipient(
-                ProtocolCommand::AcceptRelationship {
-                    expected_version: Version(0),
-                },
-                10_000,
-            ),
-            CanonicalTime(1),
-            policy(),
-        )
-    });
-    let block = thread::spawn(move || {
-        block_engine.execute(
-            recipient(
-                ProtocolCommand::BlockRelationship {
-                    expected_version: Version(0),
-                },
-                10_001,
-            ),
-            CanonicalTime(1),
-            policy(),
-        )
-    });
-    let results = [accept.join().unwrap(), block.join().unwrap()];
-    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-    assert_eq!(
-        results
-            .iter()
-            .filter(|result| matches!(
-                result,
-                Err(EngineError::Protocol(ProtocolError::VersionConflict))
-            ))
+            .filter(|i| matches!(i, EffectIntent::ExecutePayment { .. }))
             .count(),
         1
     );
 }
 
 #[test]
-fn admission_and_timeout_at_the_same_boundary_are_ordered_not_partial() {
-    let engine = engine_with_level(0);
-    let spec = AttemptSpec {
-        bond: BondId(1),
-        reserve: PersistenceReserveId(1),
-        attempt: AttemptId(1),
-        message: MessageId(1),
-        key_base: 11_000,
-    };
-    let terms = issue_terms(&engine, 1, 10_900);
-    reserve(&engine, &spec, terms, 2);
-    let engine = Arc::new(engine);
-    let admit_engine = Arc::clone(&engine);
-    let timeout_engine = Arc::clone(&engine);
-    let admit_spec = AttemptSpec { ..spec };
-    let admit_result = thread::spawn(move || {
-        admit_engine.execute(
-            sender(
-                ProtocolCommand::AdmitAttempt {
-                    bond_id: admit_spec.bond,
-                    expected_bond_version: Version(0),
-                    content_ref: ContentRef(1),
-                    delivery_intent_ref: DeliveryIntentRef(1),
-                    declaration_digest: MessageDeclarationDigest([0; 32]),
-                    message_valid_until: MessageValidityUntil(CanonicalTime(u64::MAX)),
-                },
-                11_100,
-            ),
-            CanonicalTime(12),
-            policy(),
-        )
-    });
-    let timeout_result = thread::spawn(move || {
-        timeout_engine.execute(
-            scheduler(
-                ProtocolCommand::CancelReservedAttempt {
-                    bond_id: spec.bond,
-                    expected_bond_version: Version(0),
-                    reason: CancellationReason::AdmissionTimeout,
-                },
-                11_101,
-            ),
-            CanonicalTime(12),
-            policy(),
-        )
-    });
-    let _ = admit_result.join().unwrap();
-    let _ = timeout_result.join().unwrap();
+fn capture_confirmation_and_cancellation_converge_to_one_refund() {
+    use std::sync::{Arc, Barrier};
+    let mut f = Fixture::new();
+    f.create(1, 1);
+    let operation = f.engine.snapshot().unwrap().payments[&RequestId(1)]
+        .capture
+        .clone();
+    let receipt = f.provider.submit(&operation, false).unwrap();
+    let engine = Arc::new(f.engine);
+    let barrier = Arc::new(Barrier::new(2));
+    let commands = [
+        (
+            ActorRef::Sender(ProtocolIdentity(10)),
+            ProtocolCommand::CancelPreparingRequest {
+                request_id: RequestId(1),
+                expected_request_version: Version(0),
+                reason: CancellationReason::SenderRequested,
+            },
+        ),
+        (
+            ActorRef::Provider(ProviderRef(30)),
+            ProtocolCommand::RecordPayment {
+                request_id: RequestId(1),
+                receipt,
+            },
+        ),
+    ];
+    let threads: Vec<_> = commands
+        .into_iter()
+        .enumerate()
+        .map(|(i, (actor, command))| {
+            let engine = engine.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                engine.execute(
+                    KernelCommand::new(
+                        command,
+                        actor,
+                        OperationalKeyRef(1),
+                        IdempotencyKey(900 + i as u128),
+                    ),
+                    CanonicalTime(2),
+                    policy(),
+                )
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap().unwrap();
+    }
     let snapshot = engine.snapshot().unwrap();
+    let request = &snapshot.state.requests[&RequestId(1)];
     assert!(matches!(
-        snapshot.state.bonds[&BondId(1)].state,
-        BondState::Admitted | BondState::CancelledUnadmitted { .. }
+        request.lifecycle,
+        RequestLifecycle::Cancelled { .. }
     ));
     assert_eq!(
-        engine.total_value().unwrap(),
-        Money::from_minor_units(1_000)
+        snapshot.ledger.balance(Account::RefundPayable(
+            snapshot.payments[&request.id]
+                .refund()
+                .operation()
+                .unwrap()
+                .id
+        )),
+        Money::from_minor_units(10)
+    );
+    assert_eq!(snapshot.history.level, 0);
+}
+
+#[test]
+fn captured_preparation_block_and_message_failure_refund_without_admission() {
+    let mut f = Fixture::new();
+    f.create(1, 1);
+    f.payment(1, false, 2);
+    f.execute(
+        ActorRef::Recipient(ProtocolIdentity(20)),
+        ProtocolCommand::BlockRelationship {
+            expected_version: Version(0),
+        },
+        3,
+    )
+    .unwrap();
+    let s = f.engine.snapshot().unwrap();
+    assert!(matches!(
+        s.state.requests[&RequestId(1)].lifecycle,
+        RequestLifecycle::Cancelled { .. }
+    ));
+    assert_eq!(s.history.level, 0);
+    assert!(f.admit(1, 4).is_err());
+    f.execute(
+        ActorRef::Recipient(ProtocolIdentity(20)),
+        ProtocolCommand::UnblockRelationship {
+            expected_version: s.state.relationship.version.into(),
+        },
+        4,
+    )
+    .unwrap();
+    assert_eq!(
+        f.engine.snapshot().unwrap().state.relationship.state,
+        RelationshipState::Rejected
+    );
+    let mut g = Fixture::new();
+    g.create(1, 1);
+    g.payment(1, false, 2);
+    g.sender(
+        ProtocolCommand::AdmitRequest {
+            request_id: RequestId(1),
+            expected_request_version: Version(0),
+            content_ref: ContentRef(1),
+            delivery_intent_ref: DeliveryIntentRef(1),
+            declaration_digest: MessageDeclarationDigest([0; 32]),
+            message_valid_until: MessageValidityUntil(CanonicalTime(1)),
+        },
+        3,
+    )
+    .unwrap();
+    let s = g.engine.snapshot().unwrap();
+    assert!(matches!(
+        s.state.requests[&RequestId(1)].lifecycle,
+        RequestLifecycle::Cancelled { .. }
+    ));
+    assert_eq!(s.history.level, 0);
+    assert!(s.payments[&RequestId(1)].refund().operation().is_some());
+}
+
+fn aliases() -> (Fixture, Fixture) {
+    let store = cs_mail_application::InMemoryStore::new(cs_mail_finance::FinancialScope::new(
+        [7; 32],
+        cs_mail_primitives::ProviderRef(30),
+        cs_mail_primitives::ProgramRef(1),
+        [9; 32],
+        cs_mail_primitives::ProtocolVersion(2),
+    ));
+    let make = |sender| Fixture {
+        engine: store
+            .register(
+                ProtocolState::initial(
+                    PrincipalRef(1),
+                    ProtocolIdentity(sender),
+                    ProtocolIdentity(20),
+                    CanonicalTime(0),
+                ),
+                SettlementUnit(1),
+            )
+            .unwrap(),
+        provider: SimulatedProvider::new([7; 32]),
+        policy: policy(),
+        next_key: 1,
+    };
+    (make(10), make(11))
+}
+
+#[test]
+fn alias_history_change_cancels_captured_preparation_without_shortening_cooldown() {
+    let (mut a, mut b) = aliases();
+    a.open();
+    // B shares A's history but its own relationship and request identity.
+    b.create(1, 8);
+    b.payment(1, false, 8);
+    a.decision(false, 9);
+    let before = b.engine.snapshot().unwrap();
+    assert_eq!(before.history.earliest_next_admission, CanonicalTime(99));
+    let cancelled = b.admit(1, 10).unwrap();
+    assert!(
+        cancelled
+            .transition
+            .protocol_events
+            .iter()
+            .any(|e| e.kind == ProtocolEventKind::RequestHistoryChanged(RequestId(1)))
+    );
+    let after = b.engine.snapshot().unwrap();
+    assert!(matches!(
+        after.state.requests[&RequestId(1)].lifecycle,
+        RequestLifecycle::Cancelled { .. }
+    ));
+    assert_eq!(after.history.level, 1);
+    assert_eq!(after.history.earliest_next_admission, CanonicalTime(99));
+    assert!(after.history.preparation.is_none());
+    assert!(after.messages.is_empty());
+    b.payment(1, true, 11);
+    assert!(matches!(
+        b.engine.snapshot().unwrap().payments[&RequestId(1)].refund(),
+        cs_mail_finance::RefundStatus::Confirmed(_)
+    ));
+    assert_eq!(
+        a.engine.financial_program().unwrap(),
+        b.engine.financial_program().unwrap()
     );
 }
 
 #[test]
-fn cancellation_conserves_value_across_small_policy_matrix() {
-    for processing in [0, 1, 7] {
-        for collateral in [0, 2, 11] {
-            for persistence in [0, 3, 13] {
-                let mut custom = policy();
-                custom.processing_charge = Money::from_minor_units(processing);
-                custom.collateral = Money::from_minor_units(collateral);
-                custom.persistence = vec![Money::ZERO, Money::from_minor_units(persistence)];
-                let engine = engine_with_level(1);
-                let issued = engine
-                    .execute(
-                        sender(
-                            ProtocolCommand::IssueContactTerms {
-                                quote_id: QuoteId(1),
-                                declaration_digest: None,
-                            },
-                            20_000 + u128::from(processing * 100 + collateral * 10 + persistence),
-                        ),
-                        CanonicalTime(1),
-                        custom.clone(),
-                    )
-                    .unwrap();
-                let terms = match issued.manifest.terms_outcome.unwrap() {
-                    TermsOutcome::BondRequired(terms) => terms,
-                    TermsOutcome::NoBondRequired => unreachable!(),
-                };
-                engine
-                    .execute(
-                        sender(
-                            ProtocolCommand::ReserveAttempt {
-                                bond_id: BondId(1),
-                                reserve_id: PersistenceReserveId(1),
-                                attempt_id: AttemptId(1),
-                                message_id: MessageId(1),
-                                terms,
-                            },
-                            30_000 + u128::from(processing * 100 + collateral * 10 + persistence),
-                        ),
-                        CanonicalTime(2),
-                        custom.clone(),
-                    )
-                    .unwrap();
-                engine
-                    .execute(
-                        sender(
-                            ProtocolCommand::CancelReservedAttempt {
-                                bond_id: BondId(1),
-                                expected_bond_version: Version(0),
-                                reason: CancellationReason::SenderRequested,
-                            },
-                            40_000 + u128::from(processing * 100 + collateral * 10 + persistence),
-                        ),
-                        CanonicalTime(3),
-                        custom,
-                    )
-                    .unwrap();
-                assert_eq!(
-                    engine.total_value().unwrap(),
-                    Money::from_minor_units(1_000)
+fn concurrent_aliases_reserve_exactly_one_preparation() {
+    use std::sync::{Arc, Barrier};
+    let (mut a, mut b) = aliases();
+    let quote = |f: &mut Fixture| {
+        let result = f
+            .sender(
+                ProtocolCommand::IssueRequestTerms {
+                    quote_id: QuoteId(1),
+                    declaration_digest: None,
+                },
+                1,
+            )
+            .unwrap();
+        let Some(TermsOutcome::ChargeRequired(terms)) = result.transition.terms_outcome else {
+            panic!("expected terms");
+        };
+        terms
+    };
+    let qa = quote(&mut a);
+    let qb = quote(&mut b);
+    let barrier = Arc::new(Barrier::new(2));
+    let threads: Vec<_> = [(a, qa), (b, qb)]
+        .into_iter()
+        .map(|(mut f, terms)| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                let result = f.sender(
+                    ProtocolCommand::CreateRequest {
+                        request_id: RequestId(1),
+                        message_id: MessageId(1),
+                        payment_method: [9; 32],
+                        terms,
+                    },
+                    2,
                 );
-                assert_eq!(
-                    engine.balance(sender_account()).unwrap(),
-                    Money::from_minor_units(1_000)
-                );
-            }
-        }
+                (f, result)
+            })
+        })
+        .collect();
+    let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|(_, r)| r.is_ok()).count(), 1);
+    let winner = &results.iter().find(|(_, r)| r.is_ok()).unwrap().0;
+    let shared = winner.engine.snapshot().unwrap().history;
+    assert_eq!(
+        shared.preparation.unwrap().relationship,
+        winner
+            .engine
+            .snapshot()
+            .unwrap()
+            .state
+            .relationship
+            .key
+            .reference
+    );
+    for (f, _) in results {
+        assert_eq!(f.engine.snapshot().unwrap().history, shared);
     }
 }
 
 #[test]
-fn expiry_settles_once_and_lapses_the_last_open_solicitation() {
-    let engine = engine_with_level(1);
-    let spec = AttemptSpec {
-        bond: BondId(1),
-        reserve: PersistenceReserveId(1),
-        attempt: AttemptId(1),
-        message: MessageId(1),
-        key_base: 50_000,
-    };
-    let terms = issue_terms(&engine, 1, 49_900);
-    reserve(&engine, &spec, terms, 2);
-    admit(&engine, &spec, 3);
-    engine
-        .execute(
-            scheduler(
-                ProtocolCommand::ExpireBond {
-                    bond_id: spec.bond,
-                    expected_bond_version: Version(1),
-                },
-                50_100,
-            ),
-            CanonicalTime(54),
-            policy(),
-        )
-        .unwrap();
-    let after = engine.snapshot().unwrap();
-    assert!(matches!(
-        after.state.bonds[&spec.bond].state,
-        BondState::Expired { .. }
-    ));
-    assert!(matches!(
-        after.state.reserves[&spec.reserve].state,
-        ReserveState::Reserved
-    ));
-    assert_eq!(
-        after.state.solicitation.unwrap().status,
-        SolicitationStatus::Lapsed
-    );
-    assert_eq!(
-        engine
-            .balance(Account::RecipientProvider(PROVIDER))
-            .unwrap(),
-        Money::from_minor_units(2)
-    );
-    assert_eq!(
-        engine.balance(sender_account()).unwrap(),
-        Money::from_minor_units(993)
-    );
-
-    let replay = engine
-        .execute(
-            scheduler(
-                ProtocolCommand::ExpireBond {
-                    bond_id: spec.bond,
-                    expected_bond_version: Version(1),
-                },
-                50_100,
-            ),
-            CanonicalTime(99),
-            policy(),
-        )
-        .unwrap();
-    assert!(replay.replayed);
-    assert_eq!(
-        engine.total_value().unwrap(),
-        Money::from_minor_units(1_000)
-    );
-}
-
-#[test]
-fn accepted_relationships_are_bond_free_until_revoked() {
-    let engine = engine_with_level(0);
-    engine
-        .execute(
-            recipient(
-                ProtocolCommand::AcceptRelationship {
-                    expected_version: Version(0),
-                },
-                60_000,
-            ),
-            CanonicalTime(1),
-            policy(),
-        )
-        .unwrap();
-    let accepted_terms = engine
-        .execute(
-            sender(
-                ProtocolCommand::IssueContactTerms {
-                    quote_id: QuoteId(1),
-                    declaration_digest: None,
-                },
-                60_001,
-            ),
-            CanonicalTime(2),
-            policy(),
-        )
-        .unwrap();
-    assert_eq!(
-        accepted_terms.manifest.terms_outcome,
-        Some(TermsOutcome::NoBondRequired)
-    );
-
-    engine
-        .execute(
-            recipient(
-                ProtocolCommand::RevokeRelationship {
-                    expected_version: Version(1),
-                },
-                60_002,
-            ),
-            CanonicalTime(3),
-            policy(),
-        )
-        .unwrap();
-    let revoked = engine.snapshot().unwrap();
-    assert_eq!(revoked.state.relationship.state, RelationshipState::Revoked);
-    assert_eq!(revoked.state.attempt.level, 0);
-    let new_terms = engine
-        .execute(
-            sender(
-                ProtocolCommand::IssueContactTerms {
-                    quote_id: QuoteId(2),
-                    declaration_digest: None,
-                },
-                60_003,
-            ),
-            CanonicalTime(4),
-            policy(),
-        )
-        .unwrap();
-    assert!(matches!(
-        new_terms.manifest.terms_outcome,
-        Some(TermsOutcome::BondRequired(_))
-    ));
-}
-
-#[test]
-fn quote_bound_declaration_mismatch_cancels_and_fully_releases_value() {
-    let engine = engine_with_level(1);
-    let expected = MessageDeclarationDigest([1; 32]);
-    let issued = engine
-        .execute(
-            sender(
-                ProtocolCommand::IssueContactTerms {
-                    quote_id: QuoteId(70_000),
-                    declaration_digest: Some(expected),
-                },
-                70_000,
-            ),
-            CanonicalTime(1),
-            policy(),
-        )
-        .unwrap();
-    let TermsOutcome::BondRequired(terms) = issued.manifest.terms_outcome.unwrap() else {
-        panic!("expected bonded terms");
-    };
-    let spec = AttemptSpec {
-        bond: BondId(70),
-        reserve: PersistenceReserveId(70),
-        attempt: AttemptId(70),
-        message: MessageId(70),
-        key_base: 70_100,
-    };
-    reserve(&engine, &spec, *terms, 2);
-
-    let outcome = engine
-        .execute(
-            sender(
-                ProtocolCommand::AdmitAttempt {
-                    bond_id: spec.bond,
-                    expected_bond_version: Version(0),
-                    content_ref: ContentRef(70),
-                    delivery_intent_ref: DeliveryIntentRef(70),
-                    declaration_digest: MessageDeclarationDigest([2; 32]),
-                    message_valid_until: MessageValidityUntil(CanonicalTime(100)),
-                },
-                70_200,
-            ),
-            CanonicalTime(3),
-            policy(),
-        )
-        .unwrap();
-
-    assert!(
-        outcome
-            .manifest
-            .protocol_events
-            .iter()
-            .any(|event| { event.kind == ProtocolEventKind::DeclarationMismatch(spec.bond) })
-    );
-    assert!(matches!(
-        engine.snapshot().unwrap().state.bonds[&spec.bond].state,
-        BondState::CancelledUnadmitted { .. }
-    ));
-    assert_eq!(
-        engine.balance(sender_account()).unwrap(),
-        Money::from_minor_units(1_000)
-    );
-}
-
-#[test]
-fn expired_message_validity_cancels_and_fully_releases_value() {
-    let engine = engine_with_level(1);
-    let terms = issue_terms(&engine, 1, 71_000);
-    let spec = AttemptSpec {
-        bond: BondId(71),
-        reserve: PersistenceReserveId(71),
-        attempt: AttemptId(71),
-        message: MessageId(71),
-        key_base: 71_100,
-    };
-    reserve(&engine, &spec, terms, 2);
-
-    let outcome = engine
-        .execute(
-            sender(
-                ProtocolCommand::AdmitAttempt {
-                    bond_id: spec.bond,
-                    expected_bond_version: Version(0),
-                    content_ref: ContentRef(71),
-                    delivery_intent_ref: DeliveryIntentRef(71),
-                    declaration_digest: MessageDeclarationDigest([0; 32]),
-                    message_valid_until: MessageValidityUntil(CanonicalTime(2)),
-                },
-                71_200,
-            ),
-            CanonicalTime(3),
-            policy(),
-        )
-        .unwrap();
-
-    assert!(
-        outcome
-            .manifest
-            .protocol_events
-            .iter()
-            .any(|event| { event.kind == ProtocolEventKind::MessageValidityClosed(spec.bond) })
-    );
-    assert_eq!(
-        engine.balance(sender_account()).unwrap(),
-        Money::from_minor_units(1_000)
-    );
-}
-
-#[test]
-fn concurrent_acceptance_and_reservation_leave_no_stranded_value() {
-    let engine = engine_with_level(0);
-    let terms = issue_terms(&engine, 1, 70_000);
-    let engine = Arc::new(engine);
-    let reserve_engine = Arc::clone(&engine);
-    let accept_engine = Arc::clone(&engine);
-    let reserve = thread::spawn(move || {
-        reserve_engine.execute(
-            sender(
-                ProtocolCommand::ReserveAttempt {
-                    bond_id: BondId(1),
-                    reserve_id: PersistenceReserveId(1),
-                    attempt_id: AttemptId(1),
-                    message_id: MessageId(1),
-                    terms: Box::new(terms),
-                },
-                70_001,
-            ),
-            CanonicalTime(2),
-            policy(),
-        )
-    });
-    let accept = thread::spawn(move || {
-        accept_engine.execute(
-            recipient(
-                ProtocolCommand::AcceptRelationship {
-                    expected_version: Version(0),
-                },
-                70_002,
-            ),
-            CanonicalTime(2),
-            policy(),
-        )
-    });
-    let reserve_result = reserve.join().unwrap();
-    let accept_result = accept.join().unwrap();
-    assert!(accept_result.is_ok());
-    assert!(
-        reserve_result.is_ok()
-            || matches!(
-                reserve_result,
-                Err(EngineError::Protocol(ProtocolError::RelationshipAccepted))
-            )
-    );
-    let snapshot = engine.snapshot().unwrap();
-    assert_eq!(
-        snapshot.state.relationship.state,
-        RelationshipState::Accepted
-    );
-    assert!(
-        snapshot
-            .state
-            .bonds
-            .values()
-            .all(|bond| matches!(bond.state, BondState::CancelledUnadmitted { .. }))
-    );
-    assert_eq!(snapshot.state.attempt.level, 0);
-    assert_eq!(
-        engine.balance(sender_account()).unwrap(),
-        Money::from_minor_units(1_000)
-    );
-}
-
-#[test]
-fn insufficient_funds_create_no_protocol_or_ledger_hold() {
-    let state = initial_state(PRINCIPAL, SENDER, RECIPIENT, CanonicalTime(0));
-    let engine = InMemoryEngine::new(state, UNIT, Money::from_minor_units(5)).unwrap();
-    let terms = issue_terms(&engine, 1, 80_000);
-    let before = engine.snapshot().unwrap();
-    let result = engine.execute(
-        sender(
-            ProtocolCommand::ReserveAttempt {
-                bond_id: BondId(1),
-                reserve_id: PersistenceReserveId(1),
-                attempt_id: AttemptId(1),
-                message_id: MessageId(1),
-                terms: Box::new(terms),
+fn three_messages_are_one_request_one_solicitation_and_one_refund() {
+    let mut f = Fixture::new();
+    f.open();
+    f.execute(
+        ActorRef::Recipient(ProtocolIdentity(20)),
+        ProtocolCommand::SetFollowupPolicy {
+            expected_version: Version(0),
+            policy: FollowupPolicy {
+                version: Version(0),
+                max_messages: 2,
+                max_per_interval: 2,
+                interval: Duration(10),
             },
-            80_001,
-        ),
-        CanonicalTime(2),
-        policy(),
+        },
+        4,
+    )
+    .unwrap();
+    let original = f.engine.snapshot().unwrap().state.requests[&RequestId(1)].clone();
+    for id in 2..=3 {
+        f.sender(
+            ProtocolCommand::AdmitFollowup {
+                request_id: RequestId(1),
+                message_id: MessageId(id),
+                content_ref: ContentRef(id),
+                delivery_intent_ref: DeliveryIntentRef(id),
+                declaration_digest: MessageDeclarationDigest([u8::try_from(id).unwrap(); 32]),
+                message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+                expected_policy_version: Version(1),
+            },
+            5,
+        )
+        .unwrap();
+    }
+    let snapshot = f.engine.snapshot().unwrap();
+    assert_eq!(snapshot.state.requests.len(), 1);
+    assert_eq!(snapshot.state.requests[&RequestId(1)], original);
+    assert_eq!(snapshot.messages.len(), 3);
+    assert_eq!(snapshot.payments.len(), 1);
+    assert_eq!(
+        f.engine
+            .outbox()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(
+                e,
+                EffectIntent::EstablishRequestSolicitation {
+                    request_id: RequestId(1),
+                    generation: 1
+                }
+            ))
+            .count(),
+        1
+    );
+    f.decision(true, 6);
+    let accepted = f.engine.snapshot().unwrap();
+    assert!(
+        matches!(accepted.state.requests[&RequestId(1)].lifecycle, RequestLifecycle::Accepted { admission, .. } if Some(admission) == original.lifecycle.admission())
     );
     assert!(matches!(
-        result,
-        Err(EngineError::Protocol(ProtocolError::InsufficientFunds))
+        accepted.payments[&RequestId(1)].refund(),
+        cs_mail_finance::RefundStatus::Pending(_)
     ));
-    let after = engine.snapshot().unwrap();
-    assert_eq!(after.revision, before.revision);
-    assert!(after.state.bonds.is_empty());
-    assert!(after.state.reserves.is_empty());
-    assert_eq!(
-        engine.balance(sender_account()).unwrap(),
-        Money::from_minor_units(5)
+    f.payment(1, true, 7);
+    let paid = f.engine.snapshot().unwrap();
+    assert_eq!(paid.state.requests, accepted.state.requests);
+    assert_eq!(paid.messages, accepted.messages);
+    assert_eq!(f.provider.operation_count(), 2);
+}
+
+#[test]
+fn domain_snapshots_round_trip_without_embedding_shared_or_financial_owners() {
+    let mut f = Fixture::new();
+    f.create(1, 1);
+    let mut snapshots = vec![f.engine.snapshot().unwrap()];
+    f.payment(1, false, 2);
+    f.admit(1, 3).unwrap();
+    snapshots.push(f.engine.snapshot().unwrap());
+    f.decision(true, 4);
+    snapshots.push(f.engine.snapshot().unwrap());
+    f.payment(1, true, 5);
+    snapshots.push(f.engine.snapshot().unwrap());
+    for snapshot in snapshots {
+        let bytes = serde_json::to_vec(&snapshot).unwrap();
+        let restored: SettlementSnapshot = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored, snapshot);
+        let state = serde_json::to_value(&snapshot.state).unwrap();
+        assert!(state.get("history").is_none());
+        assert!(state.get("payments").is_none());
+        assert!(state.get("messages").is_none());
+        assert!(state["requests"]["1"].get("capture").is_none());
+    }
+    // Open and resolved requests must carry their admission facts.
+    assert!(serde_json::from_value::<RequestLifecycle>(serde_json::json!("Open")).is_err());
+    assert!(
+        serde_json::from_value::<RequestLifecycle>(serde_json::json!({"Accepted": {"event": 1}}))
+            .is_err()
     );
+}
+
+#[test]
+fn initial_admission_refusal_uses_the_request_owner_for_void_or_full_refund() {
+    use cs_mail_protocol::admission::AdmissionFailure;
+    for captured in [false, true] {
+        let mut f = Fixture::new();
+        f.create(1, 1);
+        if captured {
+            f.payment(1, false, 2);
+        }
+        let snapshot = f.engine.snapshot().unwrap();
+        let command = KernelCommand::new(
+            ProtocolCommand::AdmitRequest {
+                request_id: RequestId(1),
+                expected_request_version: Version(0),
+                content_ref: ContentRef(1),
+                delivery_intent_ref: DeliveryIntentRef(1),
+                declaration_digest: MessageDeclarationDigest([0; 32]),
+                message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+            },
+            ActorRef::Sender(ProtocolIdentity(10)),
+            OperationalKeyRef(1),
+            IdempotencyKey(99),
+        );
+        let context = TransitionContext {
+            now: CanonicalTime(3),
+            journal_position: JournalPosition(99),
+            protocol_version: ProtocolVersion(2),
+            policy: f.policy,
+            admission: Err(AdmissionFailure::UnsupportedCriticalExtension),
+        };
+        let manifest = transition(&snapshot, &command, &context).unwrap();
+        assert!(matches!(
+            manifest.next_state.requests[&RequestId(1)].lifecycle,
+            RequestLifecycle::Cancelled { .. }
+        ));
+        assert_eq!(manifest.next_history.level, snapshot.history.level);
+        assert!(manifest.next_history.preparation.is_none());
+        assert!(manifest.next_messages.is_empty());
+        let financials = &manifest.next_payments[&RequestId(1)];
+        if captured {
+            assert_eq!(
+                financials.refund().operation().unwrap().amount,
+                Money::from_minor_units(10)
+            );
+        } else {
+            assert_eq!(
+                financials.capture_status(),
+                cs_mail_finance::CaptureStatus::CancellationRequested
+            );
+            assert!(financials.refund().operation().is_none());
+        }
+        snapshot.ledger.apply(&manifest.ledger_batch).unwrap();
+        assert!(
+            !manifest
+                .outbox_intents
+                .iter()
+                .any(|e| matches!(e, EffectIntent::DeliverMessage { .. }))
+        );
+    }
+}
+#[test]
+fn refused_followup_leaves_open_request_deadline_history_and_finances_intact() {
+    use cs_mail_protocol::admission::AdmissionFailure;
+    let mut f = Fixture::new();
+    f.open();
+    f.execute(
+        ActorRef::Recipient(ProtocolIdentity(20)),
+        ProtocolCommand::SetFollowupPolicy {
+            expected_version: Version(0),
+            policy: FollowupPolicy {
+                version: Version(0),
+                max_messages: 2,
+                max_per_interval: 2,
+                interval: Duration(10),
+            },
+        },
+        4,
+    )
+    .unwrap();
+    let before = f.engine.snapshot().unwrap();
+    let command = KernelCommand::new(
+        ProtocolCommand::AdmitFollowup {
+            request_id: RequestId(1),
+            message_id: MessageId(2),
+            content_ref: ContentRef(2),
+            delivery_intent_ref: DeliveryIntentRef(2),
+            declaration_digest: MessageDeclarationDigest([0; 32]),
+            message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+            expected_policy_version: Version(1),
+        },
+        ActorRef::Sender(ProtocolIdentity(10)),
+        OperationalKeyRef(1),
+        IdempotencyKey(99),
+    );
+    let context = TransitionContext {
+        now: CanonicalTime(5),
+        journal_position: JournalPosition(99),
+        protocol_version: ProtocolVersion(2),
+        policy: f.policy,
+        admission: Err(AdmissionFailure::UnsupportedCriticalExtension),
+    };
+    assert_eq!(
+        transition(&before, &command, &context),
+        Err(ProtocolError::AdmissionRefused(
+            AdmissionFailure::UnsupportedCriticalExtension
+        ))
+    );
+    assert_eq!(f.engine.snapshot().unwrap(), before);
+}
+#[test]
+fn correctly_signed_financial_command_cannot_replay_in_a_different_program() {
+    let base = policy().financial.scope;
+    let key = SimulatedProvider::new([7; 32]).verifying_key();
+    let command = cs_mail_finance::SignedProgramCommand::sign(
+        base,
+        SettlementUnit(1),
+        IdempotencyKey(1),
+        0,
+        cs_mail_finance::ProgramCommand::Enroll {
+            member: MemberId(1),
+            identity_digest: [4; 32],
+            status: cs_mail_finance::MembershipStatus {
+                opted_in: true,
+                verified: true,
+                suspended: false,
+            },
+        },
+        &[7; 32],
+    )
+    .unwrap();
+    command.verify(&key).unwrap();
+    let state = ProtocolState::initial(
+        PrincipalRef(1),
+        ProtocolIdentity(10),
+        ProtocolIdentity(20),
+        CanonicalTime(0),
+    );
+    let original = InMemoryEngine::new(state.clone(), SettlementUnit(1), base).unwrap();
+    original
+        .execute_financial_command(&command, &key, CanonicalTime(1))
+        .unwrap();
+    for scope in [
+        cs_mail_finance::FinancialScope {
+            deployment_domain: [8; 32],
+            ..base
+        },
+        cs_mail_finance::FinancialScope {
+            program: ProgramRef(2),
+            ..base
+        },
+        cs_mail_finance::FinancialScope {
+            payment_account: [8; 32],
+            ..base
+        },
+    ] {
+        let other = InMemoryEngine::new(state.clone(), SettlementUnit(1), scope).unwrap();
+        assert_eq!(
+            other.execute_financial_command(&command, &key, CanonicalTime(1)),
+            Err(EngineError::VersionConflict)
+        );
+    }
 }

@@ -5,13 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-security = { path = "../cs-mail-security" }
+cs-mail-finance = { path = "../cs-mail-finance" }
 cs-mail-content = { path = "../cs-mail-content" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
 cs-mail-protocol = { path = "../cs-mail-protocol" }
 cs-mail-storage-postgres = { path = "../cs-mail-storage-postgres" }
 
 [dev-dependencies]
-cs-mail-security = { path = "../cs-mail-security" }
+cs-mail-ledger = { path = "../cs-mail-ledger" }
+postgres.workspace = true
 
 [lints]
 workspace = true

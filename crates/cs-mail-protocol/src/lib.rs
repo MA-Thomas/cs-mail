@@ -3,281 +3,26 @@
 //! `transition` performs no I/O. It consumes a complete snapshot and an
 //! authenticated command, then returns the entire atomic consequence.
 
-use std::collections::{BTreeMap, BTreeSet};
+use cs_mail_finance::{
+    FinancialTerms, Forfeiture, PaymentKind, PaymentOperation, RequestFinancialContract,
+    RequestFinancialEffects, RequestSettlement, SignedPaymentEvidence, request_payment_id,
+};
+use cs_mail_primitives::PaymentOperationId;
+use std::collections::BTreeMap;
 
-use cs_mail_ledger::{Account, LedgerBatch, LedgerError, LedgerView};
+use cs_mail_ledger::{LedgerBatch, LedgerError};
 use cs_mail_primitives::{
-    AttemptId, AttemptSubjectRef, AttemptVersion, BondId, BondVersion, CanonicalTime, ContentRef,
-    DeliveryIntentRef, Duration, EpisodeId, EventRef, IdempotencyKey, JournalPosition, LaneId,
-    LedgerAccountRef, MessageDeclarationDigest, MessageId, MessageValidityUntil, Money,
-    OperationalKeyRef, PersistenceReserveId, PolicyVersion, PrincipalRef, PrivacyProfileVersion,
-    ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, RelationshipRef, RelationshipVersion,
-    ReserveVersion, RetentionPolicyVersion, SettlementUnit, Version,
+    CanonicalTime, ContentRef, DeliveryIntentRef, Duration, EventRef, IdempotencyKey,
+    JournalPosition, LaneId, MessageDeclarationDigest, MessageId, MessageValidityUntil, Money,
+    OperationalKeyRef, PolicyVersion, PrivacyProfileVersion, ProtocolIdentity, ProtocolVersion,
+    ProviderRef, QuoteId, RelationshipVersion, RequestId, RequestVersion, RetentionPolicyVersion,
+    SettlementUnit, Version,
 };
 pub use cs_mail_primitives::{ScheduleChange, ScheduleTask};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct RelationshipKey {
-    pub reference: RelationshipRef,
-    pub sender: ProtocolIdentity,
-    pub recipient: ProtocolIdentity,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub enum RelationshipState {
-    Unknown,
-    Accepted,
-    Rejected,
-    Revoked,
-    Blocked,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Relationship {
-    pub key: RelationshipKey,
-    pub state: RelationshipState,
-    pub version: RelationshipVersion,
-    pub last_event: Option<EventRef>,
-    pub changed_at: CanonicalTime,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RepeatedAttemptState {
-    pub subject: AttemptSubjectRef,
-    pub sender_account: LedgerAccountRef,
-    pub recipient: ProtocolIdentity,
-    pub level: u32,
-    pub earliest_next_admission: CanonicalTime,
-    pub version: AttemptVersion,
-    pub last_event: Option<EventRef>,
-    pub changed_at: CanonicalTime,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub enum BondState {
-    Reserved,
-    Admitted,
-    Accepted { event: EventRef },
-    Rejected { event: EventRef },
-    Expired { event: EventRef },
-    CancelledUnadmitted { event: EventRef },
-}
-
-impl BondState {
-    pub const fn is_terminal(self) -> bool {
-        !matches!(self, Self::Reserved | Self::Admitted)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct ContactTerms {
-    pub quote_id: QuoteId,
-    pub protocol_version: ProtocolVersion,
-    pub policy_version: PolicyVersion,
-    pub privacy_profile_version: PrivacyProfileVersion,
-    pub retention_policy_version: RetentionPolicyVersion,
-    pub relationship: RelationshipRef,
-    pub attempt_subject: AttemptSubjectRef,
-    pub sender_account: LedgerAccountRef,
-    pub sender: ProtocolIdentity,
-    pub recipient: ProtocolIdentity,
-    pub recipient_provider: ProviderRef,
-    pub relationship_version: RelationshipVersion,
-    pub attempt_version: AttemptVersion,
-    pub processing_charge: Money,
-    pub collateral: Money,
-    pub persistence: Money,
-    pub attempt_level: u32,
-    pub eligibility_time: CanonicalTime,
-    pub unit: SettlementUnit,
-    pub admission_window: Duration,
-    pub decision_window: Duration,
-    pub persistence_release_at: CanonicalTime,
-    pub earliest_final_expiry_at: CanonicalTime,
-    pub issued_at: CanonicalTime,
-    pub expires_at: CanonicalTime,
-    pub declaration_digest: Option<MessageDeclarationDigest>,
-}
-
-impl ContactTerms {
-    /// Returns the `C + S` bond portion of the reservation.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ArithmeticOverflow` if the quoted values cannot be added.
-    pub fn bond_amount(&self) -> Result<Money, ProtocolError> {
-        self.processing_charge
-            .checked_add(self.collateral)
-            .ok_or(ProtocolError::ArithmeticOverflow)
-    }
-
-    /// Returns the complete `C + S + L_k` reservation.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ArithmeticOverflow` if the quoted values cannot be added.
-    pub fn total_reservation(&self) -> Result<Money, ProtocolError> {
-        self.bond_amount()?
-            .checked_add(self.persistence)
-            .ok_or(ProtocolError::ArithmeticOverflow)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Bond {
-    pub id: BondId,
-    pub reserve_id: PersistenceReserveId,
-    pub attempt_id: AttemptId,
-    pub message_id: MessageId,
-    pub terms: ContactTerms,
-    pub created_at: CanonicalTime,
-    pub admission_deadline: CanonicalTime,
-    pub admitted_at: Option<CanonicalTime>,
-    pub decision_deadline: Option<CanonicalTime>,
-    pub content_ref: Option<ContentRef>,
-    pub delivery_intent_ref: Option<DeliveryIntentRef>,
-    pub state: BondState,
-    pub version: BondVersion,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub enum ReserveState {
-    Reserved,
-    Released { event: EventRef },
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PersistenceReserve {
-    pub id: PersistenceReserveId,
-    pub bond_id: BondId,
-    pub attempt_subject: AttemptSubjectRef,
-    pub sender_account: LedgerAccountRef,
-    pub relationship: RelationshipRef,
-    pub sender: ProtocolIdentity,
-    pub recipient: ProtocolIdentity,
-    pub amount: Money,
-    pub created_at: CanonicalTime,
-    pub release_at: CanonicalTime,
-    pub state: ReserveState,
-    pub version: ReserveVersion,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub enum SolicitationStatus {
-    Active,
-    Closed,
-    Lapsed,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SolicitationEpisode {
-    pub id: EpisodeId,
-    pub relationship: RelationshipKey,
-    pub generation: u64,
-    pub attempts: BTreeSet<AttemptId>,
-    pub opened_at: CanonicalTime,
-    pub status: SolicitationStatus,
-    pub version: Version,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProtocolState {
-    pub relationship: Relationship,
-    pub attempt: RepeatedAttemptState,
-    pub bonds: BTreeMap<BondId, Bond>,
-    pub reserves: BTreeMap<PersistenceReserveId, PersistenceReserve>,
-    pub solicitation: Option<SolicitationEpisode>,
-}
-
-impl ProtocolState {
-    pub fn initial_scoped(
-        relationship: RelationshipRef,
-        attempt_subject: AttemptSubjectRef,
-        sender_account: LedgerAccountRef,
-        sender: ProtocolIdentity,
-        recipient: ProtocolIdentity,
-        now: CanonicalTime,
-    ) -> Self {
-        Self {
-            relationship: Relationship {
-                key: RelationshipKey {
-                    reference: relationship,
-                    sender,
-                    recipient,
-                },
-                state: RelationshipState::Unknown,
-                version: RelationshipVersion::default(),
-                last_event: None,
-                changed_at: now,
-            },
-            attempt: RepeatedAttemptState {
-                subject: attempt_subject,
-                sender_account,
-                recipient,
-                level: 0,
-                earliest_next_admission: now,
-                version: AttemptVersion::default(),
-                last_event: None,
-                changed_at: now,
-            },
-            bonds: BTreeMap::new(),
-            reserves: BTreeMap::new(),
-            solicitation: None,
-        }
-    }
-
-    pub fn initial(
-        principal: PrincipalRef,
-        sender: ProtocolIdentity,
-        recipient: ProtocolIdentity,
-        now: CanonicalTime,
-    ) -> Self {
-        Self::initial_scoped(
-            RelationshipRef::from_u128_for_test(sender.0 ^ recipient.0),
-            AttemptSubjectRef::from_u128_for_test(principal.0 ^ recipient.0),
-            LedgerAccountRef::from_u128_for_test(principal.0),
-            sender,
-            recipient,
-            now,
-        )
-    }
-
-    pub fn active_reserves(&self) -> impl Iterator<Item = &PersistenceReserve> {
-        self.reserves
-            .values()
-            .filter(|reserve| matches!(reserve.state, ReserveState::Reserved))
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SettlementSnapshot {
-    pub revision: u64,
-    pub state: ProtocolState,
-    pub ledger: LedgerView,
-    complete: bool,
-}
-
-impl SettlementSnapshot {
-    pub fn complete(revision: u64, state: ProtocolState, ledger: LedgerView) -> Self {
-        Self {
-            revision,
-            state,
-            ledger,
-            complete: true,
-        }
-    }
-
-    #[cfg(test)]
-    fn incomplete(revision: u64, state: ProtocolState, ledger: LedgerView) -> Self {
-        Self {
-            revision,
-            state,
-            ledger,
-            complete: false,
-        }
-    }
-}
+mod model;
+pub use model::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct PolicySnapshot {
@@ -292,9 +37,11 @@ pub struct PolicySnapshot {
     pub admission_window: Duration,
     pub decision_window: Duration,
     pub quote_lifetime: Duration,
-    pub persistence_duration: Duration,
     pub backoff: Vec<Duration>,
-    pub persistence: Vec<Money>,
+    pub financial: FinancialTerms,
+    pub payment_provider_key: [u8; 32],
+    pub expiry_cooldown: Duration,
+    pub rejection_cooldown: Duration,
 }
 
 impl PolicySnapshot {
@@ -306,21 +53,17 @@ impl PolicySnapshot {
             .unwrap_or(Duration(0))
     }
 
-    fn persistence_for(&self, level: u32) -> Money {
-        self.persistence
-            .get(level as usize)
-            .copied()
-            .or_else(|| self.persistence.last().copied())
-            .unwrap_or(Money::ZERO)
-    }
-
     fn validate(&self) -> Result<(), ProtocolError> {
-        if self.backoff.is_empty()
-            || self.persistence.is_empty()
+        if self
+            .processing_charge
+            .checked_add(self.collateral)
+            .is_none_or(Money::is_zero)
+            || self.financial.validate().is_err()
+            || self.payment_provider_key == [0; 32]
+            || self.decision_window.0 == 0
+            || self.backoff.is_empty()
             || self.backoff[0] != Duration(0)
-            || self.persistence[0] != Money::ZERO
             || !self.backoff.windows(2).all(|pair| pair[0] <= pair[1])
-            || !self.persistence.windows(2).all(|pair| pair[0] <= pair[1])
         {
             return Err(ProtocolError::PolicyInvalid);
         }
@@ -330,6 +73,8 @@ impl PolicySnapshot {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransitionContext {
+    /// Result of the host's content and policy checks at canonical receipt time.
+    pub admission: Result<(), admission::AdmissionFailure>,
     pub now: CanonicalTime,
     pub journal_position: JournalPosition,
     pub protocol_version: ProtocolVersion,
@@ -345,21 +90,17 @@ pub enum ActorRef {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct Authorized<T> {
+pub struct KernelCommand<T> {
     command: T,
     actor: ActorRef,
     key: OperationalKeyRef,
     idempotency_key: IdempotencyKey,
 }
 
-impl<T> Authorized<T> {
-    /// Constructs authorization inside a trusted adapter or test harness.
-    ///
-    /// Durable and network-facing adapters must not expose caller-controlled
-    /// values created through this constructor; they must verify signatures or
-    /// derive commands from trusted system state first.
-    #[doc(hidden)]
-    pub const fn assume_verified(
+impl<T> KernelCommand<T> {
+    /// Builds input for the pure transition kernel. This is data, not proof of authentication.
+    /// Durable ingress accepts signed submissions and establishes authority itself.
+    pub const fn new(
         command: T,
         actor: ActorRef,
         key: OperationalKeyRef,
@@ -403,28 +144,44 @@ pub enum CancellationReason {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum ProtocolCommand {
-    IssueContactTerms {
+    RecordPayment {
+        request_id: RequestId,
+        receipt: SignedPaymentEvidence,
+    },
+    SetFollowupPolicy {
+        expected_version: Version,
+        policy: FollowupPolicy,
+    },
+    AdmitFollowup {
+        request_id: RequestId,
+        message_id: MessageId,
+        content_ref: ContentRef,
+        delivery_intent_ref: DeliveryIntentRef,
+        declaration_digest: MessageDeclarationDigest,
+        message_valid_until: MessageValidityUntil,
+        expected_policy_version: Version,
+    },
+    IssueRequestTerms {
         quote_id: QuoteId,
         declaration_digest: Option<MessageDeclarationDigest>,
     },
-    ReserveAttempt {
-        bond_id: BondId,
-        reserve_id: PersistenceReserveId,
-        attempt_id: AttemptId,
+    CreateRequest {
+        payment_method: [u8; 32],
+        request_id: RequestId,
         message_id: MessageId,
-        terms: Box<ContactTerms>,
+        terms: Box<RequestTerms>,
     },
-    AdmitAttempt {
-        bond_id: BondId,
-        expected_bond_version: Version,
+    AdmitRequest {
+        request_id: RequestId,
+        expected_request_version: Version,
         content_ref: ContentRef,
         delivery_intent_ref: DeliveryIntentRef,
         declaration_digest: MessageDeclarationDigest,
         message_valid_until: MessageValidityUntil,
     },
-    CancelReservedAttempt {
-        bond_id: BondId,
-        expected_bond_version: Version,
+    CancelPreparingRequest {
+        request_id: RequestId,
+        expected_request_version: Version,
         reason: CancellationReason,
     },
     AcceptRelationship {
@@ -439,13 +196,9 @@ pub enum ProtocolCommand {
     UnblockRelationship {
         expected_version: Version,
     },
-    ExpireBond {
-        bond_id: BondId,
-        expected_bond_version: Version,
-    },
-    ReleasePersistenceReserve {
-        reserve_id: PersistenceReserveId,
-        expected_reserve_version: Version,
+    ExpireRequest {
+        request_id: RequestId,
+        expected_request_version: Version,
     },
     RevokeRelationship {
         expected_version: Version,
@@ -454,19 +207,25 @@ pub enum ProtocolCommand {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TermsOutcome {
-    BondRequired(Box<ContactTerms>),
-    NoBondRequired,
+    ChargeRequired(Box<RequestTerms>),
+    NoChargeRequired,
+    ExistingRequest(RequestId),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum EffectIntent {
+    ExecutePayment {
+        request_id: RequestId,
+        operation_id: PaymentOperationId,
+    },
     DeliverMessage {
         message_id: MessageId,
         content_ref: ContentRef,
         delivery_intent_ref: DeliveryIntentRef,
     },
-    EstablishRelationshipSolicitation {
-        episode_id: EpisodeId,
+    EstablishRequestSolicitation {
+        request_id: RequestId,
+        generation: u64,
     },
     ReviewLane {
         lane_id: LaneId,
@@ -476,19 +235,22 @@ pub enum EffectIntent {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum ProtocolEventKind {
+    PaymentRecorded(RequestId),
+    FollowupPolicyChanged,
+    FollowupAdmitted(RequestId, MessageId),
     TermsIssued,
-    AttemptReserved(BondId),
-    AttemptAdmitted(BondId),
-    ReservedAttemptCancelled(BondId),
-    MessageValidityClosed(BondId),
-    DeclarationMismatch(BondId),
+    RequestCreated(RequestId),
+    RequestAdmitted(RequestId),
+    PreparingRequestCancelled(RequestId),
+    RequestHistoryChanged(RequestId),
+    MessageValidityClosed(RequestId),
+    DeclarationMismatch(RequestId),
     RelationshipAccepted,
     RelationshipRejected,
     RelationshipBlocked,
     RelationshipUnblocked,
     RelationshipRevoked,
-    BondExpired(BondId),
-    PersistenceReleased(PersistenceReserveId),
+    RequestExpired(RequestId),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -498,11 +260,25 @@ pub struct ProtocolEvent {
     pub kind: ProtocolEventKind,
 }
 
+/// Minimal replay evidence. Full transition snapshots are transient commit plans.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CommittedTransition {
+    pub journal_position: JournalPosition,
+    pub protocol_events: Vec<ProtocolEvent>,
+    pub terms_outcome: Option<TermsOutcome>,
+    pub delivered: bool,
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransitionManifest {
+    pub forfeitures: Vec<Forfeiture>,
+    pub forfeiture_holds: Vec<PaymentOperationId>,
     pub expected_snapshot_revision: u64,
     pub expected_ledger_revision: u64,
     pub next_state: ProtocolState,
+    pub next_history: RequestHistory,
+    pub next_payments: BTreeMap<RequestId, cs_mail_finance::RequestFinancials>,
+    pub next_messages: BTreeMap<MessageId, Message>,
+
     pub ledger_batch: LedgerBatch,
     pub schedule_changes: Vec<ScheduleChange>,
     pub protocol_events: Vec<ProtocolEvent>,
@@ -510,19 +286,39 @@ pub struct TransitionManifest {
     pub terms_outcome: Option<TermsOutcome>,
 }
 
+impl TransitionManifest {
+    pub fn committed(&self, journal_position: JournalPosition) -> CommittedTransition {
+        CommittedTransition {
+            journal_position,
+            protocol_events: self.protocol_events.clone(),
+            terms_outcome: self.terms_outcome.clone(),
+            delivered: self
+                .outbox_intents
+                .iter()
+                .any(|effect| matches!(effect, EffectIntent::DeliverMessage { .. })),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProtocolError {
     AuthenticationFailed,
+    AdmissionRefused(admission::AdmissionFailure),
     QuoteExpired,
     QuoteVersionStale,
     RelationshipAccepted,
     ContactBlocked,
     BackoffActive { next_eligible: CanonicalTime },
     InsufficientFunds,
+    RequestAlreadyExists,
+    PaymentNotConfirmed,
+    PaymentInvalid,
+    FollowupNotAllowed,
     AmountMismatch,
     AdmissionWindowClosed,
-    ReservedAttemptCancelled,
+    PreparingRequestCancelled,
     DecisionWindowClosed,
+    MessageValidityClosed,
     AlreadyTerminal,
     VersionConflict,
     DuplicateConflict,
@@ -548,6 +344,12 @@ impl From<LedgerError> for ProtocolError {
 
 struct ManifestBuilder {
     next: ProtocolState,
+    history: RequestHistory,
+    payments: BTreeMap<RequestId, cs_mail_finance::RequestFinancials>,
+    messages: BTreeMap<MessageId, Message>,
+
+    forfeitures: Vec<Forfeiture>,
+    forfeiture_holds: Vec<PaymentOperationId>,
     batch: LedgerBatch,
     schedules: Vec<ScheduleChange>,
     events: Vec<ProtocolEvent>,
@@ -561,6 +363,11 @@ impl ManifestBuilder {
     fn new(snapshot: &SettlementSnapshot, context: &TransitionContext) -> Self {
         Self {
             next: snapshot.state.clone(),
+            history: snapshot.history.clone(),
+            payments: snapshot.payments.clone(),
+            messages: snapshot.messages.clone(),
+            forfeitures: Vec::new(),
+            forfeiture_holds: Vec::new(),
             batch: LedgerBatch::new(),
             schedules: Vec::new(),
             events: Vec::new(),
@@ -582,9 +389,14 @@ impl ManifestBuilder {
     fn finish(self, snapshot: &SettlementSnapshot) -> Result<TransitionManifest, ProtocolError> {
         snapshot.ledger.apply(&self.batch)?;
         Ok(TransitionManifest {
+            forfeitures: self.forfeitures,
+            forfeiture_holds: self.forfeiture_holds,
             expected_snapshot_revision: snapshot.revision,
             expected_ledger_revision: snapshot.ledger.revision,
             next_state: self.next,
+            next_history: self.history,
+            next_payments: self.payments,
+            next_messages: self.messages,
             ledger_batch: self.batch,
             schedule_changes: self.schedules,
             protocol_events: self.events,
@@ -602,9 +414,12 @@ impl ManifestBuilder {
 /// funding, state, or completeness preconditions are not satisfied.
 pub fn transition(
     snapshot: &SettlementSnapshot,
-    authorized: &Authorized<ProtocolCommand>,
+    authorized: &KernelCommand<ProtocolCommand>,
     context: &TransitionContext,
 ) -> Result<TransitionManifest, ProtocolError> {
+    if context.protocol_version != ProtocolVersion(2) {
+        return Err(ProtocolError::ProtocolVersionMismatch);
+    }
     if !snapshot.complete {
         return Err(ProtocolError::IncompleteSnapshot);
     }
@@ -616,6 +431,17 @@ pub fn transition(
         return Err(ProtocolError::AmountMismatch);
     }
 
+    if snapshot.history.reference != snapshot.state.relationship.history
+        || snapshot.history.recipient != snapshot.state.relationship.key.recipient
+        || snapshot.state.requests.values().any(|r| {
+            snapshot
+                .payments
+                .get(&r.id)
+                .is_none_or(|p| p.capture.id != r.funding)
+        })
+    {
+        return Err(ProtocolError::IncompleteSnapshot);
+    }
     let actor = authorized.actor();
     let command = authorized.command();
     authorize(
@@ -626,84 +452,131 @@ pub fn transition(
     )?;
     let mut manifest = ManifestBuilder::new(snapshot, context);
 
+    apply_command(&mut manifest, context, actor, command)?;
+    manifest.finish(snapshot)
+}
+
+fn apply_command(
+    manifest: &mut ManifestBuilder,
+    context: &TransitionContext,
+    actor: ActorRef,
+    command: &ProtocolCommand,
+) -> Result<(), ProtocolError> {
     match command {
-        ProtocolCommand::IssueContactTerms {
-            quote_id,
-            declaration_digest,
-        } => {
-            issue_terms(&mut manifest, context, *quote_id, *declaration_digest)?;
-        }
-        ProtocolCommand::ReserveAttempt {
-            bond_id,
-            reserve_id,
-            attempt_id,
+        ProtocolCommand::RecordPayment {
+            request_id,
+            receipt,
+        } => record_payment(manifest, *request_id, receipt)?,
+        ProtocolCommand::SetFollowupPolicy {
+            expected_version,
+            policy,
+        } => set_followup_policy(manifest, *expected_version, *policy)?,
+        ProtocolCommand::AdmitFollowup {
+            request_id,
             message_id,
-            terms,
-        } => reserve_attempt(
-            &mut manifest,
-            context,
-            *bond_id,
-            *reserve_id,
-            *attempt_id,
-            *message_id,
-            terms,
-        )?,
-        ProtocolCommand::AdmitAttempt {
-            bond_id,
-            expected_bond_version,
             content_ref,
             delivery_intent_ref,
             declaration_digest,
             message_valid_until,
-        } => admit_attempt(
-            &mut manifest,
+            expected_policy_version,
+        } => admit_followup(
+            manifest,
+            *request_id,
+            *message_id,
+            *content_ref,
+            *delivery_intent_ref,
+            *declaration_digest,
+            *message_valid_until,
+            *expected_policy_version,
+            context.admission,
+        )?,
+        ProtocolCommand::IssueRequestTerms {
+            quote_id,
+            declaration_digest,
+        } => {
+            issue_terms(manifest, context, *quote_id, *declaration_digest)?;
+        }
+        ProtocolCommand::CreateRequest {
+            payment_method,
+            request_id,
+            message_id,
+            terms,
+        } => create_request(
+            manifest,
             context,
-            AttemptAdmission {
-                bond_id: *bond_id,
-                expected_version: *expected_bond_version,
+            *request_id,
+            *message_id,
+            *payment_method,
+            terms,
+        )?,
+        ProtocolCommand::AdmitRequest {
+            request_id,
+            expected_request_version,
+            content_ref,
+            delivery_intent_ref,
+            declaration_digest,
+            message_valid_until,
+        } => admit_request(
+            manifest,
+            context,
+            InitialAdmission {
+                request_id: *request_id,
+                expected_version: *expected_request_version,
                 content_ref: *content_ref,
                 delivery_intent_ref: *delivery_intent_ref,
                 declaration_digest: *declaration_digest,
                 message_valid_until: *message_valid_until,
             },
         )?,
-        ProtocolCommand::CancelReservedAttempt {
-            bond_id,
-            expected_bond_version,
+        ProtocolCommand::CancelPreparingRequest {
+            request_id,
+            expected_request_version,
             reason,
-        } => cancel_reserved_attempt(
-            &mut manifest,
+        } => cancel_preparing_request(
+            manifest,
             actor,
-            *bond_id,
-            *expected_bond_version,
+            *request_id,
+            *expected_request_version,
             *reason,
         )?,
         ProtocolCommand::AcceptRelationship { expected_version } => {
-            relationship_decision(&mut manifest, *expected_version, Decision::Accept)?;
+            relationship_decision(manifest, *expected_version, Decision::Accept)?;
         }
         ProtocolCommand::RejectRelationship { expected_version } => {
-            relationship_decision(&mut manifest, *expected_version, Decision::Reject)?;
+            relationship_decision(manifest, *expected_version, Decision::Reject)?;
         }
         ProtocolCommand::BlockRelationship { expected_version } => {
-            relationship_decision(&mut manifest, *expected_version, Decision::Block)?;
+            relationship_decision(manifest, *expected_version, Decision::Block)?;
         }
         ProtocolCommand::UnblockRelationship { expected_version } => {
-            unblock(&mut manifest, *expected_version)?;
+            unblock(manifest, *expected_version)?;
         }
-        ProtocolCommand::ExpireBond {
-            bond_id,
-            expected_bond_version,
-        } => expire_bond(&mut manifest, *bond_id, *expected_bond_version)?,
-        ProtocolCommand::ReleasePersistenceReserve {
-            reserve_id,
-            expected_reserve_version,
-        } => release_persistence(&mut manifest, *reserve_id, *expected_reserve_version)?,
+        ProtocolCommand::ExpireRequest {
+            request_id,
+            expected_request_version,
+        } => expire_request(manifest, *request_id, *expected_request_version)?,
         ProtocolCommand::RevokeRelationship { expected_version } => {
-            revoke(&mut manifest, *expected_version)?;
+            revoke(manifest, *expected_version)?;
         }
     }
 
-    manifest.finish(snapshot)
+    Ok(())
+}
+fn set_followup_policy(
+    manifest: &mut ManifestBuilder,
+    expected_version: Version,
+    mut policy: FollowupPolicy,
+) -> Result<(), ProtocolError> {
+    if manifest.next.followup_policy.version != expected_version {
+        return Err(ProtocolError::VersionConflict);
+    }
+    if policy.max_messages > 0 && (policy.max_per_interval == 0 || policy.interval.0 == 0) {
+        return Err(ProtocolError::PolicyInvalid);
+    }
+    policy.version = next_version(expected_version)?;
+    manifest.next.followup_policy = policy;
+    manifest.event(ProtocolEventKind::FollowupPolicyChanged);
+    Ok(())
 }
 
 fn authorize(
@@ -715,20 +588,23 @@ fn authorize(
     let sender = state.relationship.key.sender;
     let recipient = state.relationship.key.recipient;
     let authorized = match command {
-        ProtocolCommand::IssueContactTerms { .. }
-        | ProtocolCommand::ReserveAttempt { .. }
-        | ProtocolCommand::AdmitAttempt { .. } => actor == ActorRef::Sender(sender),
-        ProtocolCommand::CancelReservedAttempt { reason, .. } => match reason {
+        ProtocolCommand::RecordPayment { .. } => actor == ActorRef::Provider(provider),
+        ProtocolCommand::AdmitFollowup { .. }
+        | ProtocolCommand::IssueRequestTerms { .. }
+        | ProtocolCommand::CreateRequest { .. }
+        | ProtocolCommand::AdmitRequest { .. } => actor == ActorRef::Sender(sender),
+        ProtocolCommand::CancelPreparingRequest { reason, .. } => match reason {
             CancellationReason::SenderRequested => actor == ActorRef::Sender(sender),
             CancellationReason::AdmissionTimeout => actor == ActorRef::Scheduler(provider),
             CancellationReason::PreAdmissionFailure => actor == ActorRef::Provider(provider),
         },
-        ProtocolCommand::AcceptRelationship { .. }
+        ProtocolCommand::SetFollowupPolicy { .. }
+        | ProtocolCommand::AcceptRelationship { .. }
         | ProtocolCommand::RejectRelationship { .. }
         | ProtocolCommand::BlockRelationship { .. }
         | ProtocolCommand::UnblockRelationship { .. }
         | ProtocolCommand::RevokeRelationship { .. } => actor == ActorRef::Recipient(recipient),
-        ProtocolCommand::ExpireBond { .. } | ProtocolCommand::ReleasePersistenceReserve { .. } => {
+        ProtocolCommand::ExpireRequest { .. } => {
             matches!(actor, ActorRef::Scheduler(p) | ActorRef::Provider(p) if p == provider)
         }
     };
@@ -745,144 +621,196 @@ fn issue_terms(
     quote_id: QuoteId,
     declaration_digest: Option<MessageDeclarationDigest>,
 ) -> Result<(), ProtocolError> {
+    if let Some(request) = manifest.next.active_request() {
+        if manifest.next.relationship.state == RelationshipState::Blocked {
+            return Err(ProtocolError::ContactBlocked);
+        }
+        manifest.terms = Some(TermsOutcome::ExistingRequest(request.id));
+        manifest.event(ProtocolEventKind::TermsIssued);
+        return Ok(());
+    }
     match manifest.next.relationship.state {
         RelationshipState::Accepted => {
-            manifest.terms = Some(TermsOutcome::NoBondRequired);
+            manifest.terms = Some(TermsOutcome::NoChargeRequired);
         }
         RelationshipState::Blocked => return Err(ProtocolError::ContactBlocked),
         RelationshipState::Unknown | RelationshipState::Rejected | RelationshipState::Revoked => {
+            if manifest.history.preparation.is_some() {
+                return Err(ProtocolError::RequestAlreadyExists);
+            }
+            if context.now < manifest.history.earliest_next_admission {
+                return Err(ProtocolError::BackoffActive {
+                    next_eligible: manifest.history.earliest_next_admission,
+                });
+            }
             let policy = &context.policy;
-            let release_at = context
-                .now
-                .checked_add(policy.persistence_duration)
-                .ok_or(ProtocolError::ArithmeticOverflow)?;
             let expires_at = context
                 .now
                 .checked_add(policy.quote_lifetime)
                 .ok_or(ProtocolError::ArithmeticOverflow)?;
-            let earliest_final_expiry_at = context
-                .now
-                .checked_add(policy.admission_window)
-                .and_then(|time| time.checked_add(policy.decision_window))
-                .ok_or(ProtocolError::ArithmeticOverflow)?;
-            let terms = ContactTerms {
+            let terms = RequestTerms {
                 quote_id,
                 protocol_version: context.protocol_version,
                 policy_version: policy.policy_version,
                 privacy_profile_version: policy.privacy_profile_version,
                 retention_policy_version: policy.retention_policy_version,
                 relationship: manifest.next.relationship.key.reference,
-                attempt_subject: manifest.next.attempt.subject,
-                sender_account: manifest.next.attempt.sender_account,
+                request_history: manifest.history.reference,
                 sender: manifest.next.relationship.key.sender,
                 recipient: manifest.next.relationship.key.recipient,
                 recipient_provider: policy.recipient_provider,
                 relationship_version: manifest.next.relationship.version,
-                attempt_version: manifest.next.attempt.version,
+                history_version: manifest.history.version,
                 processing_charge: policy.processing_charge,
                 collateral: policy.collateral,
-                persistence: policy.persistence_for(manifest.next.attempt.level),
-                attempt_level: manifest.next.attempt.level,
-                eligibility_time: manifest.next.attempt.earliest_next_admission,
+                request_level: manifest.history.level,
+                eligibility_time: manifest.history.earliest_next_admission,
                 unit: policy.unit,
                 admission_window: policy.admission_window,
                 decision_window: policy.decision_window,
-                persistence_release_at: release_at,
-                earliest_final_expiry_at,
                 issued_at: context.now,
                 expires_at,
                 declaration_digest,
+                financial: policy.financial,
+                payment_provider_key: policy.payment_provider_key,
+                expiry_cooldown: policy.expiry_cooldown,
+                rejection_cooldown: policy.rejection_cooldown,
+                next_request_backoff: policy.backoff_for(
+                    manifest
+                        .history
+                        .level
+                        .checked_add(1)
+                        .ok_or(ProtocolError::ArithmeticOverflow)?,
+                ),
             };
-            terms.total_reservation()?;
-            manifest.terms = Some(TermsOutcome::BondRequired(Box::new(terms)));
+            terms.charge_amount()?;
+            if manifest.next.quotes.contains_key(&quote_id)
+                || manifest.next.used_quotes.contains(&quote_id)
+            {
+                return Err(ProtocolError::DuplicateConflict);
+            }
+            manifest.next.quotes.insert(quote_id, terms.clone());
+            manifest.terms = Some(TermsOutcome::ChargeRequired(Box::new(terms)));
         }
     }
     manifest.event(ProtocolEventKind::TermsIssued);
     Ok(())
 }
 
-fn reserve_attempt(
+fn create_request(
     manifest: &mut ManifestBuilder,
     context: &TransitionContext,
-    bond_id: BondId,
-    reserve_id: PersistenceReserveId,
-    attempt_id: AttemptId,
+    request_id: RequestId,
     message_id: MessageId,
-    terms: &ContactTerms,
+    payment_method: [u8; 32],
+    terms: &RequestTerms,
 ) -> Result<(), ProtocolError> {
     match manifest.next.relationship.state {
         RelationshipState::Accepted => return Err(ProtocolError::RelationshipAccepted),
         RelationshipState::Blocked => return Err(ProtocolError::ContactBlocked),
         RelationshipState::Unknown | RelationshipState::Rejected | RelationshipState::Revoked => {}
     }
-    let admission_deadline = validate_reservation_terms(manifest, context, terms)?;
-    if manifest.next.bonds.contains_key(&bond_id)
-        || manifest.next.reserves.contains_key(&reserve_id)
+    let admission_deadline = validate_request_terms(manifest, context, terms)?;
+    if manifest.next.requests.contains_key(&request_id)
+        || manifest.payments.contains_key(&request_id)
     {
         return Err(ProtocolError::DuplicateConflict);
     }
-    let bond_amount = terms.bond_amount()?;
-    manifest.batch.transfer(
-        Account::Sender(terms.sender_account),
-        Account::Bond(bond_id),
-        bond_amount,
+    if manifest
+        .next
+        .requests
+        .values()
+        .any(|r| !r.lifecycle.is_terminal())
+        || manifest.history.preparation.is_some()
+    {
+        return Err(ProtocolError::RequestAlreadyExists);
+    }
+    if manifest.next.used_quotes.contains(&terms.quote_id)
+        || manifest.next.quotes.get(&terms.quote_id) != Some(terms)
+    {
+        return Err(ProtocolError::QuoteVersionStale);
+    }
+    if payment_method == [0; 32] {
+        return Err(ProtocolError::PolicyInvalid);
+    }
+    if context.now < manifest.history.earliest_next_admission {
+        return Err(ProtocolError::BackoffActive {
+            next_eligible: manifest.history.earliest_next_admission,
+        });
+    }
+    let capture = PaymentOperation {
+        scope: terms.financial.scope,
+        id: request_payment_id(terms.financial.scope, terms.relationship, request_id, false),
+        kind: PaymentKind::Capture,
+        amount: terms.charge_amount()?,
+        unit: terms.unit,
+        destination: payment_method,
+    };
+    if capture.amount.is_zero() {
+        return Err(ProtocolError::PolicyInvalid);
+    }
+    manifest.history.preparation = Some(RequestReservation {
+        relationship: terms.relationship,
+        request: request_id,
+    });
+    manifest.next.used_quotes.insert(terms.quote_id);
+    manifest.effects.push(EffectIntent::ExecutePayment {
+        request_id,
+        operation_id: capture.id,
+    });
+    let generation = manifest
+        .next
+        .relationship
+        .generation
+        .checked_add(1)
+        .ok_or(ProtocolError::ArithmeticOverflow)?;
+    manifest.next.relationship.generation = generation;
+    manifest.payments.insert(
+        request_id,
+        cs_mail_finance::RequestFinancials::new(
+            capture.clone(),
+            RequestFinancialContract {
+                refund_id: request_payment_id(
+                    terms.financial.scope,
+                    terms.relationship,
+                    request_id,
+                    true,
+                ),
+                processing_charge: terms.processing_charge,
+                collateral: terms.collateral,
+                terms: terms.financial,
+                provider_key: terms.payment_provider_key,
+            },
+        )
+        .map_err(payment_error)?,
     );
-    manifest.batch.transfer(
-        Account::Sender(terms.sender_account),
-        Account::PersistenceReserve(reserve_id),
-        terms.persistence,
-    );
-    manifest.next.bonds.insert(
-        bond_id,
-        Bond {
-            id: bond_id,
-            reserve_id,
-            attempt_id,
-            message_id,
+    manifest.next.requests.insert(
+        request_id,
+        RelationshipRequest {
+            id: request_id,
+            generation,
+            initial_message: message_id,
+            funding: capture.id,
             terms: terms.clone(),
             created_at: context.now,
-            admission_deadline,
-            admitted_at: None,
-            decision_deadline: None,
-            content_ref: None,
-            delivery_intent_ref: None,
-            state: BondState::Reserved,
-            version: BondVersion::default(),
-        },
-    );
-    manifest.next.reserves.insert(
-        reserve_id,
-        PersistenceReserve {
-            id: reserve_id,
-            bond_id,
-            attempt_subject: terms.attempt_subject,
-            sender_account: terms.sender_account,
-            relationship: terms.relationship,
-            sender: terms.sender,
-            recipient: terms.recipient,
-            amount: terms.persistence,
-            created_at: context.now,
-            release_at: terms.persistence_release_at,
-            state: ReserveState::Reserved,
-            version: ReserveVersion::default(),
+            lifecycle: RequestLifecycle::Preparing(Preparation {
+                deadline: admission_deadline,
+            }),
+            version: RequestVersion::default(),
         },
     );
     manifest.schedules.push(ScheduleChange::Schedule {
-        task: ScheduleTask::AdmissionTimeout(bond_id),
+        task: ScheduleTask::AdmissionTimeout(request_id),
         at: admission_deadline,
     });
-    manifest.schedules.push(ScheduleChange::Schedule {
-        task: ScheduleTask::PersistenceRelease(reserve_id),
-        at: terms.persistence_release_at,
-    });
-    manifest.event(ProtocolEventKind::AttemptReserved(bond_id));
+    manifest.event(ProtocolEventKind::RequestCreated(request_id));
     Ok(())
 }
 
-fn validate_reservation_terms(
+fn validate_request_terms(
     manifest: &ManifestBuilder,
     context: &TransitionContext,
-    terms: &ContactTerms,
+    terms: &RequestTerms,
 ) -> Result<CanonicalTime, ProtocolError> {
     if terms.issued_at > context.now
         || terms.expires_at < terms.issued_at
@@ -893,18 +821,17 @@ fn validate_reservation_terms(
     if terms.protocol_version != context.protocol_version
         || terms.unit != context.policy.unit
         || terms.relationship != manifest.next.relationship.key.reference
-        || terms.attempt_subject != manifest.next.attempt.subject
-        || terms.sender_account != manifest.next.attempt.sender_account
+        || terms.request_history != manifest.history.reference
         || terms.sender != manifest.next.relationship.key.sender
         || terms.recipient != manifest.next.relationship.key.recipient
         || terms.recipient_provider != context.policy.recipient_provider
-        || terms.attempt_level != manifest.next.attempt.level
-        || terms.eligibility_time != manifest.next.attempt.earliest_next_admission
+        || terms.request_level != manifest.history.level
+        || terms.eligibility_time != manifest.history.earliest_next_admission
     {
         return Err(ProtocolError::AmountMismatch);
     }
     if terms.relationship_version != manifest.next.relationship.version
-        || terms.attempt_version != manifest.next.attempt.version
+        || terms.history_version != manifest.history.version
     {
         return Err(ProtocolError::QuoteVersionStale);
     }
@@ -912,20 +839,13 @@ fn validate_reservation_terms(
         .now
         .checked_add(terms.admission_window)
         .ok_or(ProtocolError::ArithmeticOverflow)?;
-    let latest_decision_deadline = admission_deadline
-        .checked_add(terms.decision_window)
-        .ok_or(ProtocolError::ArithmeticOverflow)?;
-    if terms.persistence_release_at < latest_decision_deadline
-        || terms.earliest_final_expiry_at < terms.issued_at
-    {
-        return Err(ProtocolError::PolicyInvalid);
-    }
+
     Ok(admission_deadline)
 }
 
 #[derive(Clone, Copy)]
-struct AttemptAdmission {
-    bond_id: BondId,
+struct InitialAdmission {
+    request_id: RequestId,
     expected_version: Version,
     content_ref: ContentRef,
     delivery_intent_ref: DeliveryIntentRef,
@@ -933,100 +853,83 @@ struct AttemptAdmission {
     message_valid_until: MessageValidityUntil,
 }
 
-fn admit_attempt(
+fn admit_request(
     manifest: &mut ManifestBuilder,
     context: &TransitionContext,
-    admission: AttemptAdmission,
+    admission: InitialAdmission,
 ) -> Result<(), ProtocolError> {
-    let bond_id = admission.bond_id;
+    let request_id = admission.request_id;
     if manifest.next.relationship.state == RelationshipState::Blocked {
         return Err(ProtocolError::ContactBlocked);
     }
-    let mut bond = manifest
+    let mut request = manifest
         .next
-        .bonds
-        .get(&bond_id)
+        .requests
+        .get(&request_id)
         .cloned()
         .ok_or(ProtocolError::MissingRecord)?;
-    if bond.version != admission.expected_version.into() {
+    if request.version != admission.expected_version.into() {
         return Err(ProtocolError::VersionConflict);
     }
-    if bond.state != BondState::Reserved {
-        return if matches!(bond.state, BondState::CancelledUnadmitted { .. }) {
-            Err(ProtocolError::ReservedAttemptCancelled)
+    if !request.lifecycle.is_preparing() {
+        return if matches!(request.lifecycle, RequestLifecycle::Cancelled { .. }) {
+            Err(ProtocolError::PreparingRequestCancelled)
         } else {
             Err(ProtocolError::AlreadyTerminal)
         };
     }
-    if manifest.next.relationship.state == RelationshipState::Accepted {
-        cancel_reserved(manifest, bond_id, ReservedCancellation::Ordinary)?;
+    if let Some(reason) = preparation_failure(manifest, &request, admission)? {
+        cancel_preparing(manifest, request_id, reason)?;
         return Ok(());
     }
-    if context.now > bond.admission_deadline {
-        cancel_reserved(manifest, bond_id, ReservedCancellation::Ordinary)?;
+    if context.admission.is_err() {
+        cancel_preparing(manifest, request_id, ReservedCancellation::Ordinary)?;
         return Ok(());
     }
-    if context.now > admission.message_valid_until.0 {
-        cancel_reserved(
-            manifest,
-            bond_id,
-            ReservedCancellation::MessageValidityClosed,
-        )?;
-        return Ok(());
-    }
-    if bond
-        .terms
-        .declaration_digest
-        .is_some_and(|expected| expected != admission.declaration_digest)
-    {
-        cancel_reserved(manifest, bond_id, ReservedCancellation::DeclarationMismatch)?;
-        return Ok(());
-    }
-    if context.now < bond.terms.eligibility_time {
-        return Err(ProtocolError::BackoffActive {
-            next_eligible: bond.terms.eligibility_time,
-        });
-    }
-    if bond.terms.attempt_version != manifest.next.attempt.version
-        || bond.terms.relationship_version != manifest.next.relationship.version
-        || bond.terms.policy_version != context.policy.policy_version
-    {
-        return Err(ProtocolError::QuoteVersionStale);
-    }
+    validate_admission_authority(manifest, context, &request)?;
     let deadline = context
         .now
-        .checked_add(bond.terms.decision_window)
+        .checked_add(request.terms.decision_window)
         .ok_or(ProtocolError::ArithmeticOverflow)?;
-    bond.state = BondState::Admitted;
-    bond.admitted_at = Some(context.now);
-    bond.decision_deadline = Some(deadline);
-    bond.content_ref = Some(admission.content_ref);
-    bond.delivery_intent_ref = Some(admission.delivery_intent_ref);
-    bond.version = next_bond_version(bond.version)?;
-    let attempt_id = bond.attempt_id;
-    let message_id = bond.message_id;
-    manifest.next.bonds.insert(bond_id, bond);
-
-    let next_level = manifest
-        .next
-        .attempt
-        .level
-        .checked_add(1)
-        .ok_or(ProtocolError::ArithmeticOverflow)?;
-    manifest.next.attempt.level = next_level;
-    manifest.next.attempt.earliest_next_admission = context
-        .now
-        .checked_add(context.policy.backoff_for(next_level))
-        .ok_or(ProtocolError::ArithmeticOverflow)?;
-    manifest.next.attempt.version = next_attempt_version(manifest.next.attempt.version)?;
-    manifest.next.attempt.last_event = Some(manifest.event);
-    manifest.next.attempt.changed_at = context.now;
+    request.lifecycle = RequestLifecycle::Open(RequestAdmission {
+        at: context.now,
+        decision_deadline: deadline,
+    });
+    if manifest.messages.contains_key(&request.initial_message) {
+        return Err(ProtocolError::DuplicateConflict);
+    }
+    manifest.messages.insert(
+        request.initial_message,
+        Message {
+            id: request.initial_message,
+            relationship: request.terms.relationship,
+            content: admission.content_ref,
+            delivery: admission.delivery_intent_ref,
+            declaration: admission.declaration_digest,
+            valid_until: admission.message_valid_until,
+            admitted_at: context.now,
+            basis: AdmissionBasis::InitialRequest {
+                request: request_id,
+            },
+        },
+    );
+    request.version = next_request_version(request.version)?;
+    let backoff = request.terms.next_request_backoff;
+    manifest.history.record_admission(
+        request.reservation(),
+        context.now,
+        backoff,
+        manifest.event,
+    )?;
+    let generation = request.generation;
+    let message_id = request.initial_message;
+    manifest.next.requests.insert(request_id, request);
 
     manifest.schedules.push(ScheduleChange::Cancel {
-        task: ScheduleTask::AdmissionTimeout(bond_id),
+        task: ScheduleTask::AdmissionTimeout(request_id),
     });
     manifest.schedules.push(ScheduleChange::Schedule {
-        task: ScheduleTask::BondExpiry(bond_id),
+        task: ScheduleTask::RequestExpiry(request_id),
         at: deadline,
     });
     manifest.effects.push(EffectIntent::DeliverMessage {
@@ -1034,122 +937,133 @@ fn admit_attempt(
         content_ref: admission.content_ref,
         delivery_intent_ref: admission.delivery_intent_ref,
     });
-    open_or_join_solicitation(manifest, attempt_id)?;
-    manifest.event(ProtocolEventKind::AttemptAdmitted(bond_id));
-    Ok(())
-}
-
-fn open_or_join_solicitation(
-    manifest: &mut ManifestBuilder,
-    attempt_id: AttemptId,
-) -> Result<(), ProtocolError> {
-    if let Some(episode) = manifest.next.solicitation.as_mut()
-        && episode.status == SolicitationStatus::Active
-    {
-        episode.attempts.insert(attempt_id);
-        episode.version = next_version(episode.version)?;
-        return Ok(());
-    }
-    let generation = manifest
-        .next
-        .solicitation
-        .as_ref()
-        .map_or(Ok(1), |episode| {
-            episode
-                .generation
-                .checked_add(1)
-                .ok_or(ProtocolError::ArithmeticOverflow)
-        })?;
-    let episode_id = EpisodeId(u128::from(generation));
-    let mut attempts = BTreeSet::new();
-    attempts.insert(attempt_id);
-    manifest.next.solicitation = Some(SolicitationEpisode {
-        id: episode_id,
-        relationship: manifest.next.relationship.key,
-        generation,
-        attempts,
-        opened_at: manifest.now,
-        status: SolicitationStatus::Active,
-        version: Version::default(),
-    });
     manifest
         .effects
-        .push(EffectIntent::EstablishRelationshipSolicitation { episode_id });
+        .push(EffectIntent::EstablishRequestSolicitation {
+            request_id,
+            generation,
+        });
+    manifest.event(ProtocolEventKind::RequestAdmitted(request_id));
     Ok(())
 }
 
-fn cancel_reserved_attempt(
+/// Classifies why a preparation must be cancelled before any admission effect is created.
+fn preparation_failure(
+    manifest: &ManifestBuilder,
+    request: &RelationshipRequest,
+    admission: InitialAdmission,
+) -> Result<Option<ReservedCancellation>, ProtocolError> {
+    let preparation = request
+        .lifecycle
+        .preparation()
+        .ok_or(ProtocolError::InvalidState)?;
+    Ok(
+        if manifest.next.relationship.state == RelationshipState::Accepted
+            || manifest.now > preparation.deadline
+        {
+            Some(ReservedCancellation::Ordinary)
+        } else if manifest.now > admission.message_valid_until.0 {
+            Some(ReservedCancellation::MessageValidityClosed)
+        } else if request
+            .terms
+            .declaration_digest
+            .is_some_and(|expected| expected != admission.declaration_digest)
+        {
+            Some(ReservedCancellation::DeclarationMismatch)
+        } else if request.terms.history_version != manifest.history.version
+            || manifest.now < manifest.history.earliest_next_admission
+        {
+            Some(ReservedCancellation::HistoryChanged)
+        } else {
+            None
+        },
+    )
+}
+
+fn cancel_preparing_request(
     manifest: &mut ManifestBuilder,
     actor: ActorRef,
-    bond_id: BondId,
+    request_id: RequestId,
     expected_version: Version,
     reason: CancellationReason,
 ) -> Result<(), ProtocolError> {
-    let bond = manifest
+    let request = manifest
         .next
-        .bonds
-        .get(&bond_id)
+        .requests
+        .get(&request_id)
         .cloned()
         .ok_or(ProtocolError::MissingRecord)?;
-    if bond.state != BondState::Reserved {
+    if !request.lifecycle.is_preparing() {
         return if matches!(actor, ActorRef::Scheduler(_)) {
             Ok(())
         } else {
             Err(ProtocolError::AlreadyTerminal)
         };
     }
-    if bond.version != expected_version.into() {
+    if request.version != expected_version.into() {
         return Err(ProtocolError::VersionConflict);
     }
-    if reason == CancellationReason::AdmissionTimeout && manifest.now < bond.admission_deadline {
+    if reason == CancellationReason::AdmissionTimeout
+        && manifest.now
+            < request
+                .lifecycle
+                .preparation()
+                .ok_or(ProtocolError::InvalidState)?
+                .deadline
+    {
         return Err(ProtocolError::InvalidState);
     }
-    cancel_reserved(manifest, bond_id, ReservedCancellation::Ordinary)
+    cancel_preparing(manifest, request_id, ReservedCancellation::Ordinary)
 }
 
 #[derive(Clone, Copy)]
 enum ReservedCancellation {
+    HistoryChanged,
     Ordinary,
     MessageValidityClosed,
     DeclarationMismatch,
 }
 
-fn cancel_reserved(
+fn cancel_preparing(
     manifest: &mut ManifestBuilder,
-    bond_id: BondId,
+    request_id: RequestId,
     cancellation: ReservedCancellation,
 ) -> Result<(), ProtocolError> {
-    let mut bond = manifest
+    let mut request = manifest
         .next
-        .bonds
-        .get(&bond_id)
+        .requests
+        .get(&request_id)
         .cloned()
         .ok_or(ProtocolError::MissingRecord)?;
-    if bond.state != BondState::Reserved {
+    if !request.lifecycle.is_preparing() {
         return Err(ProtocolError::AlreadyTerminal);
     }
-    bond.state = BondState::CancelledUnadmitted {
+    request.lifecycle = RequestLifecycle::Cancelled {
+        preparation: request
+            .lifecycle
+            .preparation()
+            .ok_or(ProtocolError::InvalidState)?,
         event: manifest.event,
     };
-    bond.version = next_bond_version(bond.version)?;
-    let bond_amount = bond.terms.bond_amount()?;
-    manifest.batch.transfer(
-        Account::Bond(bond.id),
-        Account::Sender(bond.terms.sender_account),
-        bond_amount,
-    );
-    release_reserve(manifest, bond.reserve_id)?;
-    manifest.next.bonds.insert(bond.id, bond.clone());
+    request.version = next_request_version(request.version)?;
+    if manifest.history.preparation == Some(request.reservation()) {
+        manifest.history.preparation = None;
+    }
+    settle_financials(manifest, request.id, RequestSettlement::Cancelled)?;
+    manifest.next.requests.insert(request.id, request.clone());
     manifest.schedules.push(ScheduleChange::Cancel {
-        task: ScheduleTask::AdmissionTimeout(bond.id),
+        task: ScheduleTask::AdmissionTimeout(request.id),
     });
     manifest.event(match cancellation {
-        ReservedCancellation::Ordinary => ProtocolEventKind::ReservedAttemptCancelled(bond.id),
+        ReservedCancellation::HistoryChanged => {
+            ProtocolEventKind::RequestHistoryChanged(request.id)
+        }
+        ReservedCancellation::Ordinary => ProtocolEventKind::PreparingRequestCancelled(request.id),
         ReservedCancellation::MessageValidityClosed => {
-            ProtocolEventKind::MessageValidityClosed(bond.id)
+            ProtocolEventKind::MessageValidityClosed(request.id)
         }
         ReservedCancellation::DeclarationMismatch => {
-            ProtocolEventKind::DeclarationMismatch(bond.id)
+            ProtocolEventKind::DeclarationMismatch(request.id)
         }
     });
     Ok(())
@@ -1197,24 +1111,14 @@ fn relationship_decision(
     manifest.next.relationship.last_event = Some(manifest.event);
     manifest.next.relationship.changed_at = manifest.now;
 
-    let key = manifest.next.relationship.key;
-    let ids: Vec<_> = manifest
-        .next
-        .bonds
-        .values()
-        .filter(|bond| bond.terms.sender == key.sender && bond.terms.recipient == key.recipient)
-        .map(|bond| bond.id)
-        .collect();
-    for id in ids {
-        let state = manifest.next.bonds[&id].state;
-        match state {
-            BondState::Reserved => {
-                cancel_reserved(manifest, id, ReservedCancellation::Ordinary)?;
+    if let Some(request) = manifest.next.active_request().cloned() {
+        let id = request.id;
+        match request.lifecycle {
+            RequestLifecycle::Preparing(_) => {
+                cancel_preparing(manifest, id, ReservedCancellation::Ordinary)?;
             }
-            BondState::Admitted => {
-                let deadline = manifest.next.bonds[&id]
-                    .decision_deadline
-                    .ok_or(ProtocolError::InvalidState)?;
+            RequestLifecycle::Open(admission) => {
+                let deadline = admission.decision_deadline;
                 if manifest.now <= deadline {
                     match decision {
                         Decision::Accept => settle_accepted(manifest, id)?,
@@ -1224,26 +1128,13 @@ fn relationship_decision(
                     settle_expired(manifest, id)?;
                 }
             }
-            BondState::Accepted { .. }
-            | BondState::Rejected { .. }
-            | BondState::Expired { .. }
-            | BondState::CancelledUnadmitted { .. } => {}
+            RequestLifecycle::Accepted { .. }
+            | RequestLifecycle::Rejected { .. }
+            | RequestLifecycle::Expired { .. }
+            | RequestLifecycle::Cancelled { .. } => {}
         }
     }
 
-    if matches!(decision, Decision::Accept) {
-        let key = manifest.next.relationship.key;
-        let reserve_ids: Vec<_> = manifest
-            .next
-            .active_reserves()
-            .filter(|reserve| reserve.sender == key.sender && reserve.recipient == key.recipient)
-            .map(|reserve| reserve.id)
-            .collect();
-        for reserve_id in reserve_ids {
-            release_reserve(manifest, reserve_id)?;
-        }
-    }
-    close_solicitation(manifest)?;
     manifest.event(match decision {
         Decision::Accept => ProtocolEventKind::RelationshipAccepted,
         Decision::Reject => ProtocolEventKind::RelationshipRejected,
@@ -1252,115 +1143,76 @@ fn relationship_decision(
     Ok(())
 }
 
-fn settle_accepted(manifest: &mut ManifestBuilder, id: BondId) -> Result<(), ProtocolError> {
-    let mut bond = manifest.next.bonds[&id].clone();
-    if bond.state != BondState::Admitted {
+fn settle_accepted(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), ProtocolError> {
+    let mut request = manifest.next.requests[&id].clone();
+    if !request.lifecycle.is_open() {
         return Err(ProtocolError::InvalidState);
     }
-    manifest.batch.transfer(
-        Account::Bond(id),
-        Account::Sender(bond.terms.sender_account),
-        bond.terms.bond_amount()?,
-    );
-    bond.state = BondState::Accepted {
+    settle_financials(manifest, id, RequestSettlement::Accepted)?;
+    request.lifecycle = RequestLifecycle::Accepted {
+        admission: request
+            .lifecycle
+            .admission()
+            .ok_or(ProtocolError::InvalidState)?,
         event: manifest.event,
     };
-    bond.version = next_bond_version(bond.version)?;
-    manifest.next.bonds.insert(id, bond);
+    request.version = next_request_version(request.version)?;
+    manifest.next.requests.insert(id, request);
     manifest.schedules.push(ScheduleChange::Cancel {
-        task: ScheduleTask::BondExpiry(id),
+        task: ScheduleTask::RequestExpiry(id),
     });
     Ok(())
 }
 
-fn settle_rejected(manifest: &mut ManifestBuilder, id: BondId) -> Result<(), ProtocolError> {
-    let mut bond = manifest.next.bonds[&id].clone();
-    if bond.state != BondState::Admitted {
+fn settle_rejected(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), ProtocolError> {
+    let mut request = manifest.next.requests[&id].clone();
+    if !request.lifecycle.is_open() {
         return Err(ProtocolError::InvalidState);
     }
-    manifest.batch.transfer(
-        Account::Bond(id),
-        Account::RecipientProvider(bond.terms.recipient_provider),
-        bond.terms.processing_charge,
-    );
-    manifest.batch.transfer(
-        Account::Bond(id),
-        Account::Recipient(bond.terms.recipient),
-        bond.terms.collateral,
-    );
-    bond.state = BondState::Rejected {
+    settle_financials(manifest, id, RequestSettlement::Rejected)?;
+    apply_cooldown(manifest, manifest.now, request.terms.rejection_cooldown)?;
+    request.lifecycle = RequestLifecycle::Rejected {
+        admission: request
+            .lifecycle
+            .admission()
+            .ok_or(ProtocolError::InvalidState)?,
         event: manifest.event,
     };
-    bond.version = next_bond_version(bond.version)?;
-    manifest.next.bonds.insert(id, bond);
+    request.version = next_request_version(request.version)?;
+    manifest.next.requests.insert(id, request);
     manifest.schedules.push(ScheduleChange::Cancel {
-        task: ScheduleTask::BondExpiry(id),
+        task: ScheduleTask::RequestExpiry(id),
     });
     Ok(())
 }
 
-fn settle_expired(manifest: &mut ManifestBuilder, id: BondId) -> Result<(), ProtocolError> {
-    let mut bond = manifest.next.bonds[&id].clone();
-    if bond.state != BondState::Admitted {
+fn settle_expired(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), ProtocolError> {
+    let mut request = manifest.next.requests[&id].clone();
+    if !request.lifecycle.is_open() {
         return Err(ProtocolError::InvalidState);
     }
-    manifest.batch.transfer(
-        Account::Bond(id),
-        Account::RecipientProvider(bond.terms.recipient_provider),
-        bond.terms.processing_charge,
-    );
-    manifest.batch.transfer(
-        Account::Bond(id),
-        Account::Sender(bond.terms.sender_account),
-        bond.terms.collateral,
-    );
-    bond.state = BondState::Expired {
+    settle_financials(manifest, id, RequestSettlement::Expired)?;
+    apply_cooldown(
+        manifest,
+        request
+            .lifecycle
+            .admission()
+            .ok_or(ProtocolError::InvalidState)?
+            .decision_deadline,
+        request.terms.expiry_cooldown,
+    )?;
+    request.lifecycle = RequestLifecycle::Expired {
+        admission: request
+            .lifecycle
+            .admission()
+            .ok_or(ProtocolError::InvalidState)?,
         event: manifest.event,
     };
-    bond.version = next_bond_version(bond.version)?;
-    manifest.next.bonds.insert(id, bond);
+    request.version = next_request_version(request.version)?;
+    manifest.next.requests.insert(id, request);
     manifest.schedules.push(ScheduleChange::Cancel {
-        task: ScheduleTask::BondExpiry(id),
+        task: ScheduleTask::RequestExpiry(id),
     });
-    Ok(())
-}
-
-fn release_reserve(
-    manifest: &mut ManifestBuilder,
-    reserve_id: PersistenceReserveId,
-) -> Result<(), ProtocolError> {
-    let mut reserve = manifest
-        .next
-        .reserves
-        .get(&reserve_id)
-        .cloned()
-        .ok_or(ProtocolError::MissingRecord)?;
-    if !matches!(reserve.state, ReserveState::Reserved) {
-        return Ok(());
-    }
-    manifest.batch.transfer(
-        Account::PersistenceReserve(reserve_id),
-        Account::Sender(reserve.sender_account),
-        reserve.amount,
-    );
-    reserve.state = ReserveState::Released {
-        event: manifest.event,
-    };
-    reserve.version = next_reserve_version(reserve.version)?;
-    manifest.next.reserves.insert(reserve_id, reserve);
-    manifest.schedules.push(ScheduleChange::Cancel {
-        task: ScheduleTask::PersistenceRelease(reserve_id),
-    });
-    Ok(())
-}
-
-fn close_solicitation(manifest: &mut ManifestBuilder) -> Result<(), ProtocolError> {
-    if let Some(episode) = manifest.next.solicitation.as_mut()
-        && episode.status == SolicitationStatus::Active
-    {
-        episode.status = SolicitationStatus::Closed;
-        episode.version = next_version(episode.version)?;
-    }
     Ok(())
 }
 
@@ -1396,73 +1248,36 @@ fn revoke(manifest: &mut ManifestBuilder, expected: Version) -> Result<(), Proto
     Ok(())
 }
 
-fn expire_bond(
+fn expire_request(
     manifest: &mut ManifestBuilder,
-    bond_id: BondId,
+    request_id: RequestId,
     expected: Version,
 ) -> Result<(), ProtocolError> {
-    let bond = manifest
+    let request = manifest
         .next
-        .bonds
-        .get(&bond_id)
+        .requests
+        .get(&request_id)
         .cloned()
         .ok_or(ProtocolError::MissingRecord)?;
-    if bond.state.is_terminal() {
+    if request.lifecycle.is_terminal() {
         return Ok(());
     }
-    if bond.version != expected.into() {
+    if request.version != expected.into() {
         return Err(ProtocolError::VersionConflict);
     }
-    if bond.state != BondState::Admitted {
+    if !request.lifecycle.is_open() {
         return Err(ProtocolError::InvalidState);
     }
-    let deadline = bond.decision_deadline.ok_or(ProtocolError::InvalidState)?;
+    let deadline = request
+        .lifecycle
+        .admission()
+        .ok_or(ProtocolError::InvalidState)?
+        .decision_deadline;
     if manifest.now <= deadline {
         return Err(ProtocolError::DecisionWindowClosed);
     }
-    settle_expired(manifest, bond_id)?;
-    let key = manifest.next.relationship.key;
-    let any_open = manifest.next.bonds.values().any(|candidate| {
-        candidate.terms.sender == key.sender
-            && candidate.terms.recipient == key.recipient
-            && candidate.state == BondState::Admitted
-            && candidate
-                .decision_deadline
-                .is_some_and(|time| manifest.now <= time)
-    });
-    if !any_open
-        && let Some(episode) = manifest.next.solicitation.as_mut()
-        && episode.status == SolicitationStatus::Active
-    {
-        episode.status = SolicitationStatus::Lapsed;
-        episode.version = next_version(episode.version)?;
-    }
-    manifest.event(ProtocolEventKind::BondExpired(bond_id));
-    Ok(())
-}
-
-fn release_persistence(
-    manifest: &mut ManifestBuilder,
-    reserve_id: PersistenceReserveId,
-    expected: Version,
-) -> Result<(), ProtocolError> {
-    let reserve = manifest
-        .next
-        .reserves
-        .get(&reserve_id)
-        .cloned()
-        .ok_or(ProtocolError::MissingRecord)?;
-    if !matches!(reserve.state, ReserveState::Reserved) {
-        return Ok(());
-    }
-    if reserve.version != expected.into() {
-        return Err(ProtocolError::VersionConflict);
-    }
-    if manifest.now < reserve.release_at {
-        return Err(ProtocolError::InvalidState);
-    }
-    release_reserve(manifest, reserve_id)?;
-    manifest.event(ProtocolEventKind::PersistenceReleased(reserve_id));
+    settle_expired(manifest, request_id)?;
+    manifest.event(ProtocolEventKind::RequestExpired(request_id));
     Ok(())
 }
 
@@ -1480,73 +1295,256 @@ fn next_relationship_version(
         .ok_or(ProtocolError::ArithmeticOverflow)
 }
 
-fn next_attempt_version(version: AttemptVersion) -> Result<AttemptVersion, ProtocolError> {
+fn next_request_version(version: RequestVersion) -> Result<RequestVersion, ProtocolError> {
     version
         .checked_next()
         .ok_or(ProtocolError::ArithmeticOverflow)
 }
 
-fn next_bond_version(version: BondVersion) -> Result<BondVersion, ProtocolError> {
-    version
-        .checked_next()
-        .ok_or(ProtocolError::ArithmeticOverflow)
+fn apply_cooldown(
+    manifest: &mut ManifestBuilder,
+    from: CanonicalTime,
+    duration: Duration,
+) -> Result<(), ProtocolError> {
+    manifest
+        .history
+        .extend_cooldown(from, duration, manifest.now, manifest.event)
+}
+fn apply_financial_effects(
+    manifest: &mut ManifestBuilder,
+    id: RequestId,
+    effects: RequestFinancialEffects,
+) {
+    for posting in effects.postings.transfers() {
+        manifest
+            .batch
+            .transfer(posting.from, posting.to, posting.amount);
+    }
+    manifest
+        .effects
+        .extend(
+            effects
+                .operations
+                .into_iter()
+                .map(|operation_id| EffectIntent::ExecutePayment {
+                    request_id: id,
+                    operation_id,
+                }),
+        );
+    manifest.forfeitures.extend(effects.forfeitures);
+    manifest.forfeiture_holds.extend(effects.holds);
+}
+fn payment_error(error: cs_mail_finance::PaymentError) -> ProtocolError {
+    match error {
+        cs_mail_finance::PaymentError::DuplicateConflict => ProtocolError::DuplicateConflict,
+        _ => ProtocolError::PaymentInvalid,
+    }
+}
+fn settle_financials(
+    manifest: &mut ManifestBuilder,
+    id: RequestId,
+    settlement: RequestSettlement,
+) -> Result<(), ProtocolError> {
+    let effects = manifest
+        .payments
+        .get_mut(&id)
+        .ok_or(ProtocolError::IncompleteSnapshot)?
+        .settle(settlement, manifest.now)
+        .map_err(payment_error)?;
+    apply_financial_effects(manifest, id, effects);
+    Ok(())
+}
+fn record_payment(
+    manifest: &mut ManifestBuilder,
+    id: RequestId,
+    receipt: &SignedPaymentEvidence,
+) -> Result<(), ProtocolError> {
+    let effects = manifest
+        .payments
+        .get_mut(&id)
+        .ok_or(ProtocolError::MissingRecord)?
+        .record_payment(receipt)
+        .map_err(payment_error)?;
+    if effects.capture_voided
+        && let Some(request) = manifest.next.requests.get_mut(&id)
+        && let RequestLifecycle::Preparing(preparation) = request.lifecycle
+    {
+        request.lifecycle = RequestLifecycle::Cancelled {
+            preparation,
+            event: manifest.event,
+        };
+        request.version = next_request_version(request.version)?;
+        if manifest.history.preparation == Some(request.reservation()) {
+            manifest.history.preparation = None;
+        }
+        manifest.schedules.push(ScheduleChange::Cancel {
+            task: ScheduleTask::AdmissionTimeout(id),
+        });
+    }
+    apply_financial_effects(manifest, id, effects);
+    manifest.event(ProtocolEventKind::PaymentRecorded(id));
+    Ok(())
 }
 
-fn next_reserve_version(version: ReserveVersion) -> Result<ReserveVersion, ProtocolError> {
-    version
-        .checked_next()
-        .ok_or(ProtocolError::ArithmeticOverflow)
+#[allow(clippy::too_many_arguments)]
+fn admit_followup(
+    manifest: &mut ManifestBuilder,
+    id: RequestId,
+    message_id: MessageId,
+    content_ref: ContentRef,
+    delivery_intent_ref: DeliveryIntentRef,
+    digest: MessageDeclarationDigest,
+    valid_until: MessageValidityUntil,
+    expected_policy: Version,
+    admission: Result<(), admission::AdmissionFailure>,
+) -> Result<(), ProtocolError> {
+    if manifest.next.relationship.state == RelationshipState::Blocked {
+        return Err(ProtocolError::ContactBlocked);
+    }
+    let policy = manifest.next.followup_policy;
+    if policy.version != expected_policy {
+        return Err(ProtocolError::VersionConflict);
+    }
+    let request = manifest
+        .next
+        .requests
+        .get_mut(&id)
+        .ok_or(ProtocolError::MissingRecord)?;
+    if !request.lifecycle.is_open()
+        || request
+            .lifecycle
+            .admission()
+            .is_none_or(|a| manifest.now > a.decision_deadline)
+    {
+        return Err(ProtocolError::DecisionWindowClosed);
+    }
+    if manifest.now > valid_until.0 {
+        return Err(ProtocolError::MessageValidityClosed);
+    }
+    admission.map_err(ProtocolError::AdmissionRefused)?;
+    if message_id == request.initial_message || manifest.messages.contains_key(&message_id) {
+        return Err(ProtocolError::DuplicateConflict);
+    }
+    let followups: Vec<_> = manifest
+        .messages
+        .values()
+        .filter(
+            |m| matches!(m.basis, AdmissionBasis::RequestFollowup { request, .. } if request == id),
+        )
+        .collect();
+    let recent = followups
+        .iter()
+        .filter(|m| manifest.now.0.saturating_sub(m.admitted_at.0) < policy.interval.0)
+        .count();
+    if policy.max_messages == 0
+        || followups.len() >= policy.max_messages as usize
+        || recent >= policy.max_per_interval as usize
+    {
+        return Err(ProtocolError::FollowupNotAllowed);
+    }
+    manifest.messages.insert(
+        message_id,
+        Message {
+            id: message_id,
+            relationship: request.terms.relationship,
+            content: content_ref,
+            delivery: delivery_intent_ref,
+            declaration: digest,
+            valid_until,
+            admitted_at: manifest.now,
+            basis: AdmissionBasis::RequestFollowup {
+                request: id,
+                policy_version: policy.version,
+            },
+        },
+    );
+    manifest.effects.push(EffectIntent::DeliverMessage {
+        message_id,
+        content_ref,
+        delivery_intent_ref,
+    });
+    manifest.event(ProtocolEventKind::FollowupAdmitted(id, message_id));
+    Ok(())
+}
+
+fn validate_admission_authority(
+    manifest: &ManifestBuilder,
+    context: &TransitionContext,
+    request: &RelationshipRequest,
+) -> Result<(), ProtocolError> {
+    if !manifest.payments[&request.id].capture_confirmed()
+        || manifest.payments[&request.id].capture_reversed()
+    {
+        return Err(ProtocolError::PaymentNotConfirmed);
+    }
+    if context.now < request.terms.eligibility_time {
+        return Err(ProtocolError::BackoffActive {
+            next_eligible: request.terms.eligibility_time,
+        });
+    }
+    if manifest.history.preparation != Some(request.reservation())
+        || request.terms.relationship_version != manifest.next.relationship.version
+    {
+        return Err(ProtocolError::QuoteVersionStale);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cs_mail_ledger::LedgerState;
-
-    fn fixture() -> (SettlementSnapshot, TransitionContext) {
-        let principal = PrincipalRef(1);
-        let sender = ProtocolIdentity(10);
-        let recipient = ProtocolIdentity(20);
-        let state = ProtocolState::initial(principal, sender, recipient, CanonicalTime(0));
-        let mut ledger = LedgerState::new(SettlementUnit(1));
-        ledger
-            .fund_for_test(
-                Account::Sender(state.attempt.sender_account),
-                Money::from_minor_units(1_000),
-            )
-            .unwrap();
-        let snapshot = SettlementSnapshot::complete(0, state, ledger.view());
+    use cs_mail_primitives::PrincipalRef;
+    #[test]
+    fn incomplete_snapshots_are_refused_before_any_transition() {
+        let state = ProtocolState::initial(
+            PrincipalRef(1),
+            ProtocolIdentity(10),
+            ProtocolIdentity(20),
+            CanonicalTime(0),
+        );
+        let snapshot = SettlementSnapshot::incomplete(
+            0,
+            state,
+            cs_mail_ledger::LedgerState::new(SettlementUnit(1)).view(),
+        );
+        let policy = PolicySnapshot {
+            protocol_version: ProtocolVersion(2),
+            policy_version: PolicyVersion(1),
+            privacy_profile_version: PrivacyProfileVersion(1),
+            retention_policy_version: RetentionPolicyVersion(1),
+            recipient_provider: ProviderRef(30),
+            unit: SettlementUnit(1),
+            processing_charge: Money::from_minor_units(2),
+            collateral: Money::from_minor_units(8),
+            admission_window: Duration(10),
+            decision_window: Duration(50),
+            quote_lifetime: Duration(20),
+            backoff: vec![Duration(0)],
+            financial: FinancialTerms {
+                scope: cs_mail_finance::FinancialScope::new(
+                    [7; 32],
+                    cs_mail_primitives::ProviderRef(30),
+                    cs_mail_primitives::ProgramRef(1),
+                    [9; 32],
+                    cs_mail_primitives::ProtocolVersion(2),
+                ),
+                policy_version: PolicyVersion(1),
+                corporate_basis_points: 300,
+                maturity_delay: Duration(10),
+            },
+            payment_provider_key: [1; 32],
+            expiry_cooldown: Duration(30),
+            rejection_cooldown: Duration(90),
+        };
         let context = TransitionContext {
+            admission: Ok(()),
             now: CanonicalTime(1),
             journal_position: JournalPosition(1),
-            protocol_version: ProtocolVersion(1),
-            policy: PolicySnapshot {
-                protocol_version: ProtocolVersion(1),
-                policy_version: PolicyVersion(1),
-                privacy_profile_version: PrivacyProfileVersion(1),
-                retention_policy_version: RetentionPolicyVersion(1),
-                recipient_provider: ProviderRef(30),
-                unit: SettlementUnit(1),
-                processing_charge: Money::from_minor_units(2),
-                collateral: Money::from_minor_units(8),
-                admission_window: Duration(10),
-                decision_window: Duration(20),
-                quote_lifetime: Duration(5),
-                persistence_duration: Duration(100),
-                backoff: vec![Duration(0), Duration(10), Duration(20)],
-                persistence: vec![Money::ZERO, Money::from_minor_units(5)],
-            },
+            protocol_version: ProtocolVersion(2),
+            policy,
         };
-        (snapshot, context)
-    }
-
-    #[test]
-    fn incomplete_snapshots_are_rejected() {
-        let (snapshot, context) = fixture();
-        let snapshot =
-            SettlementSnapshot::incomplete(snapshot.revision, snapshot.state, snapshot.ledger);
-        let command = Authorized::assume_verified(
-            ProtocolCommand::IssueContactTerms {
+        let command = KernelCommand::new(
+            ProtocolCommand::IssueRequestTerms {
                 quote_id: QuoteId(1),
                 declaration_digest: None,
             },
@@ -1559,91 +1557,6 @@ mod tests {
             Err(ProtocolError::IncompleteSnapshot)
         );
     }
-
-    #[test]
-    fn blocked_relationships_cannot_issue_terms() {
-        let (mut snapshot, context) = fixture();
-        snapshot.state.relationship.state = RelationshipState::Blocked;
-        let command = Authorized::assume_verified(
-            ProtocolCommand::IssueContactTerms {
-                quote_id: QuoteId(1),
-                declaration_digest: None,
-            },
-            ActorRef::Sender(ProtocolIdentity(10)),
-            OperationalKeyRef(1),
-            IdempotencyKey(1),
-        );
-        assert_eq!(
-            transition(&snapshot, &command, &context),
-            Err(ProtocolError::ContactBlocked)
-        );
-    }
-
-    #[test]
-    fn acceptance_releases_only_the_accepted_public_identity_reserves() {
-        let principal = PrincipalRef(1);
-        let sender = ProtocolIdentity(10);
-        let other_sender = ProtocolIdentity(11);
-        let recipient = ProtocolIdentity(20);
-        let mut state = ProtocolState::initial(principal, sender, recipient, CanonicalTime(0));
-        for (id, public_identity) in [
-            (PersistenceReserveId(1), sender),
-            (PersistenceReserveId(2), other_sender),
-        ] {
-            state.reserves.insert(
-                id,
-                PersistenceReserve {
-                    id,
-                    bond_id: BondId(id.0),
-                    attempt_subject: state.attempt.subject,
-                    sender_account: state.attempt.sender_account,
-                    relationship: state.relationship.key.reference,
-                    sender: public_identity,
-                    recipient,
-                    amount: Money::from_minor_units(5),
-                    created_at: CanonicalTime(0),
-                    release_at: CanonicalTime(100),
-                    state: ReserveState::Reserved,
-                    version: ReserveVersion(0),
-                },
-            );
-        }
-        state.attempt.level = 7;
-        state.attempt.earliest_next_admission = CanonicalTime(50);
-        let original_attempt = state.attempt.clone();
-        let mut ledger = LedgerState::new(SettlementUnit(1));
-        ledger
-            .fund_for_test(
-                Account::PersistenceReserve(PersistenceReserveId(1)),
-                Money::from_minor_units(5),
-            )
-            .unwrap();
-        ledger
-            .fund_for_test(
-                Account::PersistenceReserve(PersistenceReserveId(2)),
-                Money::from_minor_units(5),
-            )
-            .unwrap();
-        let snapshot = SettlementSnapshot::complete(0, state, ledger.view());
-        let (_, context) = fixture();
-        let command = Authorized::assume_verified(
-            ProtocolCommand::AcceptRelationship {
-                expected_version: Version(0),
-            },
-            ActorRef::Recipient(recipient),
-            OperationalKeyRef(1),
-            IdempotencyKey(1),
-        );
-        let manifest = transition(&snapshot, &command, &context).unwrap();
-        assert!(matches!(
-            manifest.next_state.reserves[&PersistenceReserveId(1)].state,
-            ReserveState::Released { .. }
-        ));
-        assert!(matches!(
-            manifest.next_state.reserves[&PersistenceReserveId(2)].state,
-            ReserveState::Reserved
-        ));
-        assert_eq!(manifest.next_state.attempt, original_attempt);
-        assert_eq!(manifest.ledger_batch.transfers().len(), 1);
-    }
 }
+
+pub mod admission;

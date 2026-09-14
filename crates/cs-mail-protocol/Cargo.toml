@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-capabilities = { path = "../cs-mail-capabilities" }
+cs-mail-content = { path = "../cs-mail-content" }
+cs-mail-finance = { path = "../cs-mail-finance" }
 cs-mail-ledger = { path = "../cs-mail-ledger" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
 serde.workspace = true

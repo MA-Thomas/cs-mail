@@ -1,101 +1,234 @@
-//! Retry-safe delivery and deadline worker loops.
-
+//! Bounded workers over a common durable external-work lifecycle.
 use core::fmt;
-
 use cs_mail_content::EncryptedContentRecord;
-use cs_mail_primitives::{CanonicalTime, Duration, OperationalKeyRef, ProviderRef};
+use cs_mail_finance::{PaymentError, PaymentProvider};
+use cs_mail_primitives::{CanonicalTime, Duration, OperationalKeyRef, ProviderRef, SettlementUnit};
 use cs_mail_protocol::{EffectIntent, PolicySnapshot};
-use cs_mail_storage_postgres::{OutboxItem, PostgresEngine, StorageError};
+use cs_mail_storage_postgres::{
+    PostgresEngine, StorageError, WorkFailure, WorkItem, WorkPayload, WorkQueue, WorkReport,
+};
 
 pub trait DeliverySink {
     type Error: fmt::Display;
-
-    /// The sink must deduplicate by the stable outbox item ID or delivery intent reference.
-    ///
+    /// Deduplicate by stable work ID or delivery intent reference.
     /// # Errors
-    ///
-    /// Returns a sink-specific transient or permanent delivery failure.
+    /// Returns a delivery failure; permanent errors must be classified explicitly.
     fn publish(
         &mut self,
-        item: &OutboxItem,
+        item: &WorkItem,
         content: Option<&EncryptedContentRecord>,
     ) -> Result<(), Self::Error>;
+    fn permanent_failure(_error: &Self::Error) -> bool {
+        false
+    }
 }
-
 #[derive(Debug)]
 pub enum WorkerError {
     Storage(StorageError),
-    Delivery(String),
-    MissingClaimedContent,
 }
-
 impl fmt::Display for WorkerError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Storage(error) => write!(formatter, "storage error: {error}"),
-            Self::Delivery(error) => write!(formatter, "delivery error: {error}"),
-            Self::MissingClaimedContent => {
-                formatter.write_str("claimed delivery refers to missing ciphertext")
-            }
+            Self::Storage(e) => write!(f, "storage error: {e}"),
         }
     }
 }
-
 impl std::error::Error for WorkerError {}
-
 impl From<StorageError> for WorkerError {
-    fn from(value: StorageError) -> Self {
-        Self::Storage(value)
+    fn from(e: StorageError) -> Self {
+        Self::Storage(e)
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct WorkerReport {
-    pub claimed: usize,
-    pub completed: usize,
+fn finish(
+    engine: &PostgresEngine,
+    item: &WorkItem,
+    now: CanonicalTime,
+    result: Result<(), (WorkFailure, bool)>,
+    report: &mut WorkReport,
+) -> Result<(), StorageError> {
+    let updated = match result {
+        Ok(()) => {
+            let ok = engine.complete_work(item, now)?;
+            if ok {
+                report.completed += 1;
+            }
+            ok
+        }
+        Err((failure, true)) => {
+            let ok = engine.block_work(item, now, failure)?;
+            if ok {
+                report.blocked += 1;
+            }
+            ok
+        }
+        Err((failure, false)) => {
+            let ok = engine.retry_work(item, now, failure)?;
+            if ok {
+                report.retried += 1;
+            }
+            ok
+        }
+    };
+    if !updated {
+        report.lost_claims += 1;
+    }
+    Ok(())
 }
-
-/// Publishes one leased batch. Failures remain leased and become retryable after expiry.
-///
+#[allow(clippy::needless_pass_by_value)] // Used directly as a consuming map_err conversion.
+fn storage_failure(error: StorageError) -> (WorkFailure, bool) {
+    match error {
+        StorageError::Protocol(
+            cs_mail_protocol::ProtocolError::PaymentInvalid
+            | cs_mail_protocol::ProtocolError::DuplicateConflict,
+        )
+        | StorageError::Finance(
+            cs_mail_finance::ProgramError::InvalidPayment
+            | cs_mail_finance::ProgramError::DuplicateConflict
+            | cs_mail_finance::ProgramError::Payment(_),
+        )
+        | StorageError::Security(_) => (WorkFailure::InvalidEvidence, true),
+        _ => (WorkFailure::Storage, false),
+    }
+}
+fn payment_failure(e: PaymentError) -> (WorkFailure, bool) {
+    if e == PaymentError::Unavailable {
+        (WorkFailure::DependencyUnavailable, false)
+    } else {
+        (WorkFailure::InvalidEvidence, true)
+    }
+}
+fn reconcile<P: PaymentProvider>(
+    provider: &mut P,
+    operation: &cs_mail_finance::PaymentOperation,
+    cancel: bool,
+) -> Result<cs_mail_finance::SignedPaymentEvidence, (WorkFailure, bool)> {
+    match provider.lookup(operation.id).map_err(payment_failure)? {
+        Some(receipt) => Ok(receipt),
+        None => provider.submit(operation, cancel).map_err(payment_failure),
+    }
+}
+/// Delivers a bounded batch, isolating failures and retaining stable retry identities.
 /// # Errors
-///
-/// Returns the first storage, missing-content, or sink error without acknowledging that item.
+/// Returns storage errors if claims or retry/completion records cannot be persisted.
 pub fn deliver_batch<S: DeliverySink>(
     engine: &PostgresEngine,
     sink: &mut S,
     now: CanonicalTime,
     lease: Duration,
     limit: i64,
-) -> Result<WorkerReport, WorkerError> {
-    let items = engine.claim_outbox(now, lease, limit)?;
-    let mut report = WorkerReport {
+) -> Result<WorkReport, WorkerError> {
+    let items = engine.claim_work(WorkQueue::Delivery, now, lease, limit)?;
+    let mut report = WorkReport {
         claimed: items.len(),
-        completed: 0,
+        ..WorkReport::default()
     };
     for item in items {
-        let content = match item.payload {
-            EffectIntent::DeliverMessage { content_ref, .. } => Some(
-                engine
-                    .content(content_ref)?
-                    .ok_or(WorkerError::MissingClaimedContent)?,
-            ),
-            EffectIntent::EstablishRelationshipSolicitation { .. }
-            | EffectIntent::ReviewLane { .. } => None,
-        };
-        sink.publish(&item, content.as_ref())
-            .map_err(|error| WorkerError::Delivery(error.to_string()))?;
-        if engine.mark_outbox_published(item.id, now)? {
-            report.completed += 1;
-        }
+        let result = (|| {
+            let content = match item.payload {
+                WorkPayload::Effect(EffectIntent::DeliverMessage { content_ref, .. }) => Some(
+                    engine
+                        .content(content_ref)
+                        .map_err(storage_failure)?
+                        .ok_or((WorkFailure::MissingContent, true))?,
+                ),
+                WorkPayload::Effect(
+                    EffectIntent::EstablishRequestSolicitation { .. }
+                    | EffectIntent::ReviewLane { .. },
+                ) => None,
+                _ => return Err((WorkFailure::InvalidEvidence, true)),
+            };
+            sink.publish(&item, content.as_ref())
+                .map_err(|e| (WorkFailure::DependencyUnavailable, S::permanent_failure(&e)))
+        })();
+        finish(engine, &item, now, result, &mut report)?;
     }
     Ok(report)
 }
-
-/// Materializes one leased batch of deadlines as ordinary protocol commands.
-///
+/// Reconciles captures/refunds; lost responses never allocate another operation ID.
 /// # Errors
-///
-/// Returns an error when claims, state reads, or command execution fail.
+/// Returns claim or acknowledgement storage errors; item failures are recorded in the report.
+pub fn run_payment_batch<P: PaymentProvider>(
+    engine: &PostgresEngine,
+    provider: &mut P,
+    now: CanonicalTime,
+    lease: Duration,
+    limit: i64,
+    policy: &PolicySnapshot,
+) -> Result<WorkReport, WorkerError> {
+    let items = engine.claim_work(WorkQueue::RequestPayments, now, lease, limit)?;
+    let mut report = WorkReport {
+        claimed: items.len(),
+        ..WorkReport::default()
+    };
+    for item in items {
+        let result = (|| {
+            let WorkPayload::Effect(EffectIntent::ExecutePayment {
+                request_id,
+                operation_id,
+            }) = item.payload
+            else {
+                return Err((WorkFailure::InvalidEvidence, true));
+            };
+            if let Some((operation, cancel)) = engine
+                .pending_request_payment(request_id, operation_id)
+                .map_err(storage_failure)?
+            {
+                let receipt = reconcile(provider, &operation, cancel)?;
+                engine
+                    .confirm_request_payment(request_id, receipt, now, policy.clone())
+                    .map_err(storage_failure)?;
+            }
+            Ok(())
+        })();
+        finish(engine, &item, now, result, &mut report)?;
+    }
+    Ok(report)
+}
+/// Executes bounded member payment work with the same claims and reconciliation as requests.
+/// # Errors
+/// Returns claim or acknowledgement storage errors.
+pub fn run_member_payment_batch<P: PaymentProvider>(
+    engine: &PostgresEngine,
+    provider: &mut P,
+    unit: SettlementUnit,
+    now: CanonicalTime,
+    lease: Duration,
+    limit: i64,
+) -> Result<WorkReport, WorkerError> {
+    let items = engine.claim_work(WorkQueue::MemberPayments(unit), now, lease, limit)?;
+    let mut report = WorkReport {
+        claimed: items.len(),
+        ..WorkReport::default()
+    };
+    for item in items {
+        let result = (|| {
+            let WorkPayload::MemberPayment {
+                unit,
+                allocation,
+                operation,
+            } = item.payload
+            else {
+                return Err((WorkFailure::InvalidEvidence, true));
+            };
+            if let Some(operation) = engine
+                .pending_member_payment(unit, allocation, operation)
+                .map_err(storage_failure)?
+            {
+                let receipt = reconcile(provider, &operation, false)?;
+                engine
+                    .confirm_member_payment(unit, allocation, &receipt, now)
+                    .map_err(storage_failure)?;
+            }
+            Ok(())
+        })();
+        finish(engine, &item, now, result, &mut report)?;
+    }
+    Ok(report)
+}
+/// Drains only a bounded prefix; deadlines cannot pass any remaining received commands.
+/// # Errors
+/// Returns command or schedule errors. Failed schedule claims remain recoverable after expiry.
 pub fn run_schedule_batch(
     engine: &PostgresEngine,
     now: CanonicalTime,
@@ -104,15 +237,53 @@ pub fn run_schedule_batch(
     scheduler: ProviderRef,
     operational_key: OperationalKeyRef,
     policy: &PolicySnapshot,
-) -> Result<WorkerReport, WorkerError> {
-    let items = engine.claim_due_schedules(now, lease, limit)?;
-    let mut report = WorkerReport {
+) -> Result<WorkReport, WorkerError> {
+    if limit < 0 {
+        return Err(StorageError::NumericRange.into());
+    }
+    for _ in 0..limit {
+        if !engine.process_next_received()? {
+            break;
+        }
+    }
+    let items = match engine.claim_due_schedules(now, lease, limit) {
+        Ok(items) => items,
+        Err(StorageError::PendingCommands) => return Ok(WorkReport::default()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut report = WorkReport {
         claimed: items.len(),
-        completed: 0,
+        ..WorkReport::default()
     };
     for item in items {
-        engine.execute_claimed_schedule(item, now, scheduler, operational_key, policy.clone())?;
-        report.completed += 1;
+        if engine
+            .execute_claimed_schedule(item, now, scheduler, operational_key, policy.clone())
+            .is_ok()
+        {
+            report.completed += 1;
+        } else {
+            report.retried += 1;
+        }
     }
     Ok(report)
+}
+/// Processes a bounded inbox prefix and then one bounded artifact batch.
+/// # Errors
+/// Infrastructure errors leave received commands pending in canonical order.
+pub fn run_received_batch(
+    engine: &PostgresEngine,
+    signer: &cs_mail_security::ProviderSigner,
+    now: CanonicalTime,
+    lease: Duration,
+    limit: i64,
+) -> Result<WorkReport, WorkerError> {
+    if limit < 0 {
+        return Err(StorageError::NumericRange.into());
+    }
+    for _ in 0..limit {
+        if !engine.process_next_received()? {
+            break;
+        }
+    }
+    Ok(engine.sign_artifacts_batch(signer, now, lease, limit)?)
 }

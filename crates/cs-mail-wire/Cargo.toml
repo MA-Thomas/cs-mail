@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-finance = { path = "../cs-mail-finance" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
 cs-mail-protocol = { path = "../cs-mail-protocol" }
 minicbor.workspace = true

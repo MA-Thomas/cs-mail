@@ -6,22 +6,20 @@ use cs_mail_content::{
     message_declaration_digest,
 };
 use cs_mail_primitives::{
-    AttemptId, AttemptSubjectRef, BondId, CanonicalTime, ContentKeyRef, ContentRef,
-    ContentScopeRef, DeclarationAuthority, DeclaredPurpose, DeliveryIntentRef, Duration,
-    IdempotencyKey, KnownPurpose, LedgerAccountRef, MessageDeclarations, MessageId,
-    MessageValidityUntil, Money, OperationalKeyRef, OriginDeclaration, OriginMode,
-    PersistenceReserveId, PolicyVersion, PrincipalRef, PrivacyProfileVersion, ProtocolIdentity,
-    ProtocolVersion, ProviderRef, QuoteId, RelationshipRef, RetentionPolicyVersion, SettlementUnit,
-    Version, WireVersion,
+    CanonicalTime, ContentKeyRef, ContentRef, ContentScopeRef, DeclarationAuthority,
+    DeclaredPurpose, DeliveryIntentRef, Duration, IdempotencyKey, KnownPurpose,
+    MessageDeclarations, MessageId, MessageValidityUntil, Money, OperationalKeyRef,
+    OriginDeclaration, OriginMode, PolicyVersion, PrivacyProfileVersion, ProtocolIdentity,
+    ProtocolVersion, ProviderRef, QuoteId, RelationshipRef, RequestHistoryRef, RequestId,
+    RetentionPolicyVersion, SettlementUnit, Version, WireVersion,
 };
 use cs_mail_protocol::{ActorRef, PolicySnapshot, ProtocolCommand, ProtocolState, TermsOutcome};
 use cs_mail_security::{
     CommandSigner, KeyRegistry, ProviderSigner, SignedCommandBytes, SigningScope,
 };
-use cs_mail_storage_postgres::{DurableExecutionOutcome, OutboxItem, PostgresEngine, StorageError};
-use cs_mail_worker::{DeliverySink, WorkerError, deliver_batch, run_schedule_batch};
+use cs_mail_storage_postgres::{DurableExecutionOutcome, PostgresEngine, StorageError, WorkItem};
+use cs_mail_worker::{DeliverySink, deliver_batch, run_schedule_batch};
 
-const PRINCIPAL: PrincipalRef = PrincipalRef(101);
 const SENDER: ProtocolIdentity = ProtocolIdentity(102);
 const RECIPIENT: ProtocolIdentity = ProtocolIdentity(103);
 const PROVIDER: ProviderRef = ProviderRef(104);
@@ -30,8 +28,22 @@ const DEPLOYMENT_DOMAIN: [u8; 32] = [7; 32];
 static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
 
 fn database_url() -> String {
-    std::env::var("CS_MAIL_TEST_DATABASE_URL")
-        .expect("ignored PostgreSQL tests require CS_MAIL_TEST_DATABASE_URL")
+    let base =
+        std::env::var("CS_MAIL_TEST_DATABASE_URL").expect("requires isolated test PostgreSQL");
+    let schema = format!(
+        "cs_test_{}_{}_{}",
+        std::process::id(),
+        NEXT_KEY.fetch_add(1, Ordering::Relaxed),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let mut client = postgres::Client::connect(&base, postgres::NoTls).unwrap();
+    client
+        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .unwrap();
+    format!("{base}?options=-csearch_path%3D{schema}")
 }
 
 fn engine(url: &str, label: &str) -> PostgresEngine {
@@ -45,21 +57,19 @@ fn engine(url: &str, label: &str) -> PostgresEngine {
         ),
         &ProtocolState::initial_scoped(
             RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
-            AttemptSubjectRef::from_u128_for_test(attempt_seed),
-            LedgerAccountRef::from_u128_for_test(PRINCIPAL.0),
+            RequestHistoryRef::from_u128_for_test(attempt_seed),
             SENDER,
             RECIPIENT,
             CanonicalTime(0),
         ),
         UNIT,
-        Money::from_minor_units(1_000),
     )
     .unwrap()
 }
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
-        protocol_version: ProtocolVersion(1),
+        protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
         privacy_profile_version: PrivacyProfileVersion(1),
         retention_policy_version: RetentionPolicyVersion(1),
@@ -70,9 +80,22 @@ fn policy() -> PolicySnapshot {
         admission_window: Duration(10),
         decision_window: Duration(50),
         quote_lifetime: Duration(20),
-        persistence_duration: Duration(200),
         backoff: vec![Duration(0), Duration(5)],
-        persistence: vec![Money::ZERO, Money::from_minor_units(5)],
+        financial: cs_mail_finance::FinancialTerms {
+            scope: cs_mail_finance::FinancialScope::new(
+                [7; 32],
+                PROVIDER,
+                cs_mail_primitives::ProgramRef(1),
+                [9; 32],
+                cs_mail_primitives::ProtocolVersion(2),
+            ),
+            policy_version: PolicyVersion(1),
+            corporate_basis_points: 300,
+            maturity_delay: Duration(10),
+        },
+        payment_provider_key: cs_mail_finance::SimulatedProvider::new([7; 32]).verifying_key(),
+        expiry_cooldown: Duration(30),
+        rejection_cooldown: Duration(90),
     }
 }
 
@@ -130,7 +153,7 @@ fn sender(command: ProtocolCommand, idempotency: u128) -> SignedCommandBytes {
     sender_signer()
         .sign(
             signing_scope(),
-            ProtocolVersion(1),
+            ProtocolVersion(2),
             IdempotencyKey(idempotency),
             command,
         )
@@ -153,11 +176,16 @@ impl TestExecute for PostgresEngine {
         now: CanonicalTime,
         policy: PolicySnapshot,
     ) -> Result<DurableExecutionOutcome, StorageError> {
-        let outcome = self.execute_signed(&registry(), &command, DEPLOYMENT_DOMAIN, now, policy)?;
-        if let Some(TermsOutcome::BondRequired(terms)) = &outcome.manifest.terms_outcome {
-            self.attach_signed_quote(&provider_signer().sign_contact_terms((**terms).clone())?)?;
+        self.initialize_key_registry(&registry(), CanonicalTime(0))?;
+        self.configure_ingress(DEPLOYMENT_DOMAIN, &policy)?;
+        let handle = self.receive_signed(&command, DEPLOYMENT_DOMAIN, || now, policy)?;
+        let outcome = self.process_received(&handle)?;
+        self.sign_artifacts_batch(&provider_signer(), CanonicalTime(0), Duration(30_000), 100)?;
+        match outcome {
+            cs_mail_storage_postgres::ReceivedOutcome::Protocol(o) => Ok(*o),
+            cs_mail_storage_postgres::ReceivedOutcome::Refused(e) => Err(e.into_error()),
+            _ => unreachable!(),
         }
-        Ok(outcome)
     }
 }
 
@@ -176,7 +204,7 @@ fn reserve(engine: &PostgresEngine, id: u128) {
     let terms = match engine
         .execute(
             sender(
-                ProtocolCommand::IssueContactTerms {
+                ProtocolCommand::IssueRequestTerms {
                     quote_id: QuoteId(id),
                     declaration_digest: None,
                 },
@@ -186,22 +214,24 @@ fn reserve(engine: &PostgresEngine, id: u128) {
             policy(),
         )
         .unwrap()
-        .manifest
+        .transition
         .terms_outcome
         .unwrap()
     {
-        TermsOutcome::BondRequired(terms) => terms,
-        TermsOutcome::NoBondRequired => panic!("expected bond"),
+        TermsOutcome::ChargeRequired(terms) => terms,
+        TermsOutcome::NoChargeRequired | TermsOutcome::ExistingRequest(_) => {
+            panic!("expected bond")
+        }
     };
     engine
         .execute(
             sender(
-                ProtocolCommand::ReserveAttempt {
-                    bond_id: BondId(id),
-                    reserve_id: PersistenceReserveId(id),
-                    attempt_id: AttemptId(id),
+                ProtocolCommand::CreateRequest {
+                    request_id: RequestId(id),
+
                     message_id: MessageId(id),
                     terms,
+                    payment_method: [9; 32],
                 },
                 id * 10 + 1,
             ),
@@ -222,10 +252,17 @@ impl DeliverySink for TestSink {
 
     fn publish(
         &mut self,
-        item: &OutboxItem,
+        item: &WorkItem,
         _content: Option<&EncryptedContentRecord>,
     ) -> Result<(), Self::Error> {
-        if self.fail_once {
+        if self.fail_once
+            && matches!(
+                item.payload,
+                cs_mail_storage_postgres::WorkPayload::Effect(
+                    cs_mail_protocol::EffectIntent::DeliverMessage { .. }
+                )
+            )
+        {
             self.fail_once = false;
             return Err("transient");
         }
@@ -240,10 +277,20 @@ fn delivery_failure_is_retried_after_lease_expiry() {
     let url = database_url();
     let engine = engine(&url, "delivery");
     reserve(&engine, 1);
+    let mut provider = cs_mail_finance::SimulatedProvider::new([7; 32]);
+    cs_mail_worker::run_payment_batch(
+        &engine,
+        &mut provider,
+        CanonicalTime(2),
+        Duration(10),
+        10,
+        &policy(),
+    )
+    .unwrap();
     let (sender_content_key, _) = EndpointSecretKey::generate(ContentKeyRef(2));
     let (_, public) = EndpointSecretKey::generate(ContentKeyRef(1));
     engine
-        .store_content(
+        .store_trusted_content(
             &encrypt(
                 &sender_content_key,
                 public,
@@ -253,7 +300,7 @@ fn delivery_failure_is_retried_after_lease_expiry() {
                     message_id: MessageId(1),
                     sender: SENDER,
                     recipient: RECIPIENT,
-                    protocol_version: ProtocolVersion(1),
+                    protocol_version: ProtocolVersion(2),
                     relationship: RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
                     content_scope: ContentScopeRef::from_u128_for_test(1),
                     sender_certificate: ContentCertificateDigest([1; 32]),
@@ -266,14 +313,15 @@ fn delivery_failure_is_retried_after_lease_expiry() {
                 CanonicalTime(10),
             )
             .unwrap(),
+            cs_mail_primitives::RetentionPolicyVersion(1),
         )
         .unwrap();
     engine
         .execute(
             sender(
-                ProtocolCommand::AdmitAttempt {
-                    bond_id: BondId(1),
-                    expected_bond_version: Version(0),
+                ProtocolCommand::AdmitRequest {
+                    request_id: RequestId(1),
+                    expected_request_version: Version(0),
                     content_ref: ContentRef(1),
                     delivery_intent_ref: DeliveryIntentRef(1),
                     declaration_digest: message_declaration_digest(&declarations()).unwrap(),
@@ -290,20 +338,31 @@ fn delivery_failure_is_retried_after_lease_expiry() {
         fail_once: true,
         ..TestSink::default()
     };
-    assert!(matches!(
-        deliver_batch(&engine, &mut sink, CanonicalTime(4), Duration(10), 10),
-        Err(WorkerError::Delivery(_))
-    ));
+    let first = deliver_batch(&engine, &mut sink, CanonicalTime(4), Duration(10), 10).unwrap();
+    assert_eq!(first.retried, 1);
+    assert_eq!(first.completed, 1);
     assert_eq!(
         deliver_batch(&engine, &mut sink, CanonicalTime(5), Duration(10), 10)
             .unwrap()
             .claimed,
         0
     );
-    assert_eq!(engine.purge_expired_content(CanonicalTime(10)).unwrap(), 0);
-    let report = deliver_batch(&engine, &mut sink, CanonicalTime(14), Duration(10), 10).unwrap();
-    assert_eq!(report.completed, 2);
-    assert_eq!(engine.purge_expired_content(CanonicalTime(14)).unwrap(), 1);
+    assert_eq!(
+        engine
+            .run_retention(CanonicalTime(10), 100)
+            .unwrap()
+            .deleted,
+        0
+    );
+    let report = deliver_batch(&engine, &mut sink, CanonicalTime(2004), Duration(10), 10).unwrap();
+    assert_eq!(report.completed, 1);
+    assert_eq!(
+        engine
+            .run_retention(CanonicalTime(2004), 100)
+            .unwrap()
+            .deleted,
+        1
+    );
     assert!(engine.content(ContentRef(1)).unwrap().is_none());
 }
 
@@ -325,7 +384,117 @@ fn due_admission_timeout_is_materialized_once() {
     .unwrap();
     assert_eq!(report.completed, 1);
     assert!(matches!(
-        engine.snapshot().unwrap().state.bonds[&BondId(2)].state,
-        cs_mail_protocol::BondState::CancelledUnadmitted { .. }
+        engine.snapshot().unwrap().state.requests[&RequestId(2)].lifecycle,
+        cs_mail_protocol::RequestLifecycle::Cancelled { .. }
     ));
+}
+
+#[test]
+#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+#[allow(clippy::too_many_lines)] // One end-to-end recovery sequence.
+fn uncertain_capture_and_failed_refund_keep_one_operation_and_obligation() {
+    use cs_mail_finance::SimulatedProvider;
+    use cs_mail_ledger::Account;
+    use cs_mail_protocol::CancellationReason;
+    use cs_mail_worker::run_payment_batch;
+    let url = database_url();
+    let engine = engine(&url, "payments");
+    let mut provider = SimulatedProvider::new([7; 32]);
+    reserve(&engine, 3);
+    provider.lose_next_response();
+    assert_eq!(
+        run_payment_batch(
+            &engine,
+            &mut provider,
+            CanonicalTime(3),
+            Duration(1),
+            10,
+            &policy()
+        )
+        .unwrap()
+        .retried,
+        1
+    );
+    assert_eq!(provider.operation_count(), 1);
+    assert!(!engine.snapshot().unwrap().payments[&RequestId(3)].capture_confirmed());
+    let report = run_payment_batch(
+        &engine,
+        &mut provider,
+        CanonicalTime(2004),
+        Duration(1),
+        10,
+        &policy(),
+    )
+    .unwrap();
+    assert_eq!(report.completed, 1);
+    assert_eq!(provider.operation_count(), 1);
+    engine
+        .execute(
+            sender(
+                ProtocolCommand::CancelPreparingRequest {
+                    request_id: RequestId(3),
+                    expected_request_version: Version(0),
+                    reason: CancellationReason::SenderRequested,
+                },
+                32,
+            ),
+            CanonicalTime(2005),
+            policy(),
+        )
+        .unwrap();
+    let request = engine.snapshot().unwrap().payments[&RequestId(3)].clone();
+    let obligation = Account::RefundPayable(request.refund().operation().unwrap().id);
+    assert_eq!(
+        engine.snapshot().unwrap().ledger.balance(obligation),
+        Money::from_minor_units(10)
+    );
+    provider.fail_next_submission();
+    assert_eq!(
+        run_payment_batch(
+            &engine,
+            &mut provider,
+            CanonicalTime(2006),
+            Duration(1),
+            10,
+            &policy()
+        )
+        .unwrap()
+        .retried,
+        1
+    );
+    assert_eq!(
+        engine.snapshot().unwrap().ledger.balance(obligation),
+        Money::from_minor_units(10)
+    );
+    run_payment_batch(
+        &engine,
+        &mut provider,
+        CanonicalTime(4006),
+        Duration(1),
+        10,
+        &policy(),
+    )
+    .unwrap();
+    assert_eq!(
+        engine.snapshot().unwrap().ledger.balance(obligation),
+        Money::ZERO
+    );
+    assert!(matches!(
+        engine.snapshot().unwrap().payments[&RequestId(3)].refund(),
+        cs_mail_finance::RefundStatus::Confirmed(_)
+    ));
+    assert_eq!(provider.operation_count(), 2);
+    assert_eq!(
+        run_payment_batch(
+            &engine,
+            &mut provider,
+            CanonicalTime(4010),
+            Duration(1),
+            10,
+            &policy()
+        )
+        .unwrap()
+        .claimed,
+        0
+    );
 }

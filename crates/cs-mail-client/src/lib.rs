@@ -145,7 +145,7 @@ impl NativeClient {
         )
     }
 
-    /// Computes the declaration digest used by contact terms and bonded admission.
+    /// Computes the declaration digest used by request terms and initial admission.
     ///
     /// # Errors
     ///
@@ -226,7 +226,7 @@ mod tests {
                     message_id: MessageId(4),
                     sender: ProtocolIdentity(1),
                     recipient: ProtocolIdentity(2),
-                    protocol_version: ProtocolVersion(1),
+                    protocol_version: ProtocolVersion(2),
                     relationship: RelationshipRef::from_u128_for_test(5),
                     content_scope: ContentScopeRef::from_u128_for_test(6),
                     sender_certificate: ContentCertificateDigest([7; 32]),

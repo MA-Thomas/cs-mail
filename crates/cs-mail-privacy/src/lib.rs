@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use cs_mail_primitives::{
-    AttemptSubjectRef, AuditRef, CanonicalTime, ContentScopeRef, Duration, LedgerAccountRef,
-    PrincipalRef, ProtocolIdentity, RelationshipRef, RetentionClassId,
+    AuditRef, CanonicalTime, ContentScopeRef, Duration, PrincipalRef, ProtocolIdentity,
+    RelationshipRef, RequestHistoryRef, RetentionClassId,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
@@ -79,39 +79,21 @@ impl PrivacyDeriver {
         ))
     }
 
-    pub fn attempt_subject_ref(
+    pub fn request_history_ref(
         &self,
         derivation_version: u16,
         service_domain: &[u8],
         principal: PrincipalRef,
         recipient: ProtocolIdentity,
-    ) -> AttemptSubjectRef {
-        AttemptSubjectRef::new(
+    ) -> RequestHistoryRef {
+        RequestHistoryRef::new(
             derivation_version,
             derive(
                 &self.principal_secret,
-                b"cs-mail/attempt-subject/v1",
+                b"cs-mail/request-history/v1",
                 service_domain,
                 principal.0,
                 recipient.0,
-            ),
-        )
-    }
-
-    pub fn ledger_account_ref(
-        &self,
-        derivation_version: u16,
-        service_domain: &[u8],
-        principal: PrincipalRef,
-    ) -> LedgerAccountRef {
-        LedgerAccountRef::new(
-            derivation_version,
-            derive(
-                &self.principal_secret,
-                b"cs-mail/ledger-account/v1",
-                service_domain,
-                principal.0,
-                0,
             ),
         )
     }

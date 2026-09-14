@@ -1,34 +1,24 @@
 //! A small authenticated ingress facade around the durable protocol engine.
 
 use core::fmt;
-use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cs_mail_adapters::{DmarcError, DmarcVerifier, LegacyDmarcEvidence, SmtpAuthenticationRequest};
+use cs_mail_adapters::{DmarcError, DmarcVerifier, SmtpAuthenticationRequest};
 use cs_mail_capabilities::{
-    AdmissionAuthentication, BondFreeAdmission, LaneEvidence, LaneSubject, LegacyBondFreeAdmission,
-    SignedBondFreeAdmission, SignedLaneControl, SignedLaneGrant,
+    AdmissionAuthentication, LaneSubject, LegacyBondFreeAdmission, SignedBondFreeAdmission,
+    SignedLaneControl, SignedLaneGrant,
 };
-use cs_mail_content::{EncryptedContentRecord, content_key_certificate_digest};
+use cs_mail_content::EncryptedContentRecord;
 use cs_mail_primitives::{
-    CanonicalTime, DeclarationAuthority, Duration, ExtensionCriticality, IdempotencyKey,
-    MessageDeclarations, MessageValidityUntil, NamespacedIdentifier, OperationalKeyRef,
-    OriginDeclaration, OriginMode, ProtocolVersion, ReceiptRef, Version, WireVersion,
+    CanonicalTime, DeclarationAuthority, Duration, IdempotencyKey, MessageDeclarations,
+    MessageValidityUntil, OperationalKeyRef, ProtocolVersion, Version,
 };
-use cs_mail_protocol::{
-    ActorRef, PolicySnapshot, ProtocolEventKind, SettlementSnapshot, TermsOutcome,
-};
+use cs_mail_protocol::{ActorRef, PolicySnapshot, SettlementSnapshot, TermsOutcome};
 use cs_mail_security::{
-    CommandDigest, KeyRegistry, OutcomeDigest, ProviderSigner, ReceiptKind, ReceiptPayload,
-    SecurityError, SignedCommandBytes, SignedContactTerms, SignedContentKeyCertificate,
-    SignedReceipt, SigningScope,
+    KeyRegistry, ProviderSigner, SecurityError, SignedCommandBytes, SignedContactTerms,
+    SignedContentKeyCertificate, SignedReceipt,
 };
-use cs_mail_storage_postgres::{
-    BondFreeAdmissionOutcome, DurableExecutionOutcome, LaneOperationOutcome, PostgresEngine,
-    StorageError,
-};
-use sha2::{Digest as _, Sha256};
+use cs_mail_storage_postgres::{PostgresEngine, StorageError};
 
 pub trait CanonicalClock: Send + Sync {
     fn now(&self) -> CanonicalTime;
@@ -55,54 +45,7 @@ pub struct ServicePolicy {
     pub legacy_identity_mapping_version: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AdmissionPolicyReason {
-    UnsupportedCriticalExtension,
-}
-
-pub struct AdmissionPolicyInput<'a> {
-    pub declarations: &'a MessageDeclarations,
-    pub message_valid_until: MessageValidityUntil,
-    pub capability: Option<cs_mail_primitives::LaneId>,
-    pub authentication: AdmissionAuthentication,
-}
-
-pub trait AdmissionPolicy: Send + Sync {
-    /// Decides whether envelope-visible declarations are acceptable for admission.
-    ///
-    /// # Errors
-    ///
-    /// Returns a refusal reason without mutating protocol or ledger state.
-    fn evaluate(&self, input: &AdmissionPolicyInput<'_>) -> Result<(), AdmissionPolicyReason>;
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct DefaultAdmissionPolicy {
-    supported_critical_schemas: BTreeSet<NamespacedIdentifier>,
-}
-
-impl DefaultAdmissionPolicy {
-    pub fn with_supported_critical_schemas(
-        supported_critical_schemas: impl IntoIterator<Item = NamespacedIdentifier>,
-    ) -> Self {
-        Self {
-            supported_critical_schemas: supported_critical_schemas.into_iter().collect(),
-        }
-    }
-}
-
-impl AdmissionPolicy for DefaultAdmissionPolicy {
-    fn evaluate(&self, input: &AdmissionPolicyInput<'_>) -> Result<(), AdmissionPolicyReason> {
-        if let Some(schema) = &input.declarations.payload_schema
-            && schema.criticality == ExtensionCriticality::Critical
-            && !self.supported_critical_schemas.contains(&schema.id)
-        {
-            return Err(AdmissionPolicyReason::UnsupportedCriticalExtension);
-        }
-        Ok(())
-    }
-}
-
+pub use cs_mail_protocol::admission::{AdmissionFailure, AdmissionPolicy};
 #[derive(Debug)]
 pub enum ServiceError {
     Security(SecurityError),
@@ -112,7 +55,7 @@ pub enum ServiceError {
     ReceiptUnavailable,
     Dmarc(DmarcError),
     MessageValidityClosed,
-    AdmissionPolicyRefused(AdmissionPolicyReason),
+    AdmissionPolicyRefused(AdmissionFailure),
 }
 
 impl fmt::Display for ServiceError {
@@ -156,8 +99,8 @@ impl From<StorageError> for ServiceError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ServiceExecutionOutcome {
-    pub execution: DurableExecutionOutcome,
+pub struct ServiceOutcome {
+    pub outcome: cs_mail_storage_postgres::ReceivedOutcome,
     pub signed_terms: Option<SignedContactTerms>,
     pub receipt: SignedReceipt,
 }
@@ -167,7 +110,7 @@ pub struct IngressService<C> {
     provider_signer: ProviderSigner,
     clock: C,
     policy: ServicePolicy,
-    admission_policy: Arc<dyn AdmissionPolicy>,
+    admission_policy: AdmissionPolicy,
 }
 
 impl<C: CanonicalClock> IngressService<C> {
@@ -189,7 +132,7 @@ impl<C: CanonicalClock> IngressService<C> {
             provider_signer,
             clock,
             policy,
-            Arc::new(DefaultAdmissionPolicy::default()),
+            AdmissionPolicy::default(),
         )
     }
 
@@ -204,7 +147,7 @@ impl<C: CanonicalClock> IngressService<C> {
         provider_signer: ProviderSigner,
         clock: C,
         policy: ServicePolicy,
-        admission_policy: Arc<dyn AdmissionPolicy>,
+        admission_policy: AdmissionPolicy,
     ) -> Result<Self, ServiceError> {
         if provider_signer.provider() != policy.protocol.recipient_provider {
             return Err(ServiceError::SigningScopeMismatch);
@@ -242,6 +185,8 @@ impl<C: CanonicalClock> IngressService<C> {
             )?,
             Err(error) => return Err(ServiceError::Security(error)),
         }
+        engine.configure_ingress(policy.deployment_domain, &policy.protocol)?;
+        engine.configure_admission_policy(&admission_policy)?;
         Ok(Self {
             engine,
             provider_signer,
@@ -255,20 +200,15 @@ impl<C: CanonicalClock> IngressService<C> {
         &self,
         declarations: &MessageDeclarations,
         message_valid_until: MessageValidityUntil,
-        capability: Option<cs_mail_primitives::LaneId>,
-        authentication: AdmissionAuthentication,
+        _capability: Option<cs_mail_primitives::LaneId>,
+        _authentication: AdmissionAuthentication,
         now: CanonicalTime,
     ) -> Result<(), ServiceError> {
         if message_valid_until.0 < now {
             return Err(ServiceError::MessageValidityClosed);
         }
         self.admission_policy
-            .evaluate(&AdmissionPolicyInput {
-                declarations,
-                message_valid_until,
-                capability,
-                authentication,
-            })
+            .evaluate(declarations)
             .map_err(ServiceError::AdmissionPolicyRefused)
     }
 
@@ -281,64 +221,51 @@ impl<C: CanonicalClock> IngressService<C> {
     /// # Errors
     ///
     /// Returns an authentication, registry, protocol, ledger, or storage error.
-    pub fn submit(
-        &self,
-        command: &SignedCommandBytes,
-    ) -> Result<DurableExecutionOutcome, ServiceError> {
-        Ok(self.submit_with_artifacts(command)?.execution)
-    }
-
-    /// Executes a command and returns portable provider-signed terms and receipt evidence.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for authentication, transition, persistence, or signing failures.
-    pub fn submit_with_artifacts(
-        &self,
-        command: &SignedCommandBytes,
-    ) -> Result<ServiceExecutionOutcome, ServiceError> {
-        let now = self.clock.now();
-        let registry = self.engine.key_registry()?;
-        let execution = self.engine.execute_signed(
-            &registry,
+    pub fn submit(&self, command: &SignedCommandBytes) -> Result<ServiceOutcome, ServiceError> {
+        let handle = self.engine.receive_signed(
             command,
             self.policy.deployment_domain,
-            now,
+            || self.clock.now(),
             self.policy.protocol.clone(),
         )?;
-        let signed_terms = match execution.manifest.terms_outcome.clone() {
-            Some(TermsOutcome::BondRequired(terms)) => {
-                let signed = self.provider_signer.sign_contact_terms(*terms)?;
-                self.engine.attach_signed_quote(&signed)?;
-                Some(signed)
+        self.complete_receipt(&handle)
+    }
+
+    fn complete_receipt(
+        &self,
+        handle: &cs_mail_storage_postgres::ReceivedCommand,
+    ) -> Result<ServiceOutcome, ServiceError> {
+        self.engine.sign_artifacts_batch(
+            &self.provider_signer,
+            self.clock.now(),
+            cs_mail_primitives::Duration(30_000),
+            100,
+        )?;
+        let result = self.engine.process_received(handle);
+        self.engine.sign_artifacts_batch(
+            &self.provider_signer,
+            self.clock.now(),
+            cs_mail_primitives::Duration(30_000),
+            100,
+        )?;
+        let outcome = result?;
+        let signed_terms = match &outcome {
+            cs_mail_storage_postgres::ReceivedOutcome::Protocol(o) => {
+                match &o.transition.terms_outcome {
+                    Some(TermsOutcome::ChargeRequired(t)) => {
+                        Some(self.engine.signed_quote(t.quote_id)?)
+                    }
+                    _ => None,
+                }
             }
-            Some(TermsOutcome::NoBondRequired) | None => None,
+            _ => None,
         };
-        let event = execution
-            .manifest
-            .protocol_events
-            .first()
+        let receipt = self
+            .engine
+            .receipt(handle)?
             .ok_or(ServiceError::ReceiptUnavailable)?;
-        let command_digest = CommandDigest(Sha256::digest(&command.payload).into());
-        let outcome_bytes = serde_json::to_vec(&execution.manifest)
-            .map_err(StorageError::from)
-            .map_err(ServiceError::from)?;
-        let outcome_digest = OutcomeDigest(Sha256::digest(outcome_bytes).into());
-        let receipt_id = receipt_ref(command_digest, event.reference.0, outcome_digest);
-        let receipt = self.provider_signer.sign_receipt(ReceiptPayload {
-            receipt_id,
-            kind: receipt_kind(event.kind),
-            relationship: execution.manifest.next_state.relationship.key.reference,
-            command_digest,
-            journal_position: event.reference.0,
-            received_at: event.at,
-            outcome_digest,
-            provider: self.policy.protocol.recipient_provider,
-            protocol_version: self.policy.protocol.protocol_version,
-        })?;
-        self.engine.store_receipt(&receipt)?;
-        Ok(ServiceExecutionOutcome {
-            execution,
+        Ok(ServiceOutcome {
+            outcome,
             signed_terms,
             receipt,
         })
@@ -354,14 +281,7 @@ impl<C: CanonicalClock> IngressService<C> {
         &self,
         signed: &SignedLaneGrant,
         idempotency_key: IdempotencyKey,
-    ) -> Result<LaneOperationOutcome, ServiceError> {
-        let now = self.clock.now();
-        if signed.grant.protocol_version != self.policy.protocol.protocol_version
-            || signed.grant.deployment_domain != self.policy.deployment_domain
-            || signed.grant.intended_provider != self.policy.protocol.recipient_provider
-        {
-            return Err(ServiceError::SigningScopeMismatch);
-        }
+    ) -> Result<ServiceOutcome, ServiceError> {
         if let LaneSubject::LegacyDomain(domain) = &signed.grant.subject
             && domain.synthetic_protocol_identity(
                 &self.policy.deployment_domain,
@@ -370,13 +290,14 @@ impl<C: CanonicalClock> IngressService<C> {
         {
             return Err(ServiceError::SigningScopeMismatch);
         }
-        let registry = self.engine.key_registry()?;
-        let key = registry.active_verifying_key(
-            signed.grant.recipient_operational_key,
-            ActorRef::Recipient(signed.grant.recipient),
-            now,
+        let handle = self.engine.receive_grant(
+            signed,
+            idempotency_key,
+            self.policy.deployment_domain,
+            || self.clock.now(),
+            self.policy.protocol.clone(),
         )?;
-        Ok(self.engine.grant_lane(signed, &key, idempotency_key, now)?)
+        self.complete_receipt(&handle)
     }
 
     /// Verifies and applies an explicit recipient revocation or reconfirmation.
@@ -385,29 +306,14 @@ impl<C: CanonicalClock> IngressService<C> {
     ///
     /// Returns an error for invalid signature/scope, stale version, block,
     /// conflicting replay, or storage failure.
-    pub fn control_lane(
-        &self,
-        signed: &SignedLaneControl,
-    ) -> Result<LaneOperationOutcome, ServiceError> {
-        let now = self.clock.now();
-        let control = &signed.control;
-        if control.protocol_version != self.policy.protocol.protocol_version
-            || control.deployment_domain != self.policy.deployment_domain
-            || control.intended_provider != self.policy.protocol.recipient_provider
-        {
-            return Err(ServiceError::SigningScopeMismatch);
-        }
-        let registry = self.engine.key_registry()?;
-        let key = registry.active_verifying_key(
-            control.recipient_operational_key,
-            ActorRef::Recipient(control.recipient),
-            now,
+    pub fn control_lane(&self, signed: &SignedLaneControl) -> Result<ServiceOutcome, ServiceError> {
+        let handle = self.engine.receive_control(
+            signed,
+            self.policy.deployment_domain,
+            || self.clock.now(),
+            self.policy.protocol.clone(),
         )?;
-        signed
-            .verify(&key)
-            .map_err(StorageError::from)
-            .map_err(ServiceError::from)?;
-        Ok(self.engine.control_lane(control, now)?)
+        self.complete_receipt(&handle)
     }
 
     /// Authenticates and durably admits one accepted-relationship or lane message.
@@ -419,39 +325,14 @@ impl<C: CanonicalClock> IngressService<C> {
     pub fn admit_native_bond_free(
         &self,
         signed: &SignedBondFreeAdmission,
-    ) -> Result<BondFreeAdmissionOutcome, ServiceError> {
-        let now = self.clock.now();
-        let admission = &signed.admission;
-        if admission.protocol_version != self.policy.protocol.protocol_version
-            || admission.deployment_domain != self.policy.deployment_domain
-            || admission.intended_provider != self.policy.protocol.recipient_provider
-        {
-            return Err(ServiceError::SigningScopeMismatch);
-        }
-        let AdmissionAuthentication::NativeKey(operational_key) = admission.authentication else {
-            return Err(ServiceError::SigningScopeMismatch);
-        };
-        if matches!(admission.evidence, Some(LaneEvidence::Legacy(_))) {
-            return Err(ServiceError::SigningScopeMismatch);
-        }
-        let registry = self.engine.key_registry()?;
-        let key = registry.active_verifying_key(
-            operational_key,
-            ActorRef::Sender(admission.sender),
-            now,
+    ) -> Result<ServiceOutcome, ServiceError> {
+        let handle = self.engine.receive_message(
+            signed,
+            self.policy.deployment_domain,
+            || self.clock.now(),
+            self.policy.protocol.clone(),
         )?;
-        signed
-            .verify(&key)
-            .map_err(StorageError::from)
-            .map_err(ServiceError::from)?;
-        self.evaluate_admission_policy(
-            &admission.declarations,
-            admission.message_valid_until,
-            admission.capability,
-            admission.authentication,
-            now,
-        )?;
-        Ok(self.engine.admit_bond_free(admission, now)?)
+        self.complete_receipt(&handle)
     }
 
     /// Runs DMARC at the trusted edge and admits a legacy message using the
@@ -466,63 +347,22 @@ impl<C: CanonicalClock> IngressService<C> {
         verifier: &V,
         authentication: SmtpAuthenticationRequest<'_>,
         request: &LegacyBondFreeAdmission,
-    ) -> Result<BondFreeAdmissionOutcome, ServiceError> {
-        let now = self.clock.now();
-        if request.protocol_version != self.policy.protocol.protocol_version
-            || request.deployment_domain != self.policy.deployment_domain
-            || request.intended_provider != self.policy.protocol.recipient_provider
-            || authentication.received_at != now
-            || request.lane_domain.synthetic_protocol_identity(
-                &self.policy.deployment_domain,
-                self.policy.legacy_identity_mapping_version,
-            ) != request.sender
-        {
-            return Err(ServiceError::SigningScopeMismatch);
-        }
-        let evidence = verifier
-            .verify(authentication)
-            .await
-            .map_err(ServiceError::Dmarc)?;
-        if evidence.evaluated_at != now {
-            return Err(ServiceError::SigningScopeMismatch);
-        }
-        let evidence = LegacyDmarcEvidence::new(request.lane_domain.clone(), evidence)
-            .map_err(|_| ServiceError::SigningScopeMismatch)?;
-        let declarations = MessageDeclarations {
-            purpose: request.purpose.clone(),
-            origin: OriginDeclaration {
-                mode: OriginMode::LegacyOrUnspecified,
-                authority: DeclarationAuthority::LegacyGateway(
-                    self.policy.protocol.recipient_provider,
-                ),
-            },
-            payload_schema: request.payload_schema.clone(),
-        };
-        let admission = BondFreeAdmission {
-            wire_version: WireVersion(1),
-            sender: request.sender,
-            recipient: request.recipient,
-            message_id: request.message_id,
-            content_ref: request.content_ref,
-            delivery_intent_ref: request.delivery_intent_ref,
-            declarations,
-            message_valid_until: request.message_valid_until,
-            capability: Some(request.capability),
-            evidence: Some(LaneEvidence::Legacy(evidence)),
-            idempotency_key: request.idempotency_key,
-            protocol_version: request.protocol_version,
-            deployment_domain: request.deployment_domain,
-            intended_provider: request.intended_provider,
-            authentication: AdmissionAuthentication::LegacyDmarc,
-        };
-        self.evaluate_admission_policy(
-            &admission.declarations,
-            admission.message_valid_until,
-            admission.capability,
-            admission.authentication,
-            now,
+    ) -> Result<ServiceOutcome, ServiceError> {
+        let proof = cs_mail_capabilities::verify_legacy_admission(
+            verifier,
+            authentication,
+            request,
+            self.policy.legacy_identity_mapping_version,
+        )
+        .await
+        .map_err(StorageError::from)?;
+        let handle = self.engine.receive_legacy(
+            &proof,
+            self.policy.deployment_domain,
+            || self.clock.now(),
+            self.policy.protocol.clone(),
         )?;
-        Ok(self.engine.admit_bond_free(&admission, now)?)
+        self.complete_receipt(&handle)
     }
 
     /// Stores ciphertext only when its client-declared lifetime is bounded by service policy.
@@ -552,36 +392,13 @@ impl<C: CanonicalClock> IngressService<C> {
             },
             now,
         )?;
-        let relationship = self.engine.snapshot()?.state.relationship.key.reference;
-        let registry = self.engine.key_registry()?;
-        let digest = registry.verify_content_key_certificate(
+        self.engine.store_authenticated_content(
+            record,
             certificate,
-            now,
-            self.policy.protocol.protocol_version,
-            SigningScope {
-                deployment_domain: self.policy.deployment_domain,
-                intended_provider: self.policy.protocol.recipient_provider,
-                relationship,
-            },
+            || self.clock.now(),
+            &self.policy.protocol,
+            self.policy.deployment_domain,
         )?;
-        if certificate.certificate.key.reference != record.envelope.sender_key
-            || certificate.certificate.owner != record.binding.sender
-            || record.binding.relationship != relationship
-            || record.binding.sender_certificate != digest
-            || content_key_certificate_digest(&certificate.certificate) != digest
-            || match record.binding.declarations.origin.authority {
-                DeclarationAuthority::NativeSender(key) => {
-                    key != certificate.certificate.operational_key
-                }
-                DeclarationAuthority::LegacyGateway(provider) => {
-                    provider != self.policy.protocol.recipient_provider
-                }
-            }
-        {
-            return Err(ServiceError::SigningScopeMismatch);
-        }
-        self.engine
-            .store_content_with_retention(record, self.policy.protocol.retention_policy_version)?;
         Ok(())
     }
 
@@ -632,44 +449,13 @@ impl<C: CanonicalClock> IngressService<C> {
     }
 }
 
-fn receipt_kind(event: ProtocolEventKind) -> ReceiptKind {
-    match event {
-        ProtocolEventKind::TermsIssued => ReceiptKind::ContactTermsIssued,
-        ProtocolEventKind::AttemptReserved(_) => ReceiptKind::ReservationCommitted,
-        ProtocolEventKind::AttemptAdmitted(_) => ReceiptKind::AdmissionCommitted,
-        ProtocolEventKind::RelationshipAccepted
-        | ProtocolEventKind::RelationshipRejected
-        | ProtocolEventKind::RelationshipBlocked
-        | ProtocolEventKind::RelationshipUnblocked
-        | ProtocolEventKind::RelationshipRevoked => ReceiptKind::RelationshipDecisionCommitted,
-        ProtocolEventKind::ReservedAttemptCancelled(_)
-        | ProtocolEventKind::MessageValidityClosed(_)
-        | ProtocolEventKind::DeclarationMismatch(_)
-        | ProtocolEventKind::BondExpired(_)
-        | ProtocolEventKind::PersistenceReleased(_) => ReceiptKind::SettlementCommitted,
-    }
-}
-
-fn receipt_ref(
-    command: CommandDigest,
-    position: cs_mail_primitives::JournalPosition,
-    outcome: OutcomeDigest,
-) -> ReceiptRef {
-    let mut hasher = Sha256::new();
-    hasher.update(b"cs-mail/receipt-reference/v1");
-    hasher.update(command.0);
-    hasher.update(position.0.to_be_bytes());
-    hasher.update(outcome.0);
-    let digest: [u8; 32] = hasher.finalize().into();
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    ReceiptRef(u128::from_be_bytes(bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cs_mail_primitives::{DeclaredPurpose, KnownPurpose, PayloadSchema};
+    use cs_mail_primitives::{
+        DeclaredPurpose, ExtensionCriticality, KnownPurpose, NamespacedIdentifier,
+        OriginDeclaration, OriginMode, PayloadSchema,
+    };
 
     #[derive(Clone, Copy)]
     struct FixedClock(CanonicalTime);
@@ -701,29 +487,22 @@ mod tests {
 
     #[test]
     fn admission_policy_rejects_only_unsupported_critical_schemas() {
-        let policy = DefaultAdmissionPolicy::default();
+        let policy = AdmissionPolicy::default();
         let noncritical = declarations_with_schema(ExtensionCriticality::NonCritical);
         let critical = declarations_with_schema(ExtensionCriticality::Critical);
-        let input = |declarations| AdmissionPolicyInput {
-            declarations,
-            message_valid_until: MessageValidityUntil(CanonicalTime(10)),
-            capability: None,
-            authentication: AdmissionAuthentication::NativeKey(OperationalKeyRef(1)),
-        };
 
-        assert_eq!(policy.evaluate(&input(&noncritical)), Ok(()));
+        assert_eq!(policy.evaluate(&noncritical), Ok(()));
         assert_eq!(
-            policy.evaluate(&input(&critical)),
-            Err(AdmissionPolicyReason::UnsupportedCriticalExtension)
+            policy.evaluate(&critical),
+            Err(AdmissionFailure::UnsupportedCriticalExtension)
         );
 
-        let supported =
-            DefaultAdmissionPolicy::with_supported_critical_schemas([NamespacedIdentifier::new(
-                "com.example",
-                "invoice",
-                1,
-            )
-            .unwrap()]);
-        assert_eq!(supported.evaluate(&input(&critical)), Ok(()));
+        let supported = AdmissionPolicy {
+            version: Version(1),
+            supported_critical_schemas: std::collections::BTreeSet::from([
+                NamespacedIdentifier::new("com.example", "invoice", 1).unwrap(),
+            ]),
+        };
+        assert_eq!(supported.evaluate(&critical), Ok(()));
     }
 }

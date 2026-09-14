@@ -14,6 +14,8 @@
 \author{}
 \date{}
 
+\setlength{\emergencystretch}{1.5em}
+
 \begin{document}
 \maketitle
 
@@ -21,8 +23,11 @@
 \fbox{\parbox{0.9\textwidth}{\textbf{Superseded design-history document.}
 This file predates the current \textit{cs-mail} whitepaper, protocol
 specification, Rust reference architecture, and deployment profile. It is
-retained for historical context only. The current protocol specification is
-normative and takes precedence over this document.}}
+retained for historical context only. Its per-attempt bonds, direct recipient
+collateral payouts, and funded user balances describe the earlier model, not the
+current design. Current documents use one charge per relationship request,
+request-linked refunds, and a company-owned member-distribution pool. The current
+protocol specification and C-SQD financial-program profile take precedence.}}
 \end{center}
 
 \begin{abstract}
@@ -428,9 +433,10 @@ A capability may specify
 
 These capabilities extend the same permission model while preserving narrower recipient control.
 
-\section{Reference Settlement Semantics}
+\section{Historical Reference Settlement Semantics}
 
-The initial protocol can define the following normative rules.
+The earlier draft proposed the following rules. They are historical and are
+not conformance requirements for the current request model.
 
 \subsection*{Contact-Term Discovery and Fixation}
 

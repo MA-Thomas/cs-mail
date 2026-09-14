@@ -7,18 +7,22 @@
 use std::convert::Infallible;
 use std::fmt;
 
+use cs_mail_finance::{FinancialTerms, PaymentEvidence, PaymentOutcome, SignedPaymentEvidence};
 use cs_mail_primitives::{
-    AttemptId, AttemptSubjectRef, BondId, CanonicalTime, ContentRef, DeliveryIntentRef, Duration,
-    IdempotencyKey, LedgerAccountRef, MessageDeclarationDigest, MessageId, MessageValidityUntil,
-    Money, OperationalKeyRef, PersistenceReserveId, PolicyVersion, PrivacyProfileVersion,
-    ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, RelationshipRef,
-    RetentionPolicyVersion, SettlementUnit, Version, WireVersion,
+    CanonicalTime, ContentRef, DeliveryIntentRef, Duration, IdempotencyKey,
+    MessageDeclarationDigest, MessageId, MessageValidityUntil, Money, OperationalKeyRef,
+    PolicyVersion, PrivacyProfileVersion, ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId,
+    RelationshipRef, RequestHistoryRef, RequestId, RetentionPolicyVersion, SettlementUnit, Version,
+    WireVersion,
 };
-use cs_mail_protocol::{ActorRef, CancellationReason, ContactTerms, ProtocolCommand};
+use cs_mail_primitives::{FinancialEventId, PaymentOperationId};
+use cs_mail_protocol::{
+    ActorRef, CancellationReason, FollowupPolicy, ProtocolCommand, RequestTerms,
+};
 use minicbor::{Decoder, Encoder};
 
-const SIGNING_DOMAIN: &str = "cs-mail/command";
-const QUOTE_SIGNING_DOMAIN: &str = "cs-mail/contact-terms";
+const SIGNING_DOMAIN: &str = "cs-mail/command/v5";
+const QUOTE_SIGNING_DOMAIN: &str = "cs-mail/request-terms/v5";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandTarget {
@@ -195,12 +199,62 @@ fn decode_actor(decoder: &mut Decoder<'_>) -> Result<ActorRef, WireError> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // Keep the complete wire tag table together.
 fn encode_command(
     encoder: &mut Encoder<Vec<u8>>,
     command: &ProtocolCommand,
 ) -> Result<(), WireError> {
     match command {
-        ProtocolCommand::IssueContactTerms {
+        ProtocolCommand::RecordPayment {
+            request_id,
+            receipt,
+        } => {
+            encoder.array(7)?.u8(11)?;
+            encode_id(encoder, request_id.0)?;
+            encode_id(encoder, receipt.evidence.event_id.0)?;
+            encode_id(encoder, receipt.evidence.operation_id.0)?;
+            encoder
+                .bytes(&receipt.evidence.operation_digest)?
+                .u8(match receipt.evidence.outcome {
+                    PaymentOutcome::Confirmed => 0,
+                    PaymentOutcome::Voided => 1,
+                    PaymentOutcome::Reversed => 2,
+                })?
+                .bytes(&receipt.signature)?;
+        }
+        ProtocolCommand::SetFollowupPolicy {
+            expected_version,
+            policy,
+        } => {
+            encoder
+                .array(6)?
+                .u8(12)?
+                .u64(expected_version.0)?
+                .u64(policy.version.0)?
+                .u32(policy.max_messages)?
+                .u32(policy.max_per_interval)?
+                .u64(policy.interval.0)?;
+        }
+        ProtocolCommand::AdmitFollowup {
+            request_id,
+            message_id,
+            content_ref,
+            delivery_intent_ref,
+            declaration_digest,
+            message_valid_until,
+            expected_policy_version,
+        } => {
+            encoder.array(8)?.u8(13)?;
+            encode_id(encoder, request_id.0)?;
+            encode_id(encoder, message_id.0)?;
+            encode_id(encoder, content_ref.0)?;
+            encode_id(encoder, delivery_intent_ref.0)?;
+            encoder
+                .bytes(&declaration_digest.0)?
+                .u64(message_valid_until.0.0)?
+                .u64(expected_policy_version.0)?;
+        }
+        ProtocolCommand::IssueRequestTerms {
             quote_id,
             declaration_digest,
         } => {
@@ -208,44 +262,42 @@ fn encode_command(
             encode_id(encoder, quote_id.0)?;
             encode_optional_declaration_digest(encoder, *declaration_digest)?;
         }
-        ProtocolCommand::ReserveAttempt {
-            bond_id,
-            reserve_id,
-            attempt_id,
+        ProtocolCommand::CreateRequest {
+            payment_method,
+            request_id,
             message_id,
             terms,
         } => {
-            encoder.array(6)?.u8(1)?;
-            encode_id(encoder, bond_id.0)?;
-            encode_id(encoder, reserve_id.0)?;
-            encode_id(encoder, attempt_id.0)?;
+            encoder.array(5)?.u8(1)?;
+            encode_id(encoder, request_id.0)?;
             encode_id(encoder, message_id.0)?;
             encode_terms(encoder, terms)?;
+            encoder.bytes(payment_method)?;
         }
-        ProtocolCommand::AdmitAttempt {
-            bond_id,
-            expected_bond_version,
+        ProtocolCommand::AdmitRequest {
+            request_id,
+            expected_request_version,
             content_ref,
             delivery_intent_ref,
             declaration_digest,
             message_valid_until,
         } => {
             encoder.array(7)?.u8(2)?;
-            encode_id(encoder, bond_id.0)?;
-            encoder.u64(expected_bond_version.0)?;
+            encode_id(encoder, request_id.0)?;
+            encoder.u64(expected_request_version.0)?;
             encode_id(encoder, content_ref.0)?;
             encode_id(encoder, delivery_intent_ref.0)?;
             encoder.bytes(&declaration_digest.0)?;
             encoder.u64(message_valid_until.0.0)?;
         }
-        ProtocolCommand::CancelReservedAttempt {
-            bond_id,
-            expected_bond_version,
+        ProtocolCommand::CancelPreparingRequest {
+            request_id,
+            expected_request_version,
             reason,
         } => {
             encoder.array(4)?.u8(3)?;
-            encode_id(encoder, bond_id.0)?;
-            encoder.u64(expected_bond_version.0)?;
+            encode_id(encoder, request_id.0)?;
+            encoder.u64(expected_request_version.0)?;
             encoder.u8(match reason {
                 CancellationReason::SenderRequested => 0,
                 CancellationReason::AdmissionTimeout => 1,
@@ -264,21 +316,13 @@ fn encode_command(
         ProtocolCommand::UnblockRelationship { expected_version } => {
             encode_version_command(encoder, 7, *expected_version)?;
         }
-        ProtocolCommand::ExpireBond {
-            bond_id,
-            expected_bond_version,
+        ProtocolCommand::ExpireRequest {
+            request_id,
+            expected_request_version,
         } => {
             encoder.array(3)?.u8(8)?;
-            encode_id(encoder, bond_id.0)?;
-            encoder.u64(expected_bond_version.0)?;
-        }
-        ProtocolCommand::ReleasePersistenceReserve {
-            reserve_id,
-            expected_reserve_version,
-        } => {
-            encoder.array(3)?.u8(9)?;
-            encode_id(encoder, reserve_id.0)?;
-            encoder.u64(expected_reserve_version.0)?;
+            encode_id(encoder, request_id.0)?;
+            encoder.u64(expected_request_version.0)?;
         }
         ProtocolCommand::RevokeRelationship { expected_version } => {
             encode_version_command(encoder, 10, *expected_version)?;
@@ -287,24 +331,71 @@ fn encode_command(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // Keep the complete wire tag table together.
 fn decode_command(decoder: &mut Decoder<'_>) -> Result<ProtocolCommand, WireError> {
     let length = decoder.array()?.ok_or(WireError::UnexpectedShape)?;
     let tag = decoder.u8()?;
     match tag {
-        0 if length == 3 => Ok(ProtocolCommand::IssueContactTerms {
+        11 if length == 7 => {
+            let request_id = RequestId(decode_id(decoder)?);
+            let event_id = FinancialEventId(decode_id(decoder)?);
+            let operation_id = PaymentOperationId(decode_id(decoder)?);
+            let operation_digest = read_32(decoder)?;
+            let outcome = match decoder.u8()? {
+                0 => PaymentOutcome::Confirmed,
+                1 => PaymentOutcome::Voided,
+                2 => PaymentOutcome::Reversed,
+                _ => return Err(WireError::UnexpectedShape),
+            };
+            let signature = decoder.bytes()?.to_vec();
+            if signature.len() != 64 {
+                return Err(WireError::UnexpectedShape);
+            }
+            Ok(ProtocolCommand::RecordPayment {
+                request_id,
+                receipt: SignedPaymentEvidence {
+                    evidence: PaymentEvidence {
+                        event_id,
+                        operation_id,
+                        operation_digest,
+                        outcome,
+                    },
+                    signature,
+                },
+            })
+        }
+        12 if length == 6 => Ok(ProtocolCommand::SetFollowupPolicy {
+            expected_version: Version(decoder.u64()?),
+            policy: FollowupPolicy {
+                version: Version(decoder.u64()?),
+                max_messages: decoder.u32()?,
+                max_per_interval: decoder.u32()?,
+                interval: Duration(decoder.u64()?),
+            },
+        }),
+        13 if length == 8 => Ok(ProtocolCommand::AdmitFollowup {
+            request_id: RequestId(decode_id(decoder)?),
+            message_id: MessageId(decode_id(decoder)?),
+            content_ref: ContentRef(decode_id(decoder)?),
+            delivery_intent_ref: DeliveryIntentRef(decode_id(decoder)?),
+            declaration_digest: MessageDeclarationDigest(read_32(decoder)?),
+            message_valid_until: MessageValidityUntil(CanonicalTime(decoder.u64()?)),
+            expected_policy_version: Version(decoder.u64()?),
+        }),
+        0 if length == 3 => Ok(ProtocolCommand::IssueRequestTerms {
             quote_id: QuoteId(decode_id(decoder)?),
             declaration_digest: decode_optional_declaration_digest(decoder)?,
         }),
-        1 if length == 6 => Ok(ProtocolCommand::ReserveAttempt {
-            bond_id: BondId(decode_id(decoder)?),
-            reserve_id: PersistenceReserveId(decode_id(decoder)?),
-            attempt_id: AttemptId(decode_id(decoder)?),
+        1 if length == 5 => Ok(ProtocolCommand::CreateRequest {
+            request_id: RequestId(decode_id(decoder)?),
+
             message_id: MessageId(decode_id(decoder)?),
             terms: Box::new(decode_terms(decoder)?),
+            payment_method: read_32(decoder)?,
         }),
-        2 if length == 7 => Ok(ProtocolCommand::AdmitAttempt {
-            bond_id: BondId(decode_id(decoder)?),
-            expected_bond_version: Version(decoder.u64()?),
+        2 if length == 7 => Ok(ProtocolCommand::AdmitRequest {
+            request_id: RequestId(decode_id(decoder)?),
+            expected_request_version: Version(decoder.u64()?),
             content_ref: ContentRef(decode_id(decoder)?),
             delivery_intent_ref: DeliveryIntentRef(decode_id(decoder)?),
             declaration_digest: MessageDeclarationDigest(
@@ -316,17 +407,17 @@ fn decode_command(decoder: &mut Decoder<'_>) -> Result<ProtocolCommand, WireErro
             message_valid_until: MessageValidityUntil(CanonicalTime(decoder.u64()?)),
         }),
         3 if length == 4 => {
-            let bond_id = BondId(decode_id(decoder)?);
-            let expected_bond_version = Version(decoder.u64()?);
+            let request_id = RequestId(decode_id(decoder)?);
+            let expected_request_version = Version(decoder.u64()?);
             let reason = match decoder.u8()? {
                 0 => CancellationReason::SenderRequested,
                 1 => CancellationReason::AdmissionTimeout,
                 2 => CancellationReason::PreAdmissionFailure,
                 tag => return Err(WireError::UnknownTag(u32::from(tag))),
             };
-            Ok(ProtocolCommand::CancelReservedAttempt {
-                bond_id,
-                expected_bond_version,
+            Ok(ProtocolCommand::CancelPreparingRequest {
+                request_id,
+                expected_request_version,
                 reason,
             })
         }
@@ -342,13 +433,9 @@ fn decode_command(decoder: &mut Decoder<'_>) -> Result<ProtocolCommand, WireErro
         7 if length == 2 => Ok(ProtocolCommand::UnblockRelationship {
             expected_version: Version(decoder.u64()?),
         }),
-        8 if length == 3 => Ok(ProtocolCommand::ExpireBond {
-            bond_id: BondId(decode_id(decoder)?),
-            expected_bond_version: Version(decoder.u64()?),
-        }),
-        9 if length == 3 => Ok(ProtocolCommand::ReleasePersistenceReserve {
-            reserve_id: PersistenceReserveId(decode_id(decoder)?),
-            expected_reserve_version: Version(decoder.u64()?),
+        8 if length == 3 => Ok(ProtocolCommand::ExpireRequest {
+            request_id: RequestId(decode_id(decoder)?),
+            expected_request_version: Version(decoder.u64()?),
         }),
         10 if length == 2 => Ok(ProtocolCommand::RevokeRelationship {
             expected_version: Version(decoder.u64()?),
@@ -366,8 +453,8 @@ fn encode_version_command(
     Ok(())
 }
 
-fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &ContactTerms) -> Result<(), WireError> {
-    encoder.array(26)?;
+fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &RequestTerms) -> Result<(), WireError> {
+    encoder.array(30)?;
     encode_id(encoder, terms.quote_id.0)?;
     encoder.u16(terms.protocol_version.0)?;
     encoder.u64(terms.policy_version.0)?;
@@ -380,37 +467,63 @@ fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &ContactTerms) -> Result<
     )?;
     encode_scoped_ref(
         encoder,
-        terms.attempt_subject.derivation_version(),
-        terms.attempt_subject.as_bytes(),
-    )?;
-    encode_scoped_ref(
-        encoder,
-        terms.sender_account.derivation_version(),
-        terms.sender_account.as_bytes(),
+        terms.request_history.derivation_version(),
+        terms.request_history.as_bytes(),
     )?;
     encode_id(encoder, terms.sender.0)?;
     encode_id(encoder, terms.recipient.0)?;
     encode_id(encoder, terms.recipient_provider.0)?;
     encoder.u64(terms.relationship_version.0)?;
-    encoder.u64(terms.attempt_version.0)?;
+    encoder.u64(terms.history_version.0)?;
     encoder.u64(terms.processing_charge.minor_units())?;
     encoder.u64(terms.collateral.minor_units())?;
-    encoder.u64(terms.persistence.minor_units())?;
-    encoder.u32(terms.attempt_level)?;
+    encoder.u32(terms.request_level)?;
     encoder.u64(terms.eligibility_time.0)?;
     encoder.u32(terms.unit.0)?;
     encoder.u64(terms.admission_window.0)?;
     encoder.u64(terms.decision_window.0)?;
-    encoder.u64(terms.persistence_release_at.0)?;
-    encoder.u64(terms.earliest_final_expiry_at.0)?;
     encoder.u64(terms.issued_at.0)?;
     encoder.u64(terms.expires_at.0)?;
     encode_optional_declaration_digest(encoder, terms.declaration_digest)?;
+    encode_financial_scope(encoder, terms.financial.scope)?;
+    encoder
+        .u64(terms.financial.policy_version.0)?
+        .u16(terms.financial.corporate_basis_points)?
+        .u64(terms.financial.maturity_delay.0)?
+        .bytes(&terms.payment_provider_key)?
+        .u64(terms.expiry_cooldown.0)?
+        .u64(terms.rejection_cooldown.0)?
+        .u64(terms.next_request_backoff.0)?;
     Ok(())
 }
 
-fn decode_terms(decoder: &mut Decoder<'_>) -> Result<ContactTerms, WireError> {
-    expect_array(decoder, 26)?;
+fn encode_financial_scope(
+    encoder: &mut Encoder<Vec<u8>>,
+    scope: cs_mail_finance::FinancialScope,
+) -> Result<(), WireError> {
+    encoder.array(5)?.bytes(&scope.deployment_domain)?;
+    encode_id(encoder, scope.operator.0)?;
+    encode_id(encoder, scope.program.0)?;
+    encoder
+        .bytes(&scope.payment_account)?
+        .u16(scope.protocol_version.0)?;
+    Ok(())
+}
+fn decode_financial_scope(
+    decoder: &mut Decoder<'_>,
+) -> Result<cs_mail_finance::FinancialScope, WireError> {
+    expect_array(decoder, 5)?;
+    Ok(cs_mail_finance::FinancialScope::new(
+        read_32(decoder)?,
+        ProviderRef(decode_id(decoder)?),
+        cs_mail_primitives::ProgramRef(decode_id(decoder)?),
+        read_32(decoder)?,
+        ProtocolVersion(decoder.u16()?),
+    ))
+}
+
+fn decode_terms(decoder: &mut Decoder<'_>) -> Result<RequestTerms, WireError> {
+    expect_array(decoder, 30)?;
     let quote_id = QuoteId(decode_id(decoder)?);
     let protocol_version = ProtocolVersion(decoder.u16()?);
     let policy_version = PolicyVersion(decoder.u64()?);
@@ -418,34 +531,39 @@ fn decode_terms(decoder: &mut Decoder<'_>) -> Result<ContactTerms, WireError> {
     let retention_policy_version = RetentionPolicyVersion(decoder.u16()?);
     let (relationship_version, relationship_bytes) = decode_scoped_ref(decoder)?;
     let (subject_version, subject_bytes) = decode_scoped_ref(decoder)?;
-    let (account_version, account_bytes) = decode_scoped_ref(decoder)?;
-    Ok(ContactTerms {
+    Ok(RequestTerms {
         quote_id,
         protocol_version,
         policy_version,
         privacy_profile_version,
         retention_policy_version,
         relationship: RelationshipRef::new(relationship_version, relationship_bytes),
-        attempt_subject: AttemptSubjectRef::new(subject_version, subject_bytes),
-        sender_account: LedgerAccountRef::new(account_version, account_bytes),
+        request_history: RequestHistoryRef::new(subject_version, subject_bytes),
         sender: ProtocolIdentity(decode_id(decoder)?),
         recipient: ProtocolIdentity(decode_id(decoder)?),
         recipient_provider: ProviderRef(decode_id(decoder)?),
         relationship_version: Version(decoder.u64()?).into(),
-        attempt_version: Version(decoder.u64()?).into(),
+        history_version: Version(decoder.u64()?).into(),
         processing_charge: Money::from_minor_units(decoder.u64()?),
         collateral: Money::from_minor_units(decoder.u64()?),
-        persistence: Money::from_minor_units(decoder.u64()?),
-        attempt_level: decoder.u32()?,
+        request_level: decoder.u32()?,
         eligibility_time: CanonicalTime(decoder.u64()?),
         unit: SettlementUnit(decoder.u32()?),
         admission_window: Duration(decoder.u64()?),
         decision_window: Duration(decoder.u64()?),
-        persistence_release_at: CanonicalTime(decoder.u64()?),
-        earliest_final_expiry_at: CanonicalTime(decoder.u64()?),
         issued_at: CanonicalTime(decoder.u64()?),
         expires_at: CanonicalTime(decoder.u64()?),
         declaration_digest: decode_optional_declaration_digest(decoder)?,
+        financial: FinancialTerms {
+            scope: decode_financial_scope(decoder)?,
+            policy_version: PolicyVersion(decoder.u64()?),
+            corporate_basis_points: decoder.u16()?,
+            maturity_delay: Duration(decoder.u64()?),
+        },
+        payment_provider_key: read_32(decoder)?,
+        expiry_cooldown: Duration(decoder.u64()?),
+        rejection_cooldown: Duration(decoder.u64()?),
+        next_request_backoff: Duration(decoder.u64()?),
     })
 }
 
@@ -484,7 +602,7 @@ fn decode_optional_declaration_digest(
 /// # Errors
 ///
 /// Returns an error if a field cannot be represented canonically.
-pub fn encode_contact_terms_artifact(terms: &ContactTerms) -> Result<Vec<u8>, WireError> {
+pub fn encode_contact_terms_artifact(terms: &RequestTerms) -> Result<Vec<u8>, WireError> {
     let mut encoder = Encoder::new(Vec::new());
     encoder.array(2)?.str(QUOTE_SIGNING_DOMAIN)?;
     encode_terms(&mut encoder, terms)?;
@@ -526,14 +644,21 @@ fn expect_array(decoder: &mut Decoder<'_>, expected: u64) -> Result<(), WireErro
     }
 }
 
+fn read_32(decoder: &mut Decoder<'_>) -> Result<[u8; 32], WireError> {
+    decoder
+        .bytes()?
+        .try_into()
+        .map_err(|_| WireError::UnexpectedShape)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn envelope(command: ProtocolCommand) -> CanonicalCommandEnvelope {
         CanonicalCommandEnvelope {
-            wire_version: WireVersion(2),
-            protocol_version: ProtocolVersion(1),
+            wire_version: WireVersion(5),
+            protocol_version: ProtocolVersion(2),
             deployment_domain: [9; 32],
             intended_provider: ProviderRef(5),
             target: CommandTarget::Relationship(RelationshipRef::from_u128_for_test(44)),
@@ -545,57 +670,71 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn every_command_variant_round_trips_canonically() {
         let commands = [
-            ProtocolCommand::IssueContactTerms {
+            ProtocolCommand::IssueRequestTerms {
                 quote_id: QuoteId(1),
                 declaration_digest: Some(MessageDeclarationDigest([1; 32])),
             },
-            ProtocolCommand::ReserveAttempt {
-                bond_id: BondId(1),
-                reserve_id: PersistenceReserveId(2),
-                attempt_id: AttemptId(3),
+            ProtocolCommand::CreateRequest {
+                request_id: RequestId(1),
+
                 message_id: MessageId(4),
-                terms: Box::new(ContactTerms {
+                terms: Box::new(RequestTerms {
                     quote_id: QuoteId(5),
-                    protocol_version: ProtocolVersion(1),
+                    protocol_version: ProtocolVersion(2),
                     policy_version: PolicyVersion(2),
                     privacy_profile_version: PrivacyProfileVersion(1),
                     retention_policy_version: RetentionPolicyVersion(1),
                     relationship: RelationshipRef::from_u128_for_test(6),
-                    attempt_subject: AttemptSubjectRef::from_u128_for_test(23),
-                    sender_account: LedgerAccountRef::from_u128_for_test(24),
+                    request_history: RequestHistoryRef::from_u128_for_test(23),
                     sender: ProtocolIdentity(7),
                     recipient: ProtocolIdentity(8),
                     recipient_provider: ProviderRef(9),
                     relationship_version: Version(10).into(),
-                    attempt_version: Version(11).into(),
+                    history_version: Version(11).into(),
                     processing_charge: Money::from_minor_units(12),
                     collateral: Money::from_minor_units(13),
-                    persistence: Money::from_minor_units(14),
-                    attempt_level: 15,
+                    request_level: 15,
                     eligibility_time: CanonicalTime(16),
                     unit: SettlementUnit(17),
                     admission_window: Duration(18),
                     decision_window: Duration(19),
-                    persistence_release_at: CanonicalTime(20),
                     issued_at: CanonicalTime(21),
                     expires_at: CanonicalTime(22),
-                    earliest_final_expiry_at: CanonicalTime(122),
                     declaration_digest: Some(MessageDeclarationDigest([2; 32])),
+                    financial: cs_mail_finance::FinancialTerms {
+                        scope: cs_mail_finance::FinancialScope::new(
+                            [7; 32],
+                            cs_mail_primitives::ProviderRef(30),
+                            cs_mail_primitives::ProgramRef(1),
+                            [9; 32],
+                            cs_mail_primitives::ProtocolVersion(2),
+                        ),
+                        policy_version: PolicyVersion(1),
+                        corporate_basis_points: 300,
+                        maturity_delay: Duration(10),
+                    },
+                    payment_provider_key: cs_mail_finance::SimulatedProvider::new([7; 32])
+                        .verifying_key(),
+                    expiry_cooldown: Duration(30),
+                    rejection_cooldown: Duration(90),
+                    next_request_backoff: Duration(5),
                 }),
+                payment_method: [9; 32],
             },
-            ProtocolCommand::AdmitAttempt {
-                bond_id: BondId(1),
-                expected_bond_version: Version(2),
+            ProtocolCommand::AdmitRequest {
+                request_id: RequestId(1),
+                expected_request_version: Version(2),
                 content_ref: ContentRef(3),
                 delivery_intent_ref: DeliveryIntentRef(4),
                 declaration_digest: MessageDeclarationDigest([3; 32]),
                 message_valid_until: MessageValidityUntil(CanonicalTime(40)),
             },
-            ProtocolCommand::CancelReservedAttempt {
-                bond_id: BondId(1),
-                expected_bond_version: Version(2),
+            ProtocolCommand::CancelPreparingRequest {
+                request_id: RequestId(1),
+                expected_request_version: Version(2),
                 reason: CancellationReason::AdmissionTimeout,
             },
             ProtocolCommand::AcceptRelationship {
@@ -610,13 +749,39 @@ mod tests {
             ProtocolCommand::UnblockRelationship {
                 expected_version: Version(1),
             },
-            ProtocolCommand::ExpireBond {
-                bond_id: BondId(1),
-                expected_bond_version: Version(2),
+            ProtocolCommand::ExpireRequest {
+                request_id: RequestId(1),
+                expected_request_version: Version(2),
             },
-            ProtocolCommand::ReleasePersistenceReserve {
-                reserve_id: PersistenceReserveId(1),
-                expected_reserve_version: Version(2),
+            ProtocolCommand::SetFollowupPolicy {
+                expected_version: Version(0),
+                policy: FollowupPolicy {
+                    version: Version(0),
+                    max_messages: 2,
+                    max_per_interval: 1,
+                    interval: Duration(10),
+                },
+            },
+            ProtocolCommand::AdmitFollowup {
+                request_id: RequestId(1),
+                message_id: MessageId(2),
+                content_ref: ContentRef(3),
+                delivery_intent_ref: DeliveryIntentRef(4),
+                declaration_digest: MessageDeclarationDigest([3; 32]),
+                message_valid_until: MessageValidityUntil(CanonicalTime(50)),
+                expected_policy_version: Version(1),
+            },
+            ProtocolCommand::RecordPayment {
+                request_id: RequestId(1),
+                receipt: SignedPaymentEvidence {
+                    evidence: PaymentEvidence {
+                        event_id: FinancialEventId(2),
+                        operation_id: PaymentOperationId(3),
+                        operation_digest: [4; 32],
+                        outcome: PaymentOutcome::Confirmed,
+                    },
+                    signature: vec![5; 64],
+                },
             },
             ProtocolCommand::RevokeRelationship {
                 expected_version: Version(1),

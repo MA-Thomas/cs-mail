@@ -2,7 +2,7 @@
 
 cs-mail is a communication protocol that puts economic friction at the boundary
 of a new relationship rather than on every message. Accepted senders communicate
-without protocol message fees. An unaccepted sender temporarily reserves a bond;
+without protocol message fees. An unaccepted sender submits a relationship request with one conditional charge;
 the recipient's relationship-level decision determines both future permission
 and settlement.
 
@@ -20,8 +20,8 @@ The documents have distinct roles:
    how a deterministic Rust kernel, transactional persistence, ledger, outbox,
    and privacy boundaries can implement the specification.
 4. **[Deployment and migration profile](cs_mail_deployment_profile.pdf)** -
-   nonnormative choices for an initial C-SQD deployment, including identity
-   enrollment, funding, SMTP migration, and provider clearing.
+   normative requirements for the C-SQD financial program, plus deployment
+   guidance for identity, payments, SMTP migration, and provider clearing.
 
 The matching `.tex` files are the editable sources. `intro_doc.tex` is retained
 only as a superseded design-history document and must not be used as a current
@@ -29,50 +29,44 @@ protocol reference.
 
 ## The model in brief
 
-For an unaccepted sender, the recipient provider quotes:
+For an unaccepted sender, terms fix a processing component `C` and collateral
+`S` for one relationship request. Admission requires a confirmed request-specific
+capture of `C + S`. Pre-admission cancellation returns the full charge. Acceptance
+records a full refund and grants directed permission. Rejection retains `C` as
+processing revenue and sends `S` into pending forfeiture for the separate C-SQD
+member program. Expiry retains `C` and refunds `S`. Refund obligations remain
+outstanding until the payment provider confirms them.
 
-- `C`: a processing charge;
-- `S`: recipient collateral; and
-- `L_k`: a refundable persistence reserve for repeated attempts, when required.
-
-The sender reserves `C + S + L_k`. If the message is never admitted, cancellation
-or a short admission timeout returns the entire reservation; the recipient's
-decision window starts only at admission. Acceptance refunds `C + S`, releases
-the persistence reserves associated with that public identity, and grants
-directed permission without resetting principal-wide anti-abuse history.
-Rejection transfers `C` to the recipient provider and `S` to the recipient, but
-it does not permanently bar later attempts: another attempt may become eligible
-after the applicable backoff. Expiry transfers `C` to the recipient provider and
-returns `S` to the sender. A separate recipient block refuses future ordinary
-contact until it is removed. Accepted ordinary communication requires no
-protocol bond.
+Follow-up messages, when permitted, belong to the same request and create no
+additional charge or decision deadline. Principal-recipient history coordinates
+eligibility across sender aliases. Accepted communication and valid express lanes
+require no request charge. A recipient block separately prohibits ordinary contact.
 
 ## Core vocabulary
 
-- **Private principal** - the provider-local subject used for control, recovery,
-  and repeated-attempt continuity. It is not a public or globally comparable ID.
-- **Protocol identity** - the visible persona that sends and receives, such as an
-  address. Permission is scoped to this identity.
-- **Directed relationship** - the recipient-controlled permission from one
-  protocol identity to another.
-- **Rejection** - a relationship-wide decision declining the active solicitation
-  and settling its decision-open admitted bonds while fully cancelling unadmitted
-  reservations; it preserves backoff and permits a later eligible bonded attempt.
-- **Block** - a recipient-controlled prohibition on future ordinary contact,
-  distinct from declining one solicitation and reversible only by the recipient.
-- **Relationship solicitation episode** - the recipient-facing grouping opened
-  by the first admitted attempt for an unaccepted relationship. Later attempts
-  join the active episode without generating repeated relationship prompts.
-- **Bond** - the fixed `C + S` reservation attached to an unaccepted attempt.
-- **Admission window** - the short interval in which reserved value must become
-  an admitted message; cancellation or timeout before admission returns all
-  reserved value and produces no solicitation.
-- **Persistence reserve** - refundable `L_k` liquidity held to discourage repeated
-  unsuccessful attempts; it is never provider or recipient revenue.
-- **Canonical journal** - the authoritative ordering of protocol and ledger
-  events.
-- **Express lane** - a recipient-signed, rate- and time-bounded capability for
-  bond-free communication without unrestricted standing acceptance.
+- **Private principal**: the provider-local subject used for control, recovery,
+  and request continuity across public aliases.
+- **Protocol identity**: the public persona to which directed permission applies.
+- **Relationship**: recipient-controlled permission, independent of any request.
+- **Request**: one solicitation with immutable terms, an initial message and a
+  lifecycle carrying its preparation or admission facts.
+- **Request history**: shared eligibility and preparation coordination for one
+  principal addressing one recipient.
+- **Message**: a committed admission with content and delivery references and the
+  request, relationship version or lane version that authorized it.
+- **Financial obligation**: an amount owed independently of external payment
+  progress; capture, refund and payout evidence belong to financial records.
+- **Member program**: company-owned forfeiture lots, eligibility, quarterly equal
+  allocations, restricted funds and fixed member payables.
+
+See [Stage 1: domain model and ownership](audit/stage-1-domain-ownership.md) for
+the implemented owners and Rust lifecycles, and
+[Stage 2: authenticated admission and receipt](audit/stage-2-authenticated-admission.md)
+for durable receipt ordering and shared admission checks.
+[Stage 3: financial transitions and external work](audit/stage-3-financial-transitions.md)
+and [Stage 4: persistence and lifecycle](audit/stage-4-persistence-lifecycle.md)
+describe financial ownership, fenced work claims, independent stored owners, retention
+and the current breaking formats.
 
 ## Status
 
@@ -81,7 +75,7 @@ protocol and its centralized deployment foundations. It includes the pure
 transition kernel, conserved ledger, authenticated wire format, durable
 PostgreSQL shell, endpoint content encryption, retry-safe workers, native client
 and ingress APIs, privacy/retention types, and bounded adapter state machines.
-The protocol and architecture remain drafts dated August 2026.
+The protocol and architecture remain drafts dated September 2026.
 
 This is not yet a production service. Network transports, TLS connection
 pooling, durable administrative key custody, KMS/HSM integration, external
@@ -102,12 +96,16 @@ The workspace is divided into focused libraries:
 - `cs-mail-ledger` provides atomic value-conserving transfers and balance
   projections.
 - `cs-mail-protocol` implements the pure deterministic transition kernel and its
-  complete settlement manifests.
-- `cs-mail-application` atomically applies manifests to in-memory protocol,
+  complete settlement manifests and shared admission checks.
+- `cs-mail-finance` owns payment execution, forfeiture lots, member eligibility,
+  quarter allocations and payables.
+- `cs-mail-application` atomically applies manifests to a shared in-memory store of protocol,
   ledger, journal, schedule, outbox, and idempotency state.
 - `cs-mail-storage-postgres` applies the same manifests inside row-locked
   PostgreSQL transactions and persists projections, ledger batches, transfers,
-  events, idempotency results, leased outbox work, and leased schedules.
+  events, an authenticated command inbox, recoverable signed outcomes, leased
+  external work with fenced claims, independent owner records, retention manifests,
+  and leased schedules.
 - `cs-mail-wire` defines a strict deterministic CBOR command representation,
   including deployment and intended-provider signing scope.
 - `cs-mail-security` provides Ed25519 command authentication, canonical receipt-
@@ -116,8 +114,9 @@ The workspace is divided into focused libraries:
 - `cs-mail-content` provides authenticated endpoint-only HPKE content encryption using X25519,
   HKDF-SHA-256, and ChaCha20-Poly1305, with authenticated binding to message,
   sender, recipient, content reference, and protocol version.
-- `cs-mail-worker` materializes deadlines as ordinary commands and publishes
-  leased outbox work without acknowledging failed deliveries.
+- `cs-mail-worker` recovers received commands and pending signed artifacts,
+  materializes deadlines as ordinary commands, and runs bounded delivery, request
+  payment and member payment batches with failure isolation.
 - `cs-mail-client` keeps plaintext and content private keys at the endpoint.
 - `cs-mail-service` supplies trusted-time signed-command ingress and bounded
   encrypted-content upload around the durable engine.
@@ -135,14 +134,11 @@ The workspace is divided into focused libraries:
   enforceable volume and lifetime bounds, replay-safe admission consumption,
   and lane horizon behavior.
 
-The implemented command set covers terms, reservation, admission, unadmitted
-cancellation, acceptance, rejection, blocking, unblocking, expiry, deferred
-persistence release, and revocation. Tests cover relationship-wide settlement,
-identity-scoped acceptance, solicitation coalescing, replay, value conservation,
-deadline boundaries, conflicting concurrent decisions, signature mutation and
-scope, ciphertext tampering and wrong-key access, content-before-admission,
-worker retry after lease expiry, retention protection for undelivered content,
-funding finality, SMTP downgrade labeling, and federation commitment matching.
+The implemented command set covers terms, request creation, capture evidence,
+admission, follow-ups, cancellation, acceptance, rejection, blocking, unblocking,
+expiry and revocation. Tests cover these lifecycles, shared alias history, replay,
+value conservation, provider reconciliation, financial allocation, authentication,
+content binding and worker retries.
 
 Wire determinism follows the deterministic-encoding requirements of RFC 8949.
 Command signatures use Ed25519 as specified by RFC 8032. Native content uses the
@@ -160,13 +156,16 @@ PostgreSQL integration tests run when `CS_MAIL_TEST_DATABASE_URL` names an
 isolated test database:
 
 ```sh
-CS_MAIL_TEST_DATABASE_URL='host=/path/to/socket port=5432 user=postgres dbname=postgres' \
-  cargo test -p cs-mail-storage-postgres --test postgres
+CS_MAIL_TEST_DATABASE_URL='postgresql://postgres@localhost:5432/postgres' \
+  cargo test -p cs-mail-storage-postgres --test postgres -- --ignored
 ```
 
-The four schema migrations are embedded in the storage crate and applied under
+The twelve schema migrations are embedded in the storage crate and applied under
 a database advisory lock. They cover protocol/ledger durability, encrypted
-content, and retention-safe outbox linkage. The current connector deliberately uses `NoTls`; it is
+content, retention, capabilities, financial programs, independent domain owners
+authenticated receipt ordering, unified external work and owner-specific lifecycle rules.
+Current protocol storage format is 6, financial storage format is 4, and command
+wire format is 5. Older stored formats require an explicit offline migration. The current connector deliberately uses `NoTls`; it is
 appropriate for a local Unix socket or a separately secured development
 connection. A TLS-configurable connection pool belongs to the service/security
 deployment layer.

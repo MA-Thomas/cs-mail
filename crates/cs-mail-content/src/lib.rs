@@ -315,7 +315,7 @@ mod tests {
             message_id: MessageId(2),
             sender: ProtocolIdentity(3),
             recipient: ProtocolIdentity(4),
-            protocol_version: ProtocolVersion(1),
+            protocol_version: ProtocolVersion(2),
             relationship: RelationshipRef::from_u128_for_test(5),
             content_scope: ContentScopeRef::from_u128_for_test(6),
             sender_certificate: ContentCertificateDigest([7; 32]),
