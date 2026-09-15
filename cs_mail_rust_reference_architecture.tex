@@ -5,6 +5,7 @@
 \usepackage{array}
 \usepackage{booktabs}
 \usepackage{enumitem}
+\usepackage{float}
 \usepackage{hyperref}
 \usepackage{listings}
 \usepackage{microtype}
@@ -60,7 +61,7 @@
 
 \title{\textit{cs-mail} Rust Reference Architecture}
 \author{C-SQD}
-\date{Draft 0.8 --- September 2026}
+\date{Draft 0.10 --- September 2026}
 
 \usepackage{tabularx}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
@@ -71,9 +72,10 @@
 
 \begin{abstract}
 This architecture follows one relationship request from charge preparation to
-recipient decision, then follows a forfeiture into the quarterly member program.
+recipient decision, then follows a forfeiture into the annual member program and
+one automatic bank payment of the member's allocation.
 A pure transition computes the required state and accounting obligations. A
-transaction commits them with an outbox; external providers confirm payment
+transaction commits them with an outbox; the configured processor confirms payment
 effects afterward. This division gives the revised protocol a small deterministic
 center while keeping delivery, payment uncertainty, and member eligibility in
 explicitly bounded services.
@@ -82,16 +84,20 @@ explicitly bounded services.
 \paragraph{Status and reading order.}
 The \textit{Protocol Specification} and the normative financial-program section
 of the \textit{Deployment and Migration Profile} control the rules. This document
-explains their intended implementation shape. Names and fragments below are
-illustrative target interfaces, not assertions that the current Rust workspace
-already implements the revised model. The desktop build plan describes how to
-reach that target through a simulated pilot.
+describes the current Rust domain and persistence boundaries. The workspace
+contains the request kernel, annual finance and billing domains, PostgreSQL
+coordination, signed service/client APIs, and worker libraries. A running product
+server, desktop application, and live payment-processor adapter remain product
+work; the simulator and integration tests exercise the underlying contracts.
+The \href{DOMAIN_MODEL.md}{C-SQD domain model} records the confirmed product
+rules and deferred account/calendar decisions. Implementation choices must not
+be promoted to product requirements without an explicit product decision.
 
 \section{One Request, Three Messages, One Decision}
 
 Alice creates a relationship request to Bob. The signed quote fixes $C+S$ and
 the request's policy versions. Creation stores one payment intent; a worker
-obtains capture confirmation from the external provider. Initial admission then
+obtains funding-finality evidence from the external provider. Submission then
 commits the encrypted content reference, delivery intent, common decision
 deadline, and one recipient solicitation. The public-identity pair has one
 nonterminal request, even if Alice submits from several devices.
@@ -107,7 +113,7 @@ worker then executes the refund. Alice may write under standing acceptance while
 the provider is still confirming that refund: permission and the obligation are
 already committed, although external payment completion remains pending.
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[
 node distance=0.35cm,
@@ -151,8 +157,8 @@ open relationship requests.
 The pure function has a compact shape:
 \begin{lstlisting}
 pub fn transition(
-    snapshot: &RequestSnapshot,
-    command: Authorized<RequestCommand>,
+    snapshot: &SettlementSnapshot,
+    authorized: &KernelCommand<ProtocolCommand>,
     context: &TransitionContext,
 ) -> Result<TransitionManifest, ProtocolError>;
 \end{lstlisting}
@@ -160,58 +166,64 @@ It performs no I/O and reads no implicit clock or live policy service. Time,
 versions, immutable terms, and authenticated evidence are inputs. Its result
 describes the complete consequence, not just a new relationship-state enum.
 
-\Needspace{19\baselineskip}
-\subsection{The manifest owns the whole consequence}
+\subsection{The manifest describes the complete consequence}
 
-\begin{lstlisting}
-pub struct TransitionManifest {
-    preconditions: Preconditions,
-    relationship: Option<RelationshipUpdate>,
-    request: Option<RequestUpdate>,
-    history: Option<RequestHistoryUpdate>,
-    obligations: Vec<ObligationUpdate>,
-    ledger: LedgerBatch,
-    schedules: Vec<ScheduleChange>,
-    events: Vec<DomainEvent>,
-    effects: Vec<EffectIntent>,
-}
-\end{lstlisting}
-Private constructors enforce agreement among these fields. An acceptance cannot
-grant permission without its required request outcome and refund obligation.
-A rejection cannot credit the recipient. Follow-up admission cannot introduce a
-charge simply because it uses the same storage transaction machinery.
+\texttt{TransitionManifest} contains expected snapshot and ledger revisions;
+the next protocol state, request history, payment records, and messages;
+a ledger batch; schedule changes; protocol events; outbox intents; and any terms
+result. Forfeitures and holds are explicit outputs as well. This lets one
+transition describe both permission and the money that follows from it.
 
-Storage verifies preconditions and commits the manifest atomically. In the
-initial single-provider deployment, a serializable transaction or equivalent
-lock/version discipline is a practical boundary. Application controllers do not
-recompute financial consequences after the kernel returns. Transactional outbox
-records make every post-commit operation recoverable.
+An acceptance includes its required request outcome and refund obligation.
+A rejection records pending forfeiture without crediting the recipient.
+Follow-up admission cannot introduce another charge. The manifest's fields are
+public Rust data; correctness comes from the transition, validated commit path,
+and conformance tests, rather than a claim that private constructors alone
+prevent every inconsistent value.
+
+Storage checks revisions and commits the manifest atomically. The PostgreSQL
+implementation uses transaction locks and version checks around the affected
+records. Application controllers do not recompute financial consequences after
+the kernel returns. Transactional outbox records make post-commit delivery and
+payment work recoverable.
 
 \section{Objects That Keep Different Lifecycles Apart}
 
-The relationship persists across requests. A request progresses from preparing
-to open and then accepted, rejected, expired, or cancelled before admission.
-A payment operation separately tracks external preparation, dispatch, uncertain
-outcome, and confirmed facts. A refund obligation can remain unpaid after its
-request is terminal. These distinctions should appear in domain types rather
-than a single overloaded status field.
+The relationship persists across requests. A request starts in
+\texttt{PreparingSubmission}. Its \texttt{SubmissionPreparation} records the
+deadline for completing funding and preparing the initial message.
+\texttt{CancelRequestSubmission} can cancel it during this phase.
 
-Use separate scoped identifiers for the relationship, request, message, payment
-operation, refund obligation, forfeiture lot, quarter allocation, and member
-payable. A member reference is not a public identity or a general principal
-reference. Translation among domains requires explicit authority.
+Once those requirements are satisfied, \texttt{SubmitRequestToRecipient} commits
+the initial delivery. The lifecycle becomes \texttt{AwaitingRecipientDecision};
+its \texttt{RequestSubmission} records submission time and decision deadline.
+Acceptance, rejection, and expiry close the submitted request. These names
+identify what is being prepared and whose decision is pending. ``Admission''
+remains the broader per-message permission check.
 
-Money remains integer minor units with an explicit settlement unit. Checked
+A payment operation has a separate lifecycle. Pending external evidence is not
+finalized funding, and a refund can remain unpaid after its request is terminal.
+An annual allocation likewise remains owed after service coverage ends.
+\texttt{AnnualDistributionId} identifies the network allocation year;
+\texttt{BillingAccountId} identifies the person's bank-linked account;
+\texttt{ServiceContractId} identifies a fixed service purchase and is distinct
+from the \texttt{PaymentOperationId} of a collection attempt.
+Neither is a public communication identity or a private anti-abuse principal.
+
+Money uses integer minor units and an explicit settlement unit. Checked
 arithmetic rejects overflow and mixed-unit operations. Corporate rates use exact
-rational or basis-point representations. Different clocks also deserve distinct
-types: admission deadline, request decision deadline, message validity, maturity
-cutoff, and quarter boundary do different work.
+basis-point arithmetic. Submission deadlines, decision deadlines, message
+validity, annual allocation cutoffs, service intervals, and payment dates answer
+different questions and remain explicit inputs.
 
-Quoted financial-policy versions remain fixed for a request. Current follow-up
-policy may change and is checked at each admission under a versioned guard.
-Changing notification preferences has neither authority. A future nonzero
-persistence reserve needs an explicit extension; the base draft uses zero and
-does not silently recycle the old reserve semantics.
+Quoted financial terms stay fixed for a request. The deployment's
+\texttt{RequestPricingPolicy} resolves a bounded collateral menu and default;
+a recipient's signed preference selects an allowed amount for future quotes.
+The resolver returns checked \texttt{ResolvedRequestPricing}. Durable quote
+issuance requires published policy and records its version in signed terms;
+there is no fallback to raw caller-supplied prices when policy is missing.
+Current follow-up policy can change and is checked for each message. Neither
+preference updates nor notification settings rewrite an existing quote.
 
 \section{Payment Work Is a Recoverable Conversation}
 
@@ -226,17 +238,48 @@ not from a fresh network retry.
 
 An external timeout means uncertainty. The worker queries the original operation
 or repeats it under the provider's idempotency contract; it cannot assume failure
-and invent a replacement. Admission waits for the profile's verified capture
-evidence and durable content. The platform does not rely on an authorization
+and invent a replacement. Submission waits for finalized funding evidence and durable content. The platform does not rely on an authorization
 remaining open throughout the decision window.
+
+\subsection{New funding attempts require separate authority}
+
+\texttt{PaymentOutcome::Pending} records uncertainty;
+\texttt{PaymentOutcome::Settled} represents authenticated satisfaction of the
+provider's funding-finality policy. A real adapter must map rail-specific evidence
+to that contract. Authorization or receipt of a provider request alone is
+insufficient. The current simulator can delay resolution, fail an operation,
+lose a response, or report a later reversal.
+
+\texttt{FundingSource} in \texttt{cs-mail-finance} owns verification, restriction,
+and attempt accounting. PostgreSQL shares the source record across an account's
+request and utility charges. Reserving a new operation consumes available attempt
+capacity; reconciling the same uncertain operation does not. Failure or reversal
+restricts the source. \texttt{maximum\_unresolved} bounds simultaneous unresolved
+attempts, not lifetime attempts. Authenticated bank evidence permits
+re-verification of the same person and route; bank replacement remains deferred.
+An explicit account command can request a collection retry while retaining the
+contract's terms. A worker cannot manufacture authority with another operation ID.
+
+A reservation is not a dispatch grant. The PostgreSQL
+\texttt{authorize\_request\_dispatch} and \texttt{authorize\_utility\_dispatch}
+transactions check current source restrictions before durably granting a new
+dispatch. Previously authorized work remains reconcilable under its operation
+identity. Restricted queued work waits for re-verification. A Rust value created
+earlier cannot prove that mutable external restrictions have remained unchanged.
 
 \subsection{Cancellation can precede confirmation}
 
-If admission timeout or sender cancellation commits first, the request stays
+If submission timeout or sender cancellation commits first, the request stays
 cancelled. The payment adapter voids an uncaptured authorization or refunds a
 capture. If a capture confirmation arrives afterward, the reconciler records the
 financial fact and schedules the full refund without reopening the request.
-This is a normal recoverable sequence, not an exceptional database rollback.
+This recovery completes the existing obligation after the request has closed.
+
+\texttt{PaymentProcessor} exposes submission, lookup, and explicit
+\texttt{cancel\_capture} with a validated \texttt{CaptureCancellation}.
+Cancellation reaches a pending capture rather than being consumed by lookup.
+\texttt{SimulatedProcessor} exercises these contracts; one configured processor
+authority serves the deployment. This trait is not a multi-processor router.
 
 Provider notifications are authenticated evidence. Deduplicate them by provider
 event and economic operation, check amount, unit, and destination scope, and
@@ -251,44 +294,110 @@ confirmation and the corresponding ledger effect. A chargeback or adjudicated
 correction appends a separately authorized batch. It does not overwrite a
 recipient decision or confiscate a finalized member allocation.
 
-The ledger therefore projects request charges, refunds due and completed,
+The ledger therefore projects utility-service receipts, request charges, refunds due and completed,
 pending forfeitures, corporate revenue, restricted member funds, and payables.
 It does not expose a user wallet. A refund or payable cannot be applied as
 available funds for another request.
 
-\section{From a Rejection to a Quarterly Allocation}
+\section{From a Rejection to an Annual Allocation}
 
-Bob's rejection terminally records the request outcome, processing revenue $C$,
-and a pending forfeiture lot for $S$. The lot retains the request's quoted rate
-version. No immediate recipient payout is created, and no distribution worker
-can treat that new lot as mature merely because a quarter ended.
+Bob's rejection records processing revenue $C$ and a pending forfeiture lot for
+$S$. The lot retains the request's quoted rate version. Maturity evaluation is a
+separate decision over verified financial facts and policy; a calendar boundary
+does not make unresolved funds distributable.
 
-Maturity evaluation is a separate deterministic decision over verified financial
-facts and approved policy. It excludes refunds, unresolved disputes, and required
-reserves. At cutoff, a funding manifest identifies the exact newly eligible lots.
-A membership manifest independently fixes the qualifying active members. The
-financial profile defines the once-only corporate calculation, equal allocation,
-and integer remainder; the architecture reuses those formulas rather than
-maintaining another interpretation.
+\texttt{cs-mail-finance} owns the financial program. An
+\texttt{AnnualDistributionSchedule} fixes a UTC calendar year and eligibility
+policy. At finalization, \texttt{FinancialProgram} fixes qualifying membership
+and eligible funding, assesses each new lot once, and records corporate and member
+amounts, equal individual payables, and restricted remainder. It consumes no
+renewal or billing status when deciding eligibility. The deployment profile
+defines the arithmetic; this domain supplies its single implementation.
 
-Quarter finalization should produce a reproducible batch with input digests,
-policy versions, assessment marks, corporate amount, member contribution,
-individual payables, and unallocated carryforward. A large population can be
-prepared in bounded chunks, but readers must not see a partially finalized
-quarter. A commit marker or equivalent atomic manifest makes the prepared result
-visible once and prevents a retry from assessing the same lots again.
+The current PostgreSQL finalizer loads the program records and ledger under a
+transaction lock and commits the allocation as one outcome. Replay reuses the
+finalized result. It does not implement chunked preparation for large membership
+sets. A future bounded-batch design must preserve the same atomic visibility and
+once-only assessment guarantees.
 
-Payout execution then follows the same obligation/outbox pattern as refunds.
-Failed payments and below-threshold amounts remain assigned to their members.
-They are not included in the following quarter's unallocated pool. Corrections
-to eligibility or external losses require authorized new entries with a funding
-source and audit cause; recomputing the old snapshot in place is not recovery.
+A \texttt{MemberPayable} belongs to one member and pool year. Failed or delayed
+payments stay assigned, outside the next year's equal split. Its private amount
+and published \texttt{DistributionTerms} determine reporting values
+$R_i=\min(D_i,U)$ and $X_i=\max(0,D_i-U)$. Those terms snapshot the annual
+utility amount and due date independently of renewal. The payable owns at most
+one \texttt{PaymentExecution}, never separate rebate and cash executions.
+Authorized corrections append records with a stated cause; they do not rewrite
+the annual snapshot or create another ordinary annual allocation.
+
+\section{Billing Owns Fixed Service Purchases and Coverage}
+
+\texttt{cs-mail-billing} owns the bank-linked \texttt{BillingAccount}.
+It publishes \texttt{ServiceOffer} values and records each purchase as a
+\texttt{ServiceContract}.
+A validated \texttt{ServicePeriod} spans one calendar/anniversary year with an
+explicit leap-day rule. An offer pins its policy version, price, settlement unit,
+collection date, and interval. Its constructor requires collection before the
+interval starts; the product requires collection well in advance, with the exact
+lead time supplied by policy. No universal date or number of days is invented.
+
+Purchase snapshots those terms into a contract. Collection retries preserve
+price and interval; they never start a fresh year from the retry date. Coverage
+requires finalized funding, the current time within that fixed interval, and
+funding already completed at that time. Late funding grants no past service.
+Distribution does not alter the contract or revoke coverage.
+
+\texttt{BankVerification} binds person, member, account, bank token, scope, unit,
+and verification version under the configured bank authority. Verification
+produces an opaque \texttt{VerifiedBankAccount}, not a deserializable claim of
+verification. Trusted registration enforces one person/account, member and alias
+ownership, and explicit account actor grants. Bank replacement and broader
+account-management UX remain deferred; this boundary is not a live bank connector.
+
+\texttt{SignedBillingCommand} binds account, scope, revision, idempotency, and
+command to an active operational key under a distinct signing context. Explicit
+account grants authorize inspection, purchase of a published offer, collection
+retry, and closure. These commands cannot choose a processor, set policy prices,
+or supply payout instructions. There is no independent user-managed billing key.
+Closure stops coverage but preserves the bank association needed for obligations.
+
+\section{The Application Prepares One Automatic Distribution}
+
+Finance owns eligibility, pool-year allocation, published distribution terms,
+and the resulting obligation. Billing supplies the verified bank association.
+The pure coordinator, \texttt{prepare\_distribution}, checks that association,
+scope, unit, payable, and due time, then prepares one bank payout of
+the full allocation. It does not examine renewal or available refund capacity.
+Pending next-year collection and account closure do not gate this payment.
+
+\texttt{PaymentExecution} retains sequential attempts and authenticated events.
+Its states distinguish pending, settled, failed, voided, and reversed, with the
+required evidence carried by each state. A lost response reuses the operation
+identity. Only a definite failed or voided attempt permits a replacement attempt;
+conflicting evidence is rejected. Reversal retains settlement and reversal
+evidence and the unpaid obligation; it is not silently reissued.
+
+PostgreSQL uses the same coordinator, commits payable changes and work together,
+and loads the associated bank route rather than user-supplied distribution
+instructions. Annual finalization atomically queues automatic preparation;
+workers wait for the published due time. Preparing one member's payment uses
+selected owner records rather than loading the population. Complete-program
+operations, such as annual finalization, reject such incomplete views.
+
+Service collection and distribution remain separate transactions and worker
+operations. One distribution has one completion status; rebate and excess have
+no independent retries. Statements derive the two reporting amounts from the
+fixed allocation and utility amount, including after closure or nonrenewal.
 
 \section{Admission, Scheduling, and Concurrency}
 
+The host checks funded local service coverage before new communication. This
+applies to the local recipient and any local sender, including accepted and lane
+paths; a remote sender's provider owns its coverage check. Coverage expiry leaves
+recipient decisions, financial recovery, and finalized allocations available.
+
 All delivery paths observe blocking under the directed-pair transaction boundary.
 Standing acceptance and valid lanes authorize delivery without a request charge.
-An authenticated follow-up additionally identifies an open request and consumes
+An authenticated follow-up additionally identifies a request awaiting a decision and consumes
 the recipient's current allowance. Only eligible new-request creation may start
 a new payment operation, and it requires explicit sender authorization.
 
@@ -298,40 +407,47 @@ Message validity is checked independently of the request's common deadline.
 Lanes retain their signed scope and hard validity limits; granting or revoking a
 lane does not settle a request or create member activity.
 
-Scheduled work includes preparing-request timeout, request expiry, payment
-reconciliation, maturity review, quarter preparation, payout retry, and retention.
+Scheduled work includes submission timeout, request expiry, payment
+reconciliation, annual allocation, member payment preparation, and retention.
+Maturity evidence must be recorded through the financial program before allocation.
 Each job carries a target, earliest execution time, version/evidence preconditions,
 and stable operation identity. Leased workers submit commands against current
 state. They do not assume that a row remains unchanged because a job was queued.
 
 Principal-scoped new-request history needs its own concurrency guard shared by
-aliases. It advances only at initial admission. A follow-up, cancelled preparation,
+aliases. It advances only at initial submission. A follow-up, cancelled preparation,
 or key rotation cannot bypass that distinction. Late acceptance changes future
 permission while old expiry processing preserves that permission and materializes
 only the old request's financial obligation.
 
 \section{Responsibility Boundaries in the Workspace}
 
-The existing separation of primitives, security, ledger, protocol, application,
-storage, and adapters remains useful. The semantic revision changes their
-contracts before product layers rely on them. Primitives define constrained money,
-time, versions, and scoped references. Security produces verified evidence.
-The request kernel computes outcomes; the ledger proves accounting conservation.
-Application and storage apply complete manifests. Payment adapters translate
-provider evidence and execute operations without inventing settlement rules.
+The dependency direction follows ownership. Primitives provide money, time, and
+scoped identifiers. The ledger validates balanced batches. Finance depends on
+those foundations for payment evidence, request finances, forfeiture maturity,
+member eligibility, annual allocation, and payables. Billing builds on financial
+operations to own fixed service purchases and coverage. It does not decide who
+qualifies for a share.
 
-The member program is a separate domain module for eligibility, maturity, and
-quarter finalization. It may reuse ledger, scheduling, and outbox contracts but
-should not be embedded in message controllers. A separate crate is warranted
-only when it supplies a stable independently useful boundary. A separate process
-is warranted by credentials, data access, failure isolation, or scale; a crate
-alone does not enforce privacy.
+Protocol owns request and relationship transitions and request pricing.
+Capabilities own lane grants and allowance. Security verifies communication
+and pricing authority; billing commands have their own signing contract. The
+application layer coordinates complete use cases, including the billing/finance
+automatic distribution, without acquiring either domain's policy decisions.
 
-Content and wire modules retain authenticated encryption and declaration binding.
-Capability admission remains a permission path beside financial transitions.
-The client owns presentation and endpoint secrets; it consumes signed outcomes
-instead of reconstructing financial rules. API, wire, event, protocol, database,
-and financial-policy versions remain distinct.
+PostgreSQL owns durable transactions, ordering, uniqueness, journals, and outbox
+work. Workers lease that work, call domain operations through the application or
+storage boundary, and reconcile external evidence. Payment adapters execute
+operations and translate provider evidence; they cannot set eligibility, invent
+new funding authority, or change request outcomes.
+
+Content and wire crates retain encryption and canonical declaration binding.
+The service exposes authenticated operations, and the client signs commands and
+consumes outcomes. Product interfaces build on these APIs rather than reconstruct
+settlement from presentation state. API, wire, event, protocol, database, and
+financial-policy versions remain distinct. Separate processes or credentials may
+be needed for privacy and operational isolation; a crate boundary alone supplies
+neither.
 
 \section{Privacy Extends to the Member Program}
 
@@ -351,7 +467,7 @@ accountable declarations, not proof of plaintext truth.
 
 Eligibility activity should record only the minimal facts required by policy.
 Background synchronization and inbound lane traffic are not substitutes for
-intentional use. The payment provider receives required transaction references
+intentional use. The payment processor receives required transaction references
 and amounts, not message content or the user's unrelated relationships.
 
 Retention classes define purpose, key scope, operational lifetime, dispute or
@@ -367,13 +483,20 @@ no plaintext, secrets, complete financial snapshots, or private identity evidenc
 Pairwise scoping reduces direct linkage but does not eliminate timing or amount
 correlation, so retention and access discipline remain necessary.
 
-\section{Migration and Evidence of Correctness}
+\section{Version Boundaries and Evidence of Correctness}
 
-First establish a new protocol/version baseline and document how any existing
-quotes, requests, and obligations would be treated. Do not reinterpret stored
-per-message bonds by renaming their fields. Old financial expectations need
-explicit replacement vectors, while applicable authentication, privacy, ordering,
-and conservation guarantees remain protected.
+The clean domain update directly replaces the old billing cycles, split payments,
+and distribution instructions. It has no compatibility aliases or fallback
+readers. Wire format is 6, stored protocol format is 8, and stored financial-program
+format is 6. The revised development schema requires fresh initialization;
+populated older records are not converted by the migrations.
+
+Private domain fields and checked constructors prevent invalid combinations in
+normal use. Stored rehydration additionally validates contracts, executions,
+payables, funding sources, request finances, and program records against their
+scope, ownership, arithmetic, evidence, and ledger. Durable uniqueness, dispatch
+checks, idempotency, and worker fencing address facts that local Rust types alone
+cannot guarantee.
 
 The first story test uses one charged request and three permitted messages.
 Acceptance creates one refund obligation, and provider confirmation completes it
@@ -382,12 +505,19 @@ disable follow-ups, and race policy changes with admission. Other tests exercise
 two-device creation, alias history, cancellation followed by late capture,
 duplicate/out-of-order notifications, and unknown commit recovery.
 
-Financial-program tests reproduce a quarter from fixed input manifests, exclude
+Financial-program tests reproduce a year from fixed input manifests, exclude
 refundable and immature funds, assess each eligible lot once, preserve quoted
 rate cohorts, and allocate equal integer shares. Include zero members, small
-amounts, unallocated remainder, below-threshold payables, failed payments, and
-quarter retries after a crash. A later quarter must not assess old member funds
-or redistribute already assigned obligations.
+amounts, unallocated remainder, failed payments, and
+annual finalization retries after a crash. A later year must not assess old member funds
+or redistribute already assigned obligations. Billing tests cover advance
+collection, fixed-period retries, leap-day rules, pending funding, and coverage
+boundaries. Domain and PostgreSQL acceptance stories cover one verified
+person/account, explicit actor grants, current restrictions on queued work,
+automatic payment after closure with next-year funding pending, and lost-response
+recovery for one lump sum. With $U=\$120$, \$80/\$120/\$170 allocation
+examples verify reporting without separate payment components. Corrupt evidence,
+malformed stored owners, and incomplete program views are rejected.
 
 Property and concurrency tests check conservation, finality, uniqueness, scope,
 and recovery at durable boundaries. Privacy tests exercise cross-domain credential

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-billing = { path = "../cs-mail-billing" }
 cs-mail-security = { path = "../cs-mail-security" }
 cs-mail-finance = { path = "../cs-mail-finance" }
 cs-mail-content = { path = "../cs-mail-content" }
@@ -13,6 +14,8 @@ cs-mail-protocol = { path = "../cs-mail-protocol" }
 cs-mail-storage-postgres = { path = "../cs-mail-storage-postgres" }
 
 [dev-dependencies]
+serde_json.workspace = true
+ed25519-dalek.workspace = true
 cs-mail-ledger = { path = "../cs-mail-ledger" }
 postgres.workspace = true
 

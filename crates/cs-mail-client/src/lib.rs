@@ -1,5 +1,7 @@
 //! Native endpoint helpers. Plaintext never crosses this API's provider boundary.
 
+pub mod billing;
+
 use cs_mail_content::{
     ContentBinding, ContentError, ContentKeyCertificate, EncryptedContentRecord, EndpointPublicKey,
     EndpointSecretKey, decrypt, encrypt, message_declaration_digest,
@@ -47,6 +49,16 @@ pub struct NativeClient {
 }
 
 impl NativeClient {
+    /// # Errors
+    /// Requires a recipient signer and a valid preference version.
+    pub fn sign_collateral_preference(
+        &self,
+        scope: SigningScope,
+        preference: cs_mail_protocol::pricing::RecipientCollateralPreference,
+    ) -> Result<cs_mail_security::SignedCollateralPreference, SecurityError> {
+        self.command_signer
+            .sign_collateral_preference(scope, preference)
+    }
     pub fn new(
         actor: ActorRef,
         operational_key: OperationalKeyRef,
@@ -145,7 +157,7 @@ impl NativeClient {
         )
     }
 
-    /// Computes the declaration digest used by request terms and initial admission.
+    /// Computes the declaration digest used by request terms and submission to the recipient.
     ///
     /// # Errors
     ///

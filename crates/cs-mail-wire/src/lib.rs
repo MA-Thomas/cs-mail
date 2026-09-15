@@ -216,7 +216,9 @@ fn encode_command(
             encoder
                 .bytes(&receipt.evidence.operation_digest)?
                 .u8(match receipt.evidence.outcome {
-                    PaymentOutcome::Confirmed => 0,
+                    PaymentOutcome::Settled => 0,
+                    PaymentOutcome::Pending => 3,
+                    PaymentOutcome::Failed => 4,
                     PaymentOutcome::Voided => 1,
                     PaymentOutcome::Reversed => 2,
                 })?
@@ -274,7 +276,7 @@ fn encode_command(
             encode_terms(encoder, terms)?;
             encoder.bytes(payment_method)?;
         }
-        ProtocolCommand::AdmitRequest {
+        ProtocolCommand::SubmitRequestToRecipient {
             request_id,
             expected_request_version,
             content_ref,
@@ -290,7 +292,7 @@ fn encode_command(
             encoder.bytes(&declaration_digest.0)?;
             encoder.u64(message_valid_until.0.0)?;
         }
-        ProtocolCommand::CancelPreparingRequest {
+        ProtocolCommand::CancelRequestSubmission {
             request_id,
             expected_request_version,
             reason,
@@ -300,8 +302,8 @@ fn encode_command(
             encoder.u64(expected_request_version.0)?;
             encoder.u8(match reason {
                 CancellationReason::SenderRequested => 0,
-                CancellationReason::AdmissionTimeout => 1,
-                CancellationReason::PreAdmissionFailure => 2,
+                CancellationReason::SubmissionTimeout => 1,
+                CancellationReason::PreSubmissionFailure => 2,
             })?;
         }
         ProtocolCommand::AcceptRelationship { expected_version } => {
@@ -342,9 +344,11 @@ fn decode_command(decoder: &mut Decoder<'_>) -> Result<ProtocolCommand, WireErro
             let operation_id = PaymentOperationId(decode_id(decoder)?);
             let operation_digest = read_32(decoder)?;
             let outcome = match decoder.u8()? {
-                0 => PaymentOutcome::Confirmed,
+                0 => PaymentOutcome::Settled,
                 1 => PaymentOutcome::Voided,
                 2 => PaymentOutcome::Reversed,
+                3 => PaymentOutcome::Pending,
+                4 => PaymentOutcome::Failed,
                 _ => return Err(WireError::UnexpectedShape),
             };
             let signature = decoder.bytes()?.to_vec();
@@ -393,7 +397,7 @@ fn decode_command(decoder: &mut Decoder<'_>) -> Result<ProtocolCommand, WireErro
             terms: Box::new(decode_terms(decoder)?),
             payment_method: read_32(decoder)?,
         }),
-        2 if length == 7 => Ok(ProtocolCommand::AdmitRequest {
+        2 if length == 7 => Ok(ProtocolCommand::SubmitRequestToRecipient {
             request_id: RequestId(decode_id(decoder)?),
             expected_request_version: Version(decoder.u64()?),
             content_ref: ContentRef(decode_id(decoder)?),
@@ -411,11 +415,11 @@ fn decode_command(decoder: &mut Decoder<'_>) -> Result<ProtocolCommand, WireErro
             let expected_request_version = Version(decoder.u64()?);
             let reason = match decoder.u8()? {
                 0 => CancellationReason::SenderRequested,
-                1 => CancellationReason::AdmissionTimeout,
-                2 => CancellationReason::PreAdmissionFailure,
+                1 => CancellationReason::SubmissionTimeout,
+                2 => CancellationReason::PreSubmissionFailure,
                 tag => return Err(WireError::UnknownTag(u32::from(tag))),
             };
-            Ok(ProtocolCommand::CancelPreparingRequest {
+            Ok(ProtocolCommand::CancelRequestSubmission {
                 request_id,
                 expected_request_version,
                 reason,
@@ -454,10 +458,11 @@ fn encode_version_command(
 }
 
 fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &RequestTerms) -> Result<(), WireError> {
-    encoder.array(30)?;
+    encoder.array(31)?;
     encode_id(encoder, terms.quote_id.0)?;
     encoder.u16(terms.protocol_version.0)?;
     encoder.u64(terms.policy_version.0)?;
+    encoder.u64(terms.pricing_policy_version.0)?;
     encoder.u16(terms.privacy_profile_version.0)?;
     encoder.u16(terms.retention_policy_version.0)?;
     encode_scoped_ref(
@@ -480,7 +485,7 @@ fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &RequestTerms) -> Result<
     encoder.u32(terms.request_level)?;
     encoder.u64(terms.eligibility_time.0)?;
     encoder.u32(terms.unit.0)?;
-    encoder.u64(terms.admission_window.0)?;
+    encoder.u64(terms.submission_window.0)?;
     encoder.u64(terms.decision_window.0)?;
     encoder.u64(terms.issued_at.0)?;
     encoder.u64(terms.expires_at.0)?;
@@ -523,15 +528,17 @@ fn decode_financial_scope(
 }
 
 fn decode_terms(decoder: &mut Decoder<'_>) -> Result<RequestTerms, WireError> {
-    expect_array(decoder, 30)?;
+    expect_array(decoder, 31)?;
     let quote_id = QuoteId(decode_id(decoder)?);
     let protocol_version = ProtocolVersion(decoder.u16()?);
     let policy_version = PolicyVersion(decoder.u64()?);
+    let pricing_policy_version = PolicyVersion(decoder.u64()?);
     let privacy_profile_version = PrivacyProfileVersion(decoder.u16()?);
     let retention_policy_version = RetentionPolicyVersion(decoder.u16()?);
     let (relationship_version, relationship_bytes) = decode_scoped_ref(decoder)?;
     let (subject_version, subject_bytes) = decode_scoped_ref(decoder)?;
     Ok(RequestTerms {
+        pricing_policy_version,
         quote_id,
         protocol_version,
         policy_version,
@@ -549,7 +556,7 @@ fn decode_terms(decoder: &mut Decoder<'_>) -> Result<RequestTerms, WireError> {
         request_level: decoder.u32()?,
         eligibility_time: CanonicalTime(decoder.u64()?),
         unit: SettlementUnit(decoder.u32()?),
-        admission_window: Duration(decoder.u64()?),
+        submission_window: Duration(decoder.u64()?),
         decision_window: Duration(decoder.u64()?),
         issued_at: CanonicalTime(decoder.u64()?),
         expires_at: CanonicalTime(decoder.u64()?),
@@ -657,7 +664,7 @@ mod tests {
 
     fn envelope(command: ProtocolCommand) -> CanonicalCommandEnvelope {
         CanonicalCommandEnvelope {
-            wire_version: WireVersion(5),
+            wire_version: WireVersion(6),
             protocol_version: ProtocolVersion(2),
             deployment_domain: [9; 32],
             intended_provider: ProviderRef(5),
@@ -682,6 +689,7 @@ mod tests {
 
                 message_id: MessageId(4),
                 terms: Box::new(RequestTerms {
+                    pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
                     quote_id: QuoteId(5),
                     protocol_version: ProtocolVersion(2),
                     policy_version: PolicyVersion(2),
@@ -699,7 +707,7 @@ mod tests {
                     request_level: 15,
                     eligibility_time: CanonicalTime(16),
                     unit: SettlementUnit(17),
-                    admission_window: Duration(18),
+                    submission_window: Duration(18),
                     decision_window: Duration(19),
                     issued_at: CanonicalTime(21),
                     expires_at: CanonicalTime(22),
@@ -716,7 +724,7 @@ mod tests {
                         corporate_basis_points: 300,
                         maturity_delay: Duration(10),
                     },
-                    payment_provider_key: cs_mail_finance::SimulatedProvider::new([7; 32])
+                    payment_provider_key: cs_mail_finance::SimulatedProcessor::new([7; 32])
                         .verifying_key(),
                     expiry_cooldown: Duration(30),
                     rejection_cooldown: Duration(90),
@@ -724,7 +732,7 @@ mod tests {
                 }),
                 payment_method: [9; 32],
             },
-            ProtocolCommand::AdmitRequest {
+            ProtocolCommand::SubmitRequestToRecipient {
                 request_id: RequestId(1),
                 expected_request_version: Version(2),
                 content_ref: ContentRef(3),
@@ -732,10 +740,10 @@ mod tests {
                 declaration_digest: MessageDeclarationDigest([3; 32]),
                 message_valid_until: MessageValidityUntil(CanonicalTime(40)),
             },
-            ProtocolCommand::CancelPreparingRequest {
+            ProtocolCommand::CancelRequestSubmission {
                 request_id: RequestId(1),
                 expected_request_version: Version(2),
-                reason: CancellationReason::AdmissionTimeout,
+                reason: CancellationReason::SubmissionTimeout,
             },
             ProtocolCommand::AcceptRelationship {
                 expected_version: Version(1),
@@ -778,7 +786,7 @@ mod tests {
                         event_id: FinancialEventId(2),
                         operation_id: PaymentOperationId(3),
                         operation_digest: [4; 32],
-                        outcome: PaymentOutcome::Confirmed,
+                        outcome: PaymentOutcome::Settled,
                     },
                     signature: vec![5; 64],
                 },

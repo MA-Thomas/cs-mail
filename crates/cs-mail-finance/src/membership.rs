@@ -1,4 +1,4 @@
-use crate::{DAY_MILLIS, MembershipStatus, QuarterSchedule};
+use crate::{AnnualDistributionSchedule, DAY_MILLIS, MembershipStatus};
 use cs_mail_primitives::{CanonicalTime, MemberId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -12,7 +12,7 @@ pub struct Member {
 }
 
 impl Member {
-    pub(crate) fn qualifies(&self, schedule: &QuarterSchedule) -> bool {
+    pub(crate) fn qualifies(&self, schedule: &AnnualDistributionSchedule) -> bool {
         let eligible = self
             .changes
             .iter()

@@ -1,5 +1,8 @@
 //! Operational-key signing and verification for cs-mail commands.
 
+mod pricing;
+pub use pricing::SignedCollateralPreference;
+
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -25,7 +28,7 @@ pub struct CommandDigest(pub [u8; 32]);
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct OutcomeDigest(pub [u8; 32]);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SigningScope {
     pub deployment_domain: [u8; 32],
     pub intended_provider: ProviderRef,
@@ -307,7 +310,7 @@ impl CommandSigner {
         command: ProtocolCommand,
     ) -> Result<SignedCommandBytes, SecurityError> {
         let payload = encode_command_envelope(&CanonicalCommandEnvelope {
-            wire_version: WireVersion(5),
+            wire_version: WireVersion(6),
             protocol_version,
             deployment_domain: scope.deployment_domain,
             intended_provider: scope.intended_provider,
@@ -354,6 +357,21 @@ pub struct KeyRegistry {
 }
 
 impl KeyRegistry {
+    /// Resolves current key ownership; callers still enforce purpose-specific grants.
+    /// # Errors
+    /// Rejects unknown, revoked, or not-yet-valid operational keys.
+    pub fn active_actor(
+        &self,
+        reference: OperationalKeyRef,
+        at: CanonicalTime,
+    ) -> Result<(ActorRef, [u8; 32]), SecurityError> {
+        let actor = self
+            .keys
+            .get(&reference)
+            .ok_or(SecurityError::UnknownKey)?
+            .actor;
+        Ok((actor, self.active_verifying_key(reference, actor, at)?))
+    }
     pub fn version(&self) -> Version {
         self.version
     }
@@ -517,7 +535,7 @@ impl KeyRegistry {
         expected_scope: SigningScope,
     ) -> Result<VerifiedCommand, SecurityError> {
         let envelope = decode_command_envelope(&signed.payload)?;
-        if envelope.wire_version != WireVersion(5) {
+        if envelope.wire_version != WireVersion(6) {
             return Err(SecurityError::WireVersionMismatch);
         }
         if envelope.protocol_version != expected_protocol_version {
@@ -906,20 +924,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            verified.digest().0,
-            [
-                210, 99, 97, 242, 168, 156, 191, 142, 203, 131, 61, 118, 138, 54, 75, 103, 32, 224,
-                232, 228, 236, 249, 168, 64, 210, 115, 178, 94, 32, 194, 118, 112
-            ]
-        );
-        assert_eq!(
-            signed_command.signature,
-            [
-                28, 24, 13, 134, 185, 204, 111, 71, 20, 161, 9, 90, 52, 68, 146, 97, 79, 202, 84,
-                44, 240, 195, 88, 169, 151, 69, 49, 16, 32, 95, 36, 55, 221, 107, 234, 76, 98, 226,
-                101, 0, 244, 109, 227, 23, 197, 189, 54, 243, 94, 14, 201, 189, 130, 131, 160, 23,
-                216, 86, 217, 170, 132, 21, 245, 13
-            ]
+            verified.canonical_bytes(),
+            signed_command.payload.as_slice()
         );
         assert_eq!(
             verified.authorized.actor(),

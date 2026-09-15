@@ -17,9 +17,9 @@
 }
 
 \title{\textit{cs-mail} Express Lanes --- Implementation Plan\\
-\large Recipient-Granted, Communication for Chosen Organizations}
+\large Recipient-Granted Communication for Chosen Organizations}
 \author{C-SQD}
-\date{Draft 0.4 --- September 2026}
+\date{Draft 0.6 --- September 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -30,15 +30,22 @@
 \fbox{\parbox{0.92\textwidth}{\small\textbf{Nonnormative implementation plan.}
 This document records settled design decisions and a build order for
 \emph{express lanes}, the launch-feature form of the scoped-capability extension
-that the \textit{cs-mail Protocol Specification} describes. It extends the
-\textit{Rust Reference Architecture} as a target design for the revised request
-model. Existing API names below identify adapter boundaries, not a claim that
-the current workspace implements the revised semantics. The specification
+that the \textit{cs-mail Protocol Specification} describes. The Rust workspace implements lane grants, admission, lifetime, and domain
+authentication; the product issuance and operational flows build on those
+boundaries. Interface sketches below explain the design, while the
+\textit{Rust Reference Architecture} describes domain ownership. The specification
 controls admission and request outcomes; the C-SQD financial profile controls
 the separate member program. The user-facing
 explanation of the feature is the companion memo, \textit{Express Lanes for
 Transactional Mail}.}}
 \end{center}
+
+\paragraph{Current account scope.}
+The current C-SQD product has one identifiable person per account, tied to a
+verified bank account, with multiple email addresses permitted. Organizational
+senders in these examples are legacy senders or possible future native protocol
+participants; they do not imply organizational C-SQD accounts. The
+\href{DOMAIN_MODEL.md}{C-SQD domain model} controls that product distinction.
 
 \section{The Central Observation}
 
@@ -46,14 +53,14 @@ A lane grants bounded communication permission without a relationship-request
 charge. Its admission path authenticates the sender, checks blocking and the
 signed scope, validates durable content, consumes allowance, and records delivery.
 It creates no refund or forfeiture. Accepted delivery and permitted follow-ups
-also move no request value, although a follow-up must join an identified open
-request under current recipient policy.
+also move no request value, although a follow-up must join an identified request
+that is awaiting a decision under current recipient policy.
 
 This distinction places lane evaluation at the durable admission boundary. It
 does not imply that the request kernel runs only when money moves: relationship
-transitions can change permission without a current charge. The broader business
-revision changes request settlement; lanes preserve their own absence of financial
-effects within that revised contract.
+transitions can change permission without a current charge. Annual billing supplies a separate host-level condition: local service coverage
+must be funded before new communication. That check does not make a lane a
+financial object or turn a lane message into a charged request.
 
 \section{Settled Design Decisions}
 
@@ -100,7 +107,12 @@ effects within that revised contract.
 
 \section{The Admission Decision}
 
-Express lanes add one branch to the answer of a question the system already asks:
+Before choosing a permission path, the host checks funded service coverage for
+the local recipient and any local sender. A remote sender's provider owns its
+own coverage check. Expired coverage does not revoke the lane; it prevents new
+communication until coverage is available again.
+
+Within that service boundary, express lanes add one branch to the question:
 which authority permits this inbound message? The ordered decision, evaluated for a
 directed \texttt{(sender, recipient)} pair at a single canonical boundary, is:
 
@@ -111,9 +123,9 @@ directed \texttt{(sender, recipient)} pair at a single canonical boundary, is:
     \item else if a valid, in-window lane authorizes the pair and the authenticated
     message declarations match its constraints, deliver uncharged through the lane
     path;
-    \item else, if the message identifies an open request, admit a follow-up only
+    \item else, if the message identifies a request awaiting a decision, admit a follow-up only
     if current recipient policy permits it; refusal cannot create another charge;
-    \item else, if a preparing or open request already exists, return its scoped
+    \item else, if a request is being prepared or awaiting a decision, return its scoped
     state without creating a new request;
     \item otherwise offer an eligible new-request flow, with explicit sender
     authorization before any charge.
@@ -131,7 +143,7 @@ enum AdmissionOutcome {
     Refused,          // blocked pair
     AcceptedPermission, // existing accepted-sender path
     LanePermission,     // new: valid express lane
-    RequestFollowup, // open request and current recipient allowance
+    RequestFollowup, // awaiting decision and current recipient allowance
     ExistingRequest, // resume preparation or report follow-up refusal
     NewRequestOffer, // eligibility checked; explicit charge authorization needed
 }
@@ -151,8 +163,8 @@ A scope mismatch returns \texttt{CapabilityScopeMismatch}, consumes no rate
 allowance, and moves no value. The message may use another path only under its independently valid authority.
 A pending request cannot be bypassed by buying another charge. Admission after
 message validity returns \texttt{MessageValidityClosed}: it does not settle an
-open request merely because one follow-up message is stale. A preparing initial
-request that cannot be admitted instead follows the full cancellation/refund rule.
+submitted request merely because one follow-up message is stale. An initial
+request still being prepared that cannot be submitted instead follows the full cancellation/refund rule.
 
 \section{The Lane Object and Its Store}
 
@@ -268,10 +280,17 @@ on another.
 
 \section{Lifetime and Renewal}
 
-A lane's clock is its last authenticated message, not its issue time. Each
+Lane renewal concerns permission, not the annual purchase of service. Billing
+owns advance collection and the fixed year-long coverage interval; neither changes
+a lane grant or its hard validity bound. A member allocation is sent as one
+automatic bank payment with rebate/excess reporting, independently of future
+renewal. It leaves both purchased coverage and the lane grant intact. See the
+\href{DOMAIN_MODEL.md}{C-SQD domain model} for financial and account rules.
+
+A lane's ordinary horizon follows its last authenticated admitted message. Each
 admitted lane message bumps \texttt{last\_activity} and reschedules the lane's
-horizon; a lane in active use therefore never lapses on a timer, while a dormant
-one drifts toward expiry.
+horizon; activity can extend that horizon only within the signed hard validity bound,
+while a dormant lane drifts toward its ordinary expiry.
 
 Two modes cover the range the memo describes:
 
@@ -382,6 +401,10 @@ accepted fully. Issuance neither charges the sender nor settles that request.
     admission. Provider admission policy consumes envelope-visible facts only;
     recipient presentation policy remains in the client and has no settlement
     authority.
+    \item \textbf{\texttt{cs-mail-billing}} owns funded service coverage;
+    \texttt{cs-mail-storage-postgres} checks it at the host admission boundary.
+    Lane grants and renewal remain in capabilities, and annual eligibility and
+    allocations remain in finance. None is inferred from another's activity.
     \item \textbf{\texttt{cs-mail-protocol::transition}} (the settlement kernel)
     owns request outcomes. Lane operations do not invent new request settlement,
     while shared admission coordination observes the revised request contract.
@@ -445,13 +468,11 @@ request. Lane expiry cannot extend the request deadline, and an unsupported
 declaration cannot silently start a charged request.
 
 An admitted lane message may renew the lane's activity horizon. It must not count
-automatically as intentional member activity, contribute forfeitures, or affect a
-quarterly allocation. These programs may reuse scheduling and scoped identifiers,
-but their authorities and financial effects remain separate.
-
-The companion memo explains this behavior to users. The protocol specification
-defines admission and request invariants; the deployment profile supplies the
-member program. Update examples against those versions rather than relying on
-an earlier assertion that all settlement semantics are unchanged.
+automatically as intentional member activity, contribute forfeitures, or affect an
+annual allocation. These programs may reuse scheduling and scoped identifiers,
+but their authorities and financial effects remain separate. Add coverage tests
+for an otherwise valid lane after service expires, and for restored delivery
+within the grant's remaining validity after funding finalizes. A member's earned
+allocation remains payable regardless of service renewal or lane renewal.
 
 \end{document}

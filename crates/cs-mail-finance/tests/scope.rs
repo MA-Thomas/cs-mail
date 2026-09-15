@@ -45,8 +45,8 @@ fn financial_evidence_and_operation_ids_are_bound_to_every_scope_dimension() {
         unit: SettlementUnit(1),
         destination: [9; 32],
     };
-    let mut provider = SimulatedProvider::new([7; 32]);
-    let evidence = provider.submit(&operation, false).unwrap();
+    let mut provider = SimulatedProcessor::new([7; 32]);
+    let evidence = provider.submit(&operation).unwrap();
     for other in alternatives() {
         assert_ne!(
             request_payment_id(other, relationship, RequestId(1), false),

@@ -26,6 +26,7 @@ pub use model::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct PolicySnapshot {
+    pub pricing_policy_version: PolicyVersion,
     pub protocol_version: ProtocolVersion,
     pub policy_version: PolicyVersion,
     pub privacy_profile_version: PrivacyProfileVersion,
@@ -34,7 +35,8 @@ pub struct PolicySnapshot {
     pub unit: SettlementUnit,
     pub processing_charge: Money,
     pub collateral: Money,
-    pub admission_window: Duration,
+
+    pub submission_window: Duration,
     pub decision_window: Duration,
     pub quote_lifetime: Duration,
     pub backoff: Vec<Duration>,
@@ -138,8 +140,10 @@ impl<T> KernelCommand<T> {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum CancellationReason {
     SenderRequested,
-    AdmissionTimeout,
-    PreAdmissionFailure,
+
+    SubmissionTimeout,
+
+    PreSubmissionFailure,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -171,7 +175,8 @@ pub enum ProtocolCommand {
         message_id: MessageId,
         terms: Box<RequestTerms>,
     },
-    AdmitRequest {
+    /// Commits the funded initial message for delivery and starts the decision window.
+    SubmitRequestToRecipient {
         request_id: RequestId,
         expected_request_version: Version,
         content_ref: ContentRef,
@@ -179,7 +184,8 @@ pub enum ProtocolCommand {
         declaration_digest: MessageDeclarationDigest,
         message_valid_until: MessageValidityUntil,
     },
-    CancelPreparingRequest {
+
+    CancelRequestSubmission {
         request_id: RequestId,
         expected_request_version: Version,
         reason: CancellationReason,
@@ -240,8 +246,10 @@ pub enum ProtocolEventKind {
     FollowupAdmitted(RequestId, MessageId),
     TermsIssued,
     RequestCreated(RequestId),
-    RequestAdmitted(RequestId),
-    PreparingRequestCancelled(RequestId),
+
+    RequestSubmitted(RequestId),
+
+    RequestSubmissionCancelled(RequestId),
     RequestHistoryChanged(RequestId),
     MessageValidityClosed(RequestId),
     DeclarationMismatch(RequestId),
@@ -315,8 +323,10 @@ pub enum ProtocolError {
     PaymentInvalid,
     FollowupNotAllowed,
     AmountMismatch,
-    AdmissionWindowClosed,
-    PreparingRequestCancelled,
+
+    SubmissionWindowClosed,
+
+    RequestSubmissionCancelled,
     DecisionWindowClosed,
     MessageValidityClosed,
     AlreadyTerminal,
@@ -437,7 +447,7 @@ pub fn transition(
             snapshot
                 .payments
                 .get(&r.id)
-                .is_none_or(|p| p.capture.id != r.funding)
+                .is_none_or(|p| p.capture().id != r.funding)
         })
     {
         return Err(ProtocolError::IncompleteSnapshot);
@@ -509,17 +519,17 @@ fn apply_command(
             *payment_method,
             terms,
         )?,
-        ProtocolCommand::AdmitRequest {
+        ProtocolCommand::SubmitRequestToRecipient {
             request_id,
             expected_request_version,
             content_ref,
             delivery_intent_ref,
             declaration_digest,
             message_valid_until,
-        } => admit_request(
+        } => submit_request_to_recipient(
             manifest,
             context,
-            InitialAdmission {
+            RequestSubmissionInput {
                 request_id: *request_id,
                 expected_version: *expected_request_version,
                 content_ref: *content_ref,
@@ -528,11 +538,11 @@ fn apply_command(
                 message_valid_until: *message_valid_until,
             },
         )?,
-        ProtocolCommand::CancelPreparingRequest {
+        ProtocolCommand::CancelRequestSubmission {
             request_id,
             expected_request_version,
             reason,
-        } => cancel_preparing_request(
+        } => cancel_request_submission(
             manifest,
             actor,
             *request_id,
@@ -592,11 +602,11 @@ fn authorize(
         ProtocolCommand::AdmitFollowup { .. }
         | ProtocolCommand::IssueRequestTerms { .. }
         | ProtocolCommand::CreateRequest { .. }
-        | ProtocolCommand::AdmitRequest { .. } => actor == ActorRef::Sender(sender),
-        ProtocolCommand::CancelPreparingRequest { reason, .. } => match reason {
+        | ProtocolCommand::SubmitRequestToRecipient { .. } => actor == ActorRef::Sender(sender),
+        ProtocolCommand::CancelRequestSubmission { reason, .. } => match reason {
             CancellationReason::SenderRequested => actor == ActorRef::Sender(sender),
-            CancellationReason::AdmissionTimeout => actor == ActorRef::Scheduler(provider),
-            CancellationReason::PreAdmissionFailure => actor == ActorRef::Provider(provider),
+            CancellationReason::SubmissionTimeout => actor == ActorRef::Scheduler(provider),
+            CancellationReason::PreSubmissionFailure => actor == ActorRef::Provider(provider),
         },
         ProtocolCommand::SetFollowupPolicy { .. }
         | ProtocolCommand::AcceptRelationship { .. }
@@ -635,12 +645,12 @@ fn issue_terms(
         }
         RelationshipState::Blocked => return Err(ProtocolError::ContactBlocked),
         RelationshipState::Unknown | RelationshipState::Rejected | RelationshipState::Revoked => {
-            if manifest.history.preparation.is_some() {
+            if manifest.history.pending_submission.is_some() {
                 return Err(ProtocolError::RequestAlreadyExists);
             }
-            if context.now < manifest.history.earliest_next_admission {
+            if context.now < manifest.history.earliest_next_submission {
                 return Err(ProtocolError::BackoffActive {
-                    next_eligible: manifest.history.earliest_next_admission,
+                    next_eligible: manifest.history.earliest_next_submission,
                 });
             }
             let policy = &context.policy;
@@ -649,6 +659,7 @@ fn issue_terms(
                 .checked_add(policy.quote_lifetime)
                 .ok_or(ProtocolError::ArithmeticOverflow)?;
             let terms = RequestTerms {
+                pricing_policy_version: policy.pricing_policy_version,
                 quote_id,
                 protocol_version: context.protocol_version,
                 policy_version: policy.policy_version,
@@ -664,9 +675,9 @@ fn issue_terms(
                 processing_charge: policy.processing_charge,
                 collateral: policy.collateral,
                 request_level: manifest.history.level,
-                eligibility_time: manifest.history.earliest_next_admission,
+                eligibility_time: manifest.history.earliest_next_submission,
                 unit: policy.unit,
-                admission_window: policy.admission_window,
+                submission_window: policy.submission_window,
                 decision_window: policy.decision_window,
                 issued_at: context.now,
                 expires_at,
@@ -710,7 +721,7 @@ fn create_request(
         RelationshipState::Blocked => return Err(ProtocolError::ContactBlocked),
         RelationshipState::Unknown | RelationshipState::Rejected | RelationshipState::Revoked => {}
     }
-    let admission_deadline = validate_request_terms(manifest, context, terms)?;
+    let submission_deadline = validate_request_terms(manifest, context, terms)?;
     if manifest.next.requests.contains_key(&request_id)
         || manifest.payments.contains_key(&request_id)
     {
@@ -721,7 +732,7 @@ fn create_request(
         .requests
         .values()
         .any(|r| !r.lifecycle.is_terminal())
-        || manifest.history.preparation.is_some()
+        || manifest.history.pending_submission.is_some()
     {
         return Err(ProtocolError::RequestAlreadyExists);
     }
@@ -733,9 +744,9 @@ fn create_request(
     if payment_method == [0; 32] {
         return Err(ProtocolError::PolicyInvalid);
     }
-    if context.now < manifest.history.earliest_next_admission {
+    if context.now < manifest.history.earliest_next_submission {
         return Err(ProtocolError::BackoffActive {
-            next_eligible: manifest.history.earliest_next_admission,
+            next_eligible: manifest.history.earliest_next_submission,
         });
     }
     let capture = PaymentOperation {
@@ -749,7 +760,7 @@ fn create_request(
     if capture.amount.is_zero() {
         return Err(ProtocolError::PolicyInvalid);
     }
-    manifest.history.preparation = Some(RequestReservation {
+    manifest.history.pending_submission = Some(RequestReservation {
         relationship: terms.relationship,
         request: request_id,
     });
@@ -793,15 +804,15 @@ fn create_request(
             funding: capture.id,
             terms: terms.clone(),
             created_at: context.now,
-            lifecycle: RequestLifecycle::Preparing(Preparation {
-                deadline: admission_deadline,
+            lifecycle: RequestLifecycle::PreparingSubmission(SubmissionPreparation {
+                deadline: submission_deadline,
             }),
             version: RequestVersion::default(),
         },
     );
     manifest.schedules.push(ScheduleChange::Schedule {
-        task: ScheduleTask::AdmissionTimeout(request_id),
-        at: admission_deadline,
+        task: ScheduleTask::SubmissionTimeout(request_id),
+        at: submission_deadline,
     });
     manifest.event(ProtocolEventKind::RequestCreated(request_id));
     Ok(())
@@ -826,7 +837,7 @@ fn validate_request_terms(
         || terms.recipient != manifest.next.relationship.key.recipient
         || terms.recipient_provider != context.policy.recipient_provider
         || terms.request_level != manifest.history.level
-        || terms.eligibility_time != manifest.history.earliest_next_admission
+        || terms.eligibility_time != manifest.history.earliest_next_submission
     {
         return Err(ProtocolError::AmountMismatch);
     }
@@ -835,16 +846,16 @@ fn validate_request_terms(
     {
         return Err(ProtocolError::QuoteVersionStale);
     }
-    let admission_deadline = context
+    let submission_deadline = context
         .now
-        .checked_add(terms.admission_window)
+        .checked_add(terms.submission_window)
         .ok_or(ProtocolError::ArithmeticOverflow)?;
 
-    Ok(admission_deadline)
+    Ok(submission_deadline)
 }
 
 #[derive(Clone, Copy)]
-struct InitialAdmission {
+struct RequestSubmissionInput {
     request_id: RequestId,
     expected_version: Version,
     content_ref: ContentRef,
@@ -853,12 +864,12 @@ struct InitialAdmission {
     message_valid_until: MessageValidityUntil,
 }
 
-fn admit_request(
+fn submit_request_to_recipient(
     manifest: &mut ManifestBuilder,
     context: &TransitionContext,
-    admission: InitialAdmission,
+    submission: RequestSubmissionInput,
 ) -> Result<(), ProtocolError> {
-    let request_id = admission.request_id;
+    let request_id = submission.request_id;
     if manifest.next.relationship.state == RelationshipState::Blocked {
         return Err(ProtocolError::ContactBlocked);
     }
@@ -868,30 +879,30 @@ fn admit_request(
         .get(&request_id)
         .cloned()
         .ok_or(ProtocolError::MissingRecord)?;
-    if request.version != admission.expected_version.into() {
+    if request.version != submission.expected_version.into() {
         return Err(ProtocolError::VersionConflict);
     }
-    if !request.lifecycle.is_preparing() {
+    if !request.lifecycle.is_preparing_submission() {
         return if matches!(request.lifecycle, RequestLifecycle::Cancelled { .. }) {
-            Err(ProtocolError::PreparingRequestCancelled)
+            Err(ProtocolError::RequestSubmissionCancelled)
         } else {
             Err(ProtocolError::AlreadyTerminal)
         };
     }
-    if let Some(reason) = preparation_failure(manifest, &request, admission)? {
-        cancel_preparing(manifest, request_id, reason)?;
+    if let Some(reason) = submission_failure(manifest, &request, submission)? {
+        cancel_submission(manifest, request_id, reason)?;
         return Ok(());
     }
     if context.admission.is_err() {
-        cancel_preparing(manifest, request_id, ReservedCancellation::Ordinary)?;
+        cancel_submission(manifest, request_id, ReservedCancellation::Ordinary)?;
         return Ok(());
     }
-    validate_admission_authority(manifest, context, &request)?;
+    validate_submission_authority(manifest, context, &request)?;
     let deadline = context
         .now
         .checked_add(request.terms.decision_window)
         .ok_or(ProtocolError::ArithmeticOverflow)?;
-    request.lifecycle = RequestLifecycle::Open(RequestAdmission {
+    request.lifecycle = RequestLifecycle::AwaitingRecipientDecision(RequestSubmission {
         at: context.now,
         decision_deadline: deadline,
     });
@@ -903,10 +914,10 @@ fn admit_request(
         Message {
             id: request.initial_message,
             relationship: request.terms.relationship,
-            content: admission.content_ref,
-            delivery: admission.delivery_intent_ref,
-            declaration: admission.declaration_digest,
-            valid_until: admission.message_valid_until,
+            content: submission.content_ref,
+            delivery: submission.delivery_intent_ref,
+            declaration: submission.declaration_digest,
+            valid_until: submission.message_valid_until,
             admitted_at: context.now,
             basis: AdmissionBasis::InitialRequest {
                 request: request_id,
@@ -915,7 +926,7 @@ fn admit_request(
     );
     request.version = next_request_version(request.version)?;
     let backoff = request.terms.next_request_backoff;
-    manifest.history.record_admission(
+    manifest.history.record_submission(
         request.reservation(),
         context.now,
         backoff,
@@ -926,7 +937,7 @@ fn admit_request(
     manifest.next.requests.insert(request_id, request);
 
     manifest.schedules.push(ScheduleChange::Cancel {
-        task: ScheduleTask::AdmissionTimeout(request_id),
+        task: ScheduleTask::SubmissionTimeout(request_id),
     });
     manifest.schedules.push(ScheduleChange::Schedule {
         task: ScheduleTask::RequestExpiry(request_id),
@@ -934,8 +945,8 @@ fn admit_request(
     });
     manifest.effects.push(EffectIntent::DeliverMessage {
         message_id,
-        content_ref: admission.content_ref,
-        delivery_intent_ref: admission.delivery_intent_ref,
+        content_ref: submission.content_ref,
+        delivery_intent_ref: submission.delivery_intent_ref,
     });
     manifest
         .effects
@@ -943,35 +954,35 @@ fn admit_request(
             request_id,
             generation,
         });
-    manifest.event(ProtocolEventKind::RequestAdmitted(request_id));
+    manifest.event(ProtocolEventKind::RequestSubmitted(request_id));
     Ok(())
 }
 
-/// Classifies why a preparation must be cancelled before any admission effect is created.
-fn preparation_failure(
+/// Classifies why a preparation must be cancelled before any submission effect is created.
+fn submission_failure(
     manifest: &ManifestBuilder,
     request: &RelationshipRequest,
-    admission: InitialAdmission,
+    submission: RequestSubmissionInput,
 ) -> Result<Option<ReservedCancellation>, ProtocolError> {
     let preparation = request
         .lifecycle
-        .preparation()
+        .submission_preparation()
         .ok_or(ProtocolError::InvalidState)?;
     Ok(
         if manifest.next.relationship.state == RelationshipState::Accepted
             || manifest.now > preparation.deadline
         {
             Some(ReservedCancellation::Ordinary)
-        } else if manifest.now > admission.message_valid_until.0 {
+        } else if manifest.now > submission.message_valid_until.0 {
             Some(ReservedCancellation::MessageValidityClosed)
         } else if request
             .terms
             .declaration_digest
-            .is_some_and(|expected| expected != admission.declaration_digest)
+            .is_some_and(|expected| expected != submission.declaration_digest)
         {
             Some(ReservedCancellation::DeclarationMismatch)
         } else if request.terms.history_version != manifest.history.version
-            || manifest.now < manifest.history.earliest_next_admission
+            || manifest.now < manifest.history.earliest_next_submission
         {
             Some(ReservedCancellation::HistoryChanged)
         } else {
@@ -980,7 +991,7 @@ fn preparation_failure(
     )
 }
 
-fn cancel_preparing_request(
+fn cancel_request_submission(
     manifest: &mut ManifestBuilder,
     actor: ActorRef,
     request_id: RequestId,
@@ -993,7 +1004,7 @@ fn cancel_preparing_request(
         .get(&request_id)
         .cloned()
         .ok_or(ProtocolError::MissingRecord)?;
-    if !request.lifecycle.is_preparing() {
+    if !request.lifecycle.is_preparing_submission() {
         return if matches!(actor, ActorRef::Scheduler(_)) {
             Ok(())
         } else {
@@ -1003,17 +1014,17 @@ fn cancel_preparing_request(
     if request.version != expected_version.into() {
         return Err(ProtocolError::VersionConflict);
     }
-    if reason == CancellationReason::AdmissionTimeout
+    if reason == CancellationReason::SubmissionTimeout
         && manifest.now
             < request
                 .lifecycle
-                .preparation()
+                .submission_preparation()
                 .ok_or(ProtocolError::InvalidState)?
                 .deadline
     {
         return Err(ProtocolError::InvalidState);
     }
-    cancel_preparing(manifest, request_id, ReservedCancellation::Ordinary)
+    cancel_submission(manifest, request_id, ReservedCancellation::Ordinary)
 }
 
 #[derive(Clone, Copy)]
@@ -1024,7 +1035,7 @@ enum ReservedCancellation {
     DeclarationMismatch,
 }
 
-fn cancel_preparing(
+fn cancel_submission(
     manifest: &mut ManifestBuilder,
     request_id: RequestId,
     cancellation: ReservedCancellation,
@@ -1035,30 +1046,30 @@ fn cancel_preparing(
         .get(&request_id)
         .cloned()
         .ok_or(ProtocolError::MissingRecord)?;
-    if !request.lifecycle.is_preparing() {
+    if !request.lifecycle.is_preparing_submission() {
         return Err(ProtocolError::AlreadyTerminal);
     }
     request.lifecycle = RequestLifecycle::Cancelled {
-        preparation: request
+        submission_preparation: request
             .lifecycle
-            .preparation()
+            .submission_preparation()
             .ok_or(ProtocolError::InvalidState)?,
         event: manifest.event,
     };
     request.version = next_request_version(request.version)?;
-    if manifest.history.preparation == Some(request.reservation()) {
-        manifest.history.preparation = None;
+    if manifest.history.pending_submission == Some(request.reservation()) {
+        manifest.history.pending_submission = None;
     }
     settle_financials(manifest, request.id, RequestSettlement::Cancelled)?;
     manifest.next.requests.insert(request.id, request.clone());
     manifest.schedules.push(ScheduleChange::Cancel {
-        task: ScheduleTask::AdmissionTimeout(request.id),
+        task: ScheduleTask::SubmissionTimeout(request.id),
     });
     manifest.event(match cancellation {
         ReservedCancellation::HistoryChanged => {
             ProtocolEventKind::RequestHistoryChanged(request.id)
         }
-        ReservedCancellation::Ordinary => ProtocolEventKind::PreparingRequestCancelled(request.id),
+        ReservedCancellation::Ordinary => ProtocolEventKind::RequestSubmissionCancelled(request.id),
         ReservedCancellation::MessageValidityClosed => {
             ProtocolEventKind::MessageValidityClosed(request.id)
         }
@@ -1114,11 +1125,11 @@ fn relationship_decision(
     if let Some(request) = manifest.next.active_request().cloned() {
         let id = request.id;
         match request.lifecycle {
-            RequestLifecycle::Preparing(_) => {
-                cancel_preparing(manifest, id, ReservedCancellation::Ordinary)?;
+            RequestLifecycle::PreparingSubmission(_) => {
+                cancel_submission(manifest, id, ReservedCancellation::Ordinary)?;
             }
-            RequestLifecycle::Open(admission) => {
-                let deadline = admission.decision_deadline;
+            RequestLifecycle::AwaitingRecipientDecision(submission) => {
+                let deadline = submission.decision_deadline;
                 if manifest.now <= deadline {
                     match decision {
                         Decision::Accept => settle_accepted(manifest, id)?,
@@ -1145,14 +1156,14 @@ fn relationship_decision(
 
 fn settle_accepted(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), ProtocolError> {
     let mut request = manifest.next.requests[&id].clone();
-    if !request.lifecycle.is_open() {
+    if !request.lifecycle.is_awaiting_recipient_decision() {
         return Err(ProtocolError::InvalidState);
     }
     settle_financials(manifest, id, RequestSettlement::Accepted)?;
     request.lifecycle = RequestLifecycle::Accepted {
-        admission: request
+        submission: request
             .lifecycle
-            .admission()
+            .submission()
             .ok_or(ProtocolError::InvalidState)?,
         event: manifest.event,
     };
@@ -1166,15 +1177,15 @@ fn settle_accepted(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), 
 
 fn settle_rejected(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), ProtocolError> {
     let mut request = manifest.next.requests[&id].clone();
-    if !request.lifecycle.is_open() {
+    if !request.lifecycle.is_awaiting_recipient_decision() {
         return Err(ProtocolError::InvalidState);
     }
     settle_financials(manifest, id, RequestSettlement::Rejected)?;
     apply_cooldown(manifest, manifest.now, request.terms.rejection_cooldown)?;
     request.lifecycle = RequestLifecycle::Rejected {
-        admission: request
+        submission: request
             .lifecycle
-            .admission()
+            .submission()
             .ok_or(ProtocolError::InvalidState)?,
         event: manifest.event,
     };
@@ -1188,7 +1199,7 @@ fn settle_rejected(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), 
 
 fn settle_expired(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), ProtocolError> {
     let mut request = manifest.next.requests[&id].clone();
-    if !request.lifecycle.is_open() {
+    if !request.lifecycle.is_awaiting_recipient_decision() {
         return Err(ProtocolError::InvalidState);
     }
     settle_financials(manifest, id, RequestSettlement::Expired)?;
@@ -1196,15 +1207,15 @@ fn settle_expired(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), P
         manifest,
         request
             .lifecycle
-            .admission()
+            .submission()
             .ok_or(ProtocolError::InvalidState)?
             .decision_deadline,
         request.terms.expiry_cooldown,
     )?;
     request.lifecycle = RequestLifecycle::Expired {
-        admission: request
+        submission: request
             .lifecycle
-            .admission()
+            .submission()
             .ok_or(ProtocolError::InvalidState)?,
         event: manifest.event,
     };
@@ -1265,12 +1276,12 @@ fn expire_request(
     if request.version != expected.into() {
         return Err(ProtocolError::VersionConflict);
     }
-    if !request.lifecycle.is_open() {
+    if !request.lifecycle.is_awaiting_recipient_decision() {
         return Err(ProtocolError::InvalidState);
     }
     let deadline = request
         .lifecycle
-        .admission()
+        .submission()
         .ok_or(ProtocolError::InvalidState)?
         .decision_deadline;
     if manifest.now <= deadline {
@@ -1367,18 +1378,18 @@ fn record_payment(
         .map_err(payment_error)?;
     if effects.capture_voided
         && let Some(request) = manifest.next.requests.get_mut(&id)
-        && let RequestLifecycle::Preparing(preparation) = request.lifecycle
+        && let RequestLifecycle::PreparingSubmission(preparation) = request.lifecycle
     {
         request.lifecycle = RequestLifecycle::Cancelled {
-            preparation,
+            submission_preparation: preparation,
             event: manifest.event,
         };
         request.version = next_request_version(request.version)?;
-        if manifest.history.preparation == Some(request.reservation()) {
-            manifest.history.preparation = None;
+        if manifest.history.pending_submission == Some(request.reservation()) {
+            manifest.history.pending_submission = None;
         }
         manifest.schedules.push(ScheduleChange::Cancel {
-            task: ScheduleTask::AdmissionTimeout(id),
+            task: ScheduleTask::SubmissionTimeout(id),
         });
     }
     apply_financial_effects(manifest, id, effects);
@@ -1410,10 +1421,10 @@ fn admit_followup(
         .requests
         .get_mut(&id)
         .ok_or(ProtocolError::MissingRecord)?;
-    if !request.lifecycle.is_open()
+    if !request.lifecycle.is_awaiting_recipient_decision()
         || request
             .lifecycle
-            .admission()
+            .submission()
             .is_none_or(|a| manifest.now > a.decision_deadline)
     {
         return Err(ProtocolError::DecisionWindowClosed);
@@ -1467,12 +1478,12 @@ fn admit_followup(
     Ok(())
 }
 
-fn validate_admission_authority(
+fn validate_submission_authority(
     manifest: &ManifestBuilder,
     context: &TransitionContext,
     request: &RelationshipRequest,
 ) -> Result<(), ProtocolError> {
-    if !manifest.payments[&request.id].capture_confirmed()
+    if !manifest.payments[&request.id].funding_finalized()
         || manifest.payments[&request.id].capture_reversed()
     {
         return Err(ProtocolError::PaymentNotConfirmed);
@@ -1482,7 +1493,7 @@ fn validate_admission_authority(
             next_eligible: request.terms.eligibility_time,
         });
     }
-    if manifest.history.preparation != Some(request.reservation())
+    if manifest.history.pending_submission != Some(request.reservation())
         || request.terms.relationship_version != manifest.next.relationship.version
     {
         return Err(ProtocolError::QuoteVersionStale);
@@ -1508,6 +1519,7 @@ mod tests {
             cs_mail_ledger::LedgerState::new(SettlementUnit(1)).view(),
         );
         let policy = PolicySnapshot {
+            pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
             protocol_version: ProtocolVersion(2),
             policy_version: PolicyVersion(1),
             privacy_profile_version: PrivacyProfileVersion(1),
@@ -1516,7 +1528,7 @@ mod tests {
             unit: SettlementUnit(1),
             processing_charge: Money::from_minor_units(2),
             collateral: Money::from_minor_units(8),
-            admission_window: Duration(10),
+            submission_window: Duration(10),
             decision_window: Duration(50),
             quote_lifetime: Duration(20),
             backoff: vec![Duration(0)],
@@ -1560,3 +1572,4 @@ mod tests {
 }
 
 pub mod admission;
+pub mod pricing;

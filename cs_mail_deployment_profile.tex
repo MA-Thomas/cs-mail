@@ -20,7 +20,7 @@
 
 \title{\textit{cs-mail} Deployment and Migration Profile\\\large Request Payments and the C-SQD Member Program}
 \author{C-SQD}
-\date{Draft 0.6 --- September 2026}
+\date{Draft 0.8 --- September 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -29,9 +29,10 @@
 
 \begin{abstract}
 An initial C-SQD deployment can operate the communication service and its
-canonical ledger while external providers execute request-specific charges,
-refunds, and member payments. This profile follows those obligations from a
-sender's relationship request to a quarterly member distribution. It defines the
+canonical ledger while one configured payment-processing arrangement executes annual utility charges,
+request-specific charges, refunds, and member payments. This profile follows
+a service purchase and a relationship request through to annual member allocation
+and automatic lump-sum payment to each member's associated bank account. It defines the
 C-SQD financial program, then explains the operational, privacy, and migration
 choices needed to deliver it. Company ownership of the pool does not make its
 member-restricted portion available for ordinary corporate spending.
@@ -47,20 +48,27 @@ requirements for deployments advertising this profile. In that section,
 guidance. Values explicitly marked proposed are planning defaults, not approved
 live-payment terms.
 
-This revision replaces periodic account funding, direct recipient collateral
-payouts, and withdrawals of spendable ledger balances. Its financial narrative
-is a conditional service charge for one relationship request, followed by an
-outcome-dependent refund or forfeiture and, separately, member distributions.
-The legal characterization and payment-provider arrangements still require
-assessment; these labels do not establish a money-transmission exemption.
+The companion \href{DOMAIN_MODEL.md}{C-SQD domain model} records the confirmed
+product rules and deferred decisions. Implementation choices do not override
+those clarifications. In this profile, a communication
+\emph{provider} operates the mail service; a payment \emph{processor} executes
+financial operations. The current product assumes one configured
+payment-processing arrangement, not routing among multiple processors.
+
+The financial model separates three events: an annual charge purchases service,
+a conditional charge supports a relationship request, and the member program
+returns eligible pooled forfeitures through annual allocations. None creates a
+spendable account balance. The legal characterization and processing arrangement
+still require assessment; these labels do not establish a money-transmission
+exemption.
 
 \section{A Request from Charge to Outcome}
 
 Alice has no standing permission to write to Bob. She reviews one request quote,
 authorizes $C+S$, and supplies her initial encrypted communication. C-SQD records
 one request and asks the external provider to capture that charge under a stable
-operation key. Once capture evidence and durable content are available, admission
-opens the request and starts its decision clock.
+operation key. Once funding satisfies the published finality policy and content is durable,
+submission places the request before Bob and starts its decision clock.
 
 Bob's follow-up setting governs additional messages during that clock. If he
 permits them, Alice may add messages under the same request. They cost no more,
@@ -74,14 +82,50 @@ records $C$ as revenue and a refund obligation for $S$. Bob receives no personal
 entitlement from rejecting Alice. Each obligation remains visible until the
 external execution is reconciled, even if Alice or Bob closes an account.
 
-Capture and admission cannot form one database transaction with a payment
+Funding and submission cannot form one database transaction with a payment
 provider. Recovery must therefore complete the story. A cancelled or timed-out
-preparing request is not admitted when a delayed capture confirmation arrives;
+request being prepared is not submitted when delayed funding evidence arrives;
 the captured amount is refunded in full. An uncertain capture is queried under
 its original key rather than retried as another charge. A failed refund remains
 an obligation and enters retry or review.
 
 \section{C-SQD Financial Program}\label{sec:program}
+
+\subsection{The annual utility charge purchases service}
+
+C-SQD must publish an annual utility price and collect the full charge well
+before the specified year-long service period begins. An anticipated or finalized
+pool allocation must not reduce that charge at collection. The later distribution
+is a separate bank payment; it must not shorten or revoke purchased service.
+
+Published service terms must fix the price, settlement unit, collection date,
+and year-long service interval. A failed collection and its retry must apply to
+that same interval and price. A late payment must not shift or extend the period.
+Policy changes apply to future offers, not an existing purchase. Exact calendar
+or anniversary anchors and the advance collection lead time remain policy
+decisions; this profile does not invent a universal date or offset. Collection
+date, service interval, pool year, and distribution date are distinct facts.
+
+New service coverage requires authenticated evidence that funding has met the
+provider's finality policy. Pending funding grants no new coverage, and late
+funding grants no retroactive coverage. Expiry of existing coverage prevents new
+communication through the local service, including accepted and lane messages;
+it does not erase relationships, revoke lanes, prevent recipient decisions, or
+cancel refunds and member payables. A remote sender's service entitlement belongs
+to that sender's provider.
+
+A billing account and a verified distribution member serve different purposes.
+An account may purchase service without enrolling in the member program. A member
+may retain an annual allocation after choosing not to renew service.
+
+\subsection{Request pricing is fixed at authorization}
+
+The standard request quote combines processing amount $C=\$0.50$ with a
+recipient-selected collateral amount $S$. The current default is $S=\$5.00$;
+the bounded menu is $\$1$, $\$2.50$, $\$5$, $\$10$, and $\$25$. The deployment
+versions the processing amount, menu, and default. A recipient's authenticated
+preference must select an allowed value. A later preference or policy change
+must not alter an existing request's signed quote.
 
 \subsection{Ownership and the limits on its use}
 
@@ -89,10 +133,10 @@ C-SQD is the service operator and owner of the company pool in this profile.
 It is responsible for request refunds and finalized member payments, while an
 external provider executes the underlying transactions. The live policy must
 identify the contracting entity, merchant/payment responsibilities, and applicable
-provider arrangements before charges begin.
+processing arrangement before charges begin.
 
 The pool has no participant ownership shares and no earmarked claim linking a
-particular rejected request to its recipient. Before quarterly allocation, a
+particular rejected request to its recipient. Before annual allocation, a
 member has no individually finalized claim to a fraction of its unallocated
 funds. At allocation, the ledger records an individual payment obligation for
 each qualifying member. This accounting distinction must be reflected in the
@@ -101,9 +145,9 @@ published program terms rather than inferred from the word ``pool.''
 Eligible forfeitures undergo one disclosed corporate allocation. The remainder
 is restricted to member distributions. C-SQD must not spend that remainder on
 operations, payout fees, or corporate losses, or assess it again in later
-quarters. Processing revenue and the corporate allocation fund those company
-costs. This rule qualifies the earlier proposal to devote all forfeitures to
-members; it does not authorize further undisclosed deductions.
+years. Annual utility charges, retained processing revenue, and the corporate
+allocation support those company costs. The restriction permits no further
+undisclosed deductions from member funds.
 
 \subsection{When a forfeiture becomes eligible}
 
@@ -114,8 +158,8 @@ status. Before eligibility, the policy's capture/settlement, refund, dispute,
 and reserve conditions must be satisfied. Refund obligations and unresolved
 amounts must remain separately accounted for and unavailable to the pool.
 
-Quarter end alone does not establish payment finality. A lot that fails maturity
-at cutoff stays pending until a later eligible quarter; it does not receive an
+Year end alone does not establish payment finality. A lot that fails maturity
+at cutoff stays pending until a later eligible year; it does not receive an
 estimated member allocation. A hold or dispute must identify the affected lot
 and its review condition. Reserve methodology, release conditions, and later-loss
 funding must be approved before live distribution, not invented by a worker.
@@ -127,19 +171,19 @@ part of the journal even when a financial correction is necessary.
 
 \subsection{The corporate allocation happens once}
 
-The proposed corporate rate is $\alpha=0.03$. The adopted rate and rounding
+The current corporate-rate default is $\alpha=0.03$. The adopted rate and rounding
 policy must be disclosed through immutable request terms. A future rate change
 applies prospectively; the rate at a later maturity date does not replace the
 one attached to an existing request.
 
-At quarter $q$, group newly eligible, previously unassessed lots by settlement
-unit and quoted rate version $v$. Let $F_{qv}$ be a group's amount in integer
+For allocation year $y$, group newly eligible, previously unassessed lots by settlement
+unit and quoted rate version $v$. Let $F_{yv}$ be a group's amount in integer
 minor units. The corporate amount and new member contribution are
 \[
-G_q=\sum_v\left\lfloor\alpha_v F_{qv}\right\rfloor,
-\qquad M_q=\sum_v F_{qv}-G_q.
+G_y=\sum_v\left\lfloor\alpha_v F_{yv}\right\rfloor,
+\qquad M_y=\sum_v F_{yv}-G_y.
 \]
-The floor is applied once per rate cohort and unit at the finalized quarter
+The floor is applied once per rate cohort and unit at the finalized annual
 boundary, with any fractional corporate unit left for members. Each contributing
 lot must be marked assessed in the same atomic allocation record. Replays cannot
 assess it again. Calculations must use checked integer or exact rational
@@ -147,8 +191,7 @@ arithmetic, never floating-point currency.
 
 For example, $10{,}000$ units of newly eligible forfeitures at 3\% produce $300$
 of corporate revenue and $9{,}700$ for members. This assessment excludes $C$,
-refund obligations, unresolved request amounts, and any refundable persistence
-reserve. Previously assessed member funds and finalized unpaid allocations are
+refund obligations and unresolved request amounts. Previously assessed member funds and finalized unpaid allocations are
 also excluded. The sender is not charged an additional 3\%.
 
 \subsection{Who qualifies for an equal share}
@@ -156,7 +199,7 @@ also excluded. The sender is not charged an additional 3\%.
 The program benefits qualifying active members generally. It must not weight a
 share by requests received, collateral contributed, rejections, messages sent,
 or correspondence with a particular sender. One qualifying member receives one
-share, irrespective of aliases, mailboxes, devices, or subscription seats.
+share, irrespective of aliases, mailboxes, or devices.
 
 The distribution identity is distinct from the protocol's private principal and
 public communication identities. The program must prevent duplicate enrollment
@@ -167,64 +210,101 @@ must be handled under a disclosed review and correction procedure.
 
 The proposed initial eligibility policy is membership for at least 30 days by
 cutoff and intentional authenticated use on at least two distinct days of the
-quarter. Reading can count. Background synchronization, automated polling, and
+year. Reading can count. Background synchronization, automated polling, and
 incoming lane traffic alone do not establish activity. Store minimal activity
-evidence, not message content or a history of correspondents. Whether legal
-entities or managed groups qualify independently remains unresolved; mail
-enrollment does not itself settle that question.
+evidence, not message content or a history of correspondents. The current
+C-SQD account model is personal: one identifiable person, one account, potentially
+multiple email addresses, with identity tied to a verified bank account.
+Organizational account models are outside this product scope. Renewal for the following service
+year must not be an eligibility condition. Eligibility is determined from the
+completed allocation year, independently of the member's billing account.
 
-\subsection{From quarter cutoff to fixed payables}
+\subsection{From the annual cutoff to fixed payables}
 
-Allocations occur quarterly. The program must publish its calendar, timezone,
-eligibility policy version, and cutoff rule before the period. A calendar quarter
-is represented as a half-open interval ending at the next quarter's start; an
-event at that boundary belongs to the new quarter. UTC is the proposed reference
-timezone. A review interval after cutoff can resolve already recorded evidence
-without admitting later activity into the closed quarter.
+Allocations occur once per calendar year. The program must publish its eligibility
+policy version and cutoff rule before the period. Year $y$ is the half-open
+interval from January 1 of $y$ to January 1 of $y+1$, in UTC; an event at the
+ending boundary belongs to the new year. A review interval after cutoff can
+resolve already recorded evidence without admitting later activity into the
+closed year.
 
-At finalization, fix the qualifying membership snapshot and the eligible funding
-manifest. Let $U_{q-1}$ be unallocated, previously assessed member carryforward,
-and let $N_q$ be the qualifying member count. The amount available for equal
-allocation is $D_q=U_{q-1}+M_q$. For $N_q>0$,
+At finalization, fix the qualifying membership snapshot and eligible funding
+manifest. Let $K_{y-1}$ be unallocated, previously assessed member carryforward,
+and let $N_y$ be the qualifying member count. Together with the newly assessed
+member contribution $M_y$, the amount available is $D_y=K_{y-1}+M_y$.
+For $N_y>0$,
 \[
-a_q=\left\lfloor D_q/N_q\right\rfloor,
-\qquad U_q=D_q-N_q a_q.
+a_y=\left\lfloor D_y/N_y\right\rfloor,
+\qquad K_y=D_y-N_y a_y.
 \]
-Each member receives a payable of $a_q$ minor units. The remainder $U_q$ remains
-restricted carryforward. If $N_q=0$, no individual allocation is created and
-$U_q=D_q$. An empty pool creates no payment. Settlement units must be handled
+Each member receives a payable of $a_y$ minor units. The remainder $K_y$ remains
+restricted carryforward. If $N_y=0$, no individual allocation is created and
+$K_y=D_y$. An empty pool creates no payment. Settlement units must be handled
 separately; no implicit foreign exchange is permitted.
 
 The snapshot, manifest, assessment marks, payables, remainder, and journal entries
-must finalize as one visible outcome, using a prepared batch if necessary.
-An operator must not silently rerun the quarter with a different membership set.
-Corrections require a separate authorized record with a stated cause and funding
-source; they do not overwrite the finalized batch.
+must finalize as one visible outcome. An operator must not silently rerun the
+year with a different membership set. Corrections require a separate authorized
+record with a stated cause and funding source; they do not overwrite the
+finalized allocation.
 
-\subsection{Paying a member}
+\subsection{The member's annual distribution date}
 
-Finalized payables are obligations, not available pool cash. A member with a
-failed payment, incomplete payout onboarding, or an amount below a disclosed
-minimum threshold retains that payable. It must not return to the next quarter's
-equal split. Several fixed payables may be paid together through one provider
-operation while preserving their individual accounting causes.
+Finalization establishes each member's share of the previous calendar year's
+company-wide collateral pool. One ordinary annual distribution covers that share.
+Published distribution terms set its due date separately from service collection
+and coverage. Ordinarily distribution occurs during a service year whose utility
+charge was already paid. Renewal for the next year, and a pending or failed
+collection for that year, must not delay, reclassify, or cancel the distribution.
+This profile does not require payment a fixed number of days after collection.
 
-Payment requires a stable operation key and verified destination under the
-external provider's rules. The obligation is discharged only by reconciled
-payment confirmation. Retries, account closure, and quarter rollover do not
-erase it. The proposed operational target is payment initiation within 30 days
-after quarter end; this is distinct from a promise of provider completion.
+A due date is an earliest execution date, not a guarantee of processor completion
+that day. After finalization and when due, C-SQD automatically forwards the
+distribution to the verified bank account associated with the member's account.
+No separate per-distribution instructions or independently chosen destination
+are required. Closure must preserve a minimal route for outstanding distributions
+and refunds. Detailed account management and bank replacement remain deferred.
 
-Member statements must separate finalized allocation, awaiting payment, confirmed
-payment, and any disclosed threshold carryforward. There is no spendable cs-mail
-balance and no transfer to another member. C-SQD must not deduct payout fees from
-the stated member allocation under this profile.
+\subsection{One payment, with rebate and excess reporting}
+
+Let $D_i$ be member $i$'s finalized allocation and $U$ the annual utility charge
+(\$120 in the clarified example). The reporting classifications are
+\[
+R_i=\min(D_i,U),\qquad X_i=\max(0,D_i-U),\qquad R_i+X_i=D_i.
+\]
+$R_i$ is the utility-fee rebate/refund classification and $X_i$ is the excess
+cash classification. They are bookkeeping and reporting distinctions within
+\emph{one lump-sum bank payment}. C-SQD must not implement them as an original-charge
+refund and a separate payout. Remaining processor-refundable capacity does not
+enter the calculation, and future renewal status does not change $U$.
+
+For $U=\$120$, allocations of \$80, \$120, and \$170 produce single payments
+of those amounts, with rebate/excess breakdowns of \$80/\$0, \$120/\$0,
+and \$120/\$50 respectively. A zero allocation needs no external payment.
+Actual relationship-request refunds retain their capture-linked refund meaning.
+
+The distribution has one obligation and one payment lifecycle, including its
+sequential attempts and authenticated evidence. An uncertain response must be
+reconciled under the original operation identity. A definite failure may permit
+a new attempt for the same obligation. A later reversal preserves evidence and
+restores the unpaid obligation for reconciliation; it must not silently trigger
+an unrelated payment or erase the allocation.
+
+Failed or delayed payments stay assigned to their members, outside the next
+year's equal split. Account closure and year rollover do not erase them.
+C-SQD must not deduct payout fees from the stated allocation. No member-selected
+payout minimum, cross-year aggregation, or payment-threshold rule is adopted here.
+
+Statements show the full annual utility charge, finalized allocation, rebate
+and excess classifications, and one distribution completion status. There is
+no spendable cs-mail balance, transfer to another member, or automatic netting
+against the next service purchase. The distribution leaves funded coverage intact.
 
 \subsection{Published policy and program closure}
 
-The launch policy must resolve the proposed rate, eligibility thresholds, legal-
-entity eligibility, maturity/reserve criteria, payment thresholds, and review
-timelines. It must also define account closure, unclaimed obligations, residual
+The launch policy must publish the adopted corporate rate, eligibility thresholds,
+maturity and reserve criteria, service periods and advance collection terms,
+distribution terms, and review timelines. It must also define account closure, unclaimed obligations, residual
 restricted funds, and orderly program termination before collecting real value.
 Stopping the program cannot by itself convert member-restricted funds into
 unrestricted corporate revenue or extinguish unpaid obligations.
@@ -243,28 +323,48 @@ credentials, keys, and access roles. The payment adapter receives scoped payment
 references and required amounts. It does not need message content, a recipient's
 contact graph, or events for every follow-up message.
 
-The operational ledger should reconcile captures, unresolved requests, refunds,
+The operational ledger should reconcile utility-service receipts, request funding,
+unresolved requests, refunds,
 pending forfeitures, corporate revenue, restricted funds, and member payables
 against external statements. An operator investigates mismatches through narrowly
 authorized records and compensating commands, not arbitrary balance edits.
 Unknown outcomes stay visible until resolved. A processor outage must not become
 a duplicate charge or a claim that a refund has completed.
 
-Communication enrollment may support individuals, organizations, managed groups,
-and limited accounts. Collect control and recovery evidence appropriate to each
-role; do not demand legal identity merely to populate an ordinary mailbox.
-Distribution verification is a separate purpose with its own access, retention,
-and eligibility rules. Provider migration should preserve recipient-scoped abuse
-continuity without exporting a universal principal identifier.
+Funding attempts require C-SQD-controlled capacity shared by the account's request
+and utility charges. The current limit bounds simultaneously unresolved attempts,
+not lifetime attempts. Failure or reversal restricts the source until authenticated
+re-verification; bank replacement policy remains deferred. A queued reservation
+does not authorize dispatch: the durable transaction must check current
+restrictions before granting a new dispatch. Looking up an uncertain operation under its
+original identity is reconciliation; dispatching another pull is a new attempt
+and requires available authority and capacity. Users must not bypass restrictions
+by creating new requests or changing command identifiers.
+
+Current C-SQD enrollment binds one identifiable person to one account and its
+verified bank association, with multiple email aliases permitted. Account actions
+require explicit grants checked against active operational keys; communication
+permission alone is not financial authority. This does not introduce a separate
+user-managed billing credential. Bank, membership, and communication records
+retain separate purposes, access, and scoped identifiers. Legacy organizations
+may send through express lanes without becoming C-SQD account holders. Future
+provider migration must preserve recipient-scoped abuse continuity without
+exporting a universal principal identifier.
 
 \section{The Recipient and Sender Experience}
 
 The sender sees the price of one relationship request, its initial communication,
-the possible refunds, and the decision window. After submission, the interface
-shows preparing, awaiting decision, or the terminal outcome, with external refund
-status separately. It does not present available or withdrawable funds. A
-preparing request offers authenticated cancellation; closing the application
+the possible refunds, and the decision window. The interface distinguishes preparation for submission, waiting for the
+recipient's decision, and the terminal outcome, with external refund status
+shown separately. It does not present available or withdrawable funds. A
+request still being prepared offers authenticated cancellation; closing the application
 does not imply that the charge was cancelled.
+
+The account view shows the annual service price, coverage interval, next charge
+date, and scheduled distribution date. It presents the full charge and later
+lump-sum distribution as separate transactions, with the rebate/excess breakdown
+as reporting. A member who does not renew can still inspect
+and receive a finalized allocation.
 
 The recipient sees one grouped request and the choices accept, reject, and block.
 The explanation starts with future permission, then the financial consequence.
@@ -284,8 +384,7 @@ event for rejection allocation, subject to any later principal-history bound.
 These values remain proposals. A finalized policy must define recipient-imposed
 longer limits, explicit invitations that can shorten ordinary cooldowns, and
 behavior after revocation. Blocking always requires an authenticated unblock;
-an invitation cannot silently remove it. The prior nonzero persistence reserve
-is not enabled in the base draft and requires a separate decision and extension.
+an invitation cannot silently remove it.
 
 \section{SMTP and Express-Lane Migration}
 
@@ -293,9 +392,9 @@ SMTP is a visibly identified compatibility route because its gateway may handle
 plaintext. A native message's end-to-end confidentiality must not be claimed for
 ordinary gateway-readable mail.
 
-Inbound processing first checks blocking, standing acceptance, and an applicable
-recipient-granted lane. It then checks whether an authenticated message may join
-an identified open request. Only an eligible new request reaches the payment
+Within the funded service boundary, inbound processing checks blocking, standing
+acceptance, and an applicable recipient-granted lane. It then checks whether an authenticated message may join
+an identified request awaiting a decision. Only an eligible new request reaches the payment
 invitation flow. The web authorization binds the directed parties, request,
 initial content/declarations, amount, immutable terms, and deadlines. It never
 asks the sender to top up a general account.
@@ -323,7 +422,7 @@ activity, abusive request patterns, collusion, and manipulated cutoff evidence.
 A single company-owned pool is the initial model. Independent-provider federation
 requires a new agreement assigning the merchant, refund debtor, pool owner,
 membership authority, duplicate-member controls, clearing, default losses, and
-payment responsibility. Netting may discharge valid obligations more efficiently;
+payment responsibility. Inter-provider clearing may net mutual obligations;
 it cannot create new ownership rules or turn a rejected sender's collateral into
 a direct recipient payout. The centralized draft therefore does not promise that
 the former recipient-collateral clearing example transfers unchanged to federation.
@@ -337,9 +436,11 @@ real encryption, request/follow-up permission, deadlines, and failure behavior.
 
 Before live value, the service needs approved payment and program policies,
 external reconciliation, capture-after-cancellation recovery, refund retries,
-maturity controls, reproducible quarterly snapshots, and failed-payout handling.
-The first distribution should be demonstrable end to end with duplicate provider
-events and a failed member payment before real members depend on it. Privacy
+maturity controls, reproducible annual snapshots, and failed-payout handling.
+The first distribution should be demonstrable end to end with advance collection,
+fixed-period retries, a nonrenewing or closed account, duplicate processor events,
+and lost-response recovery for one lump-sum payment. Rebate/excess examples must
+not produce separate operations or completion states. Privacy
 tests must cover verification, activity evidence, payment records, and backups as
 well as messages.
 

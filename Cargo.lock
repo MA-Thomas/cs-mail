@@ -253,10 +253,25 @@ dependencies = [
 name = "cs-mail-application"
 version = "0.1.0"
 dependencies = [
+ "cs-mail-billing",
  "cs-mail-finance",
  "cs-mail-ledger",
  "cs-mail-primitives",
  "cs-mail-protocol",
+ "ed25519-dalek",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "cs-mail-billing"
+version = "0.1.0"
+dependencies = [
+ "cs-mail-finance",
+ "cs-mail-ledger",
+ "cs-mail-primitives",
+ "ed25519-dalek",
+ "serde",
  "serde_json",
  "sha2",
 ]
@@ -276,7 +291,9 @@ dependencies = [
 name = "cs-mail-client"
 version = "0.1.0"
 dependencies = [
+ "cs-mail-billing",
  "cs-mail-content",
+ "cs-mail-finance",
  "cs-mail-primitives",
  "cs-mail-protocol",
  "cs-mail-security",
@@ -365,6 +382,7 @@ dependencies = [
  "cs-mail-wire",
  "ed25519-dalek",
  "serde",
+ "serde_json",
  "sha2",
 ]
 
@@ -373,6 +391,7 @@ name = "cs-mail-service"
 version = "0.1.0"
 dependencies = [
  "cs-mail-adapters",
+ "cs-mail-billing",
  "cs-mail-capabilities",
  "cs-mail-content",
  "cs-mail-finance",
@@ -397,6 +416,8 @@ name = "cs-mail-storage-postgres"
 version = "0.1.0"
 dependencies = [
  "cs-mail-adapters",
+ "cs-mail-application",
+ "cs-mail-billing",
  "cs-mail-capabilities",
  "cs-mail-content",
  "cs-mail-finance",
@@ -427,6 +448,7 @@ dependencies = [
 name = "cs-mail-worker"
 version = "0.1.0"
 dependencies = [
+ "cs-mail-billing",
  "cs-mail-content",
  "cs-mail-finance",
  "cs-mail-ledger",
@@ -434,7 +456,9 @@ dependencies = [
  "cs-mail-protocol",
  "cs-mail-security",
  "cs-mail-storage-postgres",
+ "ed25519-dalek",
  "postgres",
+ "serde_json",
 ]
 
 [[package]]

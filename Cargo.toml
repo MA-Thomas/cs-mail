@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/cs-mail-billing",
     "crates/cs-mail-finance",
     "crates/cs-mail-primitives",
     "crates/cs-mail-ledger",

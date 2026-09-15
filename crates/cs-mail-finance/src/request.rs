@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 pub enum CaptureStatus {
     Pending,
     CancellationRequested,
-    Confirmed,
+    FundingFinalized,
     Voided,
     Reversed,
 }
@@ -31,8 +31,9 @@ impl RefundStatus {
     }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "StoredRequestFinancials", into = "StoredRequestFinancials")]
 pub struct RequestFinancials {
-    pub capture: PaymentOperation,
+    capture: PaymentOperation,
     capture_status: CaptureStatus,
     refund: RefundStatus,
     events: BTreeMap<FinancialEventId, PaymentEvidence>,
@@ -40,6 +41,9 @@ pub struct RequestFinancials {
     settlement: Option<RequestSettlement>,
 }
 impl RequestFinancials {
+    pub fn capture(&self) -> &PaymentOperation {
+        &self.capture
+    }
     /// Creates a capture obligation from validated immutable financial terms.
     /// # Errors
     /// Rejects inconsistent amounts, scope, identifiers or provider authority.
@@ -47,6 +51,7 @@ impl RequestFinancials {
         capture: PaymentOperation,
         contract: RequestFinancialContract,
     ) -> Result<Self, PaymentError> {
+        capture.validate()?;
         if contract.terms.validate().is_err()
             || capture.kind != PaymentKind::Capture
             || capture.amount.is_zero()
@@ -66,10 +71,10 @@ impl RequestFinancials {
             events: BTreeMap::new(),
         })
     }
-    pub const fn capture_confirmed(&self) -> bool {
+    pub const fn funding_finalized(&self) -> bool {
         matches!(
             self.capture_status,
-            CaptureStatus::Confirmed | CaptureStatus::Reversed
+            CaptureStatus::FundingFinalized | CaptureStatus::Reversed
         )
     }
     pub const fn capture_voided(&self) -> bool {
@@ -78,20 +83,25 @@ impl RequestFinancials {
     pub const fn capture_reversed(&self) -> bool {
         matches!(self.capture_status, CaptureStatus::Reversed)
     }
-    pub fn pending_payment(&self, id: PaymentOperationId) -> Option<(&PaymentOperation, bool)> {
+    pub fn pending_payment(&self, id: PaymentOperationId) -> Option<crate::ProcessorRequest> {
         if id == self.capture.id
             && matches!(
                 self.capture_status,
                 CaptureStatus::Pending | CaptureStatus::CancellationRequested
             )
         {
-            return Some((
-                &self.capture,
-                self.capture_status == CaptureStatus::CancellationRequested,
-            ));
+            return if self.capture_status == CaptureStatus::CancellationRequested {
+                crate::CaptureCancellation::new(self.capture.clone())
+                    .ok()
+                    .map(crate::ProcessorRequest::CancelCapture)
+            } else {
+                Some(crate::ProcessorRequest::Submit(self.capture.clone()))
+            };
         }
         match &self.refund {
-            RefundStatus::Pending(p) if p.id == id => Some((p, false)),
+            RefundStatus::Pending(p) if p.id == id => {
+                Some(crate::ProcessorRequest::Submit(p.clone()))
+            }
             _ => None,
         }
     }
@@ -159,14 +169,14 @@ impl RequestFinancials {
                 Err(PaymentError::DuplicateConflict)
             };
         }
-        if settlement != RequestSettlement::Cancelled && !self.capture_confirmed() {
+        if settlement != RequestSettlement::Cancelled && !self.funding_finalized() {
             return Err(PaymentError::InvalidOperation);
         }
         let mut next = self.clone();
         next.settlement = Some(settlement);
         let mut effects = RequestFinancialEffects::default();
         match settlement {
-            RequestSettlement::Cancelled if !next.capture_confirmed() => {
+            RequestSettlement::Cancelled if !next.funding_finalized() => {
                 if !next.capture_voided() {
                     next.capture_status = CaptureStatus::CancellationRequested;
                     effects.operations.push(next.capture.id);
@@ -258,9 +268,10 @@ impl RequestFinancials {
         let mut next = self.clone();
         let mut effects = RequestFinancialEffects::default();
         match (operation.id == self.capture.id, receipt.evidence.outcome) {
-            (true, PaymentOutcome::Confirmed) => {
-                if !next.capture_confirmed() {
-                    next.capture_status = CaptureStatus::Confirmed;
+            (_, PaymentOutcome::Pending) | (false, PaymentOutcome::Failed) => {}
+            (true, PaymentOutcome::Settled) => {
+                if !next.funding_finalized() {
+                    next.capture_status = CaptureStatus::FundingFinalized;
                     effects.postings.transfer(
                         Account::ProcessorClearing,
                         Account::RequestEscrow(next.capture.id),
@@ -271,15 +282,15 @@ impl RequestFinancials {
                     }
                 }
             }
-            (true, PaymentOutcome::Voided) => {
-                if !next.capture_confirmed() {
+            (true, PaymentOutcome::Voided | PaymentOutcome::Failed) => {
+                if !next.funding_finalized() {
                     next.capture_status = CaptureStatus::Voided;
                     next.settlement = Some(RequestSettlement::Cancelled);
                     effects.capture_voided = true;
                 }
             }
             (true, PaymentOutcome::Reversed) => {
-                if !next.capture_confirmed() {
+                if !next.funding_finalized() {
                     return Err(PaymentError::InvalidOperation);
                 }
                 if !next.capture_reversed() {
@@ -296,7 +307,7 @@ impl RequestFinancials {
                     }
                 }
             }
-            (false, PaymentOutcome::Confirmed) => {
+            (false, PaymentOutcome::Settled) => {
                 if let RefundStatus::Pending(refund) = &next.refund {
                     effects.postings.transfer(
                         Account::RefundPayable(refund.id),
@@ -315,16 +326,109 @@ impl RequestFinancials {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+struct StoredRequestFinancials {
+    capture: PaymentOperation,
+    capture_status: CaptureStatus,
+    refund: RefundStatus,
+    events: BTreeMap<FinancialEventId, PaymentEvidence>,
+    contract: RequestFinancialContract,
+    settlement: Option<RequestSettlement>,
+}
+impl From<RequestFinancials> for StoredRequestFinancials {
+    fn from(v: RequestFinancials) -> Self {
+        Self {
+            capture: v.capture,
+            capture_status: v.capture_status,
+            refund: v.refund,
+            events: v.events,
+            contract: v.contract,
+            settlement: v.settlement,
+        }
+    }
+}
+impl TryFrom<StoredRequestFinancials> for RequestFinancials {
+    type Error = PaymentError;
+    fn try_from(v: StoredRequestFinancials) -> Result<Self, Self::Error> {
+        let mut result = Self::new(v.capture, v.contract)?;
+        result.capture_status = v.capture_status;
+        result.refund = v.refund;
+        result.events = v.events;
+        result.settlement = v.settlement;
+        for (id, e) in &result.events {
+            let operation = result
+                .operation(e.operation_id)
+                .ok_or(PaymentError::OperationMismatch)?;
+            if *id != e.event_id || operation.digest() != e.operation_digest {
+                return Err(PaymentError::OperationMismatch);
+            }
+        }
+        let has = |id, outcome| {
+            result
+                .events
+                .values()
+                .any(|e| e.operation_id == id && e.outcome == outcome)
+        };
+        let state_valid = match result.capture_status {
+            CaptureStatus::Pending => result.settlement.is_none(),
+            CaptureStatus::CancellationRequested => {
+                result.settlement == Some(RequestSettlement::Cancelled)
+            }
+            CaptureStatus::FundingFinalized => has(result.capture.id, PaymentOutcome::Settled),
+            CaptureStatus::Voided => {
+                result.settlement == Some(RequestSettlement::Cancelled)
+                    && (has(result.capture.id, PaymentOutcome::Voided)
+                        || has(result.capture.id, PaymentOutcome::Failed))
+            }
+            CaptureStatus::Reversed => {
+                has(result.capture.id, PaymentOutcome::Settled)
+                    && has(result.capture.id, PaymentOutcome::Reversed)
+            }
+        };
+        if !state_valid {
+            return Err(PaymentError::InvalidOperation);
+        }
+        if let Some(refund) = result.refund.operation() {
+            let expected = match result.settlement {
+                Some(RequestSettlement::Accepted | RequestSettlement::Cancelled) => {
+                    result.capture.amount
+                }
+                Some(RequestSettlement::Expired) => result.contract.collateral,
+                _ => return Err(PaymentError::InvalidOperation),
+            };
+            if !result.funding_finalized()
+                || refund.id != result.contract.refund_id
+                || refund.kind
+                    != (PaymentKind::Refund {
+                        capture: result.capture.id,
+                    })
+                || refund.amount != expected
+                || refund.scope != result.capture.scope
+                || refund.unit != result.capture.unit
+                || refund.destination != result.capture.destination
+            {
+                return Err(PaymentError::InvalidOperation);
+            }
+            if matches!(result.refund, RefundStatus::Confirmed(_))
+                && !has(refund.id, PaymentOutcome::Settled)
+            {
+                return Err(PaymentError::InvalidOperation);
+            }
+        }
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FinancialScope, PaymentProvider, SimulatedProvider};
+    use crate::{FinancialScope, PaymentProcessor, SimulatedProcessor};
     use cs_mail_ledger::LedgerState;
     use cs_mail_primitives::{
         Duration, PolicyVersion, ProgramRef, ProtocolVersion, ProviderRef, SettlementUnit,
     };
-    fn fixture() -> (RequestFinancials, SimulatedProvider, LedgerState) {
-        let provider = SimulatedProvider::new([7; 32]);
+    fn fixture() -> (RequestFinancials, SimulatedProcessor, LedgerState) {
+        let provider = SimulatedProcessor::new([7; 32]);
         let scope = FinancialScope::new(
             [1; 32],
             ProviderRef(1),
@@ -373,7 +477,7 @@ mod tests {
             (RequestSettlement::Cancelled, 10, 0, 0),
         ] {
             let (mut finances, mut provider, mut ledger) = fixture();
-            let receipt = provider.submit(&finances.capture, false).unwrap();
+            let receipt = provider.submit(&finances.capture).unwrap();
             post(&mut ledger, &finances.record_payment(&receipt).unwrap());
             post(
                 &mut ledger,
@@ -406,7 +510,7 @@ mod tests {
                 RequestFinancialEffects::default()
             );
             if let Some(operation) = finances.refund().operation().cloned() {
-                let receipt = provider.submit(&operation, false).unwrap();
+                let receipt = provider.submit(&operation).unwrap();
                 post(&mut ledger, &finances.record_payment(&receipt).unwrap());
                 assert_eq!(
                     finances.record_payment(&receipt).unwrap(),
@@ -422,7 +526,7 @@ mod tests {
             .settle(RequestSettlement::Cancelled, CanonicalTime(1))
             .unwrap();
         assert_eq!(effects.operations, vec![finances.capture.id]);
-        let receipt = provider.submit(&finances.capture, false).unwrap();
+        let receipt = provider.submit(&finances.capture).unwrap();
         post(&mut ledger, &finances.record_payment(&receipt).unwrap());
         assert_eq!(
             finances.refund().operation().unwrap().amount,
@@ -433,7 +537,7 @@ mod tests {
     #[test]
     fn reversals_are_monotonic_and_conflicting_evidence_is_atomic() {
         let (mut finances, mut provider, mut ledger) = fixture();
-        let confirmation = provider.submit(&finances.capture, false).unwrap();
+        let confirmation = provider.submit(&finances.capture).unwrap();
         let reversal = provider
             .reversal(finances.capture.id, FinancialEventId(9))
             .unwrap();

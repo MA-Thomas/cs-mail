@@ -105,6 +105,12 @@ pub struct ServiceOutcome {
     pub receipt: SignedReceipt,
 }
 
+pub struct BillingOutcome {
+    pub account: cs_mail_billing::BillingAccount,
+    pub operations: Vec<cs_mail_finance::PaymentOperation>,
+    pub allocations: Vec<cs_mail_finance::MemberStatementEntry>,
+}
+
 pub struct IngressService<C> {
     engine: PostgresEngine,
     provider_signer: ProviderSigner,
@@ -114,6 +120,41 @@ pub struct IngressService<C> {
 }
 
 impl<C: CanonicalClock> IngressService<C> {
+    /// # Errors
+    /// Rejects invalid recipient authority or an amount outside the configured menu.
+    pub fn set_collateral_preference(
+        &self,
+        signed: &cs_mail_security::SignedCollateralPreference,
+    ) -> Result<(), ServiceError> {
+        self.engine
+            .set_collateral_preference(signed, self.clock.now(), &self.policy.protocol)?;
+        Ok(())
+    }
+    /// Authenticates the billing command independently of service coverage. Expired service
+    /// never prevents a member from inspecting or collecting an existing allocation.
+    /// # Errors
+    /// Rejects invalid billing authority, scope, versions and financial transitions.
+    pub fn submit_billing(
+        &self,
+        command: &cs_mail_billing::SignedBillingCommand,
+    ) -> Result<BillingOutcome, ServiceError> {
+        if command.scope != self.policy.protocol.financial.scope {
+            return Err(ServiceError::SigningScopeMismatch);
+        }
+        let operations = self
+            .engine
+            .execute_billing_command(command, self.clock.now())?;
+        let account = self.engine.billing_account(command.account)?;
+        let allocations = self
+            .engine
+            .financial_program(account.unit())?
+            .member_statement(account.member());
+        Ok(BillingOutcome {
+            account,
+            operations,
+            allocations,
+        })
+    }
     /// Creates an ingress boundary backed by durable key authority.
     ///
     /// # Errors

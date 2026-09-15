@@ -25,6 +25,7 @@ mod retention;
 pub use retention::{LifecyclePolicy, RetentionReport};
 mod work;
 pub use work::{WorkFailure, WorkItem, WorkPayload, WorkQueue, WorkReport};
+mod billing;
 mod domain;
 mod finance;
 mod ingress;
@@ -65,7 +66,9 @@ const MIGRATION_3: &str = include_str!("../migrations/0003_outbox_content_retent
 const MIGRATION_4: &str = include_str!("../migrations/0004_express_lanes.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_protocol_foundations.sql");
 const MIGRATION_6: &str = include_str!("../migrations/0006_authenticated_message_envelopes.sql");
-const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 6;
+const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 8;
+const MIGRATION_14: &str = include_str!("../migrations/0014_utility_billing.sql");
+const MIGRATION_13: &str = include_str!("../migrations/0013_annual_distribution.sql");
 const MIGRATION_12: &str = include_str!("../migrations/0012_record_lifecycle.sql");
 const MIGRATION_11: &str = include_str!("../migrations/0011_owner_records.sql");
 const MIGRATION_10: &str = include_str!("../migrations/0010_financial_work.sql");
@@ -79,6 +82,7 @@ pub enum StorageError {
     Protocol(ProtocolError),
     Ledger(LedgerError),
     Finance(cs_mail_finance::ProgramError),
+    Billing(cs_mail_billing::BillingError),
     Serialization(serde_json::Error),
     DuplicateConflict,
     VersionConflict,
@@ -109,6 +113,7 @@ impl fmt::Display for StorageError {
                 formatter.write_str("earlier received commands must be processed first")
             }
             Self::AdmissionRefused(reason) => write!(formatter, "admission refused: {reason:?}"),
+            Self::Billing(error) => write!(formatter, "billing error: {error}"),
             Self::Finance(error) => write!(formatter, "financial program error: {error}"),
             Self::Database(error) => write!(formatter, "database error: {error}"),
             Self::Protocol(error) => write!(formatter, "protocol error: {error:?}"),
@@ -586,6 +591,7 @@ impl PostgresEngine {
     }
 
     /// Claims due scheduled tasks using `SKIP LOCKED` worker semantics.
+    /// Request decision deadlines are inclusive, so expiry is eligible only after `due_at`.
     ///
     /// # Errors
     ///
@@ -607,7 +613,8 @@ impl PostgresEngine {
         let rows = transaction.query(
             "SELECT aggregate_key, task_key, task, due_at FROM cs_schedules \
              WHERE aggregate_key = $1 AND due_at <= $2 AND (status = 'pending' \
-             OR (status = 'processing' AND claim_until <= $2)) ORDER BY due_at \
+             OR (status = 'processing' AND claim_until <= $2)) \
+             AND (due_at < $2 OR NOT (task ? 'RequestExpiry')) ORDER BY due_at \
              LIMIT $3 FOR UPDATE SKIP LOCKED",
             &[&self.aggregate_key, &now, &limit],
         )?;
@@ -665,24 +672,24 @@ impl PostgresEngine {
         }
         let snapshot = self.snapshot()?;
         let command = match item.task {
-            ScheduleTask::AdmissionTimeout(request_id) => snapshot
+            ScheduleTask::SubmissionTimeout(request_id) => snapshot
                 .state
                 .requests
                 .get(&request_id)
-                .filter(|bond| bond.lifecycle.is_preparing())
-                .map(|bond| ProtocolCommand::CancelPreparingRequest {
+                .filter(|request| request.lifecycle.is_preparing_submission())
+                .map(|request| ProtocolCommand::CancelRequestSubmission {
                     request_id,
-                    expected_request_version: bond.version.into(),
-                    reason: cs_mail_protocol::CancellationReason::AdmissionTimeout,
+                    expected_request_version: request.version.into(),
+                    reason: cs_mail_protocol::CancellationReason::SubmissionTimeout,
                 }),
             ScheduleTask::RequestExpiry(request_id) => snapshot
                 .state
                 .requests
                 .get(&request_id)
-                .filter(|bond| bond.lifecycle.is_open())
-                .map(|bond| ProtocolCommand::ExpireRequest {
+                .filter(|request| request.lifecycle.is_awaiting_recipient_decision())
+                .map(|request| ProtocolCommand::ExpireRequest {
                     request_id,
-                    expected_request_version: bond.version.into(),
+                    expected_request_version: request.version.into(),
                 }),
             ScheduleTask::LaneHorizon(_) => unreachable!(),
         };
@@ -790,6 +797,8 @@ fn migrate(client: &mut Client) -> Result<(), StorageError> {
         (10_i64, MIGRATION_10),
         (11_i64, MIGRATION_11),
         (12_i64, MIGRATION_12),
+        (13_i64, MIGRATION_13),
+        (14_i64, MIGRATION_14),
     ] {
         if transaction
             .query_opt(
@@ -1353,9 +1362,16 @@ fn task_key(task: ScheduleTask) -> Result<String, StorageError> {
 
 fn schedule_idempotency(task: ScheduleTask) -> IdempotencyKey {
     let mut hasher = Sha256::new();
-    hasher.update(b"cs-mail/schedule/v1");
+    // Earlier expiry workers could durably refuse at the inclusive deadline.
+    // Use a new stable identity for expiry so those refusals do not poison retries.
+    // Preserve their original receipts, and preserve all other schedule identities.
+    if matches!(task, ScheduleTask::RequestExpiry(_)) {
+        hasher.update(b"cs-mail/schedule/request-expiry/v2");
+    } else {
+        hasher.update(b"cs-mail/schedule/v1");
+    }
     match task {
-        ScheduleTask::AdmissionTimeout(id) => {
+        ScheduleTask::SubmissionTimeout(id) => {
             hasher.update([0]);
             hasher.update(id.0.to_be_bytes());
         }
@@ -1466,6 +1482,12 @@ fn record_journal_position(
     Ok(())
 }
 
+impl From<cs_mail_billing::BillingError> for StorageError {
+    fn from(e: cs_mail_billing::BillingError) -> Self {
+        Self::Billing(e)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1473,8 +1495,12 @@ mod tests {
 
     #[test]
     fn schedule_task_kinds_have_stable_distinct_idempotency_keys() {
+        assert_eq!(
+            task_key(ScheduleTask::SubmissionTimeout(RequestId(1))).unwrap(),
+            r#"{"SubmissionTimeout":1}"#
+        );
         assert_ne!(
-            schedule_idempotency(ScheduleTask::AdmissionTimeout(RequestId(1))),
+            schedule_idempotency(ScheduleTask::SubmissionTimeout(RequestId(1))),
             schedule_idempotency(ScheduleTask::RequestExpiry(RequestId(1)))
         );
     }

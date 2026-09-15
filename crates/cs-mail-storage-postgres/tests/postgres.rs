@@ -1,3 +1,4 @@
+mod support;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
@@ -68,12 +69,13 @@ fn state(attempt_seed: u128) -> ProtocolState {
         RequestHistoryRef::from_u128_for_test(attempt_seed),
         SENDER,
         RECIPIENT,
-        CanonicalTime(0),
+        test_time(0),
     )
 }
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
+        pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
         protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
         privacy_profile_version: PrivacyProfileVersion(1),
@@ -82,7 +84,7 @@ fn policy() -> PolicySnapshot {
         unit: UNIT,
         processing_charge: Money::from_minor_units(2),
         collateral: Money::from_minor_units(8),
-        admission_window: Duration(10),
+        submission_window: Duration(10),
         decision_window: Duration(50),
         quote_lifetime: Duration(20),
         backoff: vec![Duration(0), Duration(5)],
@@ -98,7 +100,7 @@ fn policy() -> PolicySnapshot {
             corporate_basis_points: 300,
             maturity_delay: Duration(10),
         },
-        payment_provider_key: cs_mail_finance::SimulatedProvider::new([7; 32]).verifying_key(),
+        payment_provider_key: cs_mail_finance::SimulatedProcessor::new([7; 32]).verifying_key(),
         expiry_cooldown: Duration(30),
         rejection_cooldown: Duration(90),
     }
@@ -163,7 +165,7 @@ fn registry() -> KeyRegistry {
         ),
     ] {
         registry
-            .register(reference, actor, key, CanonicalTime(0))
+            .register(reference, actor, key, test_time(0))
             .unwrap();
     }
     registry
@@ -185,11 +187,12 @@ impl TestExecute for PostgresEngine {
         now: CanonicalTime,
         policy: PolicySnapshot,
     ) -> Result<DurableExecutionOutcome, StorageError> {
-        self.initialize_key_registry(&registry(), CanonicalTime(0))?;
+        support::provision(self, &policy)?;
+        self.initialize_key_registry(&registry(), test_time(0))?;
         self.configure_ingress(DEPLOYMENT_DOMAIN, &policy)?;
         let handle = self.receive_signed(&command, DEPLOYMENT_DOMAIN, || now, policy)?;
         let outcome = self.process_received(&handle)?;
-        self.sign_artifacts_batch(&provider_signer(), CanonicalTime(0), Duration(30_000), 100)?;
+        self.sign_artifacts_batch(&provider_signer(), test_time(0), Duration(30_000), 100)?;
         match outcome {
             cs_mail_storage_postgres::ReceivedOutcome::Protocol(o) => Ok(*o),
             cs_mail_storage_postgres::ReceivedOutcome::Refused(e) => Err(e.into_error()),
@@ -225,7 +228,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
                 },
                 1,
             ),
-            CanonicalTime(1),
+            test_time(1),
             policy(),
         )
         .unwrap();
@@ -247,7 +250,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
                 },
                 2,
             ),
-            CanonicalTime(2),
+            test_time(2),
             policy(),
         )
         .unwrap();
@@ -269,12 +272,12 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
                     content_scope: ContentScopeRef::from_u128_for_test(1),
                     sender_certificate: ContentCertificateDigest([1; 32]),
                     declarations: native_declarations(),
-                    message_valid_until: MessageValidityUntil(CanonicalTime(1_000)),
+                    message_valid_until: MessageValidityUntil(test_time(1_000)),
                     capability: None,
                 },
                 b"encrypted before upload",
-                CanonicalTime(2),
-                CanonicalTime(1_000),
+                test_time(2),
+                test_time(1_000),
             )
             .unwrap(),
             cs_mail_primitives::RetentionPolicyVersion(1),
@@ -282,23 +285,23 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
         .unwrap();
     confirm_capture(&engine, RequestId(1), 2);
     let admission = sender(
-        ProtocolCommand::AdmitRequest {
+        ProtocolCommand::SubmitRequestToRecipient {
             request_id: RequestId(1),
             expected_request_version: Version(0),
             content_ref: ContentRef(1),
             delivery_intent_ref: DeliveryIntentRef(1),
             declaration_digest: message_declaration_digest(&native_declarations()).unwrap(),
-            message_valid_until: MessageValidityUntil(CanonicalTime(1_000)),
+            message_valid_until: MessageValidityUntil(test_time(1_000)),
         },
         3,
     );
     let first = engine
-        .execute(admission.clone(), CanonicalTime(3), policy())
+        .execute(admission.clone(), test_time(3), policy())
         .unwrap();
     assert!(!first.replayed);
     assert!(
         engine
-            .execute(admission, CanonicalTime(999), policy())
+            .execute(admission, test_time(999), policy())
             .unwrap()
             .replayed
     );
@@ -306,7 +309,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
     let claimed = engine
         .claim_work(
             cs_mail_storage_postgres::WorkQueue::Delivery,
-            CanonicalTime(4),
+            test_time(4),
             Duration(10),
             10,
         )
@@ -322,7 +325,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
         engine
             .claim_work(
                 cs_mail_storage_postgres::WorkQueue::Delivery,
-                CanonicalTime(5),
+                test_time(5),
                 Duration(10),
                 10
             )
@@ -332,28 +335,24 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
     let reclaimed = engine
         .claim_work(
             cs_mail_storage_postgres::WorkQueue::Delivery,
-            CanonicalTime(14),
+            test_time(14),
             Duration(10),
             10,
         )
         .unwrap();
     assert_eq!(reclaimed.len(), 2);
-    assert!(
-        engine
-            .complete_work(&reclaimed[0], CanonicalTime(15))
-            .unwrap()
-    );
+    assert!(engine.complete_work(&reclaimed[0], test_time(15)).unwrap());
 
     drop(engine);
     let reopened = PostgresEngine::connect(&url, &key, &state(1), UNIT).unwrap();
     let before_acceptance = reopened.snapshot().unwrap();
     assert!(matches!(
         before_acceptance.state.requests[&RequestId(1)].lifecycle,
-        RequestLifecycle::Open(_)
+        RequestLifecycle::AwaitingRecipientDecision(_)
     ));
     assert_eq!(
         before_acceptance.ledger.balance(Account::RequestEscrow(
-            before_acceptance.payments[&RequestId(1)].capture.id
+            before_acceptance.payments[&RequestId(1)].capture().id
         )),
         Money::from_minor_units(10)
     );
@@ -365,7 +364,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
                 },
                 4,
             ),
-            CanonicalTime(4),
+            test_time(4),
             policy(),
         )
         .unwrap();
@@ -401,7 +400,7 @@ fn admission_requires_durable_correctly_scoped_ciphertext() {
                 },
                 40,
             ),
-            CanonicalTime(1),
+            test_time(1),
             policy(),
         )
         .unwrap()
@@ -426,31 +425,26 @@ fn admission_requires_durable_correctly_scoped_ciphertext() {
                 },
                 41,
             ),
-            CanonicalTime(2),
+            test_time(2),
             policy(),
         )
         .unwrap();
     confirm_capture(&engine, RequestId(44), 2);
     let admission = || {
         sender(
-            ProtocolCommand::AdmitRequest {
+            ProtocolCommand::SubmitRequestToRecipient {
                 request_id: RequestId(44),
                 expected_request_version: Version(0),
                 content_ref: ContentRef(44),
                 delivery_intent_ref: DeliveryIntentRef(44),
                 declaration_digest: message_declaration_digest(&native_declarations()).unwrap(),
-                message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+                message_valid_until: MessageValidityUntil(test_time(100)),
             },
             42,
         )
     };
     let handle = engine
-        .receive_signed(
-            &admission(),
-            DEPLOYMENT_DOMAIN,
-            || CanonicalTime(3),
-            policy(),
-        )
+        .receive_signed(&admission(), DEPLOYMENT_DOMAIN, || test_time(3), policy())
         .unwrap();
     // Uploading after receipt, before processing, must not backdate availability.
     let (sender_content_key, _) = EndpointSecretKey::generate(ContentKeyRef(45));
@@ -469,12 +463,12 @@ fn admission_requires_durable_correctly_scoped_ciphertext() {
             content_scope: ContentScopeRef::from_u128_for_test(44),
             sender_certificate: ContentCertificateDigest([1; 32]),
             declarations: native_declarations(),
-            message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+            message_valid_until: MessageValidityUntil(test_time(100)),
             capability: None,
         },
         b"ciphertext only",
-        CanonicalTime(2),
-        CanonicalTime(100),
+        test_time(2),
+        test_time(100),
     )
     .unwrap();
     engine
@@ -493,9 +487,7 @@ fn admission_requires_durable_correctly_scoped_ciphertext() {
         engine.snapshot().unwrap().state.requests[&RequestId(44)].lifecycle,
         RequestLifecycle::Cancelled { .. }
     ));
-    let replay = engine
-        .execute(admission(), CanonicalTime(3), policy())
-        .unwrap();
+    let replay = engine.execute(admission(), test_time(3), policy()).unwrap();
     assert!(replay.replayed);
     assert_eq!(replay.admission_failure, refusal.admission_failure);
     assert!(engine.snapshot().unwrap().messages.is_empty());
@@ -516,7 +508,7 @@ fn database_row_lock_serializes_conflicting_decisions() {
                 },
                 10,
             ),
-            CanonicalTime(1),
+            test_time(1),
             policy(),
         )
     });
@@ -528,7 +520,7 @@ fn database_row_lock_serializes_conflicting_decisions() {
                 },
                 11,
             ),
-            CanonicalTime(1),
+            test_time(1),
             policy(),
         )
     });
@@ -571,9 +563,9 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
             interval: Duration(100),
         },
         mode: LaneMode::Expiring,
-        issued_at: CanonicalTime(1),
-        not_before: CanonicalTime(1),
-        not_after: CanonicalTime(10_000),
+        issued_at: test_time(1),
+        not_before: test_time(1),
+        not_after: test_time(10_000),
         version: Version(1),
     };
     let signed = SignedLaneGrant {
@@ -582,8 +574,9 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
             .to_bytes(),
         grant,
     };
+    support::provision(&engine, &policy()).unwrap();
     engine
-        .initialize_key_registry(&registry(), CanonicalTime(0))
+        .initialize_key_registry(&registry(), test_time(0))
         .unwrap();
     engine
         .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
@@ -593,7 +586,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
             &signed,
             IdempotencyKey(90),
             DEPLOYMENT_DOMAIN,
-            || CanonicalTime(1),
+            || test_time(1),
             policy(),
         )
         .unwrap();
@@ -620,12 +613,12 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
                     content_scope: ContentScopeRef::from_u128_for_test(90),
                     sender_certificate: ContentCertificateDigest([1; 32]),
                     declarations: native_declarations(),
-                    message_valid_until: MessageValidityUntil(CanonicalTime(1_000)),
+                    message_valid_until: MessageValidityUntil(test_time(1_000)),
                     capability: Some(LaneId(90)),
                 },
                 b"lane ciphertext",
-                CanonicalTime(1),
-                CanonicalTime(1_000),
+                test_time(1),
+                test_time(1_000),
             )
             .unwrap(),
             cs_mail_primitives::RetentionPolicyVersion(1),
@@ -640,7 +633,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
         content_ref: ContentRef(90),
         delivery_intent_ref: DeliveryIntentRef(90),
         declarations: native_declarations(),
-        message_valid_until: MessageValidityUntil(CanonicalTime(1_000)),
+        message_valid_until: MessageValidityUntil(test_time(1_000)),
         capability: Some(LaneId(90)),
         evidence: Some(evidence),
         idempotency_key: IdempotencyKey(91),
@@ -650,12 +643,12 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
         authentication: AdmissionAuthentication::NativeKey(OperationalKeyRef(1)),
     };
     assert!(
-        !sign_and_admit(&engine, &admission, CanonicalTime(2))
+        !sign_and_admit(&engine, &admission, test_time(2))
             .unwrap()
             .replayed
     );
     assert!(
-        sign_and_admit(&engine, &admission, CanonicalTime(3))
+        sign_and_admit(&engine, &admission, test_time(3))
             .unwrap()
             .replayed
     );
@@ -669,7 +662,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
                 },
                 94,
             ),
-            CanonicalTime(3),
+            test_time(3),
             policy(),
         )
         .unwrap();
@@ -690,12 +683,12 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
                     content_scope: ContentScopeRef::from_u128_for_test(91),
                     sender_certificate: ContentCertificateDigest([1; 32]),
                     declarations: native_declarations(),
-                    message_valid_until: MessageValidityUntil(CanonicalTime(1_000)),
+                    message_valid_until: MessageValidityUntil(test_time(1_000)),
                     capability: None,
                 },
                 b"accepted ciphertext",
-                CanonicalTime(3),
-                CanonicalTime(1_000),
+                test_time(3),
+                test_time(1_000),
             )
             .unwrap(),
             cs_mail_primitives::RetentionPolicyVersion(1),
@@ -709,7 +702,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
         content_ref: ContentRef(91),
         delivery_intent_ref: DeliveryIntentRef(91),
         declarations: native_declarations(),
-        message_valid_until: MessageValidityUntil(CanonicalTime(1_000)),
+        message_valid_until: MessageValidityUntil(test_time(1_000)),
         capability: None,
         evidence: None,
         idempotency_key: IdempotencyKey(95),
@@ -719,7 +712,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
         authentication: AdmissionAuthentication::NativeKey(OperationalKeyRef(1)),
     };
     assert!(matches!(
-        sign_and_admit(&engine, &accepted_admission, CanonicalTime(3))
+        sign_and_admit(&engine, &accepted_admission, test_time(3))
             .unwrap()
             .authority,
         cs_mail_storage_postgres::BondFreeAuthority::AcceptedRelationship
@@ -733,7 +726,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
                 },
                 92,
             ),
-            CanonicalTime(4),
+            test_time(4),
             policy(),
         )
         .unwrap();
@@ -741,22 +734,25 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
     let mut blocked = admission;
     blocked.idempotency_key = IdempotencyKey(93);
     assert!(matches!(
-        sign_and_admit(&engine, &blocked, CanonicalTime(5)),
+        sign_and_admit(&engine, &blocked, test_time(5)),
         Err(StorageError::Protocol(ProtocolError::ContactBlocked))
     ));
 }
 
 fn confirm_capture(engine: &PostgresEngine, id: RequestId, at: u64) {
-    use cs_mail_finance::PaymentProvider;
+    use cs_mail_finance::PaymentProcessor;
     let request = engine.snapshot().unwrap().payments[&id].clone();
-    let mut provider = cs_mail_finance::SimulatedProvider::new([7; 32]);
-    let receipt = provider.submit(&request.capture, false).unwrap();
+    let mut provider = cs_mail_finance::SimulatedProcessor::new([7; 32]);
     engine
-        .confirm_request_payment(id, receipt, CanonicalTime(at), policy())
+        .authorize_request_dispatch(id, request.capture().id)
+        .unwrap();
+    let receipt = provider.submit(request.capture()).unwrap();
+    engine
+        .confirm_request_payment(id, receipt, test_time(at), policy())
         .unwrap();
 }
 
-fn open_request(engine: &PostgresEngine) {
+fn submit_initial_request(engine: &PostgresEngine) {
     let issued = engine
         .execute(
             sender(
@@ -766,7 +762,7 @@ fn open_request(engine: &PostgresEngine) {
                 },
                 1,
             ),
-            CanonicalTime(1),
+            test_time(1),
             policy(),
         )
         .unwrap();
@@ -788,7 +784,7 @@ fn open_request(engine: &PostgresEngine) {
                 },
                 2,
             ),
-            CanonicalTime(2),
+            test_time(2),
             policy(),
         )
         .unwrap();
@@ -810,12 +806,12 @@ fn open_request(engine: &PostgresEngine) {
                     content_scope: ContentScopeRef::from_u128_for_test(1),
                     sender_certificate: ContentCertificateDigest([1; 32]),
                     declarations: native_declarations(),
-                    message_valid_until: MessageValidityUntil(CanonicalTime(1_000)),
+                    message_valid_until: MessageValidityUntil(test_time(1_000)),
                     capability: None,
                 },
                 b"encrypted before upload",
-                CanonicalTime(2),
-                CanonicalTime(1_000),
+                test_time(2),
+                test_time(1_000),
             )
             .unwrap(),
             cs_mail_primitives::RetentionPolicyVersion(1),
@@ -823,19 +819,17 @@ fn open_request(engine: &PostgresEngine) {
         .unwrap();
     confirm_capture(engine, RequestId(1), 2);
     let admission = sender(
-        ProtocolCommand::AdmitRequest {
+        ProtocolCommand::SubmitRequestToRecipient {
             request_id: RequestId(1),
             expected_request_version: Version(0),
             content_ref: ContentRef(1),
             delivery_intent_ref: DeliveryIntentRef(1),
             declaration_digest: message_declaration_digest(&native_declarations()).unwrap(),
-            message_valid_until: MessageValidityUntil(CanonicalTime(1_000)),
+            message_valid_until: MessageValidityUntil(test_time(1_000)),
         },
         3,
     );
-    engine
-        .execute(admission, CanonicalTime(3), policy())
-        .unwrap();
+    engine.execute(admission, test_time(3), policy()).unwrap();
 }
 
 fn financial_command(
@@ -843,7 +837,7 @@ fn financial_command(
     command: cs_mail_finance::ProgramCommand,
     at: CanonicalTime,
 ) -> cs_mail_finance::ProgramOutcome {
-    let revision = engine.financial_program(UNIT).unwrap().revision;
+    let revision = engine.financial_program(UNIT).unwrap().revision();
     let signed = cs_mail_finance::SignedProgramCommand::sign(
         cs_mail_finance::FinancialScope::new(
             [7; 32],
@@ -863,17 +857,19 @@ fn financial_command(
 }
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
-#[allow(clippy::too_many_lines)] // One complete request-to-quarter-to-provider recovery scenario.
-fn forfeiture_distribution_and_payment_survive_reconnect() {
+#[allow(clippy::too_many_lines)] // One complete request-to-distribution-to-provider recovery scenario.
+fn forfeiture_and_allocation_survive_reconnect() {
     use cs_mail_finance::{
-        DAY_MILLIS, EligibilityPolicy, IntentionalActivity, MembershipStatus, PaymentProvider,
-        ProgramCommand, ProgramOutcome, QuarterSchedule, SignedProgramCommand, SimulatedProvider,
+        AnnualDistributionSchedule, DAY_MILLIS, EligibilityPolicy, IntentionalActivity,
+        MembershipStatus, ProgramCommand, ProgramOutcome, SignedProgramCommand, SimulatedProcessor,
     };
     use cs_mail_primitives::{FinancialEventId, MemberId};
     let url = database_url();
     let key = aggregate_key("finance");
     let engine = PostgresEngine::connect(&url, &key, &state(90), UNIT).unwrap();
-    let mut provider = SimulatedProvider::new([7; 32]);
+    support::arrangement(&engine, &policy()).unwrap();
+    let provider = SimulatedProcessor::new([7; 32]);
+    support::arrangement(&engine, &policy()).unwrap();
     engine
         .configure_financial_program(
             cs_mail_finance::FinancialScope::new(
@@ -888,22 +884,42 @@ fn forfeiture_distribution_and_payment_survive_reconnect() {
             provider.verifying_key(),
         )
         .unwrap();
-    let schedule = QuarterSchedule::utc(
-        1970,
-        1,
+    let schedule = AnnualDistributionSchedule::utc(
+        1971,
         EligibilityPolicy {
             version: PolicyVersion(1),
             minimum_tenure: Duration(30 * DAY_MILLIS),
             minimum_active_days: 1,
         },
+        cs_mail_finance::DistributionTerms::new(
+            cs_mail_primitives::PolicyVersion(1),
+            cs_mail_primitives::Money::from_minor_units(12000),
+            cs_mail_primitives::calendar_date((1971) + 1, 1, 1).unwrap(),
+        )
+        .unwrap(),
     )
     .unwrap();
     financial_command(
         &engine,
-        ProgramCommand::PublishQuarter(schedule.clone()),
-        CanonicalTime(0),
+        ProgramCommand::PublishAnnualDistribution(schedule.clone()),
+        test_time(0),
     );
     for member in 1..=2 {
+        let evidence = cs_mail_finance::BankVerification {
+            scope: policy().financial.scope,
+            account: cs_mail_primitives::BillingAccountId(member),
+            member: MemberId(member),
+            person: [u8::try_from(member).unwrap(); 32],
+            bank_token: [u8::try_from(member + 8).unwrap(); 32],
+            unit: UNIT,
+            version: 1,
+            signature: Vec::new(),
+        }
+        .sign(&[77; 32])
+        .unwrap();
+        engine
+            .register_billing_account(&evidence, &[], &[], 100)
+            .unwrap();
         financial_command(
             &engine,
             ProgramCommand::Enroll {
@@ -915,10 +931,10 @@ fn forfeiture_distribution_and_payment_survive_reconnect() {
                     suspended: false,
                 },
             },
-            CanonicalTime(0),
+            test_time(0),
         );
     }
-    let revision = engine.financial_program(UNIT).unwrap().revision;
+    let revision = engine.financial_program(UNIT).unwrap().revision();
     let unauthorized = SignedProgramCommand::sign(
         cs_mail_finance::FinancialScope::new(
             [7; 32],
@@ -930,7 +946,7 @@ fn forfeiture_distribution_and_payment_survive_reconnect() {
         UNIT,
         IdempotencyKey(1),
         revision,
-        ProgramCommand::FinalizeQuarter(schedule.id),
+        ProgramCommand::FinalizeAnnualDistribution(schedule.id),
         &[43; 32],
     )
     .unwrap();
@@ -939,8 +955,8 @@ fn forfeiture_distribution_and_payment_survive_reconnect() {
             .execute_financial_command(&unauthorized, schedule.cutoff)
             .is_err()
     );
-    assert_eq!(engine.financial_program(UNIT).unwrap().revision, revision);
-    open_request(&engine);
+    assert_eq!(engine.financial_program(UNIT).unwrap().revision(), revision);
+    submit_initial_request(&engine);
     engine
         .execute(
             recipient(
@@ -949,12 +965,12 @@ fn forfeiture_distribution_and_payment_survive_reconnect() {
                 },
                 4,
             ),
-            CanonicalTime(4),
+            test_time(4),
             policy(),
         )
         .unwrap();
     let capture = engine.snapshot().unwrap().payments[&RequestId(1)]
-        .capture
+        .capture()
         .id;
     assert_eq!(
         engine
@@ -970,7 +986,7 @@ fn forfeiture_distribution_and_payment_survive_reconnect() {
             source: capture,
             evidence: FinancialEventId(1),
         },
-        CanonicalTime(15),
+        test_time(15),
     );
     for member in 1..=2 {
         financial_command(
@@ -979,10 +995,10 @@ fn forfeiture_distribution_and_payment_survive_reconnect() {
                 member: MemberId(member),
                 activity: IntentionalActivity::Read,
             },
-            CanonicalTime(DAY_MILLIS),
+            test_time(DAY_MILLIS),
         );
     }
-    let revision = engine.financial_program(UNIT).unwrap().revision;
+    let revision = engine.financial_program(UNIT).unwrap().revision();
     let finalize = SignedProgramCommand::sign(
         cs_mail_finance::FinancialScope::new(
             [7; 32],
@@ -994,20 +1010,21 @@ fn forfeiture_distribution_and_payment_survive_reconnect() {
         UNIT,
         IdempotencyKey(u128::MAX / 2),
         revision,
-        ProgramCommand::FinalizeQuarter(schedule.id),
+        ProgramCommand::FinalizeAnnualDistribution(schedule.id),
         &[42; 32],
     )
     .unwrap();
     let outcome = engine
         .execute_financial_command(&finalize, schedule.cutoff)
         .unwrap();
-    let ProgramOutcome::Quarter(ref allocation) = outcome else {
-        panic!("expected quarter")
+    let ProgramOutcome::AnnualAllocation(ref allocation) = outcome else {
+        panic!("expected distribution")
     };
     assert_eq!(allocation.each, Money::from_minor_units(4));
     assert_eq!(allocation.members, vec![MemberId(1), MemberId(2)]);
     drop(engine);
     let engine = PostgresEngine::connect(&url, &key, &state(90), UNIT).unwrap();
+    support::arrangement(&engine, &policy()).unwrap();
     assert_eq!(
         engine
             .execute_financial_command(&finalize, schedule.cutoff)
@@ -1016,93 +1033,20 @@ fn forfeiture_distribution_and_payment_survive_reconnect() {
     );
     let program = engine.financial_program(UNIT).unwrap();
     assert_eq!(program.payables().count(), 2);
-    let payable = program.payables().next().unwrap().clone();
-    financial_command(
-        &engine,
-        ProgramCommand::PreparePayout {
-            allocation: payable.id,
-            destination: [9; 32],
-            minimum: Money::from_minor_units(5),
-        },
-        schedule.cutoff,
-    );
-    assert!(
-        engine
-            .financial_program(UNIT)
-            .unwrap()
-            .payables()
-            .all(|p| p.lifecycle.pending().is_none())
-    );
-    financial_command(
-        &engine,
-        ProgramCommand::PreparePayout {
-            allocation: payable.id,
-            destination: [9; 32],
-            minimum: Money::from_minor_units(1),
-        },
-        schedule.cutoff,
-    );
-    let pending: Vec<_> = engine
-        .financial_program(UNIT)
-        .unwrap()
-        .payables()
-        .filter_map(|p| p.lifecycle.pending().map(|o| (p.id, o.clone())))
-        .collect();
-    assert_eq!(pending.len(), 1);
-    provider.lose_next_response();
-    assert!(provider.submit(&pending[0].1, false).is_err());
-    assert_eq!(
-        engine
-            .financial_program(UNIT)
-            .unwrap()
-            .ledger()
-            .balance(Account::MemberPayable(payable.id)),
-        payable.amount
-    );
-    let receipt = provider.lookup(pending[0].1.id).unwrap().unwrap();
-    engine
-        .confirm_member_payment(UNIT, payable.id, &receipt, schedule.cutoff)
-        .unwrap();
-    let settled = engine.financial_program(UNIT).unwrap();
-    engine
-        .confirm_member_payment(UNIT, payable.id, &receipt, schedule.cutoff)
-        .unwrap();
-    assert_eq!(engine.financial_program(UNIT).unwrap(), settled);
-    assert_eq!(
-        engine
-            .financial_program(UNIT)
-            .unwrap()
-            .ledger()
-            .balance(Account::MemberPayable(payable.id)),
-        Money::ZERO
-    );
-    assert!(
-        engine
-            .financial_program(UNIT)
-            .unwrap()
-            .payables()
-            .all(|p| p.lifecycle.pending().is_none())
-    );
-    assert_eq!(
-        engine
-            .financial_program(UNIT)
-            .unwrap()
-            .ledger()
-            .total_value(),
-        Ok(Money::ZERO)
-    );
+    assert_eq!(program.ledger().total_value(), Ok(Money::ZERO));
 }
 
 #[test]
 #[ignore = "requires native multi-session CS_MAIL_TEST_DATABASE_URL"]
-fn concurrent_quarter_finalization_records_one_allocation() {
+fn concurrent_distribution_finalization_records_one_allocation() {
     use cs_mail_finance::{
-        EligibilityPolicy, ProgramCommand, QuarterSchedule, SignedProgramCommand,
+        AnnualDistributionSchedule, EligibilityPolicy, ProgramCommand, SignedProgramCommand,
     };
     let url = database_url();
-    let key = aggregate_key("quarter-race");
+    let key = aggregate_key("distribution-race");
     let first = PostgresEngine::connect(&url, &key, &state(100), UNIT).unwrap();
     let second = PostgresEngine::connect(&url, &key, &state(100), UNIT).unwrap();
+    support::arrangement(&first, &policy()).unwrap();
     first
         .configure_financial_program(
             cs_mail_finance::FinancialScope::new(
@@ -1114,25 +1058,30 @@ fn concurrent_quarter_finalization_records_one_allocation() {
             ),
             UNIT,
             SigningKey::from_bytes(&[42; 32]).verifying_key().to_bytes(),
-            cs_mail_finance::SimulatedProvider::new([7; 32]).verifying_key(),
+            cs_mail_finance::SimulatedProcessor::new([7; 32]).verifying_key(),
         )
         .unwrap();
-    let schedule = QuarterSchedule::utc(
-        1970,
-        1,
+    let schedule = AnnualDistributionSchedule::utc(
+        1971,
         EligibilityPolicy {
             version: PolicyVersion(1),
             minimum_tenure: Duration(0),
             minimum_active_days: 1,
         },
+        cs_mail_finance::DistributionTerms::new(
+            cs_mail_primitives::PolicyVersion(1),
+            cs_mail_primitives::Money::from_minor_units(12000),
+            cs_mail_primitives::calendar_date((1971) + 1, 1, 1).unwrap(),
+        )
+        .unwrap(),
     )
     .unwrap();
     financial_command(
         &first,
-        ProgramCommand::PublishQuarter(schedule.clone()),
-        CanonicalTime(0),
+        ProgramCommand::PublishAnnualDistribution(schedule.clone()),
+        test_time(0),
     );
-    let revision = first.financial_program(UNIT).unwrap().revision;
+    let revision = first.financial_program(UNIT).unwrap().revision();
     let command = SignedProgramCommand::sign(
         cs_mail_finance::FinancialScope::new(
             [7; 32],
@@ -1144,7 +1093,7 @@ fn concurrent_quarter_finalization_records_one_allocation() {
         UNIT,
         IdempotencyKey(100),
         revision,
-        ProgramCommand::FinalizeQuarter(schedule.id),
+        ProgramCommand::FinalizeAnnualDistribution(schedule.id),
         &[42; 32],
     )
     .unwrap();
@@ -1156,8 +1105,8 @@ fn concurrent_quarter_finalization_records_one_allocation() {
     assert_eq!(results[0], results[1]);
     let reopened = PostgresEngine::connect(&url, &key, &state(100), UNIT).unwrap();
     let program = reopened.financial_program(UNIT).unwrap();
-    assert_eq!(program.revision, revision + 1);
-    assert!(program.quarter(schedule.id).is_some());
+    assert_eq!(program.revision(), revision + 1);
+    assert!(program.distribution(schedule.id).is_some());
 }
 
 #[test]
@@ -1166,16 +1115,17 @@ fn domain_owners_are_separate_and_history_survives_alias_registration() {
     let url = database_url();
     let key = aggregate_key("domain-owners");
     let first = PostgresEngine::connect(&url, &key, &state(500), UNIT).unwrap();
+    support::provision(&first, &policy()).unwrap();
     first
-        .initialize_key_registry(&registry(), CanonicalTime(0))
+        .initialize_key_registry(&registry(), test_time(0))
         .unwrap();
-    open_request(&first);
+    submit_initial_request(&first);
     let alias = ProtocolState::initial_scoped(
         RelationshipRef::from_u128_for_test(500),
         state(500).relationship.history,
         ProtocolIdentity(11),
         RECIPIENT,
-        CanonicalTime(10),
+        test_time(10),
     );
     let second = PostgresEngine::connect(&url, aggregate_key("alias"), &alias, UNIT).unwrap();
     assert_eq!(
@@ -1244,14 +1194,15 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
     let url = database_url();
     let key = aggregate_key("received-order");
     let engine = PostgresEngine::connect(&url, &key, &state(90), UNIT).unwrap();
-    open_request(&engine);
+    support::arrangement(&engine, &policy()).unwrap();
+    submit_initial_request(&engine);
     let scheduler = command_signer(ActorRef::Scheduler(PROVIDER), OperationalKeyRef(4), 4);
     engine
         .register_operational_key(
             OperationalKeyRef(4),
             ActorRef::Scheduler(PROVIDER),
             scheduler.verifying_key_bytes(),
-            CanonicalTime(4),
+            test_time(4),
         )
         .unwrap();
     let decision = recipient(
@@ -1261,18 +1212,18 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
         100,
     );
     let handle = engine
-        .receive_signed(&decision, DEPLOYMENT_DOMAIN, || CanonicalTime(50), policy())
+        .receive_signed(&decision, DEPLOYMENT_DOMAIN, || test_time(50), policy())
         .unwrap();
     assert_eq!(
         engine.snapshot().unwrap().state.relationship.state,
         RelationshipState::Unknown
     );
     assert!(matches!(
-        engine.revoke_operational_key(OperationalKeyRef(2), Version(0), CanonicalTime(51)),
+        engine.revoke_operational_key(OperationalKeyRef(2), Version(0), test_time(51)),
         Err(StorageError::PendingCommands)
     ));
     assert!(matches!(
-        engine.run_retention(CanonicalTime(2000), 100),
+        engine.run_retention(test_time(2000), 100),
         Err(StorageError::PendingCommands)
     ));
     let expiry = scheduler
@@ -1287,7 +1238,7 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
         )
         .unwrap();
     let expired = engine
-        .receive_signed(&expiry, DEPLOYMENT_DOMAIN, || CanonicalTime(54), policy())
+        .receive_signed(&expiry, DEPLOYMENT_DOMAIN, || test_time(54), policy())
         .unwrap();
     assert!(handle.position() < expired.position());
     drop(engine);
@@ -1311,17 +1262,17 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
     assert!(reopened.receipt(&handle).unwrap().is_none());
     // Restarting the signer recovers both evidence intents, including the no-op.
     reopened
-        .sign_artifacts_batch(&provider_signer(), CanonicalTime(0), Duration(30_000), 100)
+        .sign_artifacts_batch(&provider_signer(), test_time(0), Duration(30_000), 100)
         .unwrap();
     let receipt = reopened.receipt(&handle).unwrap().unwrap();
-    assert_eq!(receipt.payload.received_at, CanonicalTime(50));
+    assert_eq!(receipt.payload.received_at, test_time(50));
     assert_eq!(receipt.payload.journal_position, handle.position());
     assert_eq!(
         reopened.receipt(&expired).unwrap().unwrap().payload.kind,
         ReceiptKind::NoChange
     );
     reopened
-        .revoke_operational_key(OperationalKeyRef(2), Version(0), CanonicalTime(55))
+        .revoke_operational_key(OperationalKeyRef(2), Version(0), test_time(55))
         .unwrap();
     let replay = reopened
         .receive_signed(
@@ -1347,8 +1298,9 @@ fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_recei
     let url = database_url();
     let engine =
         PostgresEngine::connect(&url, aggregate_key("revocation"), &state(91), UNIT).unwrap();
+    support::provision(&engine, &policy()).unwrap();
     engine
-        .initialize_key_registry(&registry(), CanonicalTime(0))
+        .initialize_key_registry(&registry(), test_time(0))
         .unwrap();
     engine
         .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
@@ -1360,34 +1312,29 @@ fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_recei
         201,
     );
     registry()
-        .verify(
-            &command,
-            CanonicalTime(1),
-            ProtocolVersion(2),
-            signing_scope(),
-        )
+        .verify(&command, test_time(1), ProtocolVersion(2), signing_scope())
         .unwrap();
     engine
-        .revoke_operational_key(OperationalKeyRef(2), Version(0), CanonicalTime(2))
+        .revoke_operational_key(OperationalKeyRef(2), Version(0), test_time(2))
         .unwrap();
     assert!(matches!(
-        engine.receive_signed(&command, DEPLOYMENT_DOMAIN, || CanonicalTime(3), policy()),
+        engine.receive_signed(&command, DEPLOYMENT_DOMAIN, || test_time(3), policy()),
         Err(StorageError::Security(_))
     ));
     assert!(!engine.process_next_received().unwrap());
     let invalid = sender(
-        ProtocolCommand::AdmitRequest {
+        ProtocolCommand::SubmitRequestToRecipient {
             request_id: RequestId(999),
             expected_request_version: Version(0),
             content_ref: ContentRef(1),
             delivery_intent_ref: DeliveryIntentRef(1),
             declaration_digest: message_declaration_digest(&native_declarations()).unwrap(),
-            message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+            message_valid_until: MessageValidityUntil(test_time(100)),
         },
         202,
     );
     let handle = engine
-        .receive_signed(&invalid, DEPLOYMENT_DOMAIN, || CanonicalTime(3), policy())
+        .receive_signed(&invalid, DEPLOYMENT_DOMAIN, || test_time(3), policy())
         .unwrap();
     assert!(matches!(
         engine.process_received(&handle).unwrap(),
@@ -1395,10 +1342,10 @@ fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_recei
     ));
     // The signer authority was pinned at receipt; later key revocation cannot erase this work.
     engine
-        .revoke_operational_key(OperationalKeyRef(3), Version(0), CanonicalTime(4))
+        .revoke_operational_key(OperationalKeyRef(3), Version(0), test_time(4))
         .unwrap();
     engine
-        .sign_artifacts_batch(&provider_signer(), CanonicalTime(0), Duration(30_000), 100)
+        .sign_artifacts_batch(&provider_signer(), test_time(0), Duration(30_000), 100)
         .unwrap();
     let receipt = engine.receipt(&handle).unwrap().unwrap();
     assert_eq!(receipt.payload.kind, cs_mail_security::ReceiptKind::Refused);
@@ -1411,7 +1358,7 @@ fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_recei
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 #[allow(clippy::too_many_lines)]
-fn policy_change_after_upload_cancels_preparation_with_void_or_full_refund() {
+fn policy_change_after_upload_cancels_submission_with_void_or_full_refund() {
     use cs_mail_primitives::{ExtensionCriticality, NamespacedIdentifier, PayloadSchema};
     use cs_mail_protocol::admission::{AdmissionFailure, AdmissionPolicy};
     for captured in [false, true] {
@@ -1435,7 +1382,7 @@ fn policy_change_after_upload_cancels_preparation_with_void_or_full_refund() {
                     },
                     1,
                 ),
-                CanonicalTime(1),
+                test_time(1),
                 policy(),
             )
             .unwrap();
@@ -1453,7 +1400,7 @@ fn policy_change_after_upload_cancels_preparation_with_void_or_full_refund() {
                     },
                     2,
                 ),
-                CanonicalTime(2),
+                test_time(2),
                 policy(),
             )
             .unwrap();
@@ -1482,12 +1429,12 @@ fn policy_change_after_upload_cancels_preparation_with_void_or_full_refund() {
                 content_scope: ContentScopeRef::from_u128_for_test(1),
                 sender_certificate: ContentCertificateDigest([1; 32]),
                 declarations: declarations.clone(),
-                message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+                message_valid_until: MessageValidityUntil(test_time(100)),
                 capability: None,
             },
             b"ciphertext",
-            CanonicalTime(2),
-            CanonicalTime(100),
+            test_time(2),
+            test_time(100),
         )
         .unwrap();
         engine
@@ -1500,18 +1447,18 @@ fn policy_change_after_upload_cancels_preparation_with_void_or_full_refund() {
             })
             .unwrap();
         let command = sender(
-            ProtocolCommand::AdmitRequest {
+            ProtocolCommand::SubmitRequestToRecipient {
                 request_id: RequestId(1),
                 expected_request_version: Version(0),
                 content_ref: ContentRef(1),
                 delivery_intent_ref: DeliveryIntentRef(1),
                 declaration_digest: message_declaration_digest(&declarations).unwrap(),
-                message_valid_until: MessageValidityUntil(CanonicalTime(100)),
+                message_valid_until: MessageValidityUntil(test_time(100)),
             },
             3,
         );
         let handle = engine
-            .receive_signed(&command, DEPLOYMENT_DOMAIN, || CanonicalTime(3), policy())
+            .receive_signed(&command, DEPLOYMENT_DOMAIN, || test_time(3), policy())
             .unwrap();
         assert!(matches!(
             engine.configure_admission_policy(&AdmissionPolicy {
@@ -1557,7 +1504,7 @@ fn policy_change_after_upload_cancels_preparation_with_void_or_full_refund() {
             })
             .unwrap();
         let replay = engine
-            .receive_signed(&command, DEPLOYMENT_DOMAIN, || CanonicalTime(4), policy())
+            .receive_signed(&command, DEPLOYMENT_DOMAIN, || test_time(4), policy())
             .unwrap();
         assert_eq!(
             engine.process_received(&replay).unwrap(),
@@ -1588,7 +1535,7 @@ fn issued_quote_remains_bound_to_its_original_signing_authority() {
                 },
                 1,
             ),
-            CanonicalTime(1),
+            test_time(1),
             policy(),
         )
         .unwrap();
@@ -1602,11 +1549,11 @@ fn issued_quote_remains_bound_to_its_original_signing_authority() {
             OperationalKeyRef(5),
             ActorRef::Provider(PROVIDER),
             replacement.verifying_key_bytes(),
-            CanonicalTime(2),
+            test_time(2),
         )
         .unwrap();
     engine
-        .revoke_operational_key(OperationalKeyRef(3), Version(0), CanonicalTime(2))
+        .revoke_operational_key(OperationalKeyRef(3), Version(0), test_time(2))
         .unwrap();
     let command = sender(
         ProtocolCommand::CreateRequest {
@@ -1618,14 +1565,14 @@ fn issued_quote_remains_bound_to_its_original_signing_authority() {
         2,
     );
     let handle = engine
-        .receive_signed(&command, DEPLOYMENT_DOMAIN, || CanonicalTime(3), policy())
+        .receive_signed(&command, DEPLOYMENT_DOMAIN, || test_time(3), policy())
         .unwrap();
     assert!(matches!(
         engine.process_received(&handle).unwrap(),
         cs_mail_storage_postgres::ReceivedOutcome::Protocol(_)
     ));
     engine
-        .sign_artifacts_batch(&replacement, CanonicalTime(0), Duration(30_000), 100)
+        .sign_artifacts_batch(&replacement, test_time(0), Duration(30_000), 100)
         .unwrap();
     assert_eq!(engine.signed_quote(QuoteId(1)).unwrap(), original);
     assert_eq!(
@@ -1639,12 +1586,12 @@ fn issued_quote_remains_bound_to_its_original_signing_authority() {
     let mut altered = command;
     altered.signature[0] ^= 1;
     assert!(matches!(
-        engine.receive_signed(&altered, DEPLOYMENT_DOMAIN, || CanonicalTime(4), policy()),
+        engine.receive_signed(&altered, DEPLOYMENT_DOMAIN, || test_time(4), policy()),
         Err(StorageError::DuplicateConflict)
     ));
 }
 
-fn preparing_request(engine: &PostgresEngine, id: u128) {
+fn prepare_request_submission(engine: &PostgresEngine, id: u128) {
     let issued = engine
         .execute(
             sender(
@@ -1654,7 +1601,7 @@ fn preparing_request(engine: &PostgresEngine, id: u128) {
                 },
                 id * 10,
             ),
-            CanonicalTime(1),
+            test_time(1),
             policy(),
         )
         .unwrap();
@@ -1672,7 +1619,7 @@ fn preparing_request(engine: &PostgresEngine, id: u128) {
                 },
                 id * 10 + 1,
             ),
-            CanonicalTime(2),
+            test_time(2),
             policy(),
         )
         .unwrap();
@@ -1685,33 +1632,23 @@ fn reclaimed_work_fences_stale_completion_retry_and_foreign_engines() {
     let url = database_url();
     let key = aggregate_key("fencing");
     let engine = PostgresEngine::connect(&url, &key, &state(200), UNIT).unwrap();
-    preparing_request(&engine, 1);
+    prepare_request_submission(&engine, 1);
     let old = engine
-        .claim_work(
-            WorkQueue::RequestPayments,
-            CanonicalTime(3),
-            Duration(10),
-            1,
-        )
+        .claim_work(WorkQueue::RequestPayments, test_time(3), Duration(10), 1)
         .unwrap()
         .remove(0);
     drop(engine);
     let engine = PostgresEngine::connect(&url, &key, &state(200), UNIT).unwrap();
     let new = engine
-        .claim_work(
-            WorkQueue::RequestPayments,
-            CanonicalTime(13),
-            Duration(10),
-            1,
-        )
+        .claim_work(WorkQueue::RequestPayments, test_time(13), Duration(10), 1)
         .unwrap()
         .remove(0);
     assert_eq!(old.id, new.id);
     assert_eq!(new.attempts, 2);
-    assert!(!engine.complete_work(&old, CanonicalTime(14)).unwrap());
+    assert!(!engine.complete_work(&old, test_time(14)).unwrap());
     assert!(
         !engine
-            .retry_work(&old, CanonicalTime(14), WorkFailure::DependencyUnavailable)
+            .retry_work(&old, test_time(14), WorkFailure::DependencyUnavailable)
             .unwrap()
     );
     let mut other_state = state(201);
@@ -1719,45 +1656,35 @@ fn reclaimed_work_fences_stale_completion_retry_and_foreign_engines() {
     other_state.relationship.key.sender = ProtocolIdentity(999);
     let other =
         PostgresEngine::connect(&url, aggregate_key("foreign"), &other_state, UNIT).unwrap();
-    assert!(!other.complete_work(&new, CanonicalTime(14)).unwrap());
+    assert!(!other.complete_work(&new, test_time(14)).unwrap());
     assert!(
         engine
-            .block_work(&new, CanonicalTime(14), WorkFailure::InvalidEvidence)
+            .block_work(&new, test_time(14), WorkFailure::InvalidEvidence)
             .unwrap()
     );
     assert!(
         engine
-            .claim_work(
-                WorkQueue::RequestPayments,
-                CanonicalTime(100),
-                Duration(10),
-                1
-            )
+            .claim_work(WorkQueue::RequestPayments, test_time(100), Duration(10), 1)
             .unwrap()
             .is_empty()
     );
     assert!(
         engine
-            .resume_work(WorkQueue::RequestPayments, new.id, CanonicalTime(100))
+            .resume_work(WorkQueue::RequestPayments, new.id, test_time(100))
             .unwrap()
     );
     let resumed = engine
-        .claim_work(
-            WorkQueue::RequestPayments,
-            CanonicalTime(100),
-            Duration(10),
-            1,
-        )
+        .claim_work(WorkQueue::RequestPayments, test_time(100), Duration(10), 1)
         .unwrap()
         .remove(0);
-    assert!(engine.complete_work(&resumed, CanonicalTime(101)).unwrap());
+    assert!(engine.complete_work(&resumed, test_time(101)).unwrap());
 }
 
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 #[allow(clippy::too_many_lines)] // One end-to-end recovery sequence.
 fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
-    use cs_mail_finance::PaymentProvider;
+    use cs_mail_finance::PaymentProcessor;
     use cs_mail_storage_postgres::{LifecyclePolicy, ReceivedOutcome, WorkQueue};
     let url = database_url();
     let key = aggregate_key("erasure");
@@ -1769,9 +1696,15 @@ fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
             replay_lifetime: Duration(0),
         })
         .unwrap();
-    preparing_request(&engine, 1);
+    prepare_request_submission(&engine, 1);
+    let capture_id = engine.snapshot().unwrap().payments[&RequestId(1)]
+        .capture()
+        .id;
+    engine
+        .authorize_request_dispatch(RequestId(1), capture_id)
+        .unwrap();
     let cancel = sender(
-        ProtocolCommand::CancelPreparingRequest {
+        ProtocolCommand::CancelRequestSubmission {
             request_id: RequestId(1),
             expected_request_version: Version(0),
             reason: cs_mail_protocol::CancellationReason::SenderRequested,
@@ -1779,23 +1712,23 @@ fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
         99,
     );
     engine
-        .execute(cancel.clone(), CanonicalTime(3), policy())
+        .execute(cancel.clone(), test_time(3), policy())
         .unwrap();
     let handle = engine
-        .receive_signed(&cancel, DEPLOYMENT_DOMAIN, || CanonicalTime(4), policy())
+        .receive_signed(&cancel, DEPLOYMENT_DOMAIN, || test_time(4), policy())
         .unwrap();
     let original_receipt = engine.receipt(&handle).unwrap().unwrap();
     engine
         .update_retention(
             "request",
             "1",
-            Some(CanonicalTime(20)),
+            Some(test_time(20)),
             None,
-            CanonicalTime(4),
+            test_time(4),
             "request-specific dispute",
         )
         .unwrap();
-    engine.run_retention(CanonicalTime(10), 100).unwrap();
+    engine.run_retention(test_time(10), 100).unwrap();
     assert!(
         engine
             .snapshot()
@@ -1804,15 +1737,15 @@ fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
             .requests
             .contains_key(&RequestId(1))
     );
-    engine.run_retention(CanonicalTime(20), 100).unwrap();
+    engine.run_retention(test_time(20), 100).unwrap();
     let snapshot = engine.snapshot().unwrap();
     assert!(snapshot.state.requests.is_empty());
-    let mut provider = cs_mail_finance::SimulatedProvider::new([7; 32]);
+    let mut provider = cs_mail_finance::SimulatedProcessor::new([7; 32]);
     let capture = provider
-        .submit(&snapshot.payments[&RequestId(1)].capture, false)
+        .submit(snapshot.payments[&RequestId(1)].capture())
         .unwrap();
     engine
-        .confirm_request_payment(RequestId(1), capture, CanonicalTime(21), policy())
+        .confirm_request_payment(RequestId(1), capture, test_time(21), policy())
         .unwrap();
     let snapshot = engine.snapshot().unwrap();
     assert!(snapshot.state.requests.is_empty());
@@ -1822,9 +1755,9 @@ fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
         .unwrap()
         .clone();
     assert_eq!(refund.amount, Money::from_minor_units(10));
-    let receipt = provider.submit(&refund, false).unwrap();
+    let receipt = provider.submit(&refund).unwrap();
     engine
-        .confirm_request_payment(RequestId(1), receipt, CanonicalTime(22), policy())
+        .confirm_request_payment(RequestId(1), receipt, test_time(22), policy())
         .unwrap();
     assert_eq!(
         engine
@@ -1836,39 +1769,29 @@ fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
     );
     // All provider obligations are now completed; acknowledge the replay-safe leftover work.
     for item in engine
-        .claim_work(
-            WorkQueue::RequestPayments,
-            CanonicalTime(23),
-            Duration(10),
-            100,
-        )
+        .claim_work(WorkQueue::RequestPayments, test_time(23), Duration(10), 100)
         .unwrap()
     {
-        engine.complete_work(&item, CanonicalTime(23)).unwrap();
+        engine.complete_work(&item, test_time(23)).unwrap();
     }
     engine
-        .sign_artifacts_batch(&provider_signer(), CanonicalTime(23), Duration(10), 100)
+        .sign_artifacts_batch(&provider_signer(), test_time(23), Duration(10), 100)
         .unwrap();
-    engine.run_retention(CanonicalTime(1100), 100).unwrap();
+    engine.run_retention(test_time(1100), 100).unwrap();
     let replay = engine
-        .receive_signed(&cancel, DEPLOYMENT_DOMAIN, || CanonicalTime(1101), policy())
+        .receive_signed(&cancel, DEPLOYMENT_DOMAIN, || test_time(1101), policy())
         .unwrap();
     assert!(
         matches!(engine.process_received(&replay).unwrap(),ReceivedOutcome::Retired{outcome_digest} if outcome_digest==original_receipt.payload.outcome_digest)
     );
     assert_eq!(engine.receipt(&replay).unwrap().unwrap(), original_receipt);
     let repeated_capture = provider
-        .lookup(snapshot.payments[&RequestId(1)].capture.id)
+        .lookup(snapshot.payments[&RequestId(1)].capture().id)
         .unwrap()
         .unwrap();
     assert!(matches!(
         engine
-            .confirm_request_payment(
-                RequestId(1),
-                repeated_capture,
-                CanonicalTime(1102),
-                policy()
-            )
+            .confirm_request_payment(RequestId(1), repeated_capture, test_time(1102), policy())
             .unwrap(),
         ReceivedOutcome::Retired { .. }
     ));
@@ -1910,12 +1833,12 @@ fn ciphertext_retention_honors_extended_deadlines_and_scoped_holds() {
             content_scope: ContentScopeRef::from_u128_for_test(1),
             sender_certificate: ContentCertificateDigest([1; 32]),
             declarations: native_declarations(),
-            message_valid_until: MessageValidityUntil(CanonicalTime(10)),
+            message_valid_until: MessageValidityUntil(test_time(10)),
             capability: None,
         },
         b"retained",
-        CanonicalTime(1),
-        CanonicalTime(10),
+        test_time(1),
+        test_time(10),
     )
     .unwrap();
     engine
@@ -1926,33 +1849,24 @@ fn ciphertext_retention_honors_extended_deadlines_and_scoped_holds() {
             "content",
             "1",
             None,
-            Some(CanonicalTime(20)),
-            CanonicalTime(2),
+            Some(test_time(20)),
+            test_time(2),
             "delivery dispute window",
         )
         .unwrap();
-    assert_eq!(
-        engine.run_retention(CanonicalTime(10), 10).unwrap().deleted,
-        0
-    );
+    assert_eq!(engine.run_retention(test_time(10), 10).unwrap().deleted, 0);
     engine
         .update_retention(
             "content",
             "1",
-            Some(CanonicalTime(30)),
+            Some(test_time(30)),
             None,
-            CanonicalTime(11),
+            test_time(11),
             "scoped investigation",
         )
         .unwrap();
-    assert_eq!(
-        engine.run_retention(CanonicalTime(20), 10).unwrap().deleted,
-        0
-    );
-    assert_eq!(
-        engine.run_retention(CanonicalTime(30), 10).unwrap().deleted,
-        1
-    );
+    assert_eq!(engine.run_retention(test_time(20), 10).unwrap().deleted, 0);
+    assert_eq!(engine.run_retention(test_time(30), 10).unwrap().deleted, 1);
     assert!(engine.content(ContentRef(1)).unwrap().is_none());
     // A restored backup containing the old ciphertext cannot resurrect it.
     let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
@@ -1977,7 +1891,7 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
                 },
                 1,
             ),
-            CanonicalTime(1),
+            test_time(1),
             policy(),
         )
         .unwrap();
@@ -1994,12 +1908,7 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
         2,
     );
     let handle = engine
-        .receive_signed(
-            &submission,
-            DEPLOYMENT_DOMAIN,
-            || CanonicalTime(2),
-            policy(),
-        )
+        .receive_signed(&submission, DEPLOYMENT_DOMAIN, || test_time(2), policy())
         .unwrap();
     let before = engine.snapshot().unwrap();
     let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
@@ -2028,7 +1937,7 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
     let after = engine.snapshot().unwrap();
     assert_eq!(after.payments.len(), 1);
     assert_eq!(after.state.requests.len(), 1);
-    assert!(after.history.preparation.is_some());
+    assert!(after.history.pending_submission.is_some());
     let work: i64 = db
         .query_one(
             "SELECT count(*) FROM cs_work WHERE aggregate_key=$1 AND kind='request-payment'",
@@ -2061,25 +1970,20 @@ fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
         1,
     );
     engine
-        .execute(submission.clone(), CanonicalTime(1), policy())
+        .execute(submission.clone(), test_time(1), policy())
         .unwrap();
     let original = engine.signed_quote(QuoteId(1)).unwrap();
-    engine.run_retention(CanonicalTime(22), 100).unwrap();
+    engine.run_retention(test_time(22), 100).unwrap();
     assert_eq!(engine.signed_quote(QuoteId(1)).unwrap(), original);
     let replay = engine
-        .receive_signed(
-            &submission,
-            DEPLOYMENT_DOMAIN,
-            || CanonicalTime(23),
-            policy(),
-        )
+        .receive_signed(&submission, DEPLOYMENT_DOMAIN, || test_time(23), policy())
         .unwrap();
     assert!(matches!(
         engine.process_received(&replay).unwrap(),
         ReceivedOutcome::Protocol(_)
     ));
-    engine.run_retention(CanonicalTime(102), 100).unwrap();
-    engine.run_retention(CanonicalTime(1022), 100).unwrap();
+    engine.run_retention(test_time(102), 100).unwrap();
+    engine.run_retention(test_time(1022), 100).unwrap();
     assert!(matches!(
         engine.signed_quote(QuoteId(1)),
         Err(StorageError::QuoteMissing)
@@ -2092,11 +1996,95 @@ fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
             },
             2,
         ),
-        CanonicalTime(1023),
+        test_time(1023),
         policy(),
     );
     assert!(matches!(
         duplicate,
         Err(StorageError::Protocol(ProtocolError::DuplicateConflict))
     ));
+}
+
+#[test]
+#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+fn recipient_pricing_is_signed_and_changes_only_new_quotes() {
+    use cs_mail_protocol::pricing::*;
+    let url = database_url();
+    let engine =
+        PostgresEngine::connect(&url, aggregate_key("pricing"), &state(902), UNIT).unwrap();
+    support::provision(&engine, &policy()).unwrap();
+    engine
+        .initialize_key_registry(&registry(), test_time(0))
+        .unwrap();
+    engine
+        .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
+        .unwrap();
+    engine
+        .configure_request_pricing(&RequestPricingPolicy {
+            version: 2,
+            ..RequestPricingPolicy::default()
+        })
+        .unwrap();
+    let before = engine
+        .execute(
+            sender(
+                ProtocolCommand::IssueRequestTerms {
+                    quote_id: QuoteId(10),
+                    declaration_digest: None,
+                },
+                10,
+            ),
+            test_time(1),
+            policy(),
+        )
+        .unwrap();
+    let TermsOutcome::ChargeRequired(original) = before.transition.terms_outcome.unwrap() else {
+        panic!("quote expected")
+    };
+    assert_eq!(original.pricing_policy_version, PolicyVersion(2));
+    assert_eq!(original.processing_charge, Money::from_minor_units(50));
+    assert_eq!(original.collateral, Money::from_minor_units(500));
+    let signed = command_signer(ActorRef::Recipient(RECIPIENT), OperationalKeyRef(2), 2)
+        .sign_collateral_preference(
+            signing_scope(),
+            RecipientCollateralPreference {
+                recipient: RECIPIENT,
+                version: 1,
+                amount: Money::from_minor_units(1000),
+            },
+        )
+        .unwrap();
+    engine
+        .set_collateral_preference(&signed, test_time(2), &policy())
+        .unwrap();
+    let after = engine
+        .execute(
+            sender(
+                ProtocolCommand::IssueRequestTerms {
+                    quote_id: QuoteId(11),
+                    declaration_digest: None,
+                },
+                11,
+            ),
+            test_time(3),
+            policy(),
+        )
+        .unwrap();
+    let TermsOutcome::ChargeRequired(next) = after.transition.terms_outcome.unwrap() else {
+        panic!("quote expected")
+    };
+    assert_eq!(next.collateral, Money::from_minor_units(1000));
+    assert_eq!(original.collateral, Money::from_minor_units(500));
+    let mut forged = signed;
+    forged.preference.amount = Money::from_minor_units(2500);
+    assert!(
+        engine
+            .set_collateral_preference(&forged, test_time(4), &policy())
+            .is_err()
+    );
+}
+
+fn test_time(value: u64) -> CanonicalTime {
+    const START: u64 = 31_536_000_000;
+    CanonicalTime(if value < START { START + value } else { value })
 }

@@ -14,7 +14,7 @@
 mod tests {
     use cs_mail_application::{EngineError, InMemoryEngine};
     use cs_mail_content::{ContentKeyCertificate, EndpointSecretKey};
-    use cs_mail_finance::PaymentProvider;
+    use cs_mail_finance::PaymentProcessor;
     use cs_mail_primitives::{
         CanonicalTime, ContentKeyRef, ContentKeyVersion, ContentRef, DeliveryIntentRef, Duration,
         IdempotencyKey, JournalPosition, MessageDeclarationDigest, MessageId, MessageValidityUntil,
@@ -37,6 +37,7 @@ mod tests {
 
     fn policy() -> PolicySnapshot {
         PolicySnapshot {
+            pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
             protocol_version: ProtocolVersion(2),
             policy_version: PolicyVersion(1),
             privacy_profile_version: PrivacyProfileVersion(1),
@@ -45,7 +46,7 @@ mod tests {
             unit: SettlementUnit(1),
             processing_charge: Money::from_minor_units(2),
             collateral: Money::from_minor_units(8),
-            admission_window: Duration(10),
+            submission_window: Duration(10),
             decision_window: Duration(20),
             quote_lifetime: Duration(20),
             backoff: vec![Duration(0), Duration(5)],
@@ -61,7 +62,7 @@ mod tests {
                 corporate_basis_points: 300,
                 maturity_delay: Duration(10),
             },
-            payment_provider_key: cs_mail_finance::SimulatedProvider::new([7; 32]).verifying_key(),
+            payment_provider_key: cs_mail_finance::SimulatedProcessor::new([7; 32]).verifying_key(),
             expiry_cooldown: Duration(30),
             rejection_cooldown: Duration(90),
         }
@@ -166,7 +167,7 @@ mod tests {
         changed.policy_version = PolicyVersion(2);
         changed.processing_charge = Money::from_minor_units(200);
         changed.collateral = Money::from_minor_units(800);
-        changed.admission_window = Duration(2);
+        changed.submission_window = Duration(2);
         engine
             .execute(
                 sender(
@@ -242,11 +243,11 @@ mod tests {
                 policy(),
             )
             .unwrap();
-        let mut provider = cs_mail_finance::SimulatedProvider::new([7; 32]);
+        let mut provider = cs_mail_finance::SimulatedProcessor::new([7; 32]);
         let op = first.snapshot().unwrap().payments[&RequestId(1)]
-            .capture
+            .capture()
             .clone();
-        let receipt = provider.submit(&op, false).unwrap();
+        let receipt = provider.submit(&op).unwrap();
         first
             .execute(
                 KernelCommand::new(
@@ -266,7 +267,7 @@ mod tests {
             .execute(
                 sender_as(
                     old_sender,
-                    ProtocolCommand::AdmitRequest {
+                    ProtocolCommand::SubmitRequestToRecipient {
                         request_id: RequestId(1),
                         expected_request_version: Version(0),
                         content_ref: ContentRef(1),
@@ -283,7 +284,7 @@ mod tests {
         let first_snapshot = first.snapshot().unwrap();
         assert_eq!(first_snapshot.history.level, 1);
         assert_eq!(
-            first_snapshot.history.earliest_next_admission,
+            first_snapshot.history.earliest_next_submission,
             CanonicalTime(8)
         );
 
@@ -352,9 +353,9 @@ mod tests {
             )
             .unwrap();
         let op = rotated.snapshot().unwrap().payments[&RequestId(2)]
-            .capture
+            .capture()
             .clone();
-        let receipt = provider.submit(&op, false).unwrap();
+        let receipt = provider.submit(&op).unwrap();
         rotated
             .execute(
                 KernelCommand::new(
@@ -374,7 +375,7 @@ mod tests {
             .execute(
                 sender_as(
                     new_sender,
-                    ProtocolCommand::AdmitRequest {
+                    ProtocolCommand::SubmitRequestToRecipient {
                         request_id: RequestId(2),
                         expected_request_version: Version(0),
                         content_ref: ContentRef(2),

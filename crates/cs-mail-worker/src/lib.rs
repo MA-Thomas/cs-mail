@@ -1,7 +1,7 @@
 //! Bounded workers over a common durable external-work lifecycle.
 use core::fmt;
 use cs_mail_content::EncryptedContentRecord;
-use cs_mail_finance::{PaymentError, PaymentProvider};
+use cs_mail_finance::{PaymentError, PaymentOutcome, PaymentProcessor};
 use cs_mail_primitives::{CanonicalTime, Duration, OperationalKeyRef, ProviderRef, SettlementUnit};
 use cs_mail_protocol::{EffectIntent, PolicySnapshot};
 use cs_mail_storage_postgres::{
@@ -78,6 +78,9 @@ fn finish(
 #[allow(clippy::needless_pass_by_value)] // Used directly as a consuming map_err conversion.
 fn storage_failure(error: StorageError) -> (WorkFailure, bool) {
     match error {
+        StorageError::Billing(cs_mail_billing::BillingError::Payment(
+            PaymentError::FundingRestricted,
+        )) => (WorkFailure::FundingRestricted, false),
         StorageError::Protocol(
             cs_mail_protocol::ProtocolError::PaymentInvalid
             | cs_mail_protocol::ProtocolError::DuplicateConflict,
@@ -98,14 +101,105 @@ fn payment_failure(e: PaymentError) -> (WorkFailure, bool) {
         (WorkFailure::InvalidEvidence, true)
     }
 }
-fn reconcile<P: PaymentProvider>(
+fn pending_outcome(outcome: PaymentOutcome) -> Result<(), (WorkFailure, bool)> {
+    match outcome {
+        PaymentOutcome::Pending => Err((WorkFailure::DependencyUnavailable, false)),
+        PaymentOutcome::Failed => Err((WorkFailure::InvalidEvidence, true)),
+        _ => Ok(()),
+    }
+}
+
+/// Finalizes published annual periods and prepares one automatic bank payment per allocation.
+/// # Errors
+/// Returns claim/acknowledgement errors; per-item failures retain their durable work.
+pub fn run_annual_distribution_batch(
+    engine: &PostgresEngine,
+    unit: SettlementUnit,
+    now: CanonicalTime,
+    lease: Duration,
+    limit: i64,
+) -> Result<WorkReport, WorkerError> {
+    let mut report = WorkReport::default();
+    for queue in [
+        WorkQueue::AnnualAllocations(unit),
+        WorkQueue::DistributionPreparation,
+    ] {
+        let items = engine.claim_work(queue, now, lease, limit)?;
+        report.claimed += items.len();
+        for item in items {
+            let result = match item.payload {
+                WorkPayload::AnnualAllocation { unit, distribution } => engine
+                    .finalize_due_annual_distribution(unit, distribution, now)
+                    .map_err(storage_failure),
+                WorkPayload::PrepareDistribution { unit, allocation } => engine
+                    .prepare_due_distribution(unit, allocation, now)
+                    .map_err(storage_failure),
+                _ => Err((WorkFailure::InvalidEvidence, true)),
+            };
+            finish(engine, &item, now, result, &mut report)?;
+        }
+    }
+    Ok(report)
+}
+
+/// Executes due utility charges, preserving pending funding across worker retries.
+/// # Errors
+/// Returns durable claim/acknowledgement errors; individual failures remain recorded.
+pub fn run_utility_payment_batch<P: PaymentProcessor>(
+    engine: &PostgresEngine,
     provider: &mut P,
-    operation: &cs_mail_finance::PaymentOperation,
-    cancel: bool,
+    now: CanonicalTime,
+    lease: Duration,
+    limit: i64,
+) -> Result<WorkReport, WorkerError> {
+    let items = engine.claim_work(WorkQueue::UtilityPayments, now, lease, limit)?;
+    let mut report = WorkReport {
+        claimed: items.len(),
+        ..WorkReport::default()
+    };
+    for item in items {
+        let result = (|| {
+            let WorkPayload::UtilityPayment {
+                account,
+                contract,
+                operation,
+            } = item.payload
+            else {
+                return Err((WorkFailure::InvalidEvidence, true));
+            };
+            if let Some(operation) = engine
+                .authorize_utility_dispatch(account, contract, operation, now)
+                .map_err(storage_failure)?
+            {
+                let receipt = reconcile(
+                    provider,
+                    &cs_mail_finance::ProcessorRequest::Submit(operation),
+                )?;
+                engine
+                    .confirm_utility_payment(account, contract, &receipt, now)
+                    .map_err(storage_failure)?;
+                pending_outcome(receipt.evidence.outcome)?;
+            }
+            Ok(())
+        })();
+        finish(engine, &item, now, result, &mut report)?;
+    }
+    Ok(report)
+}
+fn reconcile<P: PaymentProcessor>(
+    provider: &mut P,
+    request: &cs_mail_finance::ProcessorRequest,
 ) -> Result<cs_mail_finance::SignedPaymentEvidence, (WorkFailure, bool)> {
-    match provider.lookup(operation.id).map_err(payment_failure)? {
-        Some(receipt) => Ok(receipt),
-        None => provider.submit(operation, cancel).map_err(payment_failure),
+    match request {
+        cs_mail_finance::ProcessorRequest::Submit(operation) => {
+            match provider.lookup(operation.id).map_err(payment_failure)? {
+                Some(receipt) => Ok(receipt),
+                None => provider.submit(operation).map_err(payment_failure),
+            }
+        }
+        cs_mail_finance::ProcessorRequest::CancelCapture(cancellation) => provider
+            .cancel_capture(cancellation)
+            .map_err(payment_failure),
     }
 }
 /// Delivers a bounded batch, isolating failures and retaining stable retry identities.
@@ -148,7 +242,7 @@ pub fn deliver_batch<S: DeliverySink>(
 /// Reconciles captures/refunds; lost responses never allocate another operation ID.
 /// # Errors
 /// Returns claim or acknowledgement storage errors; item failures are recorded in the report.
-pub fn run_payment_batch<P: PaymentProvider>(
+pub fn run_payment_batch<P: PaymentProcessor>(
     engine: &PostgresEngine,
     provider: &mut P,
     now: CanonicalTime,
@@ -170,14 +264,16 @@ pub fn run_payment_batch<P: PaymentProvider>(
             else {
                 return Err((WorkFailure::InvalidEvidence, true));
             };
-            if let Some((operation, cancel)) = engine
-                .pending_request_payment(request_id, operation_id)
+            if let Some(request) = engine
+                .authorize_request_dispatch(request_id, operation_id)
                 .map_err(storage_failure)?
             {
-                let receipt = reconcile(provider, &operation, cancel)?;
+                let receipt = reconcile(provider, &request)?;
+                let outcome = receipt.evidence.outcome;
                 engine
                     .confirm_request_payment(request_id, receipt, now, policy.clone())
                     .map_err(storage_failure)?;
+                pending_outcome(outcome)?;
             }
             Ok(())
         })();
@@ -188,7 +284,7 @@ pub fn run_payment_batch<P: PaymentProvider>(
 /// Executes bounded member payment work with the same claims and reconciliation as requests.
 /// # Errors
 /// Returns claim or acknowledgement storage errors.
-pub fn run_member_payment_batch<P: PaymentProvider>(
+pub fn run_member_payment_batch<P: PaymentProcessor>(
     engine: &PostgresEngine,
     provider: &mut P,
     unit: SettlementUnit,
@@ -215,10 +311,14 @@ pub fn run_member_payment_batch<P: PaymentProvider>(
                 .pending_member_payment(unit, allocation, operation)
                 .map_err(storage_failure)?
             {
-                let receipt = reconcile(provider, &operation, false)?;
+                let receipt = reconcile(
+                    provider,
+                    &cs_mail_finance::ProcessorRequest::Submit(operation),
+                )?;
                 engine
                     .confirm_member_payment(unit, allocation, &receipt, now)
                     .map_err(storage_failure)?;
+                pending_outcome(receipt.evidence.outcome)?;
             }
             Ok(())
         })();
@@ -267,7 +367,9 @@ pub fn run_schedule_batch(
     }
     Ok(report)
 }
-/// Processes a bounded inbox prefix and then one bounded artifact batch.
+/// Processes a bounded inbox prefix and then one bounded artifact batch, even if
+/// processing fails. Signing can satisfy the dependency that blocked the inbox;
+/// the next run then retries the same received command.
 /// # Errors
 /// Infrastructure errors leave received commands pending in canonical order.
 pub fn run_received_batch(
@@ -280,10 +382,15 @@ pub fn run_received_batch(
     if limit < 0 {
         return Err(StorageError::NumericRange.into());
     }
-    for _ in 0..limit {
-        if !engine.process_next_received()? {
-            break;
+    let processing = (|| -> Result<(), StorageError> {
+        for _ in 0..limit {
+            if !engine.process_next_received()? {
+                break;
+            }
         }
-    }
-    Ok(engine.sign_artifacts_batch(signer, now, lease, limit)?)
+        Ok(())
+    })();
+    let artifacts = engine.sign_artifacts_batch(signer, now, lease, limit);
+    processing?;
+    Ok(artifacts?)
 }

@@ -244,7 +244,7 @@ pub fn proposed_message(
 ) -> Option<Message> {
     use crate::{AdmissionBasis, ProtocolCommand};
     let (id, content, delivery, declaration, valid_until, basis) = match *command {
-        ProtocolCommand::AdmitRequest {
+        ProtocolCommand::SubmitRequestToRecipient {
             request_id,
             content_ref,
             delivery_intent_ref,

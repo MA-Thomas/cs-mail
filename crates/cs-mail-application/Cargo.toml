@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-billing = { path = "../cs-mail-billing" }
 cs-mail-finance = { path = "../cs-mail-finance" }
 cs-mail-ledger = { path = "../cs-mail-ledger" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
@@ -15,3 +16,6 @@ sha2.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+ed25519-dalek.workspace = true

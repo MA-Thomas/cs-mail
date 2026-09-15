@@ -3,11 +3,16 @@ use super::{
     CanonicalTime, Deserialize, Duration, EffectIntent, JournalPosition, Json, PostgresEngine,
     Serialize, SettlementUnit, StorageError, Transaction, to_i64,
 };
-use cs_mail_primitives::{AllocationId, PaymentOperationId};
+use cs_mail_primitives::{
+    AllocationId, AnnualDistributionId, BillingAccountId, PaymentOperationId,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkQueue {
     Delivery,
+    UtilityPayments,
+    AnnualAllocations(SettlementUnit),
+    DistributionPreparation,
     RequestPayments,
     MemberPayments(SettlementUnit),
     Artifacts,
@@ -15,6 +20,9 @@ pub enum WorkQueue {
 impl WorkQueue {
     fn kind(self) -> &'static str {
         match self {
+            Self::UtilityPayments => "utility-payment",
+            Self::AnnualAllocations(_) => "annual-allocation",
+            Self::DistributionPreparation => "prepare-distribution",
             Self::Delivery => "delivery",
             Self::RequestPayments => "request-payment",
             Self::MemberPayments(_) => "member-payment",
@@ -23,7 +31,10 @@ impl WorkQueue {
     }
     fn owner(self, aggregate: &str) -> String {
         match self {
-            Self::MemberPayments(unit) => format!("program:{}", unit.0),
+            Self::UtilityPayments | Self::DistributionPreparation => "billing".into(),
+            Self::MemberPayments(unit) | Self::AnnualAllocations(unit) => {
+                format!("program:{}", unit.0)
+            }
             _ => format!("relationship:{aggregate}"),
         }
     }
@@ -31,6 +42,19 @@ impl WorkQueue {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum WorkPayload {
     Effect(EffectIntent),
+    AnnualAllocation {
+        unit: SettlementUnit,
+        distribution: AnnualDistributionId,
+    },
+    PrepareDistribution {
+        unit: SettlementUnit,
+        allocation: AllocationId,
+    },
+    UtilityPayment {
+        account: BillingAccountId,
+        contract: cs_mail_primitives::ServiceContractId,
+        operation: PaymentOperationId,
+    },
     MemberPayment {
         unit: SettlementUnit,
         allocation: AllocationId,
@@ -43,6 +67,9 @@ pub enum WorkPayload {
 impl WorkPayload {
     fn queue(&self) -> WorkQueue {
         match self {
+            Self::AnnualAllocation { unit, .. } => WorkQueue::AnnualAllocations(*unit),
+            Self::PrepareDistribution { .. } => WorkQueue::DistributionPreparation,
+            Self::UtilityPayment { .. } => WorkQueue::UtilityPayments,
             Self::Effect(EffectIntent::ExecutePayment { .. }) => WorkQueue::RequestPayments,
             Self::Effect(_) => WorkQueue::Delivery,
             Self::MemberPayment { unit, .. } => WorkQueue::MemberPayments(*unit),
@@ -71,6 +98,7 @@ impl WorkItem {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkFailure {
     DependencyUnavailable,
+    FundingRestricted,
     InvalidEvidence,
     MissingContent,
     Storage,
@@ -79,6 +107,7 @@ pub enum WorkFailure {
 impl WorkFailure {
     const fn code(self) -> &'static str {
         match self {
+            Self::FundingRestricted => "funding-restricted",
             Self::DependencyUnavailable => "dependency-unavailable",
             Self::InvalidEvidence => "invalid-evidence",
             Self::MissingContent => "missing-content",
@@ -102,7 +131,9 @@ pub(super) enum WorkSource {
         position: JournalPosition,
         ordinal: usize,
     },
-    Payout(PaymentOperationId),
+    PaymentAttempt(PaymentOperationId),
+    AnnualAllocation(AnnualDistributionId),
+    PrepareDistribution(AllocationId),
 }
 
 pub(super) fn enqueue(
@@ -113,7 +144,13 @@ pub(super) fn enqueue(
     now: CanonicalTime,
 ) -> Result<(), StorageError> {
     let queue = payload.queue();
-    let aggregate = if matches!(queue, WorkQueue::MemberPayments(_)) {
+    let aggregate = if matches!(
+        queue,
+        WorkQueue::MemberPayments(_)
+            | WorkQueue::UtilityPayments
+            | WorkQueue::AnnualAllocations(_)
+            | WorkQueue::DistributionPreparation
+    ) {
         None
     } else {
         Some(key)
@@ -129,9 +166,23 @@ pub(super) fn enqueue(
             format!("{}:{}:{ordinal}", queue.kind(), position.0),
             Some(to_i64(position.0)?),
         ),
-        WorkSource::Payout(id) => (format!("payout:{}", id.0), None),
+        WorkSource::AnnualAllocation(id) => (format!("annual-allocation:{}", id.0), None),
+        WorkSource::PrepareDistribution(allocation) => {
+            (format!("prepare-distribution:{}", allocation.0), None)
+        }
+        WorkSource::PaymentAttempt(id) => (format!("payout:{}", id.0), None),
     };
-    tx.execute("INSERT INTO cs_work(owner,aggregate_key,work_key,kind,payload,content_ref,status,available_at,created_at,journal_position) VALUES($1,$2,$3,$4,$5,$6,'ready',0,$7,$8) ON CONFLICT(owner,work_key) DO NOTHING", &[&queue.owner(key), &aggregate, &work_key, &queue.kind(), &Json(payload), &content, &to_i64(now.0)?, &position])?;
+    let available_at = if matches!(
+        queue,
+        WorkQueue::UtilityPayments
+            | WorkQueue::AnnualAllocations(_)
+            | WorkQueue::DistributionPreparation
+    ) {
+        now.0
+    } else {
+        0
+    };
+    tx.execute("INSERT INTO cs_work(owner,aggregate_key,work_key,kind,payload,content_ref,status,available_at,created_at,journal_position) VALUES($1,$2,$3,$4,$5,$6,'ready',$9,$7,$8) ON CONFLICT(owner,work_key) DO NOTHING", &[&queue.owner(key), &aggregate, &work_key, &queue.kind(), &Json(payload), &content, &to_i64(now.0)?, &position, &to_i64(available_at)?])?;
     Ok(())
 }
 impl PostgresEngine {

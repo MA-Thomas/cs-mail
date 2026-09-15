@@ -4,6 +4,8 @@
 //! schedule, journal, outbox, and idempotency behavior without pretending to be
 //! a production database.
 
+pub mod billing;
+
 use cs_mail_primitives::{MessageId, RelationshipRef, RequestHistoryRef, RequestId};
 use cs_mail_protocol::{Message, RequestHistory};
 use std::collections::BTreeMap;
@@ -32,6 +34,7 @@ pub enum EngineError {
     ArithmeticOverflow,
     CommandEncoding,
     Finance(cs_mail_finance::ProgramError),
+    Billing(cs_mail_billing::BillingError),
 }
 
 impl From<ProtocolError> for EngineError {
@@ -74,6 +77,10 @@ struct EngineState {
 
 #[derive(Default)]
 struct StoreState {
+    billing_accounts:
+        BTreeMap<cs_mail_primitives::BillingAccountId, cs_mail_billing::BillingAccount>,
+    billing_work:
+        BTreeMap<cs_mail_primitives::PaymentOperationId, cs_mail_finance::PaymentOperation>,
     relationships: BTreeMap<RelationshipRef, EngineState>,
     histories: BTreeMap<RequestHistoryRef, RequestHistory>,
     programs: BTreeMap<SettlementUnit, ProgramState>,
@@ -402,9 +409,9 @@ impl InMemoryEngine {
                 Err(EngineError::DuplicateConflict)
             };
         }
-        if signed.scope != inner.program.scope
-            || signed.unit != inner.program.unit
-            || signed.expected_revision != inner.program.revision
+        if signed.scope != inner.program.scope()
+            || signed.unit != inner.program.unit()
+            || signed.expected_revision != inner.program.revision()
         {
             return Err(EngineError::VersionConflict);
         }

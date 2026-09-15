@@ -9,6 +9,7 @@
 \usepackage{longtable}
 \usepackage{tabularx}
 \usepackage{microtype}
+\usepackage{needspace}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
 
@@ -27,7 +28,7 @@
 
 \title{\textit{cs-mail} Protocol Specification\\\large Relationship Requests, Permission, and Financial Obligations}
 \author{C-SQD}
-\date{Draft 0.7 --- September 2026}
+\date{Draft 0.9 --- September 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -42,24 +43,24 @@ accept, reject, or leave the request to expire. These outcomes determine refunds
 and forfeitures; permitted follow-up messages create no further charge. This
 specification defines the request lifecycle, authenticated decisions, financial
 obligations, and privacy boundaries. The C-SQD deployment adds a company-owned
-pool and quarterly equal member allocations under its financial-program profile.
+pool and annual equal member allocations under its financial-program profile.
 \end{abstract}
 
 \section{Reading the Protocol Through One Request}
 
 Alice wants to establish permission to write to Bob. Bob has not accepted her
 public identity, and no scoped capability authorizes her message. Alice obtains
-terms for a dollar-denominated relationship request: processing component $C=0.25$ and refundable
-collateral component $S=4.75$. She authorizes a charge of $5.00$ associated with
-that request. Admission occurs only after the payment requirement, encrypted
-content, and retryable delivery intent are durably satisfied.
+terms for a dollar-denominated relationship request: processing component $C=0.50$ and refundable
+collateral component $S=5.00$. She authorizes a charge of $5.50$ associated with
+that request. Submission occurs once funding is finalized, encrypted content is
+durable, and the service can commit a retryable delivery intent.
 
 Bob sees one relationship request. If his settings permit follow-ups, Alice may
 add messages to it without another charge or a later decision deadline. Accepting
-Alice grants future permission and records a $5.00$ refund obligation. Rejecting
-her retains $0.25$ as processing revenue and records $4.75$ as pending forfeiture.
+Alice grants future permission and records a $5.50$ refund obligation. Rejecting
+her retains $0.50$ as processing revenue and records $5.00$ as pending forfeiture.
 Bob does not acquire a personal claim on that collateral. If the request expires
-without a timely decision, the processing amount is retained and $4.75$ is due
+without a timely decision, the processing amount is retained and $5.00$ is due
 back to Alice.
 
 Those are protocol outcomes. The external provider may confirm a refund later.
@@ -70,16 +71,17 @@ This separation explains the objects and transitions that follow.
 
 \section{Status, Scope, and Conformance}
 
-This draft replaces the earlier per-attempt bond model. Its command names and
-objects describe the revised target contract; they are not claims about existing
-Rust APIs or deployment readiness. The words \MUST, \MUSTNOT, \SHOULD,
+This specification defines the request and permission contract. The Rust reference
+architecture identifies its implementation boundaries; the desktop plan describes
+the remaining product work. Conformance to the contract does not by itself
+establish readiness for live financial operations. The words \MUST, \MUSTNOT, \SHOULD,
 \SHOULDNOT, and \MAY{} describe conformance to this draft.
 
 The protocol governs directed permission, one charge per request, request
 outcomes, financial obligations, authenticated admission, replay, and privacy.
 The section titled \emph{C-SQD Financial Program} in the \textit{Deployment and
 Migration Profile} is normative for a deployment advertising that profile. It
-defines the company-owned pool and equal quarterly distribution rules. Parameters
+defines the company-owned pool and equal annual distribution rules. Parameters
 explicitly marked proposed there are not launch commitments. A live deployment
 \MUST{} publish a complete, versioned policy before accepting real charges.
 
@@ -101,8 +103,13 @@ A public protocol identity $I_i$ is the addressable persona another participant
 can accept or block. Its controlling provider maintains authorized operational
 keys, status, and version. A provider-local private principal $P_i$ attaches
 control, recovery, and anti-abuse continuity to one or more public identities.
-A principal may represent a person, account, organization, or managed group;
-it is not automatically a verified distribution-program member.
+The general protocol can represent people or organizational principals; that
+scope does not establish organizational accounts in the current C-SQD product.
+C-SQD currently binds one identifiable person to one account, with multiple
+email addresses permitted and identity tied to a verified bank account.
+A principal is not automatically an enrolled distribution-program member.
+The \href{DOMAIN_MODEL.md}{C-SQD domain model} and financial deployment profile
+define these product rules; distinct scoped identifiers retain their privacy roles.
 
 Permission is directed from $I_i$ to $I_j$. Accepting one identity \MUSTNOT{}
 accept another identity controlled by the same principal. Conversely, rotating
@@ -128,20 +135,28 @@ under recipient and anti-abuse policy. Thus a request is needed when standing
 permission is absent, not only when no relationship record exists. Rejection
 declines a request; blocking prohibits further ordinary contact until removed.
 
+\Needspace{17\baselineskip}
 \subsection{The relationship request}
 
 A request is the economic unit. It \MUST{} have a unique scoped identifier,
 directed relationship and generation, immutable quote, initial-message binding,
-original charge reference, creation time, admission deadline, optional admission
-time and decision deadline, state, and version. Its state is
-\[
-\begin{split}
-\texttt{request\_state}\in\{&\texttt{preparing},\texttt{open},
-\texttt{accepted},\\
-&\texttt{rejected},\texttt{expired},\texttt{cancelled}\}.
-\end{split}
-\]
-Only the first two states are nonterminal. At most one nonterminal request
+original charge reference, creation time, submission deadline, optional submission
+time and decision deadline, state, and version. The request lifecycle has two
+nonterminal states. Submission commits the initial communication for delivery;
+message admission is the more general check of whether a particular message
+may proceed under a request, relationship, or capability. The states are:
+\begin{description}[leftmargin=1.5em,style=nextline]
+\item[\texttt{PreparingSubmission}] The request exists, but its initial
+communication has not yet been committed for delivery to the recipient. Funding
+and content preparation must finish before the submission deadline.
+\item[\texttt{AwaitingRecipientDecision}] Submission has committed and fixed the
+decision deadline. The recipient may decide, and permitted follow-ups may join
+the request.
+\end{description}
+The terminal outcomes are \texttt{Accepted}, \texttt{Rejected},
+\texttt{Expired}, and \texttt{Cancelled}.
+
+At most one nonterminal request
 \MUST{} exist per directed public-identity pair. Creation and external-charge
 dispatch \MUST{} enforce that constraint even across devices or different
 idempotency keys. A second submission returns the existing request or a stable
@@ -149,18 +164,18 @@ conflict; it does not authorize another charge.
 
 The charge purchases submission of a relationship request with an initial
 communication. It does not guarantee acceptance, attention, inbox prominence,
-or a response. Ordinary delivery recovery after admission does not undo the
-request. A sender cannot cancel an admitted request to avoid its outcome.
+or a response. Ordinary delivery recovery after submission does not undo the
+request. A sender cannot cancel a submitted request to avoid its outcome.
 
-\subsection{Messages within an open request}
+\subsection{Messages while awaiting the recipient's decision}
 
-The initial admission opens one logical solicitation. Later messages may join only
+Submission creates one logical solicitation. Later messages may join only
 when authenticated recipient follow-up policy permits them. Each message retains
 its own identifier, ciphertext, envelope validity, and delivery state. It does
 not acquire a new financial decision window.
 
 An allowed follow-up \MUSTNOT{} create another charge, solicitation generation,
-forfeiture, persistence commitment, or new-request history increment, and
+forfeiture or new-request history increment, and
 \MUSTNOT{} extend the request deadline. An exact replay returns the original
 admission result without consuming allowance twice. Recipient policy may disable
 follow-ups or bound count, rate, size, and declared scope. Its version and the
@@ -169,7 +184,7 @@ allowance consumed \MUST{} be recorded at admission.
 Follow-up permission is admission authority. Notification style, unread counts,
 ranking, and dismissing a prompt are presentation preferences and do not decide
 the request. A disabled follow-up \MUST{} fail without offering an automatic
-second charge against the open request.
+second charge against the pending request.
 
 \section{Fixed Terms and Canonical Time}
 
@@ -178,7 +193,7 @@ second charge against the open request.
 Before creating a request, the sender obtains signed terms containing the quote
 identifier; protocol, policy, and financial-program versions; scoped parties and
 service operator; relationship and request-history versions; $C$ and $S$;
-settlement unit; admission and decision durations; request eligibility time;
+settlement unit; submission and decision durations; request eligibility time;
 quote issue and expiry times; and refund and forfeiture rules. The terms
 \MUST{} include the applicable corporate-share rate or an immutable reference
 to it. Any declaration-dependent pricing or eligibility \MUST{} bind a canonical
@@ -188,19 +203,17 @@ The base charge is
 \[
 Q=C+S.
 \]
-The service operator sets $C$ and may set a minimum collateral amount. A recipient
-may select a higher collateral preference under the published policy. The full
+The service operator sets $C$, a bounded menu for $S$, and a default selection.
+A recipient may choose from that menu through an authenticated preference. The
+C-SQD defaults are specified in the deployment profile; the protocol does not
+embed a particular price or currency. The full
 amount and possible outcomes \MUST{} be disclosed before authorization. The
 corporate share is an allocation from eligible forfeitures, not an additional
 sender fee. Quoted financial terms \MUST{} remain immutable after creation.
 
-\paragraph{The earlier persistence reserve.}
-Prior drafts required an additional refundable $L_k$. Its retention is unresolved
-in this revision. The base profile uses $L_k=0$; enabling a nonzero reserve
-requires a separately versioned extension defining its charge, refund, and release
-lifecycle. Such an extension \MUST{} attach it only to a new request, disclose
-the complete $C+S+L_k$, and exclude it from forfeitures, corporate revenue, and
-member distributions. Follow-ups \MUSTNOT{} add or increase it.
+Recipient preferences affect new quotes only. A preference change \MUSTNOT{}
+alter the amount on an existing request. The base request has no additional
+persistence reserve, and follow-ups add no financial component.
 
 \subsection{Time and receipt authority}
 
@@ -209,11 +222,11 @@ canonical linearization position. Device clocks cannot determine financial
 timeliness. Authenticated recipient decisions \MUST{} be durably received before
 the provider issues a signed receipt or claims they were received.
 
-Creation materializes the admission deadline from canonical creation time.
-Initial admission materializes one immutable decision deadline $T$ from canonical
-admission time. Arithmetic \MUST{} be checked for overflow. A message's separate
+Creation materializes the submission deadline from canonical creation time.
+Submission materializes one immutable decision deadline $T$ from canonical
+submission time. Arithmetic \MUST{} be checked for overflow. A message's separate
 validity deadline only gates that message's admission; it cannot shorten or
-extend $T$, alter an admitted request's outcome, or authorize early deletion of
+extend $T$, alter a submitted request's outcome, or authorize early deletion of
 content still required for delivery.
 
 A decision is timely when durably received at or before $T$. Expiry \MUSTNOT{}
@@ -235,9 +248,12 @@ The deployment \MUST{} define the evidence required to admit a paid request.
 A local accounting entry alone is not evidence of external payment. Authorization,
 capture, settlement, dispute exposure, and refund confirmation are distinct
 facts. In particular, an authorization is not assumed to last throughout the
-recipient decision window. The C-SQD profile uses confirmed capture before
-initial admission, with recovery for captures that succeed after cancellation.
+recipient decision window. The C-SQD profile requires authenticated evidence that the charge satisfies its
+funding-finality policy before submission. A pending provider acknowledgment is
+insufficient. Later reversals remain possible and require explicit recovery;
+``finalized funding does not mean that dispute exposure has vanished.
 
+\Needspace{16\baselineskip}
 \subsection{The request outcome}
 
 The following table gives obligations created by a terminal outcome. ``Refund''
@@ -246,15 +262,15 @@ external execution, not claiming immediate receipt by the sender's bank.
 
 \begin{center}
 \small
-\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}Y@{}}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.27\textwidth}Y@{}}
 \toprule
 Outcome & Financial consequence \\
 \midrule
 Accepted in time & Refund $C+S$ to the original sender. \\
 Rejected in time & Retain $C$ as processing revenue; record $S$ as pending forfeiture. \\
-Blocked in time while open & Apply the rejection allocation and prohibit future contact. \\
+Blocked in time while awaiting a decision & Apply the rejection allocation and prohibit future contact. \\
 Expired without timely decision & Retain $C$; refund $S$. \\
-Cancelled before admission & Void an uncaptured authorization or refund the full captured amount. \\
+Cancelled before submission & Void an uncaptured authorization or refund the full captured amount. \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -269,7 +285,7 @@ as distributable resources, regardless of where cash is held.
 The ledger \MUST{} use append-only double-entry accounting, checked integer
 amounts, and conservation within each settlement unit. It \MUST{} distinguish
 processor clearing, unresolved request amounts, refund obligations, processing
-revenue, pending forfeitures, corporate allocations, restricted member funds,
+revenue, utility-service receipts, pending forfeitures, corporate allocations, restricted member funds,
 and finalized member payables. These are accounting categories, not general
 user spending balances. Refunds and member payables \MUSTNOT{} fund another
 request, transfer between users, or become on-demand wallet withdrawals.
@@ -283,9 +299,41 @@ completion. Failed or delayed payment \MUSTNOT{} erase the obligation.
 Provider notifications \MUST{} be authenticated, associated with the correct
 operation and amount, and deduplicated. Out-of-order evidence cannot regress a
 confirmed outcome. A late capture of a cancelled request creates or updates the
-full refund obligation; it cannot revive admission. Later external reversals
+full refund obligation; it cannot revive submission. Later external reversals
 require separately authorized compensating entries, not rewritten protocol
 history or automatic deductions from member entitlements.
+
+\subsection{Funding attempts and service coverage}
+
+The C-SQD host \MUST{} bound new funding attempts under operator-controlled
+source verification and unresolved-attempt capacity. A failed or reversed funding
+source requires restriction and authenticated re-verification; bank-account
+replacement policy remains deferred. A queued reservation is not dispatch
+authority: the host \MUST{} check current restrictions transactionally before
+granting a new dispatch. Creating a
+new request identifier \MUSTNOT{} bypass that restriction. Reconciliation of one
+uncertain operation preserves its identity and does not consume a new attempt.
+
+Annual utility billing belongs to the host service, separately from the request
+lifecycle. Published terms fix a year-long service interval, price, and collection
+date well before that interval starts. Failed or late retries \MUST{} retain
+those terms and \MUSTNOT{} shift or extend the interval. Finalized funding
+authorizes coverage only within that interval, without retroactive service. Before
+issuing terms, creating or submitting a request, or admitting a follow-up,
+accepted message, or lane message, C-SQD checks the recipient's local coverage and
+the sender's coverage if the sender also has a local account. The remote sender's
+provider owns its own entitlement check.
+
+Pending annual funding grants no new coverage. Expired coverage \MUSTNOT{}
+prevent recipient decisions, refund reconciliation, inspection of obligations,
+or payment of a finalized member allocation. It does not revoke a relationship
+or lane. An annual allocation is paid automatically as one lump sum to the
+associated verified bank account. Its rebate and excess amounts are reporting
+classifications, not separate processor operations. Distribution \MUSTNOT{}
+revoke purchased service, and next-year renewal or funding \MUSTNOT{} gate or
+reclassify it. Eligibility, annual allocation, and the distribution due date
+remain governed by the financial profile. The C-SQD profile assumes one
+configured payment-processing arrangement.
 
 \section{Commands Along the Request Lifecycle}
 
@@ -304,35 +352,36 @@ returned as such; only an eligible new request receives a charge quote.
 
 \texttt{CreateRequest} validates the quote signature, expiry, unit, versions,
 initial-message binding, and sender authorization. Under the directed-pair
-uniqueness boundary it creates a \texttt{preparing} request, fixes its terms,
-schedules admission timeout, and records one external payment intent. It creates
+uniqueness boundary it creates a \texttt{PreparingSubmission} request, fixes its terms,
+schedules submission timeout, and records one external payment intent. It creates
 no recipient solicitation and does not advance request history.
 
-Stale terms, blocking, acceptance, or an already preparing/open request prevent a
-new charge. If an external operation was already in flight when such a state
+Stale terms, blocking, or standing acceptance prevent a new charge. So does an
+existing request in preparation or awaiting a decision. If an external operation was already in flight when such a state
 change occurred, its completion is reconciled and any resulting captured amount
 is refunded through the cancelled request rather than silently abandoned.
 
-\subsection{Admit the initial communication}
+\subsection{Submit the request to the recipient}
 
-\texttt{AdmitRequest} validates current permission, request and quote versions,
-payment evidence, admission and message-validity deadlines, authenticated
-declarations, and durable encrypted content. The admission transaction \MUST{}
-open the request, record its single decision deadline, advance principal-scoped
-new-request history, replace admission timeout with expiry, and store the initial
-delivery intent and one logical solicitation effect.
+\texttt{SubmitRequestToRecipient} validates current permission, request and quote versions,
+finalized funding evidence, submission and message-validity deadlines,
+authenticated declarations, and durable encrypted content. The lifecycle becomes
+\texttt{AwaitingRecipientDecision}. That transition \MUST{} atomically record the
+single decision deadline, advance principal-scoped new-request history, replace
+submission timeout with expiry, and store the initial delivery intent and one
+logical solicitation effect.
 
-If cancellation or timeout wins first, admission cannot revive the request. If
+If cancellation or timeout wins first, submission cannot revive the request. If
 acceptance occurs while it is preparing, cancel the request and return its full
 captured amount; the message may subsequently use accepted-sender admission.
-Blocking before admission cancels it in full and prevents delivery. No message
+Blocking before submission cancels it in full and prevents delivery. No message
 becomes visible before its durable admission commits.
 
 \subsection{Admit a follow-up}
 
-\texttt{AdmitFollowup} identifies the exact open request and authenticates a new
+\texttt{AdmitFollowup} identifies the exact request awaiting a decision and authenticates a new
 message under the same directed pair. At one canonical boundary it checks that
-the request is still decision-open, the pair is not blocked, current recipient
+the request is still awaiting a decision, the pair is not blocked, current recipient
 follow-up policy permits the message, and content and declarations are valid.
 It consumes permitted allowance once, associates the message, and records the
 delivery intent. It leaves charge, financial deadline, and new-request history
@@ -348,20 +397,19 @@ become a newly charged request.
 
 \texttt{AcceptRelationship} is authorized by the recipient for the directed
 public-identity pair. It establishes accepted permission. If the current request
-is open and the decision was timely, the same transition marks it accepted,
+is awaiting a decision and the decision was timely, the same transition marks it accepted,
 records exactly one full refund obligation, closes the solicitation, and cancels
 expiry. If the request is preparing, acceptance cancels it in full instead.
 
 A late acceptance grants future permission but cannot reopen a logically expired
 or terminal request. Its expiry obligations must still be materialized. Accepting
 one public identity \MUSTNOT{} accept sibling identities or reset the private
-principal's new-request history. A versioned persistence extension, if enabled,
-must define any identity-scoped release without affecting other identities.
+principal's new-request history.
 
 \subsection{Reject, block, unblock, and revoke}
 
 \texttt{RejectRelationship} declines the current unaccepted relationship request.
-A timely open request becomes rejected with the allocation defined above; a
+A timely request awaiting a decision becomes rejected with the allocation defined above; a
 preparing request is cancelled in full. Rejection closes the solicitation and
 preserves history and applicable retry cooldown. It is invalid for an accepted
 relationship, which must first be revoked. A rejection received after the request
@@ -369,11 +417,11 @@ deadline does not replace its expiry allocation.
 
 \texttt{BlockRelationship} may operate from any relationship state. It sets the
 pair to blocked, invalidates capabilities, and closes any solicitation. A timely
-open request uses the rejection allocation; a preparing request is cancelled in
+request awaiting a decision uses the rejection allocation; a preparing request is cancelled in
 full; a logically expired or terminal request keeps its existing outcome. An
 exact replay moves no further value.
 
-While blocked, terms, creation, initial admission, follow-ups, and capability
+While blocked, terms, creation, initial submission, follow-ups, and capability
 admission \MUST{} be refused. \texttt{UnblockRelationship} returns the pair to
 rejected without accepting it, restoring a lane, erasing history, or reopening a
 request. \texttt{RevokeRelationship} changes accepted permission to revoked for
@@ -382,26 +430,26 @@ transition remain subject to current eligibility and recipient policy.
 
 \subsection{Expire or cancel}
 
-\texttt{ExpireRequest} acts only on an open request after the decision window
+\texttt{ExpireRequest} acts only on a request awaiting a decision after the decision window
 and journal holdback rules permit finalization. It rechecks timely decisions,
 records expiry with processing revenue and collateral refund, closes the
 solicitation, and schedules the refund. It \MUSTNOT{} undo a later prospective
 acceptance. A stale job targeting a terminal request has no further effect.
 
-\texttt{CancelPreparingRequest} may be authorized by the sender, a verified
-pre-admission failure, or admission timeout. It marks the request cancelled,
+\texttt{CancelRequestSubmission} may be authorized by the sender, a verified
+pre-submission failure, or submission timeout. It marks the request cancelled,
 voids or refunds its payment, cancels timeout, and creates neither a solicitation
-nor a history increment. Cancellation is valid only before admission. Closing a
+nor a history increment. Cancellation is valid only before submission. Closing a
 client or losing a network connection is not itself a cancellation command.
 
 \section{Ordering, Retry, and Abuse Continuity}
 
-Creation, admission, follow-up policy changes, and recipient decisions \MUST{}
+Creation, submission, follow-up policy changes, and recipient decisions \MUST{}
 serialize for the directed pair. Decisions carry an expected relationship
 version; the first valid committed decision changes it and stale conflicting
-decisions fail without partial effects. Admission and cancellation share the
+decisions fail without partial effects. Submission and cancellation share the
 request version. No execution may both advance request history and cancel the
-same request as unadmitted.
+same request before submission.
 
 Timely receipt must survive queue delay. A worker cannot win an expiry race merely
 by running before a decision already durably received by the deadline. Conversely,
@@ -410,7 +458,7 @@ Subsequent processing of an older request must preserve current permission.
 
 Request history is keyed by $(P_i,I_j)$ through a scoped assertion. It contains a
 new-request level, eligibility time, policy version, and canonical event position.
-Initial admission advances it atomically; follow-ups and cancelled preparation do
+Initial submission advances it atomically; follow-ups and cancelled preparation do
 not. Acceptance bypasses that history for the accepted public identity without
 erasing it for aliases. Cross-identity request creation \MUST{} observe the shared
 history boundary so concurrent aliases cannot all use stale initial terms.
@@ -442,12 +490,12 @@ Condition & Required behavior \\
 \texttt{ContactBlocked}, \texttt{BackoffActive} & Refuse contact or report eligible time without advancing history. \\
 \texttt{PaymentPending} & Query/reconcile the original operation; do not dispatch a replacement. \\
 \texttt{PaymentFailed}, \texttt{AmountMismatch} & Do not admit; reconcile and cancel/refund any captured amount under the original authorization. \\
-\texttt{AdmissionWindowClosed} & Cancel preparation and void/refund payment in full. \\
+\texttt{SubmissionWindowClosed} & Cancel preparation and void/refund payment in full. \\
 \texttt{RequestClosed}, \texttt{FollowupNotAllowed} & Refuse the follow-up without a new charge. \\
 \texttt{DecisionWindowClosed} & Preserve expiry economics; acceptance may grant prospective permission. \\
 \texttt{AlreadyTerminal}, \texttt{Duplicate} & Return the recorded result for exact replay. A conflicting payload fails. \\
 \texttt{VersionConflict} & Refresh state; apply no partial outcome. \\
-\texttt{MessageValidityClosed} & Refuse this message; cancel a still-preparing initial request, but do not settle an open request because a follow-up is stale. \\
+\texttt{MessageValidityClosed} & Refuse this message; cancel a still-preparing initial request, but do not settle a submitted request because a follow-up is stale. \\
 \texttt{CapabilityScopeMismatch} & Consume no allowance and charge nothing automatically. \\
 \texttt{UnsupportedCriticalExtension} & Refuse admission dependent on the extension; unwind a still-preparing initial request. \\
 \texttt{PrivacyScopeViolation}, \texttt{LinkageErased} & Refuse excess disclosure or reconstruction of erased linkage. \\
@@ -487,7 +535,7 @@ accepting the domain or its authorized subdomains under a consistent versioned
 mapping. A passing DKIM or SPF identifier cannot silently replace that scope.
 
 The admission order is blocked refusal, accepted permission, valid capability,
-permitted follow-up on the identified open request, then eligible new-request
+permitted follow-up on the identified request awaiting a decision, then eligible new-request
 creation with explicit sender authorization. If a request already exists but a
 follow-up is refused, the last branch is unavailable. Capability mismatch never
 silently converts a message into a charged request.
@@ -715,8 +763,9 @@ than manufacture expiry. Pricing and financial-program policies \MUST{} include
 review, dispute, correction, and audit procedures.
 
 Protocol policy fixes request economics and deterministic transitions. Admission
-policy evaluates only authenticated envelopes, permission, recipient follow-up
-settings, rate/history state, and authorized safety evidence. Presentation policy
+policy evaluates authenticated envelopes, permission, recipient follow-up
+settings, rate/history state, funded local service coverage, and authorized safety
+evidence. Presentation policy
 runs for the recipient and controls ranking, notifications, digests, and local
 content processing. Neither latter policy may rewrite charge terms or terminal
 outcomes. A learned or probabilistic recommendation is not an authenticated
@@ -744,15 +793,16 @@ must assign charge/refund responsibility, pool governance, membership uniqueness
 clearing, default losses, and payment obligations before real federated value is
 enabled. SMTP downgrade must be visible before transmission and in the envelope.
 
+\Needspace{9\baselineskip}
 \section{Required Invariants and Conformance Stories}
 
 Conformance \MUST{} preserve the following together:
 \begin{enumerate}[leftmargin=2em,nosep]
 \item One nonterminal request per directed pair, one authorized charge per request,
       and no additional financial effect from follow-ups or retries.
-\item One request deadline fixed at admission; timely-decision priority and no
+\item One request deadline fixed at submission; timely-decision priority and no
       retroactive reopening of a terminal or logically expired request.
-\item Full return before admission; no ordinary cancellation after admission.
+\item Full return before submission; no ordinary cancellation after submission.
 \item Atomic permission, request outcome, ledger obligations, and outbox intent,
       with external confirmation represented separately.
 \item Exact outcome allocation, integer value conservation, and no recipient
@@ -772,11 +822,20 @@ Conformance \MUST{} preserve the following together:
 A reference suite should begin with one request and three permitted messages:
 acceptance creates one refund obligation and future permission. It should then
 exercise disabled follow-ups, concurrent creation, alias rotation, cancellation
-versus admission, a late capture after cancellation, timely decisions delayed in
+versus submission, a late capture after cancellation, timely decisions delayed in
 queues, late acceptance, duplicate and out-of-order provider evidence, and failed
 refund recovery. Profile tests must additionally exercise maturity exclusions,
-once-only corporate allocation, quarterly eligibility, integer rounding, zero
-eligible members, carryforward, and failed member payments.
+once-only corporate allocation, annual eligibility, integer rounding, zero
+eligible members, carryforward, and failed member payments. They must also cover
+advance collection for fixed annual service intervals, unchanged terms across
+failed or late retries, and equal allocations independent of renewal. For
+$U=\$120$, allocations of \$80, \$120, and \$170 must each produce one bank
+payment, with reporting values $R_i=\min(D_i,U)$ and $X_i=\max(0,D_i-U)$.
+Tests must cover automatic payment to the associated verified bank account,
+one completion lifecycle with lost-response recovery, and payment after closure.
+Future renewal funding must not delay or reclassify a distribution. The earlier
+full service charge remains separate, and distribution does not revoke coverage.
+Pending funding must grant neither request submission nor new service coverage.
 
 The implementation sequence follows the same story: model request transitions
 and obligations; establish the transactional journal and outbox; add authenticated

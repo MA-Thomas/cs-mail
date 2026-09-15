@@ -19,7 +19,7 @@
 \title{\textit{cs-mail}: Express Lanes for Transactional Mail\\
 \large A Pedagogical Memo}
 \author{C-SQD}
-\date{Draft 0.3 --- September 2026}
+\date{Draft 0.5 --- September 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -35,6 +35,13 @@ privacy semantics remain governed by that specification. The companion
 implementation plan develops issuance and lifetime; the deployment profile
 defines the separate C-SQD financial program.}}
 \end{center}
+
+\paragraph{Current account scope.}
+The current C-SQD product has one identifiable person per account, tied to a
+verified bank account, with multiple email addresses permitted. Organizational
+senders in these examples are legacy senders or possible future native protocol
+participants; they do not imply organizational C-SQD accounts. The
+\href{DOMAIN_MODEL.md}{C-SQD domain model} controls that product distinction.
 
 \section{A First Week with a New Bank Account}
 
@@ -63,7 +70,7 @@ it. That gap is what this memo is about.
 
 Wanted mail comes in two shapes. The first is people and ongoing relationships: a
 colleague, a friend, a new client. \textit{cs-mail} handles these by acceptance---
-you grant a person standing permission and they write freely thereafter. The
+you grant a person standing permission and they write without a request charge. The
 second is organizations you have authorized for a bounded purpose: the bank's
 statements, the airline's boarding pass, the pharmacy's refill notice, the clinic's
 appointment reminder. Call this \emph{transactional mail}.
@@ -129,7 +136,7 @@ issuance, safety, and lifetime rules it needs to actually work.
 
 \section{The Solution: Express Lanes}
 
-An express lane is a recipient-granted, revocable, uncharged path for one sender
+An express lane is a recipient-granted, revocable path without a relationship-request charge for one sender
 you have chosen, bounded in purpose and time. Three properties make it safe.
 
 \paragraph{What it limits.}
@@ -186,9 +193,9 @@ These permission paths explain the main cases:
 \midrule
 A stranger & Submits one charged relationship request, with any permitted
 follow-ups. & Explicit sender authorization; decision or expiry settles the request. \\
-A person you accept & Writes freely, no request charge. & You accept the relationship; you
+A person you accept & Writes with no request charge. & You accept the relationship; you
 revoke it. \\
-An organization you chose & Travels a uncharged express lane, bounded in purpose
+An organization you chose & Travels an express lane with no request charge, bounded in purpose
 and time. & Issued from a decision you already made; you revoke it or let it
 lapse. \\
 \bottomrule
@@ -228,8 +235,15 @@ granting.
 
 \section{How a Lane Ends: Lifetime and Renewal}
 
-A lane that lasted forever by default would rebuild the very allowlist we are
-trying to avoid. So lifetime is bounded, but bounded intelligently.
+A lane's lifetime describes the permission you gave an organization. Your annual
+utility charge describes the service you purchased from C-SQD. A lane carries no
+request charge, but delivery still requires funded service coverage. Renewing
+service does not extend the lane's signed validity; a lapse in service coverage
+does not itself revoke your grant.
+
+Within that distinction, the lane needs its own lifetime rules. A grant that
+lasted forever by default would leave forgotten permissions in place, so its
+ordinary horizon follows activity and its hard limit remains recipient-signed.
 
 \paragraph{Anchor on activity, not the calendar.}
 A lane's clock is its last authenticated message, not its issue date. A lane in
@@ -255,7 +269,7 @@ Revocation and blocking remain available and immediate, whatever the lifetime.
 
 \section{Implementation Constraints}
 
-Four constraints shape any implementation. Their details belong in a later
+The following constraints shape any implementation. Their details belong in a later
 specification; the constraints themselves are worth stating now because they are
 what make the concept real.
 
@@ -276,14 +290,12 @@ without learning the organization at all; for legacy senders the provider must s
 the domain to match DMARC, which is one more reason the native path is the more
 private destination.
 
-\paragraph{This promotes an existing feature rather than inventing settlement.}
-The protocol specification already defines scoped capabilities, already requires
-that a capability-authorized message open no relationship solicitation and advance
-no repeated-attempt state, and already lets a block override a capability. Express
-lanes adopt those rules unchanged. The launch extension adds the issuance flow
-(the two moments and the
-DMARC-confirmed legacy grant), the domain-binding and expected-domain mismatch rules,
-and the activity-anchored lifetime with its persistent option. The lane retains these properties under the revised request model; its grant does not create or settle a charge.
+\paragraph{Lanes use the existing permission rules.}
+A scoped capability already authorizes communication without a request charge,
+solicitation, or new-request history increment. Blocking overrides it. Express
+lanes give that capability a practical issuance flow, domain binding for legacy
+senders, and activity-based lifetime with an optional persistent mode. A lane
+grant creates no charge and settles no separate request.
 
 \paragraph{Declarations remain minimal.}
 The authenticated envelope exposes only the coarse purpose, origin mode, validity,
@@ -296,19 +308,18 @@ other relationship signals.
 
 \paragraph{Lane activity and member activity are different.}
 An authenticated incoming message can renew a lane's horizon. It does not by
-itself establish intentional activity for a quarterly member distribution, extend
-a pending relationship request, or create a pool contribution. Those lifecycles
-remain separate even when their events occur close together.
+itself establish intentional activity for an annual member allocation, renew
+paid service, extend a pending relationship request, or create a pool contribution.
+Eligibility for an allocation depends on the completed year's membership rules,
+not renewal of either service or a lane. Those lifecycles remain separate even
+when their events occur close together.
 
 \section{Where This Leaves \textit{cs-mail}}
 
-With express lanes, the permission model reads as one sentence: strangers submit a
-single relationship request to seek permission, people you accept may write freely, and
-organizations you have chosen travel an express lane you can close at any time.
-Each state matches how the relationship actually feels---a stranger earning a
-first hearing, a person you know, an institution you deliberately signed up with.
-That is what mindful email means: not an inbox that guesses what you want, but one
-where reaching you is a permission you granted, on purpose, and can always take
-back.
+Express lanes complete the permission model: strangers submit a relationship
+request, accepted contacts write without a request charge, and chosen
+organizations use a bounded grant. Each path reflects a different relationship
+and gives the recipient a clear way to end it. Reaching the recipient depends
+on permission they granted and can withdraw.
 
 \end{document}

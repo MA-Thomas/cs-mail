@@ -1,6 +1,7 @@
 use crate::{FinancialTerms, ProgramError};
 use cs_mail_primitives::{
-    CanonicalTime, FinancialEventId, Money, PaymentOperationId, QuarterId, SettlementUnit,
+    AnnualDistributionId, CanonicalTime, FinancialEventId, Money, PaymentOperationId,
+    SettlementUnit,
 };
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -25,7 +26,7 @@ pub enum LotLifecycle {
     Cleared(MaturityClearance),
     Assessed {
         clearance: MaturityClearance,
-        quarter: QuarterId,
+        distribution: AnnualDistributionId,
     },
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -35,7 +36,7 @@ pub struct ForfeitureLot {
 }
 impl ForfeitureLot {
     /// # Errors
-    /// Refuses changes to a lot already assessed in a quarter.
+    /// Refuses changes to a lot already assessed in a distribution.
     pub fn set_hold(&mut self, held: bool) -> Result<(), ProgramError> {
         if matches!(self.lifecycle, LotLifecycle::Assessed { .. }) {
             return Err(ProgramError::ClosedPeriod);
@@ -73,11 +74,14 @@ impl ForfeitureLot {
     }
     /// # Errors
     /// Requires a cleared lot that has not already been assessed.
-    pub fn assess(&mut self, quarter: QuarterId) -> Result<(), ProgramError> {
+    pub fn assess(&mut self, distribution: AnnualDistributionId) -> Result<(), ProgramError> {
         let LotLifecycle::Cleared(clearance) = self.lifecycle else {
             return Err(ProgramError::InsufficientEvidence);
         };
-        self.lifecycle = LotLifecycle::Assessed { clearance, quarter };
+        self.lifecycle = LotLifecycle::Assessed {
+            clearance,
+            distribution,
+        };
         Ok(())
     }
 }

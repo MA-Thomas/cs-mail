@@ -14,6 +14,7 @@ pub enum Account {
     RequestEscrow(PaymentOperationId),
     RefundPayable(PaymentOperationId),
     ProcessingRevenue,
+    UtilityServiceReceipts(PaymentOperationId),
     PendingForfeiture(PaymentOperationId),
     CorporatePoolRevenue,
     RestrictedMemberFunds,

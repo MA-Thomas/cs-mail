@@ -62,7 +62,7 @@
 \title{\textit{cs-mail} Desktop MVP and CLI Administration\\
 \large AI-Agent Milestone and Build Plan}
 \author{C-SQD}
-\date{Draft 0.2 --- September 2026}
+\date{Draft 0.4 --- September 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -72,43 +72,44 @@
 \begin{abstract}
 This plan develops a native desktop pilot, an operator administration CLI, and a
 reusable client core around the revised relationship-request model. Alice makes
-one simulated charge for a request to Bob, sends permitted follow-ups without
-another charge, and sees the outcome of his decision. The service then carries
-a simulated forfeiture through maturity, quarterly allocation, and payment
-recovery. Each milestone requires a usable journey and evidence of failure
+a simulated annual service purchase, then authorizes one conditional charge for
+a request to Bob. She sends permitted follow-ups without another charge and sees
+the outcome of his decision. The service then carries
+a simulated forfeiture through maturity, annual allocation, and one automatic
+bank payment with rebate/excess reporting. Each milestone requires a usable journey and evidence of failure
 recovery. The pilot introduces no real redeemable value.
 \end{abstract}
 
-\section{Start with the Revised Contract}
+\section{Build on the Implemented Domain Contracts}
 
 The \textit{Protocol Specification} governs requests and permission. The normative
 C-SQD financial-program section of the \textit{Deployment and Migration Profile}
-governs the pool, corporate allocation, and equal member distributions. The
-\textit{Rust Reference Architecture} explains the intended implementation shape.
-This plan is nonnormative and does not claim that the existing Rust code already
-implements the new contracts.
+governs annual utility billing, the pool, and equal member distributions. The
+\textit{Rust Reference Architecture} describes the current ownership boundaries.
+This plan develops product journeys on those contracts. Start with the
+\href{DOMAIN_MODEL.md}{C-SQD domain model} for confirmed rules and deferred
+choices. Current C-SQD accounts belong to identifiable people, one account per
+person, with multiple email aliases and a verified bank association. The product
+uses one configured payment-processing arrangement.
 
-Before product milestones begin, establish the revised semantic baseline:
-version the request and obligation contracts, document treatment of any old
-quotes or records, and replace superseded financial expectations with explicit
-conformance vectors. Preserve applicable security, privacy, ordering, and
-conservation guarantees. An old test requiring separate bonds for follow-up
-messages must not override the revised specification merely because it predates
-the change.
+The workspace already implements request-specific payment operations, refunds,
+forfeiture maturity, annual allocation, fixed service contracts with advance
+collection, funded coverage, and automatic lump-sum distribution preparation. Signed
+service and client APIs, PostgreSQL transactions, and worker libraries exercise
+those rules with a simulated external provider. They are the foundation for the
+pilot, not a completed running server or desktop application.
 
-The baseline must model request-specific payment operations, refunds against the
-original charge, pending forfeitures, restricted member funds, and finalized
-payables. One pending request permits at most one charge; recipient settings
-determine whether it admits more messages. The base draft uses no nonzero
-persistence reserve. Proposed rates, eligibility rules, and time periods use
-explicit simulation-policy versions and must not be presented as approved live
-terms.
+The current code replaces deprecated labels and quarterly types directly.
+Product work must not recreate them through aliases, fallback readers, or parallel
+implementations. If older populated data needs conversion, handle that as an
+explicit data operation while preserving its real obligations. Security, privacy,
+ordering, and conservation remain requirements of the current model.
 
-Once that baseline is established, product work extends it through small vertical
-slices. Further changes to value semantics, signatures, identity meaning, or
-privacy scope require a decision record explaining the user-visible need,
-affected contracts, compatibility, migration, and validation. Routine reversible
-implementation choices remain the agent's responsibility.
+Product slices should reuse the existing domain owners and APIs. An interface
+must show the full annual service price separately from any later distribution,
+and one pending request must remain one charge even when follow-ups are allowed.
+Rates, eligibility thresholds, prices, collection dates, and distribution dates must have explicit simulation
+policy versions; a fixture is not an approved live-payment term.
 
 \section{The Pilot We Are Building}
 
@@ -119,7 +120,7 @@ after the macOS journey is stable. Later Swift and Kotlin clients reuse a
 platform-neutral Rust client core through a narrow binding.
 
 The value model is a deterministic external-payment simulator. It can approve,
-decline, delay, or report an uncertain request charge; confirm or fail a refund;
+decline, delay, or report an uncertain utility or request charge; confirm or fail a refund;
 and execute or fail a finalized member payment. All amounts are explicitly
 nonredeemable. Users do not receive a generally spendable test-credit wallet,
 and the operator configures simulator scenarios rather than topping up accounts.
@@ -137,14 +138,14 @@ not evidence that production payment operations are ready.
 \section{Keep Shared Mechanics and Product Journeys Separate}
 
 The stable foundation remains organized around primitives, authentication,
-ledger, request transitions, content, wire, storage, and workers. Product modules
+ledger, finance, billing, request transitions, content, wire, storage, and workers. Product modules
 coordinate a user journey without implementing another version of those rules.
 
 \begin{lstlisting}[language={}]
 crates/
-  existing cs-mail-* crates       # revised semantic foundation
-  cs-mail-api-types               # versioned transport contracts
-  cs-mail-client-core             # portable client use cases
+  existing cs-mail-* crates       # current semantic foundation
+  cs-mail-api-types               # add when transport contracts need it
+  cs-mail-client                  # extend existing client and billing APIs
   cs-mail-mobile-ffi              # later portability milestone
 
 apps/
@@ -159,13 +160,17 @@ depend on a web framework, desktop shell, concrete database, or operating-system
 keychain. Create another crate only for a stable reusable contract, dependency
 boundary, or independently built artifact, not for every new feature.
 
-Within client core and server, organize identity/device management, requests,
-messages, relationships, financial activity, distributions, recovery, and
+Within the client and server, organize identity/device management, requests,
+messages, relationships, annual service billing, distributions, recovery, and
 administration as vertical modules. Request orchestration handles quote,
-authorization, content upload, payment progress, admission, and retry. Financial
+authorization, content upload, payment progress, submission, and retry. Financial
 views consume canonical obligation status; they do not reconstruct settlement
 from UI events. The member program consumes eligibility and funding evidence
-separately from message handling.
+separately from message handling. Billing owns fixed annual service contracts,
+collection evidence, and coverage; finance owns eligibility, distribution terms,
+and amounts owed. The existing
+application coordinator prepares payments across those two owners. Product
+controllers must not duplicate that calculation.
 
 The client core defines ports for key custody, local ciphertext storage,
 transport, clock, and notifications. Tauri, Swift, Kotlin, Keychain, SQLite, and
@@ -183,8 +188,11 @@ writing canonical tables directly.
 
 Every visible outcome has a durable cause and stable retry identity. Unknown
 payment or commit outcomes remain distinguishable from failure. UI language
-separates charge preparation, an open request, a refund due, refund completion,
-finalized member allocation, and payment completion. No screen suggests that
+separates preparation for submission, waiting for a recipient decision, a refund
+due, refund completion, finalized member allocation, and payment completion.
+Annual service coverage and charge status have their own view. A distribution
+does not mark the service year unpaid, and a nonrenewing member can still
+inspect an allocation and its payment status. No screen suggests that
 rejecting a sender pays the recipient or that a payable can fund another request.
 
 Use separate protocol, wire, API, event, policy, and database versions. Migrations
@@ -211,14 +219,14 @@ as the relevant surfaces appear.
 \toprule
 Stage & User-visible result & Exit evidence \\
 \midrule
-Baseline & Revised request and financial contracts & Versioned decisions and conformance vectors \\
+Baseline & Implemented domain contracts & Current conformance and PostgreSQL tests \\
 0 & Product foundation is ready & Buildable skeleton and dependency checks \\
 1 & Operator starts the service & Bootstrap, simulator, CLI, and restart demo \\
-2 & Alice owns an identity & Enrollment, key custody, and reopen demo \\
-3 & Alice requests a relationship & One simulated charge and encrypted admission \\
+2 & Alice owns an identity and funded service & Enrollment, annual charge, coverage, and reopen demo \\
+3 & Alice requests a relationship & One conditional charge and encrypted submission \\
 4 & Bob controls the request & Decisions, follow-up policy, and accurate activity views \\
 5 & Time and failure are recoverable & Deadline, provider-event, and crash matrix \\
-5b & The member cycle is demonstrable & Reproducible quarter and failed-payment recovery \\
+5b & The member cycle is demonstrable & Annual allocation and one bank payment with recovery \\
 6 & A small pilot can use it & Signed builds, recovery, restore, and usability evidence \\
 7 & The core is portable & Swift/Kotlin binding parity harness \\
 \bottomrule
@@ -231,7 +239,7 @@ not merely when the new code compiles.
 
 \section{Milestone 0: Establish the Product Foundation}
 
-After the semantic baseline, create the product packages and enforce inward
+Using the existing semantic baseline, create the product packages and enforce inward
 dependencies. Define shared package metadata, lints, and dependency versions.
 Document the architecture boundary and add a command that runs the full quality
 gate without hiding individual checks. Empty server and CLI binaries should
@@ -251,14 +259,17 @@ initial process, HTTP, TLS, diagnostics, and CLI choices. Keep synchronous stora
 behind a bounded blocking boundary until a tested replacement is appropriate.
 
 Configuration identifies the deployment domain, provider authority, public URL,
-database, content limits, retention versions, and simulation mode. Ordinary
+database, content limits, retention versions, and simulation mode. Expose versioned
+request pricing and immutable annual service offers through the authorized
+administration surface, including funding-source verification and attempt limits. Ordinary
 administration uses an authenticated API. A local bootstrap/migration command
 may initialize the deployment, but cannot silently replace an existing identity
 or key registry.
 
 The simulator persists operation identities and supports controlled delayed,
 duplicate, out-of-order, and failed results. Its scenario changes are audited
-and separate from canonical financial writes. No live provider credentials or
+and separate from canonical financial writes. Reuse the existing provider model,
+adding durable scenario controls at the host boundary. No live provider credentials or
 redeemable amounts are enabled.
 
 Tests cover migration from empty, repeated bootstrap, missing keys, user/admin
@@ -267,12 +278,28 @@ that distinguishes process health from database readiness. Demonstrate restart
 without duplicate authority or simulated operations. Exit evidence includes a
 clean-start transcript, API contracts, database tests, and redacted diagnostics.
 
-\section{Milestone 2: Give Alice an Identity She Controls}
+\section{Milestone 2: Establish Identity and Annual Service}
 
-Alice installs the macOS application, redeems an invite, creates a protocol
-identity and device keys, and reopens the same identity after quitting. Client
-use cases coordinate identity resolution, enrollment, device listing, and
-revocation through portable ports. The Tauri shell remains thin.
+Alice installs the macOS application, redeems an invite, establishes a simulated
+verified person/bank association, and creates protocol identities and device keys
+for her one account. Multiple email aliases do not create more accounts or shares.
+She reopens the same account after quitting. Portable client use cases coordinate
+enrollment and device management; the Tauri shell remains thin.
+
+Alice reviews a published offer with annual price, advance collection date, and
+fixed year-long service interval. Collection occurs well before the interval;
+finalized funding enables coverage only within it. Signed account actions use
+active operational keys with explicit account grants and a separate signing
+context, not a second user-managed billing secret. Trusted operator configuration
+publishes offers and establishes verification authority. A pending charge does
+not imply renewed service.
+
+Test explicit calendar and leap-day handling, failed and late collection retries
+that preserve the same price and interval, and coverage boundaries. Restart must
+preserve the attempt identity and result. Duplicate person registration and
+ungranted account actions must fail. Restrict a source after work is queued and
+show that first dispatch waits for authenticated re-verification; reconciliation
+of an already-authorized uncertain operation retains its original identity.
 
 Store only key references, ciphertext, cursors, minimized relationship metadata,
 and nonsecret preferences in SQLite. Use the macOS keychain for secrets. Explain
@@ -282,19 +309,21 @@ provider access to old content.
 Tests reject foreign-scope or revoked device authority, conflicting invite reuse,
 and secret leakage to storage or logs. Local schema upgrades preserve ciphertext
 and cursors. Demonstrate enrollment, keychain denial, quit/reopen, and device
-listing on a clean user account. Sending and completed recovery remain deferred.
+listing and a funded annual service interval on a clean user account. Sending
+and completed recovery remain deferred.
 
 \section{Milestone 3: Submit One Encrypted Relationship Request}
 
-Alice resolves Bob and reviews $C$, $S$, the total conditional charge, the request
+With funded service available, Alice resolves Bob and reviews $C$, $S$, the total
+conditional charge, the request
 deadline rule, and possible refunds. The UI identifies the value as simulated.
 She authorizes one request, encrypts the initial message, and obtains signed
-evidence of admission after the simulator confirms capture and delivery
+evidence of submission after the simulator finalizes funding and delivery
 preparation is durable.
 
 The client state machine persists the request and operation references across
-quote, create, payment preparation, ciphertext upload, and admission. An existing
-preparing or open request is resumed instead of charged again. No delivery is
+quote, create, payment preparation, ciphertext upload, and submission. An existing
+request in preparation or awaiting a decision is resumed instead of charged again. No delivery is
 visible before durable admission. Bob receives an encrypted inbox record and
 decrypts at his endpoint.
 
@@ -317,7 +346,9 @@ rejection records processing revenue and pending forfeiture; blocking additional
 prevents contact. The UI explains permission first, then money, and never
 describes rejection as a payment to Bob.
 
-Implement recipient follow-up preferences with bounded count/rate controls and
+Expose the recipient's collateral menu and default with authenticated preference
+updates. Changing a selection affects the next quote, leaving already authorized
+requests intact. Implement recipient follow-up preferences with bounded count/rate controls and
 canonical admission enforcement. Alice can add a message only when the identified
 request and current policy allow it. Its own delivery state remains visible, but
 the charge and common deadline remain unchanged. Closing or dismissing the
@@ -330,7 +361,7 @@ prohibition, and projection rebuild after restart reproduces canonical state.
 
 Tests cover one request with three messages and one refund, disabled follow-ups,
 allowance replay, policy-change races, decision races, alias history, and block
-before versus after admission. A follow-up refusal must not start another charge.
+before versus after submission. A follow-up refusal must not start another charge.
 Demonstrate accept, reject, block/unblock, and allowed/disabled follow-ups from
 both clients. Exit evidence includes reviewed financial wording and encrypted
 accepted-message delivery.
@@ -344,10 +375,15 @@ retries, graceful shutdown, database TLS, and a bounded connection pool without
 changing the revised semantics.
 
 This milestone makes uncertainty visible. Kill the service after capture but
-before its response is recorded; cancel a preparing request before delayed capture
+before its response is recorded; cancel a request during preparation before delayed funding
 confirmation; replay provider notifications out of order; and fail a refund before
 retrying it. The request stays cancelled when appropriate, all captured money is
 returned once, and a terminal obligation does not disappear during recovery.
+
+Also expire service coverage while a request and member obligation remain
+unsettled. New communication must stop, but the recipient can still decide and
+the service can finish refunds and payments. Reconciliation can continue querying
+an uncertain bank operation; it must not initiate unbounded new funding attempts.
 
 Exercise timely acceptance delayed behind expiry processing and late acceptance
 after a closed window. Preserve current permission while materializing old
@@ -360,38 +396,50 @@ and one visible message/economic outcome after retries. Exit evidence is a
 failure-injection matrix, scheduler-authority tests, a sustained concurrency run,
 and an operator reconciliation procedure.
 
-\section{Milestone 5b: Complete a Simulated Quarter}
+\section{Milestone 5b: Complete an Annual Member Cycle}
 
-The operator can demonstrate how a rejected request eventually benefits members
-without paying its recipient directly. Create simulated forfeiture lots with
-different maturity and quoted-rate versions, and a synthetic membership set with
-explicit activity and verification evidence. These fixture policies are visibly
-provisional; they do not settle live legal-entity eligibility or identity checks.
+The operator demonstrates how rejected requests eventually benefit members
+without paying their recipients directly. Use the existing finance domain to
+create simulated lots with different maturity and quoted-rate versions, and a
+membership set with explicit activity and verification evidence. Fixture policies
+remain visibly provisional where live eligibility or identity checks are unsettled.
 
-Prepare a quarter from fixed funding and eligibility manifests. Apply the
-financial profile's once-only corporate calculation, equal minor-unit allocation,
-and restricted remainder. Publish the finalized batch atomically and show an
-aggregate reconciliation plus each member's own statement. Operator access must
-not expose the correspondence behind another member's funding or eligibility.
+Finalize a UTC calendar year from fixed funding and eligibility inputs. Show the
+once-only corporate assessment, equal minor-unit allocations, and restricted
+remainder in aggregate reconciliation and individual statements. Include zero
+members, empty funding, exact cutoff boundaries, mixed rate cohorts, immature
+funds, and replay. A following year must not reassess old funds or divide amounts
+already assigned to members.
 
-Test refundable and immature exclusions, duplicate members and aliases, exact
-cutoff boundaries, multiple rate cohorts, zero eligible members, empty funding,
-rounding, and replay after partial preparation. The next quarter must not assess
-previously assessed funds again. A delayed or below-threshold payable remains
-assigned to its member and cannot become spendable request funding.
+Next demonstrate one lump-sum payment of each member's previous-calendar-year
+share. Distribution terms set the due date independently of service collection.
+Ordinarily the receiving service year is already paid. Using $U=\$120$,
+exercise separate allocation scenarios of \$80, \$120, and \$170: each produces
+one payment, with rebate/excess reporting of \$80/\$0, \$120/\$0, and
+\$120/\$50. These are examples across scenarios, not unequal shares for equally
+qualifying members of the same pool year.
 
-Finally fail one simulated payout, cross the quarter boundary, and recover it.
-The member's fixed entitlement remains intact throughout. Exit evidence includes
-reproducible manifests, conservation checks, a failed-payment demo, and a clear
-distinction between unallocated carryforward and unpaid finalized obligations.
-Live payouts and production verification remain deferred.
+Use the application coordinator to resolve the associated verified bank account
+automatically. No per-distribution instructions or payout minimum are supplied.
+Keep next-year service collection pending and show that distribution proceeds
+unchanged. Repeat with nonrenewal and closure, preserving the minimal payment
+route. Fail or lose the response to the single bank payment, restart, and prove
+that recovery does not duplicate it or create independent component work.
+Distribution leaves purchased coverage intact. Delayed obligations remain
+assigned even across a later allocation year.
+
+Exit evidence includes reproducible equal allocation, automatic due-time bank
+payment, unchanged reporting after nonrenewal, closure recovery, and one payment
+completion status. Statements separate the full service charge from the later
+distribution. Live payments and production verification remain deferred.
 
 \section{Milestone 6: Run a Small Supported Pilot}
 
 Package and sign the macOS application and versioned server/CLI artifacts.
 Complete user-held recovery and trusted-device enrollment, with explicit device
 revocation and no provider content-decryption authority. Add understandable
-onboarding for requests, refunds, simulated distributions, follow-up preferences,
+onboarding for annual service charges, requests, refunds, simulated distributions,
+follow-up preferences,
 encryption, recovery, and device loss.
 
 Provide scoped diagnostics export, support and abuse intake, deletion procedures,
@@ -402,7 +450,8 @@ stable and platform-neutral.
 
 Tests cover clean installation and upgrade, recovery on a new device, revoked
 device refusal, diagnostics secret scans, and restore followed by reconciliation
-of requests, refunds, quarter manifests, payables, and inbox state. Run a
+of fixed service contracts, collection attempts, requests, refunds, annual allocations,
+payables, and inbox state. Run a
 50-identity soak with offline periods, decisions, retries, and restarts.
 
 Give nondeveloper testers clean machines and the pilot guide. They should enroll,
@@ -415,7 +464,7 @@ outside this milestone.
 \section{Milestone 7: Prove Mobile Portability}
 
 Expose a narrow FFI facade for identity, request progress, decisions, encrypted
-inbox, financial status, distribution statements, and device management. It uses
+inbox, annual billing and coverage, financial status, distribution statements, and device management. It uses
 bounded values, stable error codes, cancellation, and explicit ownership rather
 than exporting internal domain structs or secret bytes.
 
@@ -453,15 +502,15 @@ than presenting that fixture as a business commitment.
 
 The pilot is complete when clean installations can enroll and recover identities,
 exchange encrypted relationship requests and accepted messages, enforce follow-up
-preferences, survive deadlines and failures, and reproduce a simulated quarter
+preferences, survive deadlines and failures, and reproduce an annual allocation and member payment cycle
 with correct unpaid obligations. The operator can deploy, reconcile, restore,
 and support it without arbitrary database edits. The published pilot policy
 states simulation limits, retention, abuse review, and deletion behavior.
 
-The first assignment is therefore to establish the revised semantic baseline
-and its conformance vectors. After that, Milestone~0 and the smallest service/CLI
-walking skeleton provide a bounded product start. Preserving the earlier
-per-message bond model is not a prerequisite for this revised plan; preserving
-the agreed guarantees under the new request model is.
+The next assignment is Milestone~0 and the smallest service/CLI path over the
+existing libraries. It should start the service, establish authenticated
+administration, and expose a durable simulated annual charge. Later milestones
+extend that path through encrypted requests and the annual member cycle without
+reimplementing the domain rules.
 
 \end{document}

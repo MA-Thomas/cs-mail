@@ -23,6 +23,7 @@ pub enum ReceivedOutcome {
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Refusal {
+    Billing(cs_mail_billing::BillingError),
     Protocol(ProtocolError),
     Admission(cs_mail_protocol::admission::AdmissionFailure),
     Capability(CapabilityError),
@@ -35,6 +36,7 @@ pub enum Refusal {
 impl Refusal {
     pub fn into_error(self) -> StorageError {
         match self {
+            Self::Billing(e) => StorageError::Billing(e),
             Self::Protocol(e) => StorageError::Protocol(e),
             Self::Admission(e) => StorageError::AdmissionRefused(e),
             Self::Capability(e) => StorageError::Capability(e),
@@ -80,7 +82,10 @@ pub(super) fn require_drained(tx: &mut Transaction<'_>) -> Result<(), StorageErr
     }
     Ok(())
 }
-fn registry_locked(tx: &mut Transaction<'_>, key: &str) -> Result<KeyRegistry, StorageError> {
+pub(super) fn registry_locked(
+    tx: &mut Transaction<'_>,
+    key: &str,
+) -> Result<KeyRegistry, StorageError> {
     Ok(tx
         .query_opt(
             "SELECT registry FROM cs_key_registries WHERE aggregate_key=$1 FOR UPDATE",
@@ -282,7 +287,7 @@ impl PostgresEngine {
         let content_ref = match &operation {
             Operation::Message(a) => Some(a.content_ref),
             Operation::Protocol(c) => match c.command() {
-                ProtocolCommand::AdmitRequest { content_ref, .. }
+                ProtocolCommand::SubmitRequestToRecipient { content_ref, .. }
                 | ProtocolCommand::AdmitFollowup { content_ref, .. } => Some(*content_ref),
                 _ => None,
             },
@@ -453,8 +458,9 @@ impl PostgresEngine {
                         let financials = payments
                             .get(request_id)
                             .ok_or(StorageError::Protocol(ProtocolError::IncompleteSnapshot))?;
-                        let operation = if receipt.evidence.operation_id == financials.capture.id {
-                            &financials.capture
+                        let operation = if receipt.evidence.operation_id == financials.capture().id
+                        {
+                            financials.capture()
                         } else {
                             financials
                                 .refund()
@@ -516,7 +522,7 @@ fn receipt_kind(operation: &Operation, outcome: &ReceivedOutcome) -> ReceiptKind
         if o.transition.protocol_events.is_empty() {
             return ReceiptKind::NoChange;
         }
-        if matches!(operation,Operation::Protocol(c) if matches!(c.command(),ProtocolCommand::AdmitRequest{..}))
+        if matches!(operation,Operation::Protocol(c) if matches!(c.command(),ProtocolCommand::SubmitRequestToRecipient{..}))
             && !o.transition.delivered
         {
             return ReceiptKind::SettlementCommitted;
@@ -529,9 +535,8 @@ fn receipt_kind(operation: &Operation, outcome: &ReceivedOutcome) -> ReceiptKind
         Operation::Protocol(c) => match c.command() {
             ProtocolCommand::IssueRequestTerms { .. } => ReceiptKind::ContactTermsIssued,
             ProtocolCommand::CreateRequest { .. } => ReceiptKind::ReservationCommitted,
-            ProtocolCommand::AdmitRequest { .. } | ProtocolCommand::AdmitFollowup { .. } => {
-                ReceiptKind::AdmissionCommitted
-            }
+            ProtocolCommand::SubmitRequestToRecipient { .. }
+            | ProtocolCommand::AdmitFollowup { .. } => ReceiptKind::AdmissionCommitted,
             ProtocolCommand::AcceptRelationship { .. }
             | ProtocolCommand::RejectRelationship { .. }
             | ProtocolCommand::BlockRelationship { .. }
@@ -544,21 +549,63 @@ fn receipt_kind(operation: &Operation, outcome: &ReceivedOutcome) -> ReceiptKind
         },
     }
 }
+#[allow(clippy::too_many_lines)] // Request state, funding reservations and external work share one atomic boundary.
 fn apply_protocol(
     transaction: &mut Transaction<'_>,
     aggregate_key: &str,
     authorized: &KernelCommand<ProtocolCommand>,
     now: CanonicalTime,
-    policy: PolicySnapshot,
+    mut policy: PolicySnapshot,
     journal_position: JournalPosition,
     content_available: bool,
 ) -> Result<DurableExecutionOutcome, StorageError> {
     let mut aggregate = load_locked_aggregate(transaction, aggregate_key)?;
+    if matches!(
+        authorized.command(),
+        ProtocolCommand::IssueRequestTerms { .. }
+            | ProtocolCommand::CreateRequest { .. }
+            | ProtocolCommand::SubmitRequestToRecipient { .. }
+            | ProtocolCommand::AdmitFollowup { .. }
+    ) {
+        let account =
+            billing::identity_account(transaction, aggregate.state.relationship.key.recipient)?;
+        if account.scope() != policy.financial.scope || !account.covers(now) {
+            return Err(cs_mail_billing::BillingError::ServiceNotCovered.into());
+        }
+        billing::check_local_sender_coverage(
+            transaction,
+            aggregate.state.relationship.key.sender,
+            now,
+        )?;
+    }
+    if matches!(
+        authorized.command(),
+        ProtocolCommand::IssueRequestTerms { .. }
+    ) {
+        let row = transaction
+            .query_opt(
+                "SELECT policy,preference FROM cs_recipient_pricing WHERE recipient=$1",
+                &[&aggregate.state.relationship.key.recipient.0.to_string()],
+            )?
+            .ok_or(ProtocolError::PolicyInvalid)?;
+        let pricing = row
+            .get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)
+            .0;
+        let preference = row
+            .get::<_, Option<Json<cs_mail_protocol::pricing::RecipientCollateralPreference>>>(1)
+            .map(|p| p.0);
+        policy.apply_pricing(&pricing.resolve_quote(preference.as_ref())?);
+        if billing::arrangement(transaction, policy.financial.scope, policy.unit)?.0
+            != policy.payment_provider_key
+        {
+            return Err(ProtocolError::PolicyInvalid.into());
+        }
+    }
     let target = match authorized.command() {
         ProtocolCommand::CreateRequest { request_id, .. }
-        | ProtocolCommand::AdmitRequest { request_id, .. }
+        | ProtocolCommand::SubmitRequestToRecipient { request_id, .. }
         | ProtocolCommand::AdmitFollowup { request_id, .. }
-        | ProtocolCommand::CancelPreparingRequest { request_id, .. }
+        | ProtocolCommand::CancelRequestSubmission { request_id, .. }
         | ProtocolCommand::ExpireRequest { request_id, .. }
         | ProtocolCommand::RecordPayment { request_id, .. } => Some(*request_id),
         _ => None,
@@ -621,6 +668,35 @@ fn apply_protocol(
         policy,
     };
     let manifest = transition(&snapshot, authorized, &context)?;
+    match authorized.command() {
+        ProtocolCommand::CreateRequest { request_id, .. } => {
+            let account =
+                billing::identity_account(transaction, snapshot.state.relationship.key.sender)?;
+            let financials = manifest
+                .next_payments
+                .get(request_id)
+                .ok_or(ProtocolError::MissingRecord)?;
+            billing::reserve_source(transaction, account.id(), financials.capture())?;
+        }
+        ProtocolCommand::RecordPayment {
+            request_id,
+            receipt,
+        } => {
+            let financials = manifest
+                .next_payments
+                .get(request_id)
+                .ok_or(ProtocolError::MissingRecord)?;
+            if receipt.evidence.operation_id == financials.capture().id {
+                billing::record_source(
+                    transaction,
+                    financials.capture(),
+                    receipt,
+                    financials.provider_key(),
+                )?;
+            }
+        }
+        _ => {}
+    }
     let admission_failure = context.admission.err();
     let next_ledger = snapshot.ledger.apply(&manifest.ledger_batch)?;
     persist_manifest(
@@ -808,6 +884,16 @@ fn apply_free(
     content_available: bool,
 ) -> Result<BondFreeAdmissionOutcome, StorageError> {
     let aggregate = load_locked_aggregate(transaction, aggregate_key)?;
+    let account =
+        billing::identity_account(transaction, aggregate.state.relationship.key.recipient)?;
+    if !account.covers(now) {
+        return Err(cs_mail_billing::BillingError::ServiceNotCovered.into());
+    }
+    billing::check_local_sender_coverage(
+        transaction,
+        aggregate.state.relationship.key.sender,
+        now,
+    )?;
 
     let record = if content_available {
         transaction.query_opt("SELECT record FROM cs_encrypted_content WHERE aggregate_key=$1 AND content_ref=$2 FOR SHARE",&[&aggregate_key,&request.content_ref.0.to_string()])?.map(|r|r.get::<_,Json<EncryptedContentRecord>>(0).0)
@@ -1231,6 +1317,7 @@ fn classify_refusal(error: StorageError) -> Result<Refusal, StorageError> {
         StorageError::Protocol(ProtocolError::AdmissionRefused(reason))
         | StorageError::AdmissionRefused(reason) => Refusal::Admission(reason),
         StorageError::Protocol(error) => Refusal::Protocol(error),
+        StorageError::Billing(error) => Refusal::Billing(error),
         StorageError::Capability(error) => Refusal::Capability(error),
         StorageError::DuplicateConflict => Refusal::DuplicateConflict,
         StorageError::VersionConflict => Refusal::VersionConflict,
@@ -1239,4 +1326,110 @@ fn classify_refusal(error: StorageError) -> Result<Refusal, StorageError> {
         StorageError::Security(SecurityError::InvalidSignature) => Refusal::InvalidQuote,
         error => return Err(error),
     })
+}
+
+impl PostgresEngine {
+    /// Trusted deployment configuration of the recipient's bounded pricing menu.
+    /// # Errors
+    /// Rejects invalid policies, stale versions and menus excluding an existing preference.
+    pub fn configure_request_pricing(
+        &self,
+        pricing: &cs_mail_protocol::pricing::RequestPricingPolicy,
+    ) -> Result<(), StorageError> {
+        if !pricing.valid() {
+            return Err(ProtocolError::PolicyInvalid.into());
+        }
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut tx = client.transaction()?;
+        require_drained(&mut tx)?;
+        let recipient = load_locked_aggregate(&mut tx, &self.aggregate_key)?
+            .state
+            .relationship
+            .key
+            .recipient;
+        if let Some(row) = tx.query_opt(
+            "SELECT policy,preference FROM cs_recipient_pricing WHERE recipient=$1 FOR UPDATE",
+            &[&recipient.0.to_string()],
+        )? {
+            let previous = row
+                .get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)
+                .0;
+            let preference = row
+                .get::<_, Option<Json<cs_mail_protocol::pricing::RecipientCollateralPreference>>>(1)
+                .map(|p| p.0);
+            if previous != *pricing && previous.version >= pricing.version {
+                return Err(StorageError::VersionConflict);
+            }
+            if pricing.resolve(preference.as_ref()).is_none() {
+                return Err(ProtocolError::PolicyInvalid.into());
+            }
+        }
+        tx.execute("INSERT INTO cs_recipient_pricing(recipient,policy) VALUES($1,$2) ON CONFLICT(recipient) DO UPDATE SET policy=EXCLUDED.policy", &[&recipient.0.to_string(), &Json(pricing)])?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// # Errors
+    /// Rejects invalid recipient authority, unsupported amounts and conflicting versions.
+    pub fn set_collateral_preference(
+        &self,
+        signed: &cs_mail_security::SignedCollateralPreference,
+        now: CanonicalTime,
+        policy: &PolicySnapshot,
+    ) -> Result<(), StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut tx = client.transaction()?;
+        require_drained(&mut tx)?;
+        validate_ingress_scope(
+            &mut tx,
+            &self.aggregate_key,
+            signed.scope.deployment_domain,
+            policy,
+        )?;
+        let relationship = load_locked_aggregate(&mut tx, &self.aggregate_key)?
+            .state
+            .relationship
+            .key;
+        if relationship.recipient != signed.preference.recipient
+            || relationship.reference != signed.scope.relationship
+            || policy.recipient_provider != signed.scope.intended_provider
+        {
+            return Err(SecurityError::SigningScopeMismatch.into());
+        }
+        let registry = registry_locked(&mut tx, &self.aggregate_key)?;
+        let key = registry.active_verifying_key(
+            signed.operational_key,
+            ActorRef::Recipient(signed.preference.recipient),
+            now,
+        )?;
+        signed.verify(&key)?;
+        let row = tx.query_one(
+            "SELECT policy,preference FROM cs_recipient_pricing WHERE recipient=$1 FOR UPDATE",
+            &[&relationship.recipient.0.to_string()],
+        )?;
+        let pricing = row
+            .get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)
+            .0;
+        if signed.preference.version == 0 || pricing.resolve(Some(&signed.preference)).is_none() {
+            return Err(ProtocolError::PolicyInvalid.into());
+        }
+        if let Some(Json(old)) =
+            row.get::<_, Option<Json<cs_mail_protocol::pricing::RecipientCollateralPreference>>>(1)
+        {
+            if old == signed.preference {
+                return Ok(());
+            }
+            if signed.preference.version <= old.version {
+                return Err(StorageError::VersionConflict);
+            }
+        }
+        tx.execute(
+            "UPDATE cs_recipient_pricing SET preference=$2 WHERE recipient=$1",
+            &[
+                &relationship.recipient.0.to_string(),
+                &Json(&signed.preference),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
 }

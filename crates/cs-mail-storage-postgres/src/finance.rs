@@ -8,25 +8,25 @@ use cs_mail_primitives::{AllocationId, PaymentOperationId, RequestId};
 
 /// Point operations assemble only their owner. Allocation and audit require the complete program.
 #[derive(Clone, Copy)]
-enum ProgramRead {
+pub(super) enum ProgramRead {
     All,
     Metadata,
     Lot(PaymentOperationId),
     Member(cs_mail_primitives::MemberId),
     Payable(AllocationId),
 }
-fn load_program(
+pub(super) fn load_program(
     transaction: &mut Transaction<'_>,
     unit: SettlementUnit,
     scope: Option<cs_mail_finance::FinancialScope>,
     read: ProgramRead,
 ) -> Result<FinancialProgram, StorageError> {
     if let Some(scope) = scope {
-        transaction.execute("INSERT INTO cs_financial_programs(settlement_unit,metadata,program_format_version) VALUES($1,$2,4) ON CONFLICT DO NOTHING",&[&i64::from(unit.0),&Json(FinancialProgram::new(scope,unit).metadata())])?;
+        transaction.execute("INSERT INTO cs_financial_programs(settlement_unit,metadata,program_format_version) VALUES($1,$2,6) ON CONFLICT DO NOTHING",&[&i64::from(unit.0),&Json(FinancialProgram::new(scope,unit).metadata())])?;
     }
     let row=transaction.query_one("SELECT metadata,program_format_version,ledger_revision FROM cs_financial_programs WHERE settlement_unit=$1 FOR UPDATE",&[&i64::from(unit.0)])?;
     let version: i16 = row.get(1);
-    if version != 4 {
+    if version != 6 {
         return Err(StorageError::UnsupportedStoredFinancialFormat(version));
     }
     let metadata = row.get::<_, Json<cs_mail_finance::ProgramMetadata>>(0).0;
@@ -47,7 +47,7 @@ fn load_program(
             },
         ),
         ("cs_program_schedules", None),
-        ("cs_program_quarters", None),
+        ("cs_program_annual_allocations", None),
         (
             "cs_program_payables",
             match read {
@@ -80,13 +80,13 @@ fn load_program(
                 }
                 "cs_program_schedules" => {
                     records.schedules.insert(
-                        cs_mail_primitives::QuarterId(id),
+                        cs_mail_primitives::AnnualDistributionId(id),
                         serde_json::from_value(record)?,
                     );
                 }
-                "cs_program_quarters" => {
-                    records.quarters.insert(
-                        cs_mail_primitives::QuarterId(id),
+                "cs_program_annual_allocations" => {
+                    records.annual_allocations.insert(
+                        cs_mail_primitives::AnnualDistributionId(id),
                         serde_json::from_value(record)?,
                     );
                 }
@@ -104,9 +104,22 @@ fn load_program(
         &[&i64::from(unit.0)],
     )?)?;
     let ledger = LedgerView::from_balances(to_u64(row.get(2))?, unit, balances);
-    FinancialProgram::restore(metadata, records, ledger, Vec::new()).map_err(StorageError::Finance)
+    if matches!(read, ProgramRead::All) {
+        FinancialProgram::restore(metadata, records, ledger, Vec::new())
+            .map_err(StorageError::Finance)
+    } else {
+        use cs_mail_finance::ProgramOwner;
+        let owner = match read {
+            ProgramRead::Metadata => ProgramOwner::Metadata,
+            ProgramRead::Lot(id) => ProgramOwner::Funding(id, records.funding.remove(&id)),
+            ProgramRead::Member(id) => ProgramOwner::Member(id, records.members.remove(&id)),
+            ProgramRead::Payable(id) => ProgramOwner::Payable(id, records.payables.remove(&id)),
+            ProgramRead::All => unreachable!(),
+        };
+        FinancialProgram::restore_owner(metadata, owner, ledger).map_err(StorageError::Finance)
+    }
 }
-fn save_program(
+pub(super) fn save_program(
     transaction: &mut Transaction<'_>,
     program: &FinancialProgram,
     event: &serde_json::Value,
@@ -115,27 +128,27 @@ fn save_program(
     transaction.execute(
         "UPDATE cs_financial_programs SET metadata=$2,ledger_revision=$3 WHERE settlement_unit=$1",
         &[
-            &i64::from(program.unit.0),
+            &i64::from(program.unit().0),
             &Json(program.metadata()),
             &to_i64(program.ledger().revision)?,
         ],
     )?;
     let records = program.records();
     macro_rules! save_records {($table:literal,$records:expr)=>{for (id,record) in $records {
-        transaction.execute(concat!("INSERT INTO ",$table,"(settlement_unit,id,record) VALUES($1,$2,$3) ON CONFLICT(settlement_unit,id) DO UPDATE SET record=EXCLUDED.record WHERE ",$table,".record IS DISTINCT FROM EXCLUDED.record"),&[&i64::from(program.unit.0),&id.0.to_string(),&Json(record)])?;
+        transaction.execute(concat!("INSERT INTO ",$table,"(settlement_unit,id,record) VALUES($1,$2,$3) ON CONFLICT(settlement_unit,id) DO UPDATE SET record=EXCLUDED.record WHERE ",$table,".record IS DISTINCT FROM EXCLUDED.record"),&[&i64::from(program.unit().0),&id.0.to_string(),&Json(record)])?;
     }}}
     save_records!("cs_program_lots", &records.funding);
     save_records!("cs_program_members", &records.members);
     save_records!("cs_program_schedules", &records.schedules);
-    save_records!("cs_program_quarters", &records.quarters);
+    save_records!("cs_program_annual_allocations", &records.annual_allocations);
     save_records!("cs_program_payables", &records.payables);
     for (account, balance) in program.ledger().balances() {
-        transaction.execute("INSERT INTO cs_program_accounts(settlement_unit,account_key,account,balance) VALUES($1,$2,$3,$4::text::numeric) ON CONFLICT(settlement_unit,account_key) DO UPDATE SET balance=EXCLUDED.balance WHERE cs_program_accounts.balance IS DISTINCT FROM EXCLUDED.balance",&[&i64::from(program.unit.0),&account_key(*account)?,&Json(account),&balance.to_string()])?;
+        transaction.execute("INSERT INTO cs_program_accounts(settlement_unit,account_key,account,balance) VALUES($1,$2,$3,$4::text::numeric) ON CONFLICT(settlement_unit,account_key) DO UPDATE SET balance=EXCLUDED.balance WHERE cs_program_accounts.balance IS DISTINCT FROM EXCLUDED.balance",&[&i64::from(program.unit().0),&account_key(*account)?,&Json(account),&balance.to_string()])?;
     }
     for (ordinal, entry) in program.journal().iter().enumerate() {
-        transaction.execute("INSERT INTO cs_program_journal(settlement_unit,revision,ordinal,entry) VALUES($1,$2,$3,$4)",&[&i64::from(program.unit.0),&to_i64(program.revision)?,&i32::try_from(ordinal).map_err(|_|StorageError::NumericRange)?,&Json(entry)])?;
+        transaction.execute("INSERT INTO cs_program_journal(settlement_unit,revision,ordinal,entry) VALUES($1,$2,$3,$4)",&[&i64::from(program.unit().0),&to_i64(program.revision())?,&i32::try_from(ordinal).map_err(|_|StorageError::NumericRange)?,&Json(entry)])?;
     }
-    transaction.execute("INSERT INTO cs_financial_events(settlement_unit,revision,event,received_at) VALUES($1,$2,$3,$4)",&[&i64::from(program.unit.0),&to_i64(program.revision)?,&Json(event),&to_i64(at.0)?])?;
+    transaction.execute("INSERT INTO cs_financial_events(settlement_unit,revision,event,received_at) VALUES($1,$2,$3,$4)",&[&i64::from(program.unit().0),&to_i64(program.revision())?,&Json(event),&to_i64(at.0)?])?;
     Ok(())
 }
 pub(super) fn persist_forfeitures(
@@ -150,11 +163,11 @@ pub(super) fn persist_forfeitures(
             Some(source.terms.scope),
             ProgramRead::Lot(source.id),
         )?;
-        let previous = program.revision;
+        let previous = program.revision();
         program
             .record_forfeiture(source.clone(), at)
             .map_err(StorageError::Finance)?;
-        if program.revision != previous {
+        if program.revision() != previous {
             save_program(transaction, &program, &serde_json::to_value(source)?, at)?;
         }
     }
@@ -178,8 +191,11 @@ impl PostgresEngine {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
         ingress::require_drained(&mut tx)?;
+        if billing::arrangement(&mut tx, scope, unit)?.0 != provider_key {
+            return Err(StorageError::Finance(ProgramError::InvalidPayment));
+        }
         let program = load_program(&mut tx, unit, Some(scope), ProgramRead::Metadata)?;
-        if program.scope != scope {
+        if program.scope() != scope {
             return Err(StorageError::VersionConflict);
         }
         let row=tx.query_one("SELECT administration_key,payment_provider_key FROM cs_financial_programs WHERE settlement_unit=$1",&[&i64::from(unit.0)])?;
@@ -210,9 +226,6 @@ impl PostgresEngine {
             signed.unit,
             None,
             match &signed.command {
-                cs_mail_finance::ProgramCommand::PreparePayout { allocation, .. } => {
-                    ProgramRead::Payable(*allocation)
-                }
                 cs_mail_finance::ProgramCommand::Hold { source, .. }
                 | cs_mail_finance::ProgramCommand::ClearMaturity { source, .. } => {
                     ProgramRead::Lot(*source)
@@ -240,30 +253,55 @@ impl PostgresEngine {
             if row.get::<_,Json<serde_json::Value>>(0).0!=command {return Err(StorageError::DuplicateConflict);}
             let outcome=row.get::<_,Json<ProgramOutcome>>(1).0;tx.commit()?;return Ok(outcome);
         }
-        if signed.scope != program.scope || signed.expected_revision != program.revision {
+        if signed.scope != program.scope() || signed.expected_revision != program.revision() {
             return Err(StorageError::VersionConflict);
         }
-        let previous = program.revision;
+        if let cs_mail_finance::ProgramCommand::Enroll {
+            member,
+            identity_digest,
+            ..
+        } = &signed.command
+        {
+            let row = tx
+                .query_opt(
+                    "SELECT record FROM cs_billing_accounts WHERE member=$1 FOR SHARE",
+                    &[&member.0.to_string()],
+                )?
+                .ok_or(StorageError::Finance(ProgramError::InsufficientEvidence))?;
+            let account = row.get::<_, Json<cs_mail_billing::BillingAccount>>(0).0;
+            if account.scope() != signed.scope
+                || account.unit() != signed.unit
+                || account.bank().evidence().person != *identity_digest
+            {
+                return Err(StorageError::Finance(ProgramError::InsufficientEvidence));
+            }
+        }
+        let previous = program.revision();
         let outcome = program
             .apply(&signed.command, at)
             .map_err(StorageError::Finance)?;
-        if let ProgramOutcome::Payout(Some(operation)) = &outcome {
-            let cs_mail_finance::PaymentKind::MemberPayout { allocation } = operation.kind else {
-                return Err(StorageError::Finance(ProgramError::InvalidPayment));
-            };
+        if let cs_mail_finance::ProgramCommand::PublishAnnualDistribution(schedule) =
+            &signed.command
+        {
             work::enqueue(
                 &mut tx,
                 &self.aggregate_key,
-                work::WorkSource::Payout(operation.id),
-                &WorkPayload::MemberPayment {
+                work::WorkSource::AnnualAllocation(schedule.id),
+                &WorkPayload::AnnualAllocation {
                     unit: signed.unit,
-                    allocation,
-                    operation: operation.id,
+                    distribution: schedule.id,
                 },
-                at,
+                schedule.cutoff,
             )?;
         }
-        if program.revision != previous {
+        if matches!(
+            signed.command,
+            cs_mail_finance::ProgramCommand::FinalizeAnnualDistribution(_)
+                | cs_mail_finance::ProgramCommand::CompensateMember { .. }
+        ) {
+            enqueue_distribution_preparation(&mut tx, &self.aggregate_key, &program)?;
+        }
+        if program.revision() != previous {
             save_program(&mut tx, &program, &command, at)?;
         }
         tx.execute("INSERT INTO cs_financial_commands (settlement_unit,operation_key,command,outcome,received_at) VALUES ($1,$2,$3,$4,$5)",&[&i64::from(signed.unit.0),&operation_key,&Json(command),&Json(&outcome),&to_i64(at.0)?])?;
@@ -293,13 +331,15 @@ impl PostgresEngine {
     /// Returns a request's still-pending operation and whether capture cancellation is required.
     /// # Errors
     /// Returns snapshot errors or missing requests.
-    pub fn pending_request_payment(
+    pub fn authorize_request_dispatch(
         &self,
         request: RequestId,
         operation: PaymentOperationId,
-    ) -> Result<Option<(PaymentOperation, bool)>, StorageError> {
+    ) -> Result<Option<cs_mail_finance::ProcessorRequest>, StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let row = client.query_opt(
+        let mut tx = client.transaction()?;
+        ingress::require_drained(&mut tx)?;
+        let row = tx.query_opt(
             "SELECT f.financials,a.protocol_format_version FROM cs_request_financials f JOIN cs_relationship_aggregates a USING(aggregate_key) WHERE f.aggregate_key=$1 AND f.request_id=$2",
             &[&self.aggregate_key, &request.0.to_string()],
         )?;
@@ -309,12 +349,16 @@ impl PostgresEngine {
                 return Err(StorageError::UnsupportedStoredProtocolFormat(version));
             }
         }
-        Ok(row.and_then(|r| {
+        let request = row.and_then(|r| {
             r.get::<_, Json<cs_mail_finance::RequestFinancials>>(0)
                 .0
                 .pending_payment(operation)
-                .map(|(o, c)| (o.clone(), c))
-        }))
+        });
+        if let Some(cs_mail_finance::ProcessorRequest::Submit(operation)) = &request {
+            billing::authorize_source(&mut tx, operation)?;
+        }
+        tx.commit()?;
+        Ok(request)
     }
     /// Applies independently signed provider evidence through the ordinary atomic transition.
     /// # Errors
@@ -354,16 +398,15 @@ impl PostgresEngine {
         )?;
         if let Some(row) = &row {
             let version: i16 = row.get(1);
-            if version != 4 {
+            if version != 6 {
                 return Err(StorageError::UnsupportedStoredFinancialFormat(version));
             }
         }
         Ok(row.and_then(|r| {
             r.get::<_, Json<cs_mail_finance::MemberPayable>>(0)
                 .0
-                .lifecycle
                 .pending()
-                .filter(|o| o.id == operation)
+                .find(|o| o.id == operation)
                 .cloned()
         }))
     }
@@ -389,11 +432,11 @@ impl PostgresEngine {
             .ok_or(StorageError::Finance(ProgramError::InvalidPayment))?
             .try_into()
             .map_err(|_| StorageError::NumericRange)?;
-        let previous = program.revision;
+        let previous = program.revision();
         program
             .confirm_payout(id, receipt, &key, now)
             .map_err(StorageError::Finance)?;
-        if program.revision != previous {
+        if program.revision() != previous {
             save_program(&mut tx, &program, &serde_json::to_value(receipt)?, now)?;
         }
         tx.commit()?;
@@ -427,6 +470,58 @@ pub(super) fn persist_forfeiture_holds(
             &program,
             &serde_json::json!({"reversed_forfeiture":id}),
             at,
+        )?;
+    }
+    Ok(())
+}
+
+impl PostgresEngine {
+    /// The signed, published annual schedule authorizes this deterministic cutoff operation.
+    /// # Errors
+    /// Rejects missing schedules, premature/out-of-order finalization and storage failures.
+    pub fn finalize_due_annual_distribution(
+        &self,
+        unit: SettlementUnit,
+        distribution: cs_mail_primitives::AnnualDistributionId,
+        at: CanonicalTime,
+    ) -> Result<(), StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut tx = client.transaction()?;
+        ingress::require_drained(&mut tx)?;
+        let mut program = load_program(&mut tx, unit, None, ProgramRead::All)?;
+        let previous = program.revision();
+        program
+            .finalize_annual_distribution(distribution, at)
+            .map_err(StorageError::Finance)?;
+        if program.revision() != previous {
+            save_program(
+                &mut tx,
+                &program,
+                &serde_json::json!({"annual_distribution":distribution}),
+                at,
+            )?;
+        }
+        enqueue_distribution_preparation(&mut tx, &self.aggregate_key, &program)?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+fn enqueue_distribution_preparation(
+    tx: &mut Transaction<'_>,
+    aggregate: &str,
+    program: &FinancialProgram,
+) -> Result<(), StorageError> {
+    for payable in program.payables() {
+        work::enqueue(
+            tx,
+            aggregate,
+            work::WorkSource::PrepareDistribution(payable.id()),
+            &WorkPayload::PrepareDistribution {
+                unit: program.unit(),
+                allocation: payable.id(),
+            },
+            payable.terms().due_at(),
         )?;
     }
     Ok(())

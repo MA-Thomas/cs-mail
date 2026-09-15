@@ -1,13 +1,13 @@
 use crate::membership::Member;
 use crate::{
-    Forfeiture, ForfeitureLot, LotLifecycle, MemberPayable, PayableLifecycle, QuarterAllocation,
-    QuarterSchedule,
+    AnnualAllocation, AnnualDistributionSchedule, Forfeiture, ForfeitureLot, LotLifecycle,
+    MemberPayable, PaymentState,
 };
 use crate::{PaymentError, PaymentOperation, SignedPaymentEvidence};
 use cs_mail_ledger::{Account, LedgerBatch, LedgerError, LedgerState};
 use cs_mail_primitives::{
-    AllocationId, CanonicalTime, Duration, FinancialEventId, MemberId, Money, PaymentOperationId,
-    PolicyVersion, QuarterId, SettlementUnit,
+    AllocationId, AnnualDistributionId, CanonicalTime, Duration, FinancialEventId, MemberId, Money,
+    PaymentOperationId, PolicyVersion, SettlementUnit,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -47,6 +47,7 @@ pub enum IntentionalActivity {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProgramError {
     InvalidPolicy,
+    IncompleteSnapshot,
     DuplicateConflict,
     MissingRecord,
     TooEarly,
@@ -81,10 +82,12 @@ pub struct ProgramJournalEntry {
     pub batch: LedgerBatch,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "StoredProgram", into = "StoredProgram")]
 pub struct FinancialProgram {
-    pub scope: crate::FinancialScope,
-    pub unit: SettlementUnit,
-    pub revision: u64,
+    scope: crate::FinancialScope,
+    unit: SettlementUnit,
+    revision: u64,
+    complete: bool,
     ledger: LedgerState,
     records: ProgramRecords,
     journal: Vec<ProgramJournalEntry>,
@@ -95,8 +98,8 @@ pub struct FinancialProgram {
 pub struct ProgramRecords {
     pub funding: BTreeMap<PaymentOperationId, ForfeitureLot>,
     pub members: BTreeMap<MemberId, Member>,
-    pub schedules: BTreeMap<QuarterId, QuarterSchedule>,
-    pub quarters: BTreeMap<QuarterId, QuarterAllocation>,
+    pub schedules: BTreeMap<AnnualDistributionId, AnnualDistributionSchedule>,
+    pub annual_allocations: BTreeMap<AnnualDistributionId, AnnualAllocation>,
     pub payables: BTreeMap<AllocationId, MemberPayable>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -107,11 +110,59 @@ pub struct ProgramMetadata {
     pub last_event_at: CanonicalTime,
 }
 impl FinancialProgram {
+    pub const fn scope(&self) -> crate::FinancialScope {
+        self.scope
+    }
+    pub const fn unit(&self) -> SettlementUnit {
+        self.unit
+    }
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+    fn require_complete(&self) -> Result<(), ProgramError> {
+        if self.complete {
+            Ok(())
+        } else {
+            Err(ProgramError::IncompleteSnapshot)
+        }
+    }
+    /// Restores a single selected owner; complete-program operations reject this view.
+    /// # Errors
+    /// Rejects inconsistent stored owner records or ledger values.
+    pub fn restore_owner(
+        metadata: ProgramMetadata,
+        owner: ProgramOwner,
+        ledger: cs_mail_ledger::LedgerView,
+    ) -> Result<Self, ProgramError> {
+        let mut records = ProgramRecords::default();
+        match owner {
+            ProgramOwner::Metadata => {}
+            ProgramOwner::Funding(id, value) => {
+                if let Some(value) = value {
+                    records.funding.insert(id, value);
+                }
+            }
+            ProgramOwner::Member(id, value) => {
+                if let Some(value) = value {
+                    records.members.insert(id, value);
+                }
+            }
+            ProgramOwner::Payable(id, value) => {
+                if let Some(value) = value {
+                    records.payables.insert(id, value);
+                }
+            }
+        }
+        let mut program = Self::restore(metadata, records, ledger, Vec::new())?;
+        program.complete = false;
+        Ok(program)
+    }
     pub fn new(scope: crate::FinancialScope, unit: SettlementUnit) -> Self {
         Self {
             scope,
             unit,
             revision: 0,
+            complete: true,
             ledger: LedgerState::new(unit),
             records: ProgramRecords::default(),
             journal: Vec::new(),
@@ -142,11 +193,89 @@ impl FinancialProgram {
         if ledger.unit != metadata.unit {
             return Err(ProgramError::InvalidPolicy);
         }
-        ledger.total_value()?;
+        if ledger.total_value()? != Money::ZERO {
+            return Err(ProgramError::InvalidPayment);
+        }
+        let mut identities = BTreeSet::new();
+        for (id, member) in &records.members {
+            if *id != member.id
+                || member.identity_digest == [0; 32]
+                || !identities.insert(member.identity_digest)
+                || member.changes.is_empty()
+                || member.changes.iter().any(|(at, _)| *at < member.joined_at)
+                || member.changes.windows(2).any(|pair| pair[0].0 > pair[1].0)
+            {
+                return Err(ProgramError::InvalidPolicy);
+            }
+        }
+        for (id, lot) in &records.funding {
+            if *id != lot.source.id
+                || lot.source.unit != metadata.unit
+                || lot.source.terms.scope != metadata.scope
+                || lot.source.amount.is_zero()
+            {
+                return Err(ProgramError::InvalidPolicy);
+            }
+            lot.source.terms.validate()?;
+            let clearance = match lot.lifecycle {
+                LotLifecycle::Pending { .. } => None,
+                LotLifecycle::Cleared(c) | LotLifecycle::Assessed { clearance: c, .. } => Some(c),
+            };
+            if clearance.is_some_and(|c| {
+                c.evidence.0 == 0
+                    || lot
+                        .source
+                        .forfeited_at
+                        .checked_add(lot.source.terms.maturity_delay)
+                        .is_none_or(|at| c.at < at)
+            }) {
+                return Err(ProgramError::InsufficientEvidence);
+            }
+        }
+        for (id, payable) in &records.payables {
+            payable.validate(metadata.scope, metadata.unit)?;
+            if *id != payable.id()
+                || ledger.balance(Account::MemberPayable(*id)) != payable.outstanding()
+            {
+                return Err(ProgramError::InvalidPayment);
+            }
+        }
+        for (id, schedule) in &records.schedules {
+            if *id != schedule.id || !schedule.is_calendar_year() {
+                return Err(ProgramError::InvalidPolicy);
+            }
+        }
+        for (id, allocation) in &records.annual_allocations {
+            if *id != allocation.schedule.id
+                || !allocation.schedule.is_calendar_year()
+                || allocation.finalized_at < allocation.schedule.cutoff
+                || allocation
+                    .corporate_share
+                    .checked_add(allocation.member_contribution)
+                    != Some(allocation.newly_eligible)
+                || allocation.members.iter().collect::<BTreeSet<_>>().len()
+                    != allocation.members.len()
+                || allocation.funding.iter().collect::<BTreeSet<_>>().len()
+                    != allocation.funding.len()
+            {
+                return Err(ProgramError::InvalidPolicy);
+            }
+            let count = allocation.members.len() as u128;
+            let total = u128::from(allocation.each.minor_units()) * count
+                + u128::from(allocation.remainder.minor_units());
+            if total > u128::from(u64::MAX)
+                || (count == 0 && !allocation.each.is_zero())
+                || (count > 0 && u128::from(allocation.remainder.minor_units()) >= count)
+            {
+                return Err(ProgramError::InvalidPolicy);
+            }
+        }
+
         Ok(Self {
             scope: metadata.scope,
             unit: metadata.unit,
             revision: metadata.revision,
+            complete: true,
             last_event_at: metadata.last_event_at,
             records,
             ledger: LedgerState::from_view(ledger),
@@ -159,8 +288,8 @@ impl FinancialProgram {
     pub fn payables(&self) -> impl Iterator<Item = &MemberPayable> {
         self.records.payables.values()
     }
-    pub fn quarter(&self, id: QuarterId) -> Option<&QuarterAllocation> {
-        self.records.quarters.get(&id)
+    pub fn distribution(&self, id: AnnualDistributionId) -> Option<&AnnualAllocation> {
+        self.records.annual_allocations.get(&id)
     }
     pub fn journal(&self) -> &[ProgramJournalEntry] {
         &self.journal
@@ -279,6 +408,7 @@ impl FinancialProgram {
         status: MembershipStatus,
         at: CanonicalTime,
     ) -> Result<(), ProgramError> {
+        self.require_complete()?;
         self.atomic(at, |p| {
             if identity_digest == [0; 32]
                 || p.records.members.contains_key(&id)
@@ -341,12 +471,13 @@ impl FinancialProgram {
     }
     /// Publishes an immutable calendar and eligibility policy before the period begins.
     /// # Errors
-    /// Rejects late publication, overlapping quarters, and changed definitions.
-    pub fn publish_quarter(
+    /// Rejects late publication, overlapping annual periods, and changed definitions.
+    pub fn publish_annual_distribution(
         &mut self,
-        schedule: QuarterSchedule,
+        schedule: AnnualDistributionSchedule,
         at: CanonicalTime,
     ) -> Result<(), ProgramError> {
+        self.require_complete()?;
         if let Some(old) = self.records.schedules.get(&schedule.id) {
             return if old == &schedule {
                 Ok(())
@@ -355,7 +486,7 @@ impl FinancialProgram {
             };
         }
         self.atomic(at, |p| {
-            if !schedule.is_calendar_quarter()
+            if !schedule.is_calendar_year()
                 || at > schedule.start
                 || schedule.start >= schedule.cutoff
                 || schedule.eligibility.minimum_active_days == 0
@@ -373,12 +504,13 @@ impl FinancialProgram {
     /// Freezes funding, equal allocations, assessment marks, and carryforward atomically.
     /// # Errors
     /// Rejects early or out-of-order closure and arithmetic failures.
-    pub fn finalize_quarter(
+    pub fn finalize_annual_distribution(
         &mut self,
-        id: QuarterId,
+        id: AnnualDistributionId,
         at: CanonicalTime,
-    ) -> Result<QuarterAllocation, ProgramError> {
-        if let Some(q) = self.records.quarters.get(&id) {
+    ) -> Result<AnnualAllocation, ProgramError> {
+        self.require_complete()?;
+        if let Some(q) = self.records.annual_allocations.get(&id) {
             return Ok(q.clone());
         }
         self.atomic(at, |p| {
@@ -391,11 +523,9 @@ impl FinancialProgram {
             if at < schedule.cutoff {
                 return Err(ProgramError::TooEarly);
             }
-            if p.records
-                .schedules
-                .values()
-                .any(|s| s.cutoff <= schedule.start && !p.records.quarters.contains_key(&s.id))
-            {
+            if p.records.schedules.values().any(|s| {
+                s.cutoff <= schedule.start && !p.records.annual_allocations.contains_key(&s.id)
+            }) {
                 return Err(ProgramError::ClosedPeriod);
             }
             let members = p.qualifying_members(&schedule);
@@ -433,16 +563,16 @@ impl FinancialProgram {
                     }
                     p.records.payables.insert(
                         allocation,
-                        MemberPayable {
-                            id: allocation,
-                            member: *member,
-                            quarter: schedule.id,
-                            amount: each,
-                            lifecycle: PayableLifecycle::Due,
-                            previous_payments: Vec::new(),
-                            events: BTreeMap::new(),
-                            correction: None,
-                        },
+                        MemberPayable::new(
+                            allocation,
+                            *member,
+                            schedule.id,
+                            each,
+                            schedule.payment.clone(),
+                            p.scope,
+                            p.unit,
+                            None,
+                        )?,
                     );
                     batch.transfer(
                         Account::RestrictedMemberFunds,
@@ -452,7 +582,7 @@ impl FinancialProgram {
                 }
             }
             p.post(at, FinancialEventId(schedule.id.0), batch)?;
-            let result = QuarterAllocation {
+            let result = AnnualAllocation {
                 schedule,
                 finalized_at: at,
                 members,
@@ -463,27 +593,25 @@ impl FinancialProgram {
                 each,
                 remainder,
             };
-            p.records.quarters.insert(id, result.clone());
+            p.records.annual_allocations.insert(id, result.clone());
             Ok(result)
         })
     }
-    /// Fixes a verified payout destination. Below-threshold obligations remain payable.
+    /// Prepares one due allocation using the account's verified bank association.
     /// # Errors
-    /// Rejects missing payables, unverified destinations, or conflicting retries.
-    pub fn prepare_payout(
+    /// Rejects the wrong beneficiary, premature execution, or an unresolved recovery state.
+    pub fn prepare_member_payment(
         &mut self,
         id: AllocationId,
-        destination: [u8; 32],
-        minimum: Money,
+        bank: &crate::VerifiedBankAccount,
         at: CanonicalTime,
     ) -> Result<Option<PaymentOperation>, ProgramError> {
         self.atomic(at, |p| {
-            let payable = p
-                .records
+            p.records
                 .payables
                 .get_mut(&id)
-                .ok_or(ProgramError::MissingRecord)?;
-            payable.prepare(p.scope, p.unit, destination, minimum)
+                .ok_or(ProgramError::MissingRecord)?
+                .prepare(bank, at)
         })
     }
     /// Discharges a fixed payable only after verified provider confirmation.
@@ -518,14 +646,14 @@ impl FinancialProgram {
 fn allocation_id(
     scope: crate::FinancialScope,
     unit: SettlementUnit,
-    quarter: QuarterId,
+    distribution: AnnualDistributionId,
     member: MemberId,
 ) -> AllocationId {
     let mut h = Sha256::new();
     h.update(b"cs-mail/member-allocation/v2");
     h.update(scope.canonical_bytes());
     h.update(unit.0.to_be_bytes());
-    h.update(quarter.0.to_be_bytes());
+    h.update(distribution.0.to_be_bytes());
     h.update(member.0.to_be_bytes());
     let hash = h.finalize();
     let mut b = [0; 16];
@@ -538,7 +666,7 @@ pub enum ProgramCommand {
     CompensateMember {
         event: FinancialEventId,
         member: MemberId,
-        quarter: QuarterId,
+        distribution: AnnualDistributionId,
         amount: Money,
         reason: String,
     },
@@ -555,7 +683,7 @@ pub enum ProgramCommand {
         member: MemberId,
         activity: IntentionalActivity,
     },
-    PublishQuarter(QuarterSchedule),
+    PublishAnnualDistribution(AnnualDistributionSchedule),
     Hold {
         source: PaymentOperationId,
         hold: bool,
@@ -564,18 +692,12 @@ pub enum ProgramCommand {
         source: PaymentOperationId,
         evidence: FinancialEventId,
     },
-    FinalizeQuarter(QuarterId),
-    PreparePayout {
-        allocation: AllocationId,
-        destination: [u8; 32],
-        minimum: Money,
-    },
+    FinalizeAnnualDistribution(AnnualDistributionId),
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProgramOutcome {
     Recorded,
-    Quarter(QuarterAllocation),
-    Payout(Option<PaymentOperation>),
+    AnnualAllocation(AnnualAllocation),
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SignedProgramCommand {
@@ -648,10 +770,10 @@ impl FinancialProgram {
             ProgramCommand::CompensateMember {
                 event,
                 member,
-                quarter,
+                distribution,
                 amount,
                 reason,
-            } => self.compensate_member(*event, *member, *quarter, *amount, reason, at)?,
+            } => self.compensate_member(*event, *member, *distribution, *amount, reason, at)?,
             ProgramCommand::Enroll {
                 member,
                 identity_digest,
@@ -663,24 +785,17 @@ impl FinancialProgram {
             ProgramCommand::RecordActivity { member, activity } => {
                 self.record_activity(*member, *activity, at)?;
             }
-            ProgramCommand::PublishQuarter(schedule) => {
-                self.publish_quarter(schedule.clone(), at)?;
+            ProgramCommand::PublishAnnualDistribution(schedule) => {
+                self.publish_annual_distribution(schedule.clone(), at)?;
             }
             ProgramCommand::Hold { source, hold } => self.set_hold(*source, *hold, at)?,
             ProgramCommand::ClearMaturity { source, evidence } => {
                 self.clear_maturity(*source, *evidence, at)?;
             }
-            ProgramCommand::FinalizeQuarter(id) => {
-                return self.finalize_quarter(*id, at).map(ProgramOutcome::Quarter);
-            }
-            ProgramCommand::PreparePayout {
-                allocation,
-                destination,
-                minimum,
-            } => {
+            ProgramCommand::FinalizeAnnualDistribution(id) => {
                 return self
-                    .prepare_payout(*allocation, *destination, *minimum, at)
-                    .map(ProgramOutcome::Payout);
+                    .finalize_annual_distribution(*id, at)
+                    .map(ProgramOutcome::AnnualAllocation);
             }
         }
         Ok(ProgramOutcome::Recorded)
@@ -696,7 +811,10 @@ pub enum AllocationStatus {
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MemberStatementEntry {
-    pub quarter: QuarterId,
+    pub rebate_amount: Money,
+    pub excess_amount: Money,
+    pub outstanding: Money,
+    pub distribution: AnnualDistributionId,
     pub amount: Money,
     pub status: AllocationStatus,
     pub correction: Option<FinancialEventId>,
@@ -708,38 +826,42 @@ impl FinancialProgram {
             .values()
             .filter(|p| p.member == member)
             .map(|p| MemberStatementEntry {
-                quarter: p.quarter,
+                rebate_amount: p.rebate(),
+                excess_amount: p.excess(),
+                outstanding: p.outstanding(),
+                distribution: p.distribution,
                 amount: p.amount,
-                status: match p.lifecycle {
-                    PayableLifecycle::Due => AllocationStatus::Allocated,
-                    PayableLifecycle::Pending(_) => AllocationStatus::AwaitingPayment,
-                    PayableLifecycle::Paid(_) => AllocationStatus::Confirmed,
-                    PayableLifecycle::Reversed(_) => AllocationStatus::AwaitingReconciliation,
+                status: match p.payment().map(crate::PaymentExecution::state) {
+                    None => AllocationStatus::Allocated,
+                    Some(PaymentState::Pending) => AllocationStatus::AwaitingPayment,
+                    Some(PaymentState::Settled { .. }) => AllocationStatus::Confirmed,
+                    Some(_) => AllocationStatus::AwaitingReconciliation,
                 },
                 correction: p.correction,
             })
             .collect()
     }
-    /// Adds a separately authorized, company-funded correction without rewriting a quarter.
+    /// Adds a separately authorized, company-funded correction without rewriting a distribution.
     /// # Errors
-    /// Requires an existing member, finalized quarter, unique cause, and a bounded explanation.
+    /// Requires an existing member, finalized distribution, unique cause, and a bounded explanation.
     #[allow(clippy::too_many_arguments)]
     pub fn compensate_member(
         &mut self,
         event: FinancialEventId,
         member: MemberId,
-        quarter: QuarterId,
+        distribution: AnnualDistributionId,
         amount: Money,
         reason: &str,
         at: CanonicalTime,
     ) -> Result<(), ProgramError> {
+        self.require_complete()?;
         self.atomic(at, |p| {
             if event.0 == 0
                 || amount.is_zero()
                 || reason.trim().is_empty()
                 || reason.len() > 2000
                 || !p.records.members.contains_key(&member)
-                || !p.records.quarters.contains_key(&quarter)
+                || !p.records.annual_allocations.contains_key(&distribution)
             {
                 return Err(ProgramError::InvalidPolicy);
             }
@@ -757,16 +879,19 @@ impl FinancialProgram {
             }
             p.records.payables.insert(
                 id,
-                MemberPayable {
+                MemberPayable::new(
                     id,
                     member,
-                    quarter,
+                    distribution,
                     amount,
-                    lifecycle: PayableLifecycle::Due,
-                    previous_payments: Vec::new(),
-                    events: BTreeMap::new(),
-                    correction: Some(event),
-                },
+                    p.records.annual_allocations[&distribution]
+                        .schedule
+                        .payment
+                        .clone(),
+                    p.scope,
+                    p.unit,
+                    Some(event),
+                )?,
             );
             let mut batch = LedgerBatch::new();
             batch.transfer(
@@ -780,7 +905,7 @@ impl FinancialProgram {
 }
 
 impl FinancialProgram {
-    fn qualifying_members(&self, schedule: &QuarterSchedule) -> Vec<MemberId> {
+    fn qualifying_members(&self, schedule: &AnnualDistributionSchedule) -> Vec<MemberId> {
         self.records
             .members
             .values()
@@ -791,7 +916,7 @@ impl FinancialProgram {
     fn assess_funding(
         &mut self,
         funding: &[PaymentOperationId],
-        schedule: &QuarterSchedule,
+        schedule: &AnnualDistributionSchedule,
         batch: &mut LedgerBatch,
     ) -> Result<(Money, Money, Money), ProgramError> {
         let mut new = Money::ZERO;
@@ -865,5 +990,40 @@ impl FinancialProgram {
             }
             Ok(())
         })
+    }
+}
+
+/// The selected storage owner is explicit; omitted owners cannot be used for allocation.
+pub enum ProgramOwner {
+    Metadata,
+    Funding(PaymentOperationId, Option<ForfeitureLot>),
+    Member(MemberId, Option<Member>),
+    Payable(AllocationId, Option<MemberPayable>),
+}
+#[derive(Deserialize, Serialize)]
+struct StoredProgram {
+    metadata: ProgramMetadata,
+    complete: bool,
+    records: ProgramRecords,
+    ledger: cs_mail_ledger::LedgerView,
+    journal: Vec<ProgramJournalEntry>,
+}
+impl From<FinancialProgram> for StoredProgram {
+    fn from(v: FinancialProgram) -> Self {
+        Self {
+            metadata: v.metadata(),
+            complete: v.complete,
+            ledger: v.ledger(),
+            records: v.records,
+            journal: v.journal,
+        }
+    }
+}
+impl TryFrom<StoredProgram> for FinancialProgram {
+    type Error = ProgramError;
+    fn try_from(v: StoredProgram) -> Result<Self, Self::Error> {
+        let mut program = Self::restore(v.metadata, v.records, v.ledger, v.journal)?;
+        program.complete = v.complete;
+        Ok(program)
     }
 }

@@ -1,0 +1,17 @@
+[package]
+name = "cs-mail-billing"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs-mail-primitives = { path = "../cs-mail-primitives" }
+cs-mail-finance = { path = "../cs-mail-finance" }
+cs-mail-ledger = { path = "../cs-mail-ledger" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ed25519-dalek.workspace = true
+
+[lints]
+workspace = true

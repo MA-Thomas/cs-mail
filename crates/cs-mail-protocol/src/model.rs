@@ -53,8 +53,10 @@ pub struct RequestHistory {
     pub reference: RequestHistoryRef,
     pub recipient: ProtocolIdentity,
     pub level: u32,
-    pub earliest_next_admission: CanonicalTime,
-    pub preparation: Option<RequestReservation>,
+
+    pub earliest_next_submission: CanonicalTime,
+
+    pub pending_submission: Option<RequestReservation>,
     pub version: RequestHistoryVersion,
     pub last_event: Option<EventRef>,
     pub changed_at: CanonicalTime,
@@ -69,21 +71,21 @@ impl RequestHistory {
             reference,
             recipient,
             level: 0,
-            earliest_next_admission: now,
-            preparation: None,
+            earliest_next_submission: now,
+            pending_submission: None,
             version: RequestHistoryVersion::default(),
             last_event: None,
             changed_at: now,
         }
     }
-    pub(crate) fn record_admission(
+    pub(crate) fn record_submission(
         &mut self,
         reservation: RequestReservation,
         at: CanonicalTime,
         backoff: Duration,
         event: EventRef,
     ) -> Result<(), ProtocolError> {
-        if self.preparation != Some(reservation) {
+        if self.pending_submission != Some(reservation) {
             return Err(ProtocolError::QuoteVersionStale);
         }
         let next_level = self
@@ -92,7 +94,7 @@ impl RequestHistory {
             .ok_or(ProtocolError::ArithmeticOverflow)?;
         self.extend_cooldown(at, backoff, at, event)?;
         self.level = next_level;
-        self.preparation = None;
+        self.pending_submission = None;
         Ok(())
     }
     pub(crate) fn extend_cooldown(
@@ -109,7 +111,7 @@ impl RequestHistory {
             .version
             .checked_next()
             .ok_or(ProtocolError::ArithmeticOverflow)?;
-        self.earliest_next_admission = self.earliest_next_admission.max(next);
+        self.earliest_next_submission = self.earliest_next_submission.max(next);
         self.version = version;
         self.last_event = Some(event);
         self.changed_at = now;
@@ -117,59 +119,71 @@ impl RequestHistory {
     }
 }
 
+/// The time allowed to complete funding and submit the initial message.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Preparation {
+pub struct SubmissionPreparation {
     pub deadline: CanonicalTime,
 }
+/// The provider's commitment to deliver the request and await the recipient's decision.
+/// Submission does not establish transport completion or reading.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RequestAdmission {
+pub struct RequestSubmission {
     pub at: CanonicalTime,
     pub decision_deadline: CanonicalTime,
 }
-/// Every admitted outcome retains its admission facts; cancellation has none.
+/// Every submitted outcome retains its submission facts; cancellation has none.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RequestLifecycle {
-    Preparing(Preparation),
-    Open(RequestAdmission),
+    /// Funding and the initial message are prepared here; submission has not yet committed.
+    PreparingSubmission(SubmissionPreparation),
+    /// Initial delivery is committed and the recipient decision window has started.
+    AwaitingRecipientDecision(RequestSubmission),
     Accepted {
-        admission: RequestAdmission,
+        submission: RequestSubmission,
         event: EventRef,
     },
     Rejected {
-        admission: RequestAdmission,
+        submission: RequestSubmission,
         event: EventRef,
     },
     Expired {
-        admission: RequestAdmission,
+        submission: RequestSubmission,
         event: EventRef,
     },
     Cancelled {
-        preparation: Preparation,
+        submission_preparation: SubmissionPreparation,
         event: EventRef,
     },
 }
 impl RequestLifecycle {
     pub const fn is_terminal(self) -> bool {
-        !matches!(self, Self::Preparing(_) | Self::Open(_))
+        !matches!(
+            self,
+            Self::PreparingSubmission(_) | Self::AwaitingRecipientDecision(_)
+        )
     }
-    pub const fn is_open(self) -> bool {
-        matches!(self, Self::Open(_))
+    pub const fn is_awaiting_recipient_decision(self) -> bool {
+        matches!(self, Self::AwaitingRecipientDecision(_))
     }
-    pub const fn is_preparing(self) -> bool {
-        matches!(self, Self::Preparing(_))
+    pub const fn is_preparing_submission(self) -> bool {
+        matches!(self, Self::PreparingSubmission(_))
     }
-    pub const fn preparation(self) -> Option<Preparation> {
+    pub const fn submission_preparation(self) -> Option<SubmissionPreparation> {
         match self {
-            Self::Preparing(p) | Self::Cancelled { preparation: p, .. } => Some(p),
+            Self::PreparingSubmission(p)
+            | Self::Cancelled {
+                submission_preparation: p,
+                ..
+            } => Some(p),
             _ => None,
         }
     }
-    pub const fn admission(self) -> Option<RequestAdmission> {
+    pub const fn submission(self) -> Option<RequestSubmission> {
         match self {
-            Self::Open(a)
-            | Self::Accepted { admission: a, .. }
-            | Self::Rejected { admission: a, .. }
-            | Self::Expired { admission: a, .. } => Some(a),
+            Self::AwaitingRecipientDecision(a)
+            | Self::Accepted { submission: a, .. }
+            | Self::Rejected { submission: a, .. }
+            | Self::Expired { submission: a, .. } => Some(a),
             _ => None,
         }
     }
@@ -177,6 +191,7 @@ impl RequestLifecycle {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RequestTerms {
+    pub pricing_policy_version: PolicyVersion,
     pub quote_id: QuoteId,
     pub protocol_version: ProtocolVersion,
     pub policy_version: PolicyVersion,
@@ -194,7 +209,8 @@ pub struct RequestTerms {
     pub request_level: u32,
     pub eligibility_time: CanonicalTime,
     pub unit: SettlementUnit,
-    pub admission_window: Duration,
+
+    pub submission_window: Duration,
     pub decision_window: Duration,
     pub issued_at: CanonicalTime,
     pub expires_at: CanonicalTime,

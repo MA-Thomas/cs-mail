@@ -7,6 +7,7 @@
 \usepackage{enumitem}
 \usepackage{hyperref}
 \usepackage{microtype}
+\usepackage{needspace}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
 
@@ -18,7 +19,7 @@
 
 \title{\textit{cs-mail}: Permissioned Communication\\\large One Relationship Request, One Conditional Charge}
 \author{C-SQD}
-\date{Draft 0.6 --- September 2026}
+\date{Draft 0.8 --- September 2026}
 
 \usepackage{tabularx}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
@@ -29,15 +30,17 @@
 
 \begin{abstract}
 \textit{cs-mail} makes permission to communicate explicit. Accepted contacts
-write without protocol message charges. A sender without permission may submit
+write without protocol message charges under their providers' service terms. A sender without permission may submit
 one relationship request, accompanied by a communication and a conditional
-charge. Acceptance produces a full refund; expiry retains a processing amount;
+charge. Acceptance produces a full refund; expiry retains the processing amount;
 rejection also forfeits the collateral component. Forfeitures support a
-company-owned pool for later equal distributions among qualifying active members,
+company-owned pool for annual equal allocations among qualifying active members,
 after a disclosed corporate allocation. The recipient does not receive the money
 from the person they rejected. Native content remains end-to-end encrypted, and
 the system separates communication permission, financial obligations, and external
-payment execution.
+payment execution. An annual utility charge purchases service; a member's pool
+allocation is paid separately as one lump sum. Its utility-fee rebate and excess
+cash classifications are bookkeeping and reporting distinctions within that payment.
 \end{abstract}
 
 \section{Permission Before Repeated Interruption}
@@ -58,13 +61,41 @@ The payment is not a purchase of attention, priority, or a reply. Its purpose is
 to make unwanted relationship requests costly while returning the charge when
 the recipient welcomes the relationship.
 
+\section{An Annual Communications Service}
+
+C-SQD provides cs-mail as a communications utility with a published annual price.
+The annual utility charge is collected well before its specified year-long
+service period begins. Accepted messages
+and express-lane messages carry no relationship-request charge; a request to
+establish new permission has its own conditional charge.
+
+Service terms fix the price, advance collection date, and purchased interval.
+Failed or late collection retries apply to the same price and interval; they
+do not move or extend the service year. Exact calendar or anniversary anchors
+and collection lead times remain policy decisions. The full annual price is
+collected independently of any pool allocation. A later distribution is a
+separate payment, not a discount when collecting the next year's fee.
+
+The current C-SQD product ties one identifiable person to one account and a
+verified bank account, while allowing multiple email addresses. It uses one
+configured payment-processing arrangement. The companion
+\href{DOMAIN_MODEL.md}{C-SQD domain model} records these confirmed rules and
+distinguishes deferred decisions from implementation choices.
+
+Payment must satisfy the provider's funding-finality policy before it grants new
+service coverage. A pending bank transaction does not yet purchase service.
+Funding does not start coverage before the specified interval or authorize past
+service retroactively. Once coverage ends, new communication requires funded coverage again, while
+existing permission records, refunds, and finalized member obligations retain
+their separate lifecycles.
+
 \section{Alice Requests a Relationship with Bob}
 
 Bob has not accepted Alice. She sees a dollar-denominated quote with a processing component of
-$0.25$ and collateral of $4.75$, for a total charge of $5.00$. She reviews the
+$0.50$ and collateral of $5.00$, for a total charge of $5.50$. She reviews the
 outcomes and decision window, authorizes the request, and supplies an encrypted
-initial message. The service admits it after confirming the required payment
-and durable delivery preparation. That admission starts one decision clock and
+initial message. The service submits the request to Bob once funding is finalized
+and delivery preparation is durable. Submission starts one decision clock and
 creates one request for Bob to consider.
 
 \begin{center}
@@ -73,33 +104,35 @@ creates one request for Bob to consider.
 \toprule
 Outcome & The original charge & Future contact \\
 \midrule
-Accept & All $5.00$ is due back to Alice. & Alice gains standing permission to write to Bob. \\
-Reject & $0.25$ is processing revenue; $4.75$ becomes pending forfeiture. & Alice remains unaccepted and must wait until another request is eligible. \\
-Expire & $0.25$ is processing revenue; $4.75$ is due back to Alice. & No standing permission is granted. \\
+Accept & All $5.50$ is due back to Alice. & Alice gains standing permission to write to Bob. \\
+Reject & $0.50$ is processing revenue; $5.00$ becomes pending forfeiture. & Alice remains unaccepted and must wait until another request is eligible. \\
+Expire & $0.50$ is processing revenue; $5.00$ is due back to Alice. & No standing permission is granted. \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-Bob may allow follow-up messages while this request is open. If he does, Alice
+The processing amount is standardized by deployment policy. Bob chooses his
+collateral requirement from a bounded menu, with $5.00$ as the default. Alice
+always sees the resulting total before authorizing it. Bob may allow follow-up
+messages while this request awaits his decision. If he does, Alice
 can add context without another charge, another request prompt, or a later
 deadline. If he does not, the service refuses the follow-up. A sender cannot
-evade that choice by paying again against the same open request.
+evade that choice by paying again against the same pending request.
 
 When Bob accepts, the service records permission and the refund obligation
-together. The payment provider may confirm the refund afterward, so Alice's
+together. The payment processor may confirm the refund afterward, so Alice's
 statement distinguishes a refund due from a refund completed. Bob's acceptance
 is directed: it does not automatically accept Bob as a sender to Alice or grant
 permission to every other identity Alice controls.
 
 \section{The Request Has a Beginning and an End}
 
-Preparing a request is different from admitting it. An abandoned or cancelled
-request that has not been admitted receives a full void or refund and produces
-no recipient solicitation. If payment succeeds after cancellation, the service
+Before submission, the service prepares the charge and encrypted delivery. If the sender cancels or the preparation deadline passes, the service voids or
+refunds the full amount without soliciting the recipient. If payment succeeds after cancellation, the service
 still refunds it rather than reviving the request. Closing an application alone
 is not proof that a payment was cancelled.
 
-After admission, ordinary delivery retries do not reopen the sender's cancellation
+After submission, ordinary delivery retries do not reopen the sender's cancellation
 option. The request remains subject to the recipient's decision or its fixed
 expiry. This prevents cancellation from becoming a way to escape rejection.
 A message's own delivery-validity limit remains separate from that decision clock.
@@ -107,7 +140,7 @@ A message's own delivery-validity limit remains separate from that decision cloc
 Rejection and blocking express different intentions. Rejection declines this
 request but may permit a later eligible one. Blocking prohibits contact until an
 authenticated unblock, including communication through a previously issued lane.
-Blocking an open request uses its rejection allocation; blocking before admission
+Blocking a request awaiting a decision uses its rejection allocation; blocking before submission
 returns the charge in full. Blocking after finalization does not reopen money.
 
 The service records when an authenticated decision arrives. A timely acceptance
@@ -128,50 +161,73 @@ money that may still be needed for refunds, disputes, or required reserves canno
 fund distributions. Separate accounting protects these obligations even when
 the underlying cash is held through the same financial provider.
 
-The proposed corporate allocation is 3\% of newly eligible forfeitures, assessed
+The current corporate-allocation default is 3\% of newly eligible forfeitures, assessed
 once under the rate disclosed for each request. The remaining 97\% enters the
 member-restricted portion. For example, $10{,}000$ of newly eligible forfeitures
 would yield $300$ of corporate revenue and $9{,}700$ for members. This is not an
 extra charge to the sender. Previously assessed member funds are not charged
-another 3\% each quarter.
+another 3\% in later years.
 
 C-SQD cannot spend the member-restricted portion on operations or payout fees.
-Those costs come from its processing revenue and corporate allocation. The exact
-launch rate remains a policy choice; the separation between corporate revenue,
-restricted funds, and outstanding obligations is part of the model.
+Annual utility charges, retained processing amounts, and the corporate allocation
+support the service. The 3\% rate is the current policy default and must appear
+in the published live terms; restricted funds and outstanding obligations remain
+separately accounted for.
 
-\section{A Quarterly Benefit for Active Members}
+\section{An Annual Allocation for Active Members}
 
-The pool benefits qualifying active members generally, rather than only those
-who receive unsolicited requests. Each qualifying member receives an equal
-share. Sending more requests, rejecting more people, or choosing more expensive
-collateral does not increase that share. Multiple mailboxes or devices do not
-create multiple memberships.
+The pool benefits qualifying active members generally. Each qualifying member
+receives an equal share. Sending more requests, rejecting more people, or choosing
+more expensive collateral does not increase that share. Multiple mailboxes or
+devices do not create multiple memberships.
 
-At a published quarterly cutoff, C-SQD fixes the eligible membership and funding
-records. It then finalizes equal allocations and records the amount owed to each
-member. A failed payment or an amount below a disclosed payment threshold remains
-that member's payable; it does not return to the next quarter's equal split.
-Unallocated fractional-unit remainder stays in the restricted pool. If no members
-qualify, unallocated funds carry forward.
+The network uses a calendar year, from January 1 to the next January 1 in UTC.
+After that cutoff, it fixes the eligible membership and funding records and
+finalizes an equal allocation for each qualifying member. Unallocated
+fractional-unit remainder stays in the restricted pool; if no members qualify,
+unallocated funds carry forward. An amount already assigned to a member remains
+owed to that member even if its payment fails or is delayed.
 
-The proposed activity rule is modest: membership for at least 30 days and
-intentional authenticated use on two distinct days during the quarter. Reading
-can count; background polling alone does not. These are candidate defaults,
-along with verification and opt-in requirements. Organization eligibility and
-the remaining launch parameters are identified in the deployment profile rather
-than treated as settled facts here.
+The proposed activity rule is membership for at least 30 days and intentional
+authenticated use on two distinct days during the year. Reading can count;
+background polling alone does not. Verification and program opt-in also apply.
+Renewing service for the next year is not an eligibility condition: the allocation
+recognizes qualification during the completed year.
 
-This program is distinct from a wallet. Members cannot spend a pending allocation
-on another request, transfer it to someone else, or deposit generally spendable
-funds. External providers execute charges, refunds, and payments of finalized
-obligations. The ledger records what the service owes and what has been confirmed.
+\section{One Annual Distribution, Two Reporting Classifications}
+
+One payment covers the member's share of the previous calendar year's company-wide
+collateral pool. C-SQD automatically sends it to the verified bank account
+associated with the member's account. The published distribution date is separate
+from collection and service dates; no fixed charge-date offset is assumed.
+Ordinarily payment occurs during a service year whose utility charge was already
+paid. It does not depend on renewal or pending funding for the next year.
+
+Let $D_i$ be the allocation and $U$ the annual utility charge. The utility-fee
+rebate/refund classification is $R_i=\min(D_i,U)$, and excess cash is
+$X_i=\max(0,D_i-U)$. These sum to the single payment $D_i$. With $U=\$120$,
+an \$80 allocation is reported entirely as rebate; a \$170 allocation has
+\$120 rebate and \$50 excess. In each case the member receives one bank payment.
+The rebate is not an independently executed processor refund, and remaining
+refund capacity does not determine it. Actual request refunds are separate
+capture-linked obligations.
+
+The statement distinguishes the earlier service charge from the later distribution
+and shows one completion status with its rebate/excess breakdown. Failed or
+uncertain execution is recovered as the same obligation, not as two payment legs.
+Distribution does not revoke purchased coverage. Closure preserves the minimal
+route needed for outstanding distributions and refunds; no separate payout
+instructions or member-selected minimum are part of this flow.
+
+There is no spendable cs-mail balance: members cannot apply an allocation to
+another request, transfer it to another member, or deposit general-purpose funds.
+The configured payment processor executes the operations recorded by the ledger.
 
 \section{Persistence Without Repeated Charges Inside a Request}
 
 One request per directed identity pair does not by itself stop someone from
 returning after every expiry or rotating addresses. New requests therefore remain
-subject to recipient policy and principal-scoped history. Initial admission
+subject to recipient policy and principal-scoped history. Initial submission
 advances that history; an allowed follow-up does not. Acceptance of a public
 identity bypasses the request gate for that identity without erasing the history
 that applies to its aliases.
@@ -181,10 +237,9 @@ or rejection, with recipient controls and explicit invitations. The final
 durations belong in published, versioned policy. Blocking remains effective
 regardless of willingness to pay.
 
-Earlier drafts also proposed a refundable persistence reserve $L_k$. Its future
-use remains unresolved. The revised base model does not enable a nonzero reserve;
-retaining one would require explicit charge and release rules. It could attach
-only to a new request and would never fund the pool or corporate revenue.
+The base request has only the processing and collateral components described
+above. Follow-up limits and new-request cooldowns govern persistence without
+adding another financial component.
 
 \section{Permission for Organizations: Express Lanes}
 
@@ -218,7 +273,8 @@ and facts needed for their roles.
 Public protocol identities are the personas people address and accept. A private
 principal connects control, recovery, and anti-abuse continuity inside its
 identity authority. A distribution-program member is a third concept: a verified
-subject eligible for one share. These identities should not collapse into one
+person eligible for one share. These roles refer to the same account holder but
+their scoped identifiers should not collapse into one
 global identifier passed through every service.
 
 Relationship and financial systems use separately scoped opaque handles. A
@@ -231,7 +287,7 @@ make those distinctions operational.
 The envelope may expose a minimal authenticated purpose, origin, validity time,
 and permission or request reference needed for delivery. It does not expose
 subjects, bodies, attachments, legal identity, or unrelated financial activity.
-The external payment provider receives required request/payment references and
+The external payment processor receives required request/payment references and
 amounts, not the message history within the request. Recipient follow-up rules
 are admission policy; ranking and notification preferences are presentation
 policy. Neither silently rewrites financial terms.
@@ -253,7 +309,7 @@ independently retained by a sender or recipient.
 \section{The Ledger Makes the Promise Testable}
 
 The canonical ledger uses append-only double-entry accounting. It distinguishes
-request amounts, refunds due, pending forfeitures, corporate allocations,
+utility-service receipts, request amounts, refunds due, pending forfeitures, corporate allocations,
 restricted funds, and member payables. A recipient decision commits its financial
 obligations and retryable external work together. Payment confirmation arrives
 as a separate fact. Duplicate commands and provider notifications must not repeat
@@ -272,11 +328,12 @@ fabricated activity, collusion, or manipulation of deadlines. Visible acceptance
 signed receipts, pricing controls, scoped review, and aggregate reconciliation
 remain necessary parts of the design.
 
+\Needspace{12\baselineskip}
 \section{Building and Operating the First Deployment}
 
 C-SQD can begin as one operator with a deterministic request kernel, a durable
 ledger, encrypted delivery, and external payment adapters. The desktop pilot
-can simulate charges and quarterly distributions without real redeemable value.
+can simulate annual service purchases, request charges, and member payments without real redeemable value.
 That allows the request and failure stories to be tested before members depend
 on live payments.
 
@@ -291,7 +348,7 @@ The \textit{Protocol Specification} defines the common request rules. The
 \textit{Deployment and Migration Profile} defines the C-SQD financial program and
 identifies open launch parameters. The architecture and desktop plan translate
 that model into staged implementation. Together they preserve the central
-experience: permission is explicit, an open request carries one charge, and
-ordinary communication within an accepted relationship carries none.
+experience: permission is explicit, a pending request carries one charge, and
+ordinary communication within an accepted relationship carries no request charge.
 
 \end{document}

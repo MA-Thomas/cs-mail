@@ -3,6 +3,36 @@
 use core::fmt;
 use serde::{Deserialize, Serialize};
 
+/// An exact Gregorian UTC date at midnight; supported years are 1970 through 9999.
+pub fn calendar_date(year: u16, month: u8, day: u8) -> Option<CanonicalTime> {
+    if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) {
+        return None;
+    }
+    let leap = |y: u16| y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400));
+    let months = [
+        31_u64,
+        if leap(year) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if day == 0 || u64::from(day) > months[usize::from(month - 1)] {
+        return None;
+    }
+    let years: u64 = (1970..year).map(|y| if leap(y) { 366 } else { 365 }).sum();
+    Some(CanonicalTime(
+        (years + months[..usize::from(month - 1)].iter().sum::<u64>() + u64::from(day - 1))
+            * 86_400_000,
+    ))
+}
+
 macro_rules! id_type {
     ($name:ident) => {
         #[derive(
@@ -34,9 +64,11 @@ id_type!(RetentionClassId);
 id_type!(FundingRef);
 id_type!(PaymentOperationId);
 id_type!(MemberId);
+id_type!(BillingAccountId);
+id_type!(ServiceContractId);
 id_type!(ProgramRef);
 id_type!(AllocationId);
-id_type!(QuarterId);
+id_type!(AnnualDistributionId);
 id_type!(FinancialEventId);
 id_type!(FederationTransactionRef);
 id_type!(RecoveryFactorRef);
@@ -534,7 +566,7 @@ pub struct EventRef(pub JournalPosition);
 /// its task variant and the command or state transition materialized from it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ScheduleTask {
-    AdmissionTimeout(RequestId),
+    SubmissionTimeout(RequestId),
     RequestExpiry(RequestId),
     LaneHorizon(LaneId),
 }
