@@ -1,4 +1,5 @@
-//! Product acceptance tests through signed account actions and durable workers.
+use cs_mail_test_support::enrollment;
+// Product acceptance tests through signed account actions and durable workers.
 use cs_mail_billing::*;
 use cs_mail_finance::*;
 use cs_mail_primitives::*;
@@ -56,34 +57,24 @@ fn setup() -> (String, PostgresEngine) {
     engine
         .configure_financial_program(scope(), SettlementUnit(1), key(42), key(7))
         .unwrap();
-    let mut registry = KeyRegistry::default();
-    registry
-        .register(
-            OperationalKeyRef(1),
-            ActorRef::Sender(ProtocolIdentity(10)),
-            key(1),
+    engine
+        .initialize_key_registry(&KeyRegistry::default(), at(2025, 1, 1))
+        .unwrap();
+    for (id, persona) in [(1, 10), (2, 20)] {
+        enrollment::enroll(
+            &engine,
+            cs_mail_accounts::EnrollmentInput {
+                bank: bank(id, 1),
+                persona: ProtocolIdentity(persona),
+                actor: ActorRef::Sender(ProtocolIdentity(persona)),
+                key_ref: OperationalKeyRef(id),
+                initial_key: key(u8::try_from(id).unwrap()),
+                maximum_unresolved: 2,
+            },
             at(2025, 1, 1),
         )
         .unwrap();
-    registry
-        .register(
-            OperationalKeyRef(2),
-            ActorRef::Sender(ProtocolIdentity(20)),
-            key(2),
-            at(2025, 1, 1),
-        )
-        .unwrap();
-    engine
-        .initialize_key_registry(&registry, at(2025, 1, 1))
-        .unwrap();
-    engine
-        .register_billing_account(
-            &bank(1, 1),
-            &[ProtocolIdentity(10), ProtocolIdentity(11)],
-            &[ActorRef::Sender(ProtocolIdentity(10))],
-            2,
-        )
-        .unwrap();
+    }
     (url, engine)
 }
 fn bank(account: u128, version: u64) -> BankVerification {
@@ -117,7 +108,9 @@ fn account_command(
         &[1; 32],
     )
     .unwrap();
-    engine.execute_billing_command(&signed, time).unwrap()
+    cs_mail_application::billing::operations::BillingService::new(engine, &|| time)
+        .execute_command(&signed)
+        .unwrap()
 }
 fn program_command(
     engine: &PostgresEngine,
@@ -178,14 +171,14 @@ fn collection_is_advance_fixed_and_rechecks_a_queued_source() {
     let mut processor = SimulatedProcessor::new([7; 32]);
     let lease = Duration(30_000);
     assert_eq!(
-        run_utility_payment_batch(&engine, &mut processor, at(2025, 9, 30), lease, 10)
+        run_utility_payment_batch(&engine, &mut processor, &|| at(2025, 9, 30), lease, 10)
             .unwrap()
             .claimed,
         0
     );
     processor.pend_next_submission();
     assert_eq!(
-        run_utility_payment_batch(&engine, &mut processor, at(2025, 10, 1), lease, 10)
+        run_utility_payment_batch(&engine, &mut processor, &|| at(2025, 10, 1), lease, 10)
             .unwrap()
             .retried,
         1
@@ -193,13 +186,15 @@ fn collection_is_advance_fixed_and_rechecks_a_queued_source() {
     processor
         .resolve(first.id, FinancialEventId(900), PaymentOutcome::Failed)
         .unwrap();
-    run_utility_payment_batch(&engine, &mut processor, at(2025, 10, 2), lease, 10).unwrap();
+    run_utility_payment_batch(&engine, &mut processor, &|| at(2025, 10, 2), lease, 10).unwrap();
     let report =
-        run_utility_payment_batch(&engine, &mut processor, at(2026, 10, 1), lease, 10).unwrap();
+        run_utility_payment_batch(&engine, &mut processor, &|| at(2026, 10, 1), lease, 10).unwrap();
     assert_eq!(report.retried, 1);
     assert_eq!(processor.operation_count(), 1);
     assert!(processor.lookup(second.id).unwrap().is_none());
-    engine.reverify_funding_source(&bank(1, 2)).unwrap();
+    cs_mail_application::billing::operations::BillingService::new(&engine, &|| at(2025, 1, 1))
+        .reverify_funding(&bank(1, 2))
+        .unwrap();
     let retry = account_command(
         &engine,
         BillingCommand::RetryCollection {
@@ -210,7 +205,7 @@ fn collection_is_advance_fixed_and_rechecks_a_queued_source() {
     )
     .remove(0);
     assert_ne!(retry.id, first.id);
-    run_utility_payment_batch(&engine, &mut processor, at(2026, 11, 1), lease, 10).unwrap();
+    run_utility_payment_batch(&engine, &mut processor, &|| at(2026, 11, 1), lease, 10).unwrap();
     let account = engine.billing_account(BillingAccountId(1)).unwrap();
     assert_eq!(
         account.contracts()[&ServiceContractId(first.id.0)]
@@ -226,40 +221,52 @@ fn collection_is_advance_fixed_and_rechecks_a_queued_source() {
 #[ignore = "requires isolated PostgreSQL"]
 fn bank_identity_and_account_authority_cannot_be_substituted() {
     let (_url, engine) = setup();
-    let mut duplicate = bank(2, 1);
-    duplicate.person = [1; 32];
-    duplicate = duplicate.sign(&[77; 32]).unwrap();
+    // A distinct enrollment cannot claim an existing persona, even with valid bank evidence.
     assert!(
-        engine
-            .register_billing_account(&duplicate, &[ProtocolIdentity(20)], &[], 1)
-            .is_err()
+        enrollment::enroll(
+            &engine,
+            cs_mail_accounts::EnrollmentInput {
+                bank: bank(3, 1),
+                persona: ProtocolIdentity(10),
+                actor: ActorRef::Sender(ProtocolIdentity(10)),
+                key_ref: OperationalKeyRef(3),
+                initial_key: key(3),
+                maximum_unresolved: 2,
+            },
+            at(2025, 1, 1)
+        )
+        .is_err()
     );
     assert!(
         engine
             .configure_payment_arrangement(scope(), SettlementUnit(1), key(8), key(77))
             .is_err()
     );
-    let signed = SignedBillingCommand::sign(
-        BillingAccountId(1),
-        OperationalKeyRef(2),
-        scope(),
-        0,
-        IdempotencyKey(90),
-        BillingCommand::CloseAccount,
-        &[2; 32],
-    )
+    let repository = engine.accounts(|| at(2025, 2, 1));
+    let product = repository.persona_account(ProtocolIdentity(10)).unwrap();
+    let signed = cs_mail_accounts::control::SignedAccountCommand {
+        account: product,
+        operational_key: OperationalKeyRef(2),
+        expected_revision: 0,
+        idempotency_key: IdempotencyKey(90),
+        product: "cs-mail/test".into(),
+        command: cs_mail_accounts::control::AccountCommand::SetStatus(
+            cs_mail_accounts::control::AccountStatus::Closed,
+        ),
+        signature: Vec::new(),
+    }
+    .sign(&[2; 32])
     .unwrap();
     assert!(
-        engine
-            .execute_billing_command(&signed, at(2025, 2, 1))
-            .is_err()
+        cs_mail_application::accounts::operations::AccountService::new(&repository, &|| at(
+            2025, 2, 1
+        ))
+        .execute_command(&signed)
+        .is_err()
     );
     assert_eq!(
-        engine
-            .billing_account(BillingAccountId(1))
-            .unwrap()
-            .status(),
-        AccountStatus::Open
+        repository.account_control(product).unwrap().status(),
+        cs_mail_accounts::control::AccountStatus::Active
     );
     let ghost = SignedProgramCommand::sign(
         scope(),
@@ -362,7 +369,17 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
         &engine,
         ProgramCommand::Enroll {
             member: MemberId(1),
-            identity_digest: [1; 32],
+            identity_digest: {
+                let mut db = Client::connect(&url, NoTls).unwrap();
+                db.query_one(
+                    "SELECT membership_identity FROM cs_product_accounts WHERE billing='1'",
+                    &[],
+                )
+                .unwrap()
+                .get::<_, Vec<u8>>(0)
+                .try_into()
+                .unwrap()
+            },
             status: MembershipStatus {
                 opted_in: true,
                 verified: true,
@@ -393,14 +410,15 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
     );
     let mut processor = SimulatedProcessor::new([7; 32]);
     let lease = Duration(30_000);
-    run_utility_payment_batch(&engine, &mut processor, at(2025, 10, 1), lease, 10).unwrap();
+    run_utility_payment_batch(&engine, &mut processor, &|| at(2025, 10, 1), lease, 10).unwrap();
     assert!(
         !engine
             .billing_account(BillingAccountId(1))
             .unwrap()
             .covers(at(2025, 10, 1))
     );
-    run_annual_distribution_batch(&engine, SettlementUnit(1), at(2026, 1, 1), lease, 10).unwrap();
+    run_annual_distribution_batch(&engine, SettlementUnit(1), &|| at(2026, 1, 1), lease, 10)
+        .unwrap();
     assert!(
         engine
             .financial_program(SettlementUnit(1))
@@ -411,8 +429,31 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
             .payment()
             .is_none()
     );
-    account_command(&engine, BillingCommand::CloseAccount, 2, at(2026, 2, 1));
-    run_annual_distribution_batch(&engine, SettlementUnit(1), due, lease, 10).unwrap();
+    let repository = engine.accounts(|| at(2026, 2, 1));
+    let product = repository.persona_account(ProtocolIdentity(10)).unwrap();
+    let product_name = repository
+        .product_account(product)
+        .unwrap()
+        .identity
+        .product;
+    cs_mail_application::accounts::operations::AccountService::new(&repository, &|| at(2026, 2, 1))
+        .execute_command(
+            &cs_mail_accounts::control::SignedAccountCommand {
+                account: product,
+                operational_key: OperationalKeyRef(1),
+                expected_revision: 0,
+                idempotency_key: IdempotencyKey(2),
+                product: product_name,
+                command: cs_mail_accounts::control::AccountCommand::SetStatus(
+                    cs_mail_accounts::control::AccountStatus::Closed,
+                ),
+                signature: Vec::new(),
+            }
+            .sign(&[1; 32])
+            .unwrap(),
+        )
+        .unwrap();
+    run_annual_distribution_batch(&engine, SettlementUnit(1), &|| due, lease, 10).unwrap();
     let program = engine.financial_program(SettlementUnit(1)).unwrap();
     let payable = program.payables().next().unwrap();
     let op = payable.pending().next().unwrap();

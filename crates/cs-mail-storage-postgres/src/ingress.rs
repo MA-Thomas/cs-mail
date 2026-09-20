@@ -85,16 +85,44 @@ pub(super) fn require_drained(tx: &mut Transaction<'_>) -> Result<(), StorageErr
 pub(super) fn registry_locked(
     tx: &mut Transaction<'_>,
     key: &str,
-) -> Result<KeyRegistry, StorageError> {
-    Ok(tx
+) -> Result<cs_mail_security::AuthoritySnapshot, StorageError> {
+    let registry = tx
         .query_opt(
             "SELECT registry FROM cs_key_registries WHERE aggregate_key=$1 FOR UPDATE",
             &[&key],
         )?
         .ok_or(StorageError::RegistryMissing)?
         .get::<_, Json<KeyRegistry>>(0)
-        .0)
+        .0;
+    let mut snapshot = cs_mail_security::AuthoritySnapshot::new(registry)?;
+    // User authority comes only from product accounts.
+    // Scope to the relationship's participants; provider/scheduler keys remain local.
+    let relationship = tx
+        .query_one(
+            "SELECT relationship_state FROM cs_relationship_aggregates WHERE aggregate_key=$1",
+            &[&key],
+        )?
+        .get::<_, Json<domain::RelationshipRecord>>(0)
+        .0
+        .into_state();
+    let participants = [
+        relationship.relationship.key.sender,
+        relationship.relationship.key.recipient,
+    ];
+    let mut included = std::collections::BTreeSet::new();
+    for persona in participants {
+        if let Some(row) = tx.query_opt("SELECT a.id,a.registry,a.control FROM cs_persona_owners p JOIN cs_product_accounts a ON a.id=p.account WHERE p.identity=$1 FOR SHARE OF a", &[&persona.0.to_string()])? {
+            if !row.get::<_,Json<cs_mail_accounts::control::AccountControl>>(2).0.allows_service() { continue; }
+            let id: String = row.get(0);
+            if included.insert(id.clone()) {
+                let personas = tx.query("SELECT identity FROM cs_persona_owners WHERE account=$1", &[&id])?.into_iter().map(|r| r.get::<_,String>(0).parse::<u128>().map(cs_mail_primitives::ProtocolIdentity).map_err(|_| StorageError::NumericRange)).collect::<Result<_,_>>()?;
+                snapshot.add_account(cs_mail_primitives::AccountId(id.parse().map_err(|_| StorageError::NumericRange)?), personas, row.get::<_,Json<KeyRegistry>>(1).0)?;
+            }
+        }
+    }
+    Ok(snapshot)
 }
+
 impl PostgresEngine {
     /// Records a signature-verified command before attempting its transition.
     /// # Errors
@@ -1126,7 +1154,7 @@ impl PostgresEngine {
             let row=client.query_one("SELECT receipt,authority,outcome FROM cs_received_commands WHERE aggregate_key=$1 AND position=$2",&[&self.aggregate_key,&to_i64(position.0)?])?;
             (
                 row.get::<_, Json<ReceiptPayload>>(0).0,
-                row.get::<_, Json<KeyRegistry>>(1).0,
+                row.get::<_, Json<cs_mail_security::AuthoritySnapshot>>(1).0,
                 row.get::<_, Json<ReceivedOutcome>>(2).0,
             )
         };

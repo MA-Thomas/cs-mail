@@ -13,7 +13,6 @@ pub enum BillingCommand {
     RetryCollection {
         contract: cs_mail_primitives::ServiceContractId,
     },
-    CloseAccount,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SignedBillingCommand {
@@ -28,7 +27,7 @@ pub struct SignedBillingCommand {
 impl SignedBillingCommand {
     fn bytes(&self) -> Result<Vec<u8>, BillingError> {
         serde_json::to_vec(&(
-            "cs-mail/account-command/v2",
+            "cs-mail/billing-command/v3",
             self.operational_key,
             self.account,
             self.scope,

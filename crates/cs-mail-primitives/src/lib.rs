@@ -48,6 +48,7 @@ macro_rules! id_type {
     };
 }
 
+id_type!(AccountId);
 id_type!(PrincipalRef);
 id_type!(ProtocolIdentity);
 id_type!(ProviderRef);

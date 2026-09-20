@@ -303,17 +303,11 @@ impl From<ServiceContract> for StoredContract {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum AccountStatus {
-    Open,
-    Closed,
-}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "StoredAccount", into = "StoredAccount")]
 pub struct BillingAccount {
     bank: VerifiedBankAccount,
     revision: u64,
-    status: AccountStatus,
     contracts: BTreeMap<ServiceContractId, ServiceContract>,
 }
 #[derive(Deserialize, Serialize)]
@@ -321,7 +315,6 @@ struct StoredAccount {
     bank: BankVerification,
     verification_authority: [u8; 32],
     revision: u64,
-    status: AccountStatus,
     contracts: BTreeMap<ServiceContractId, ServiceContract>,
 }
 impl BillingAccount {
@@ -329,7 +322,6 @@ impl BillingAccount {
         Self {
             bank,
             revision: 0,
-            status: AccountStatus::Open,
             contracts: BTreeMap::new(),
         }
     }
@@ -348,42 +340,46 @@ impl BillingAccount {
     pub fn bank(&self) -> &VerifiedBankAccount {
         &self.bank
     }
+    /// Changes future payment instructions while retaining every existing obligation.
+    /// # Errors
+    /// Rejects a foreign beneficiary, scope or a non-increasing bank verification version.
+    pub fn rebind_bank(&mut self, bank: VerifiedBankAccount) -> Result<(), BillingError> {
+        let old = self.bank.evidence();
+        let new = bank.evidence();
+        if old.account != new.account
+            || old.member != new.member
+            || old.person != new.person
+            || old.scope != new.scope
+            || old.unit != new.unit
+            || new.version <= old.version
+        {
+            return Err(BillingError::Conflict);
+        }
+        self.bump()?;
+        self.bank = bank;
+        Ok(())
+    }
     pub const fn revision(&self) -> u64 {
         self.revision
-    }
-    pub const fn status(&self) -> AccountStatus {
-        self.status
     }
     pub fn contracts(&self) -> &BTreeMap<ServiceContractId, ServiceContract> {
         &self.contracts
     }
     pub fn covers(&self, at: CanonicalTime) -> bool {
-        self.status == AccountStatus::Open && self.contracts.values().any(|c| c.covers(at))
-    }
-    /// # Errors
-    /// Rejects revision overflow; existing obligations remain intact.
-    pub fn close(&mut self) -> Result<(), BillingError> {
-        if self.status == AccountStatus::Open {
-            self.bump()?;
-            self.status = AccountStatus::Closed;
-        }
-        Ok(())
+        self.contracts.values().any(|c| c.covers(at))
     }
     fn bump(&mut self) -> Result<(), BillingError> {
         self.revision = self.revision.checked_add(1).ok_or(BillingError::Overflow)?;
         Ok(())
     }
     /// # Errors
-    /// Rejects closure, overlapping service periods, changed contract terms, or invalid processor authority.
+    /// Rejects overlapping service periods, changed contract terms, or invalid processor authority.
     pub fn purchase(
         &mut self,
         offer: &ServiceOffer,
         processor_key: [u8; 32],
     ) -> Result<ServiceContractId, BillingError> {
-        if self.status != AccountStatus::Open
-            || offer.unit != self.unit()
-            || processor_key == [0; 32]
-        {
+        if offer.unit != self.unit() || processor_key == [0; 32] {
             return Err(BillingError::Conflict);
         }
         let id = ServiceContractId(
@@ -428,14 +424,11 @@ impl BillingAccount {
         Ok(id)
     }
     /// # Errors
-    /// Rejects a closed account, an unknown contract, or collection without definitive failure.
+    /// Rejects an unknown contract, or collection without definitive failure.
     pub fn retry_collection(
         &mut self,
         id: ServiceContractId,
     ) -> Result<PaymentOperation, BillingError> {
-        if self.status != AccountStatus::Open {
-            return Err(BillingError::Conflict);
-        }
         let mut contract = self
             .contracts
             .get(&id)
@@ -470,7 +463,6 @@ impl From<BillingAccount> for StoredAccount {
             bank: v.bank.evidence().clone(),
             verification_authority: *v.bank.authority(),
             revision: v.revision,
-            status: v.status,
             contracts: v.contracts,
         }
     }
@@ -482,11 +474,7 @@ impl TryFrom<StoredAccount> for BillingAccount {
         let mut periods = Vec::new();
         for (id, c) in &v.contracts {
             let op = c.collection.current();
-            if *id != c.id
-                || op.scope != v.bank.scope
-                || op.unit != v.bank.unit
-                || op.destination != v.bank.bank_token
-            {
+            if *id != c.id || op.scope != v.bank.scope || op.unit != v.bank.unit {
                 return Err(BillingError::Conflict);
             }
             periods.push(c.offer.period);
@@ -498,7 +486,6 @@ impl TryFrom<StoredAccount> for BillingAccount {
         Ok(Self {
             bank,
             revision: v.revision,
-            status: v.status,
             contracts: v.contracts,
         })
     }

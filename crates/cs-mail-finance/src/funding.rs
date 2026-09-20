@@ -26,6 +26,9 @@ struct StoredSource {
     dispatched: BTreeSet<PaymentOperationId>,
 }
 impl FundingSource {
+    pub const fn bank_token(&self) -> &[u8; 32] {
+        &self.token
+    }
     /// # Errors
     /// Rejects an empty unresolved-attempt limit.
     pub fn verified(

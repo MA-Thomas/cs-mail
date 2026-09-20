@@ -166,7 +166,6 @@ fn closure_and_pending_future_service_do_not_change_the_distribution() {
     )
     .unwrap();
     account.purchase(&next, processor.verifying_key()).unwrap();
-    account.close().unwrap();
     let id = program.payables().next().unwrap().id();
     let op = prepare_distribution(
         &account,
@@ -195,8 +194,7 @@ fn wrong_beneficiary_and_tampered_payable_are_rejected() {
         )
         .is_err()
     );
-    let mut account = BillingAccount::new(bank(1));
-    account.close().unwrap();
+    let account = BillingAccount::new(bank(1));
     prepare_distribution(
         &account,
         &mut program,

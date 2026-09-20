@@ -1,9 +1,7 @@
-//! Transactional in-memory execution for the deterministic protocol kernel.
-//!
-//! This adapter is deliberately small: it demonstrates atomic state, ledger,
-//! schedule, journal, outbox, and idempotency behavior without pretending to be
-//! a production database.
+//! Application workflows, atomic persistence contracts, and in-memory adapters.
+//! Business decisions use domain values; adapters supply consistent context and durable commits.
 
+pub mod accounts;
 pub mod billing;
 
 use cs_mail_primitives::{MessageId, RelationshipRef, RequestHistoryRef, RequestId};
@@ -26,6 +24,8 @@ use cs_mail_protocol::{
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EngineError {
+    Security(cs_mail_security::SecurityError),
+    Identity(identity_contract::Error),
     Protocol(ProtocolError),
     Ledger(LedgerError),
     DuplicateConflict,
@@ -35,6 +35,12 @@ pub enum EngineError {
     CommandEncoding,
     Finance(cs_mail_finance::ProgramError),
     Billing(cs_mail_billing::BillingError),
+}
+
+impl From<identity_contract::Error> for EngineError {
+    fn from(value: identity_contract::Error) -> Self {
+        Self::Identity(value)
+    }
 }
 
 impl From<ProtocolError> for EngineError {
@@ -75,16 +81,45 @@ struct EngineState {
     next_journal_position: u64,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct StoreState {
+    enrollment: accounts::memory::EnrollmentState,
+    product_accounts: BTreeMap<
+        cs_mail_primitives::AccountId,
+        (cs_mail_accounts::Account, cs_mail_accounts::EnrollmentInput),
+    >,
     billing_accounts:
         BTreeMap<cs_mail_primitives::BillingAccountId, cs_mail_billing::BillingAccount>,
+    billing_configuration: Option<(SettlementUnit, [u8; 32], [u8; 32])>,
+    service_offers: BTreeMap<cs_mail_primitives::PolicyVersion, cs_mail_billing::ServiceOffer>,
+    billing_commands: BTreeMap<
+        (cs_mail_primitives::BillingAccountId, IdempotencyKey),
+        (
+            cs_mail_billing::SignedBillingCommand,
+            Vec<cs_mail_finance::PaymentOperation>,
+        ),
+    >,
+    utility_work:
+        BTreeMap<cs_mail_primitives::PaymentOperationId, billing::operations::CollectionWork>,
+    billing_journal: BTreeMap<
+        (cs_mail_primitives::BillingAccountId, String),
+        billing::operations::CollectionJournal,
+    >,
+    billing_ledgers: BTreeMap<cs_mail_primitives::BillingAccountId, cs_mail_ledger::LedgerView>,
+    funding_sources: BTreeMap<
+        [u8; 32],
+        (
+            cs_mail_primitives::BillingAccountId,
+            cs_mail_finance::FundingSource,
+        ),
+    >,
     billing_work:
         BTreeMap<cs_mail_primitives::PaymentOperationId, cs_mail_finance::PaymentOperation>,
     relationships: BTreeMap<RelationshipRef, EngineState>,
     histories: BTreeMap<RequestHistoryRef, RequestHistory>,
     programs: BTreeMap<SettlementUnit, ProgramState>,
 }
+#[derive(Clone)]
 struct ProgramState {
     program: cs_mail_finance::FinancialProgram,
     financial_commands: BTreeMap<
@@ -475,4 +510,28 @@ pub fn initial_state(
     now: CanonicalTime,
 ) -> ProtocolState {
     ProtocolState::initial(principal, sender, recipient, now)
+}
+
+impl From<cs_mail_security::SecurityError> for EngineError {
+    fn from(e: cs_mail_security::SecurityError) -> Self {
+        Self::Security(e)
+    }
+}
+impl From<cs_mail_billing::BillingError> for EngineError {
+    fn from(e: cs_mail_billing::BillingError) -> Self {
+        Self::Billing(e)
+    }
+}
+impl From<accounts::operations::OperationConflict> for EngineError {
+    fn from(e: accounts::operations::OperationConflict) -> Self {
+        match e {
+            accounts::operations::OperationConflict::Version => Self::VersionConflict,
+            accounts::operations::OperationConflict::Duplicate => Self::DuplicateConflict,
+        }
+    }
+}
+impl From<cs_mail_finance::ProgramError> for EngineError {
+    fn from(e: cs_mail_finance::ProgramError) -> Self {
+        Self::Finance(e)
+    }
 }

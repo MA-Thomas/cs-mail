@@ -1,5 +1,7 @@
 //! Operational-key signing and verification for cs-mail commands.
 
+mod authority;
+pub use authority::AuthoritySnapshot;
 mod pricing;
 pub use pricing::SignedCollateralPreference;
 
@@ -357,6 +359,14 @@ pub struct KeyRegistry {
 }
 
 impl KeyRegistry {
+    pub fn contains_key(&self, reference: OperationalKeyRef) -> bool {
+        self.keys.contains_key(&reference)
+    }
+    /// Read-only records for validating ownership when installing a registry.
+    pub fn records(&self) -> impl Iterator<Item = &OperationalKeyRecord> {
+        self.keys.values()
+    }
+
     /// Resolves current key ownership; callers still enforce purpose-specific grants.
     /// # Errors
     /// Rejects unknown, revoked, or not-yet-valid operational keys.

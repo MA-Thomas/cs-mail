@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+identity-contract.workspace = true
+cs-mail-accounts = { path = "../cs-mail-accounts" }
+cs-mail-application = { path = "../cs-mail-application" }
 cs-mail-billing = { path = "../cs-mail-billing" }
 cs-mail-security = { path = "../cs-mail-security" }
 cs-mail-finance = { path = "../cs-mail-finance" }
@@ -14,6 +17,7 @@ cs-mail-protocol = { path = "../cs-mail-protocol" }
 cs-mail-storage-postgres = { path = "../cs-mail-storage-postgres" }
 
 [dev-dependencies]
+cs-mail-test-support = { path = "../cs-mail-test-support" }
 serde_json.workspace = true
 ed25519-dalek.workspace = true
 cs-mail-ledger = { path = "../cs-mail-ledger" }

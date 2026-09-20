@@ -43,9 +43,14 @@ separate policy inputs. New service coverage requires finalized funding and the
 current time to fall within the purchased interval. Accepted and lane messages
 have no request charge.
 
-For the current product, one identifiable person has one account, potentially
-multiple email addresses, and an associated verified bank account. C-SQD uses
-one configured payment-processing arrangement.
+For cs-mail, one account per person is a best-effort anti-abuse objective.
+A product account has an independent `AccountId` and `PrincipalRef`, with a
+product-scoped binding to the shared identity service and a verified bank
+association. Exact subject bindings and persona ownership are unique; bank
+ownership does not establish universal person uniqueness. Phoros enrollment
+requires a separate, stricter policy. C-SQD uses one configured payment-processing
+arrangement. See [shared identity integration](docs/shared-identity-contract.md)
+for the contract, migration behavior, service setup, and coordinated build.
 
 For an unaccepted sender, terms fix a processing component `C` and collateral
 `S` for one relationship request. Submission requires authenticated evidence that
@@ -250,3 +255,13 @@ latexmk -pdf cs_mail_desktop_mvp_build_plan.tex
 Generated auxiliary files can be removed with `latexmk -c`. Root-level PDFs are
 the canonical review artifacts; `output/` is ignored to avoid duplicate generated
 copies.
+
+## Rust domain boundaries
+
+See [the September domain update](docs/rust-domain-update.md) for account lifecycle,
+identity changes, key ownership, disclosure, delivery fencing and the coordinated
+fresh-schema release requirements.
+
+The [application/persistence cutover](docs/application-persistence-boundaries.md)
+documents the current application entry points and the atomic guarantees retained
+by PostgreSQL.

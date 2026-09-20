@@ -5,6 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+identity-contract.workspace = true
+cs-mail-accounts = { path = "../cs-mail-accounts" }
 cs-mail-application = { path = "../cs-mail-application" }
 cs-mail-billing = { path = "../cs-mail-billing" }
 cs-mail-finance = { path = "../cs-mail-finance" }
@@ -21,6 +23,15 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+identity-application = { path = "../../../identity-model/identity-application" }
+identity-storage-postgres = { path = "../../../identity-model/identity-storage-postgres" }
+cs-mail-test-support = { path = "../cs-mail-test-support" }
+cs-mail-identity-client = { path = "../cs-mail-identity-client" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+axum = "0.8"
+identity-enrollment = { path = "../../../identity-model/identity-enrollment" }
+identity-model = { path = "../../../identity-model/identity-model" }
 cs-mail-privacy = { path = "../cs-mail-privacy" }
 cs-mail-adapters = { path = "../cs-mail-adapters" }
 ed25519-dalek.workspace = true

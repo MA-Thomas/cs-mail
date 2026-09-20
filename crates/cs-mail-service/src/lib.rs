@@ -84,7 +84,15 @@ impl fmt::Display for ServiceError {
     }
 }
 
-impl std::error::Error for ServiceError {}
+impl std::error::Error for ServiceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(e) => Some(e),
+            Self::Security(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<SecurityError> for ServiceError {
     fn from(value: SecurityError) -> Self {
@@ -141,9 +149,11 @@ impl<C: CanonicalClock> IngressService<C> {
         if command.scope != self.policy.protocol.financial.scope {
             return Err(ServiceError::SigningScopeMismatch);
         }
-        let operations = self
-            .engine
-            .execute_billing_command(command, self.clock.now())?;
+        let operations =
+            cs_mail_application::billing::operations::BillingService::new(&self.engine, &|| {
+                self.clock.now()
+            })
+            .execute_command(command)?;
         let account = self.engine.billing_account(command.account)?;
         let allocations = self
             .engine

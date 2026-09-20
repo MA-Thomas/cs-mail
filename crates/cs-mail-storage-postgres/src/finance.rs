@@ -264,14 +264,14 @@ impl PostgresEngine {
         {
             let row = tx
                 .query_opt(
-                    "SELECT record FROM cs_billing_accounts WHERE member=$1 FOR SHARE",
+                    "SELECT b.record,a.membership_identity FROM cs_billing_accounts b JOIN cs_product_accounts a ON a.billing=b.id WHERE b.member=$1 FOR SHARE OF a,b",
                     &[&member.0.to_string()],
                 )?
                 .ok_or(StorageError::Finance(ProgramError::InsufficientEvidence))?;
             let account = row.get::<_, Json<cs_mail_billing::BillingAccount>>(0).0;
             if account.scope() != signed.scope
                 || account.unit() != signed.unit
-                || account.bank().evidence().person != *identity_digest
+                || row.get::<_, Vec<u8>>(1) != *identity_digest
             {
                 return Err(StorageError::Finance(ProgramError::InsufficientEvidence));
             }

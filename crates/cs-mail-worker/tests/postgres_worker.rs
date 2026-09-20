@@ -1,5 +1,4 @@
-#[path = "../../cs-mail-storage-postgres/tests/support/mod.rs"]
-mod support;
+use cs_mail_test_support as support;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -179,8 +178,7 @@ impl TestExecute for PostgresEngine {
         now: CanonicalTime,
         policy: PolicySnapshot,
     ) -> Result<DurableExecutionOutcome, StorageError> {
-        support::provision(self, &policy)?;
-        self.initialize_key_registry(&registry(), test_time(0))?;
+        support::provision(self, &policy, registry(), SENDER, test_time(0))?;
         self.configure_ingress(DEPLOYMENT_DOMAIN, &policy)?;
         let handle = self.receive_signed(&command, DEPLOYMENT_DOMAIN, || now, policy)?;
         let outcome = self.process_received(&handle)?;
@@ -611,10 +609,7 @@ fn blocked_inbox_still_signs_its_quote_and_recovers_across_relationship_workers(
     use cs_mail_worker::{WorkerError, run_received_batch};
     let url = database_url();
     let engine = engine(&url, "unsigned-quote");
-    support::provision(&engine, &policy()).unwrap();
-    engine
-        .initialize_key_registry(&registry(), test_time(0))
-        .unwrap();
+    support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
     engine
         .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
         .unwrap();
@@ -730,7 +725,7 @@ fn published_annual_period_is_finalized_by_durable_work() {
         cs_mail_worker::run_annual_distribution_batch(
             &engine,
             UNIT,
-            test_time(schedule.cutoff.0 - 1),
+            &|| test_time(schedule.cutoff.0 - 1),
             Duration(30_000),
             10
         )
@@ -742,7 +737,7 @@ fn published_annual_period_is_finalized_by_durable_work() {
         cs_mail_worker::run_annual_distribution_batch(
             &engine,
             UNIT,
-            schedule.cutoff,
+            &|| schedule.cutoff,
             Duration(30_000),
             10
         )
@@ -756,7 +751,7 @@ fn published_annual_period_is_finalized_by_durable_work() {
         cs_mail_worker::run_annual_distribution_batch(
             &engine,
             UNIT,
-            schedule.cutoff,
+            &|| schedule.cutoff,
             Duration(30_000),
             10
         )

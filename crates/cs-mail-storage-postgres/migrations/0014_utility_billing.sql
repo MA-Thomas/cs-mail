@@ -11,11 +11,9 @@ CREATE TABLE cs_payment_arrangement (
  bank_authority BYTEA NOT NULL CHECK(octet_length(bank_authority)=32)
 );
 CREATE TABLE cs_billing_accounts (
- id TEXT PRIMARY KEY, person BYTEA NOT NULL UNIQUE CHECK(octet_length(person)=32), member TEXT NOT NULL UNIQUE,
+ id TEXT PRIMARY KEY, person BYTEA NOT NULL CHECK(octet_length(person)=32), member TEXT NOT NULL UNIQUE,
  record JSONB NOT NULL, ledger JSONB NOT NULL
 );
-CREATE TABLE cs_billing_identities (identity TEXT PRIMARY KEY, account TEXT NOT NULL REFERENCES cs_billing_accounts(id));
-CREATE TABLE cs_account_authorities (account TEXT NOT NULL REFERENCES cs_billing_accounts(id), actor JSONB NOT NULL, PRIMARY KEY(account,actor));
 CREATE TABLE cs_remote_identities (identity TEXT PRIMARY KEY, provider TEXT NOT NULL);
 CREATE TABLE cs_service_offers (version TEXT PRIMARY KEY, record JSONB NOT NULL);
 CREATE TABLE cs_billing_commands (
@@ -25,5 +23,6 @@ CREATE TABLE cs_billing_commands (
 CREATE TABLE cs_billing_journal (account TEXT NOT NULL REFERENCES cs_billing_accounts(id), event TEXT NOT NULL, entry JSONB NOT NULL, PRIMARY KEY(account,event));
 CREATE TABLE cs_funding_sources (source_key TEXT PRIMARY KEY, account TEXT NOT NULL REFERENCES cs_billing_accounts(id), record JSONB NOT NULL);
 CREATE TABLE cs_recipient_pricing (recipient TEXT PRIMARY KEY, policy JSONB NOT NULL, preference JSONB);
-REVOKE ALL ON cs_payment_arrangement,cs_billing_accounts,cs_billing_identities,cs_account_authorities,cs_remote_identities,cs_service_offers,cs_billing_commands,cs_billing_journal,cs_funding_sources,cs_recipient_pricing FROM PUBLIC;
+REVOKE ALL ON cs_payment_arrangement,cs_billing_accounts,cs_remote_identities,cs_service_offers,cs_billing_commands,cs_billing_journal,cs_funding_sources,cs_recipient_pricing FROM PUBLIC;
+CREATE INDEX cs_bank_person_evidence ON cs_billing_accounts(person);
 INSERT INTO cs_schema_migrations(version) VALUES(14);

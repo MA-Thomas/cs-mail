@@ -115,10 +115,11 @@ fn pending_outcome(outcome: PaymentOutcome) -> Result<(), (WorkFailure, bool)> {
 pub fn run_annual_distribution_batch(
     engine: &PostgresEngine,
     unit: SettlementUnit,
-    now: CanonicalTime,
+    clock: &impl cs_mail_application::accounts::AccountClock,
     lease: Duration,
     limit: i64,
 ) -> Result<WorkReport, WorkerError> {
+    let now = clock.now();
     let mut report = WorkReport::default();
     for queue in [
         WorkQueue::AnnualAllocations(unit),
@@ -131,9 +132,11 @@ pub fn run_annual_distribution_batch(
                 WorkPayload::AnnualAllocation { unit, distribution } => engine
                     .finalize_due_annual_distribution(unit, distribution, now)
                     .map_err(storage_failure),
-                WorkPayload::PrepareDistribution { unit, allocation } => engine
-                    .prepare_due_distribution(unit, allocation, now)
-                    .map_err(storage_failure),
+                WorkPayload::PrepareDistribution { unit, allocation } => {
+                    cs_mail_application::billing::operations::BillingService::new(engine, clock)
+                        .prepare_distribution(unit, allocation)
+                        .map_err(storage_failure)
+                }
                 _ => Err((WorkFailure::InvalidEvidence, true)),
             };
             finish(engine, &item, now, result, &mut report)?;
@@ -148,10 +151,11 @@ pub fn run_annual_distribution_batch(
 pub fn run_utility_payment_batch<P: PaymentProcessor>(
     engine: &PostgresEngine,
     provider: &mut P,
-    now: CanonicalTime,
+    clock: &impl cs_mail_application::accounts::AccountClock,
     lease: Duration,
     limit: i64,
 ) -> Result<WorkReport, WorkerError> {
+    let now = clock.now();
     let items = engine.claim_work(WorkQueue::UtilityPayments, now, lease, limit)?;
     let mut report = WorkReport {
         claimed: items.len(),
@@ -167,16 +171,17 @@ pub fn run_utility_payment_batch<P: PaymentProcessor>(
             else {
                 return Err((WorkFailure::InvalidEvidence, true));
             };
-            if let Some(operation) = engine
-                .authorize_utility_dispatch(account, contract, operation, now)
-                .map_err(storage_failure)?
+            if let Some(operation) =
+                cs_mail_application::billing::operations::BillingService::new(engine, clock)
+                    .authorize_dispatch(account, contract, operation)
+                    .map_err(storage_failure)?
             {
                 let receipt = reconcile(
                     provider,
                     &cs_mail_finance::ProcessorRequest::Submit(operation),
                 )?;
-                engine
-                    .confirm_utility_payment(account, contract, &receipt, now)
+                cs_mail_application::billing::operations::BillingService::new(engine, clock)
+                    .confirm_payment(account, contract, &receipt)
                     .map_err(storage_failure)?;
                 pending_outcome(receipt.evidence.outcome)?;
             }
@@ -393,4 +398,23 @@ pub fn run_received_batch(
     let artifacts = engine.sign_artifacts_batch(signer, now, lease, limit);
     processing?;
     Ok(artifacts?)
+}
+
+/// Retries durable identity confirmations independently of request processing.
+/// # Errors
+/// Leaves failed items pending for the host's next bounded batch.
+pub fn run_identity_confirmation_batch(
+    repository: &cs_mail_storage_postgres::PostgresAccountRepository,
+    client: &impl identity_contract::IdentityClient,
+    product_secret: &[u8; 32],
+    limit: u32,
+    at: CanonicalTime,
+) -> Result<cs_mail_application::accounts::ConfirmationReport, WorkerError> {
+    Ok(cs_mail_application::accounts::confirm_identity_enrollments(
+        repository,
+        client,
+        product_secret,
+        limit,
+        at,
+    )?)
 }

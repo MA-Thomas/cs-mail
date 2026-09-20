@@ -1,4 +1,5 @@
-mod support;
+mod shared_identity;
+use cs_mail_test_support as support;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
@@ -187,8 +188,7 @@ impl TestExecute for PostgresEngine {
         now: CanonicalTime,
         policy: PolicySnapshot,
     ) -> Result<DurableExecutionOutcome, StorageError> {
-        support::provision(self, &policy)?;
-        self.initialize_key_registry(&registry(), test_time(0))?;
+        support::provision(self, &policy, registry(), SENDER, test_time(0))?;
         self.configure_ingress(DEPLOYMENT_DOMAIN, &policy)?;
         let handle = self.receive_signed(&command, DEPLOYMENT_DOMAIN, || now, policy)?;
         let outcome = self.process_received(&handle)?;
@@ -574,10 +574,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
             .to_bytes(),
         grant,
     };
-    support::provision(&engine, &policy()).unwrap();
-    engine
-        .initialize_key_registry(&registry(), test_time(0))
-        .unwrap();
+    support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
     engine
         .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
         .unwrap();
@@ -917,14 +914,35 @@ fn forfeiture_and_allocation_survive_reconnect() {
         }
         .sign(&[77; 32])
         .unwrap();
-        engine
-            .register_billing_account(&evidence, &[], &[], 100)
-            .unwrap();
+        let persona = if member == 1 { SENDER } else { RECIPIENT };
+        let account_id = support::enrollment::enroll(
+            &engine,
+            cs_mail_accounts::EnrollmentInput {
+                bank: evidence,
+                persona,
+                actor: if member == 1 {
+                    ActorRef::Sender(persona)
+                } else {
+                    ActorRef::Recipient(persona)
+                },
+                key_ref: OperationalKeyRef(member),
+                initial_key: SigningKey::from_bytes(&[u8::try_from(member).unwrap(); 32])
+                    .verifying_key()
+                    .to_bytes(),
+                maximum_unresolved: 100,
+            },
+            test_time(0),
+        )
+        .unwrap();
         financial_command(
             &engine,
             ProgramCommand::Enroll {
                 member: MemberId(member),
-                identity_digest: [u8::try_from(member).unwrap(); 32],
+                identity_digest: engine
+                    .accounts(|| cs_mail_primitives::CanonicalTime(0))
+                    .product_account(account_id)
+                    .unwrap()
+                    .membership_identity,
                 status: MembershipStatus {
                     opted_in: true,
                     verified: true,
@@ -1115,10 +1133,7 @@ fn domain_owners_are_separate_and_history_survives_alias_registration() {
     let url = database_url();
     let key = aggregate_key("domain-owners");
     let first = PostgresEngine::connect(&url, &key, &state(500), UNIT).unwrap();
-    support::provision(&first, &policy()).unwrap();
-    first
-        .initialize_key_registry(&registry(), test_time(0))
-        .unwrap();
+    support::provision(&first, &policy(), registry(), SENDER, test_time(0)).unwrap();
     submit_initial_request(&first);
     let alias = ProtocolState::initial_scoped(
         RelationshipRef::from_u128_for_test(500),
@@ -1187,6 +1202,7 @@ fn sign_and_admit(
 
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+#[allow(clippy::too_many_lines)] // One ordered receipt, expiry and restart scenario.
 fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
     use cs_mail_security::ReceiptKind;
     use cs_mail_storage_postgres::ReceivedOutcome;
@@ -1218,10 +1234,19 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
         engine.snapshot().unwrap().state.relationship.state,
         RelationshipState::Unknown
     );
-    assert!(matches!(
-        engine.revoke_operational_key(OperationalKeyRef(2), Version(0), test_time(51)),
-        Err(StorageError::PendingCommands)
-    ));
+    // Revocation affects new receipts; accepted commands retain their frozen authority.
+    engine
+        .accounts(|| cs_mail_primitives::CanonicalTime(0))
+        .revoke_account_key(
+            engine
+                .accounts(|| cs_mail_primitives::CanonicalTime(0))
+                .persona_account(RECIPIENT)
+                .unwrap(),
+            OperationalKeyRef(2),
+            Version(0),
+            test_time(51),
+        )
+        .unwrap();
     assert!(matches!(
         engine.run_retention(test_time(2000), 100),
         Err(StorageError::PendingCommands)
@@ -1271,9 +1296,6 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
         reopened.receipt(&expired).unwrap().unwrap().payload.kind,
         ReceiptKind::NoChange
     );
-    reopened
-        .revoke_operational_key(OperationalKeyRef(2), Version(0), test_time(55))
-        .unwrap();
     let replay = reopened
         .receive_signed(
             &decision,
@@ -1298,10 +1320,7 @@ fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_recei
     let url = database_url();
     let engine =
         PostgresEngine::connect(&url, aggregate_key("revocation"), &state(91), UNIT).unwrap();
-    support::provision(&engine, &policy()).unwrap();
-    engine
-        .initialize_key_registry(&registry(), test_time(0))
-        .unwrap();
+    support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
     engine
         .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
         .unwrap();
@@ -1315,7 +1334,16 @@ fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_recei
         .verify(&command, test_time(1), ProtocolVersion(2), signing_scope())
         .unwrap();
     engine
-        .revoke_operational_key(OperationalKeyRef(2), Version(0), test_time(2))
+        .accounts(|| cs_mail_primitives::CanonicalTime(0))
+        .revoke_account_key(
+            engine
+                .accounts(|| cs_mail_primitives::CanonicalTime(0))
+                .persona_account(RECIPIENT)
+                .unwrap(),
+            OperationalKeyRef(2),
+            Version(0),
+            test_time(2),
+        )
         .unwrap();
     assert!(matches!(
         engine.receive_signed(&command, DEPLOYMENT_DOMAIN, || test_time(3), policy()),
@@ -2012,10 +2040,7 @@ fn recipient_pricing_is_signed_and_changes_only_new_quotes() {
     let url = database_url();
     let engine =
         PostgresEngine::connect(&url, aggregate_key("pricing"), &state(902), UNIT).unwrap();
-    support::provision(&engine, &policy()).unwrap();
-    engine
-        .initialize_key_registry(&registry(), test_time(0))
-        .unwrap();
+    support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
     engine
         .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
         .unwrap();

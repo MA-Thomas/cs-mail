@@ -25,6 +25,9 @@ mod retention;
 pub use retention::{LifecyclePolicy, RetentionReport};
 mod work;
 pub use work::{WorkFailure, WorkItem, WorkPayload, WorkQueue, WorkReport};
+mod accounts;
+mod key_claims;
+pub use accounts::{PostgresAccountRepository, ProductAccountSnapshot, ProductIdentitySnapshot};
 mod billing;
 mod domain;
 mod finance;
@@ -34,7 +37,7 @@ pub use ingress::{ReceivedCommand, ReceivedOutcome, Refusal};
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use cs_mail_capabilities::{
     BondFreeAdmission, CapabilityError, Lane, LaneControl, LaneControlAction, LaneHorizonEffect,
@@ -67,6 +70,7 @@ const MIGRATION_4: &str = include_str!("../migrations/0004_express_lanes.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_protocol_foundations.sql");
 const MIGRATION_6: &str = include_str!("../migrations/0006_authenticated_message_envelopes.sql");
 const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 8;
+const MIGRATION_15: &str = include_str!("../migrations/0015_product_accounts.sql");
 const MIGRATION_14: &str = include_str!("../migrations/0014_utility_billing.sql");
 const MIGRATION_13: &str = include_str!("../migrations/0013_annual_distribution.sql");
 const MIGRATION_12: &str = include_str!("../migrations/0012_record_lifecycle.sql");
@@ -78,6 +82,7 @@ const MIGRATION_7: &str = include_str!("../migrations/0007_relationship_requests
 
 #[derive(Debug)]
 pub enum StorageError {
+    Identity(identity_contract::Error),
     Database(postgres::Error),
     Protocol(ProtocolError),
     Ledger(LedgerError),
@@ -105,6 +110,7 @@ pub enum StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Identity(error) => write!(formatter, "identity error: {error}"),
             Self::UnsupportedStoredFinancialFormat(version) => write!(
                 formatter,
                 "stored financial format {version} requires an explicit migration"
@@ -152,7 +158,23 @@ impl fmt::Display for StorageError {
     }
 }
 
-impl std::error::Error for StorageError {}
+impl std::error::Error for StorageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Identity(e) => Some(e),
+            Self::Database(e) => Some(e),
+            Self::Serialization(e) => Some(e),
+            Self::Security(e) => Some(e),
+            Self::Billing(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+impl From<identity_contract::Error> for StorageError {
+    fn from(value: identity_contract::Error) -> Self {
+        Self::Identity(value)
+    }
+}
 
 impl From<postgres::Error> for StorageError {
     fn from(value: postgres::Error) -> Self {
@@ -254,10 +276,21 @@ enum CapabilityEvent {
 
 pub struct PostgresEngine {
     aggregate_key: String,
-    client: Mutex<Client>,
+    client: Arc<Mutex<Client>>,
 }
 
 impl PostgresEngine {
+    /// Account ownership is independent of this engine's relationship.
+    pub fn accounts(
+        &self,
+        clock: impl cs_mail_application::accounts::AccountClock + 'static,
+    ) -> PostgresAccountRepository {
+        PostgresAccountRepository {
+            client: self.client.clone(),
+            clock: Arc::new(clock),
+        }
+    }
+
     /// Connects without transport TLS, migrates, and bootstraps an aggregate.
     /// Production callers should create a TLS-configured `Client` and use `from_client`.
     ///
@@ -292,7 +325,7 @@ impl PostgresEngine {
         bootstrap(&mut client, &aggregate_key, initial_state, unit)?;
         Ok(Self {
             aggregate_key,
-            client: Mutex::new(client),
+            client: Arc::new(Mutex::new(client)),
         })
     }
 
@@ -307,17 +340,28 @@ impl PostgresEngine {
         now: CanonicalTime,
     ) -> Result<(), StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        client.execute(
-            "INSERT INTO cs_key_registries \
-             (aggregate_key, registry_version, registry, updated_at) VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (aggregate_key) DO NOTHING",
-            &[
-                &self.aggregate_key,
-                &to_i64(registry.version().0)?,
-                &Json(registry),
-                &to_i64(now.0)?,
-            ],
-        )?;
+        let mut tx = client.transaction()?;
+        ingress::lock_receipt_order(&mut tx)?;
+        for record in registry.records() {
+            key_claims::provider(
+                &mut tx,
+                record.reference,
+                record.actor,
+                record.verifying_key,
+            )?;
+        }
+        if tx
+            .query_opt(
+                "SELECT 1 FROM cs_key_registries WHERE aggregate_key=$1",
+                &[&self.aggregate_key],
+            )?
+            .is_some()
+        {
+            return Ok(());
+        }
+        ingress::require_drained(&mut tx)?;
+        tx.execute("INSERT INTO cs_key_registries(aggregate_key,registry_version,registry,updated_at) VALUES($1,$2,$3,$4)", &[&self.aggregate_key,&to_i64(registry.version().0)?,&Json(registry),&to_i64(now.0)?])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -349,9 +393,19 @@ impl PostgresEngine {
         verifying_key: [u8; 32],
         now: CanonicalTime,
     ) -> Result<(), StorageError> {
-        self.update_key_registry(now, |registry| {
-            registry.register(reference, actor, verifying_key, now)
-        })
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut tx = client.transaction()?;
+        ingress::require_drained(&mut tx)?;
+        key_claims::provider(&mut tx, reference, actor, verifying_key)?;
+        let row = tx.query_one(
+            "SELECT registry FROM cs_key_registries WHERE aggregate_key=$1 FOR UPDATE",
+            &[&self.aggregate_key],
+        )?;
+        let mut registry = row.get::<_, Json<KeyRegistry>>(0).0;
+        registry.register(reference, actor, verifying_key, now)?;
+        tx.execute("UPDATE cs_key_registries SET registry=$2,registry_version=$3,updated_at=$4 WHERE aggregate_key=$1", &[&self.aggregate_key,&Json(&registry),&to_i64(registry.version().0)?,&to_i64(now.0)?])?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Revokes a key under the same durable authority used by command verification.
@@ -366,6 +420,10 @@ impl PostgresEngine {
         now: CanonicalTime,
     ) -> Result<(), StorageError> {
         self.update_key_registry(now, |registry| {
+            let (actor, _) = registry.active_actor(reference, now)?;
+            if !matches!(actor, ActorRef::Provider(_) | ActorRef::Scheduler(_)) {
+                return Err(SecurityError::ActorMismatch);
+            }
             registry.revoke(reference, expected_version, now)
         })
     }
@@ -799,6 +857,7 @@ fn migrate(client: &mut Client) -> Result<(), StorageError> {
         (12_i64, MIGRATION_12),
         (13_i64, MIGRATION_13),
         (14_i64, MIGRATION_14),
+        (15_i64, MIGRATION_15),
     ] {
         if transaction
             .query_opt(
