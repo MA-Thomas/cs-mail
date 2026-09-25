@@ -93,9 +93,8 @@ Documents/identity-model
 
 The production dependencies are the narrow contract crate; the service/model crates
 are development dependencies for the joint integration tests. Before merging or
-publishing cs-mail, publish the corresponding identity-model changes and set the
-GitHub repository variable `IDENTITY_MODEL_REF` to that reviewed full commit SHA.
-CI checks out that exact revision next to cs-mail. The previously published commit
+publishing cs-mail, commit the corresponding identity-model changes and regenerate
+`identity-source.sha256` so it matches them; both repos are built locally side by side. The previously published commit
 a6de0a8 does not contain the new crates. A standalone packaged release must publish
 identity-contract or replace sibling paths with an immutable reviewed Git revision.
 
