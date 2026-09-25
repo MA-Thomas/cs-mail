@@ -24,14 +24,20 @@ members = [
     "crates/cs-mail-capabilities",
     "crates/cs-mail-smtp-gateway",
     "crates/cs-mail-conformance",
+    "apps/cs-maild",
+    "apps/cs-mail-admin",
+    "apps/cs-mail-cli",
 ]
 resolver = "2"
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
+publish = false
 
 [workspace.dependencies]
+clap = { version = "4.6", features = ["derive"] }
 identity-contract = { version = "0.1.0", path = "../identity-model/identity-contract" }
 postgres = { version = "0.19.10", features = ["with-serde_json-1"] }
 serde = { version = "1.0.219", features = ["derive"] }

@@ -223,6 +223,16 @@ The workspace is divided into focused libraries:
   enforceable volume and lifetime bounds, replay-safe admission consumption,
   and lane horizon behavior.
 
+Product applications live in `apps/` and are adapters over these libraries; see
+[apps/README.md](apps/README.md). Dependencies point inward: no library depends on
+an application.
+
+- `cs-maild` is the service process (HTTP API, workers, sender request page).
+- `cs-mail-admin` is the operator administration client.
+- `cs-mail-cli` is the developer member client.
+
+At Milestone 0 these binaries report their version and help only.
+
 The implemented command set covers terms, request creation, capture evidence,
 submission to the recipient, follow-ups, cancellation, acceptance, rejection, blocking, unblocking,
 expiry and revocation. Tests cover these lifecycles, shared alias history, replay,
@@ -237,22 +247,19 @@ Command signatures use Ed25519 as specified by RFC 8032. Native content uses the
 RFC 9180 HPKE construction. These choices are versioned protocol inputs, not an
 invitation to silently substitute another suite.
 
-To verify the Rust workspace:
+To verify the workspace, run the local quality gate. It checks the identity source
+manifest, dependency direction, formatting, Clippy, workspace tests, the PostgreSQL
+suites, and the application binaries, and reports each check separately:
 
 ```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+CS_MAIL_TEST_DATABASE_URL='postgresql://postgres@localhost:5432/cs_mail_test' \
+  scripts/quality-gate.sh
 ```
 
-PostgreSQL integration tests run when `CS_MAIL_TEST_DATABASE_URL` names an
-isolated test database:
+The PostgreSQL suites need an isolated test database. `scripts/quality-gate.sh
+--skip-postgres` skips them explicitly and reports them as skipped, not passed.
 
-```sh
-CS_MAIL_TEST_DATABASE_URL='postgresql://postgres@localhost:5432/postgres' \
-  cargo test -p cs-mail-storage-postgres --test postgres -- --ignored
-```
-
-The seventeen schema migrations are embedded in the storage crate and applied under
+The eighteen schema migrations are embedded in the storage crate and applied under
 a database advisory lock. They cover protocol/ledger durability, encrypted
 content, retention, capabilities, financial programs, independent domain owners,
 authenticated receipt ordering, unified external work, annual allocation, utility
@@ -260,6 +267,12 @@ billing, and owner-specific lifecycle rules. Current protocol storage format is 
 financial storage format is 6, and command wire format is 6. This clean domain
 update requires a freshly initialized schema. Unsupported stored formats are
 rejected; the migrations do not convert populated older records.
+
+**Schema migration policy.** Until the first pilot data is created, a schema change
+may replace or renumber existing migrations and requires a fresh database; there is no
+upgrade path. From the creation of the first pilot data, migrations in cs-mail and
+identity-model are forward-only: a merged migration is never edited, removed or
+renumbered, and every schema change is a new migration.
 There are no compatibility aliases or fallback readers for deprecated labels. The current connector deliberately uses `NoTls`; it is
 appropriate for a local Unix socket or a separately secured development
 connection. A TLS-configurable connection pool belongs to the service/security

@@ -1,0 +1,13 @@
+[package]
+name = "cs-maild"
+description = "cs-mail service: HTTP API, workers, and sender request page hosting"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap.workspace = true
+
+[lints]
+workspace = true

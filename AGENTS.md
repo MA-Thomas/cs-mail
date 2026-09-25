@@ -20,9 +20,14 @@ Working conventions:
 - identity-model is a separate repository, checked out as a sibling at `../identity-model`.
   Commit identity-model changes before the cs-mail changes that depend on them, and keep
   `identity-source.sha256` in step (`sha256sum --check identity-source.sha256`).
-- Development and testing are local; there is no hosted CI. Local quality gate:
-  `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace`, and the PostgreSQL suites with
-  `CS_MAIL_TEST_DATABASE_URL=... cargo test --workspace -- --ignored`.
+- Development and testing are local; there is no hosted CI. Run the quality gate before
+  handing off: `CS_MAIL_TEST_DATABASE_URL=... scripts/quality-gate.sh`. It reports each
+  check separately. `--skip-postgres` skips the PostgreSQL suites explicitly; skipped
+  suites are not evidence.
 - Applications (`apps/`) are adapters. Domain decisions belong in domain and application
-  crates.
+  crates, and no library may depend on an application (the gate checks this). See
+  [apps/README.md](apps/README.md).
+- Schema migrations: until the first pilot data is created, a schema change may replace
+  or renumber existing migrations and requires a fresh database. From the first pilot
+  data onward, migrations are forward-only: never edit, remove or renumber a merged
+  migration.

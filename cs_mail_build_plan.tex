@@ -238,12 +238,11 @@ would matter; each milestone lists its claims and agrees its testing scope befor
 work begins. Claims about locking, atomicity, or concurrency are challenged
 against PostgreSQL, not an in-memory adapter. Guarantees already enforced by types
 need no redundant runtime test. Demonstration scripts show a journey; they are not
-evidence for a claim. At each handoff, run the local quality gate:
+evidence for a claim. At each handoff, run the local quality gate, which reports
+the identity source manifest, dependency direction, rustfmt, Clippy, workspace
+tests, PostgreSQL suites, and application binaries separately:
 \begin{lstlisting}
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-CS_MAIL_TEST_DATABASE_URL=... cargo test --workspace -- --ignored
+CS_MAIL_TEST_DATABASE_URL=... scripts/quality-gate.sh
 \end{lstlisting}
 
 \section{Milestone Map}
@@ -282,11 +281,20 @@ versions. Each reports its version and help. Add a local script that runs the
 full quality gate without hiding individual checks, and document the inward
 dependency rule.
 
-\textbf{Decision to record:} when the fresh-database policy ends and migrations
-become forward-only---at the latest, before any pilot data is created.
+\textbf{Decided (25 September 2026):} the fresh-database policy ends when the
+first pilot data is created. Until then a schema change may replace or renumber
+existing migrations and requires a fresh database. From then on, migrations in
+cs-mail and identity-model are forward-only: a merged migration is never edited,
+removed, or renumbered.
 
 \textbf{Exit:} clean checkout, passing gate, running binaries. No listener,
 enrollment, or domain change belongs to this stage.
+
+\textbf{Status: complete (25 September 2026).} The three binaries report their
+version and help. \texttt{scripts/quality-gate.sh} runs the identity source
+manifest, dependency direction, rustfmt, Clippy, workspace tests, PostgreSQL
+suites, and binary checks, each reported separately; see
+\href{apps/README.md}{\texttt{apps/README.md}} for the boundary rules.
 
 \section{Milestone 1: The Service and Identity Boot}
 
