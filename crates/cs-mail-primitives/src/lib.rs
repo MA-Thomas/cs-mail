@@ -54,6 +54,7 @@ id_type!(ProtocolIdentity);
 id_type!(ProviderRef);
 id_type!(QuoteId);
 id_type!(RequestId);
+id_type!(RequestClassId);
 id_type!(MessageId);
 id_type!(ContentRef);
 id_type!(ContentKeyRef);

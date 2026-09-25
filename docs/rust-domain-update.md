@@ -82,14 +82,20 @@ unconditional Allowed policy from deployment configuration.
 
 ## Account changes and security reconciliation
 
-`ChangeIntent` separates device recovery, bank rebinding and login linking. It binds
+`ChangeIntent` separates device recovery and bank rebinding. It binds
 the existing account, product-scoped subject, expected security version, challenge,
 proposed key/bank digest and change kind. The backend signs the whole request.
 Every change requires fresh OIDC authentication, device possession and authenticated
-bank ownership. Bank rebinding and login linking require possession of the current
-key. Recovery instead proves the replacement key and preserves the existing bank
-binding. Login linking also verifies the second login token, in the configured
-OIDC realm. Conflicting login-to-subject associations are rejected.
+bank ownership. Bank rebinding requires possession of the current key. Device
+recovery instead proves the replacement key and preserves the existing bank,
+product-login and subject bindings. OIDC authentication-method management and
+recovery belong to the configured provider and preserve its external subject.
+
+The [product identity alignment](product-identity-model.md) replaces global login
+aliases with one durable product login per subject. The second-login operation
+is removed. Phoros subject adoption is a distinct future enrollment decision,
+requiring its ceremony and proof of control of an existing cs-mail account.
+Shared-enrollment schema version 2 requires a fresh database.
 
 Successful changes create signed, ordered security events. Tokens and login IDs
 are not copied into product security notifications. The product requires contiguous

@@ -3,6 +3,9 @@
 
 pub mod accounts;
 pub mod billing;
+pub mod correspondence;
+pub mod relationships;
+pub mod request_classes;
 
 use cs_mail_primitives::{MessageId, RelationshipRef, RequestHistoryRef, RequestId};
 use cs_mail_protocol::{Message, RequestHistory};
@@ -535,3 +538,5 @@ impl From<cs_mail_finance::ProgramError> for EngineError {
         Self::Finance(e)
     }
 }
+
+pub mod consent;

@@ -16,7 +16,7 @@
     urlcolor=blue
 }
 
-\title{\textit{cs-mail}: Express Lanes for Transactional Mail\\
+\title{\textit{cs-mail}: Express Lanes for Bounded Communication\\
 \large A Pedagogical Memo}
 \author{C-SQD}
 \date{Draft 0.5 --- September 2026}
@@ -56,26 +56,21 @@ urging you to confirm your login. The
 first three you wanted. The last is a phishing attempt. Every one of them arrived
 the same way: someone typed your address and pressed send.\par}
 
-\textit{cs-mail} already changed that story for strangers. An unknown person must
-submit one conditionally charged relationship request with an initial message,
-and you accept or reject it. Permitted follow-ups share that request's charge
-and deadline.
-But your bank is neither a stranger you want to charge nor a person you
-``accept'' as a standing contact. You chose to hear from it, for particular
-reasons, and it will write to you from many addresses for years. The two states
-\textit{cs-mail} already has---requesting sender and accepted contact---do not fit
-it. That gap is what this memo is about.
+In \textit{cs-mail}, a stranger selects a published request class and authorizes
+one conditional charge. You can accept with standing permission or a lane, or
+reject. Permitted follow-ups share the charge and deadline. Your bank needs a
+different invitation: you chose to hear from it for particular reasons, across
+many addresses. A bounded lane expresses that permission.
 
-\section{The Problem: Two Kinds of Wanted Mail}
+\section{The Choice: Standing or Bounded Permission}
 
-Wanted mail comes in two shapes. The first is people and ongoing relationships: a
-colleague, a friend, a new client. \textit{cs-mail} handles these by acceptance---
-you grant a person standing permission and they write without a request charge. The
-second is organizations you have authorized for a bounded purpose: the bank's
+Standing and bounded permission both apply to people and organizations: a friend
+may receive standing permission, a researcher an express lane. Familiar bounded
+uses include the bank's
 statements, the airline's boarding pass, the pharmacy's refill notice, the clinic's
 appointment reminder. Call this \emph{transactional mail}.
 
-Transactional mail does not fit acceptance, for four reasons:
+Standing acceptance alone fits transactional mail poorly, for four reasons:
 
 \begin{itemize}[leftmargin=2em]
     \item It arrives from many addresses. One bank sends from
@@ -90,7 +85,7 @@ Transactional mail does not fit acceptance, for four reasons:
     ordinary email, and will for a long time.
 \end{itemize}
 
-So we need another permission path: a way to grant a chosen organization a
+So we need a permission path that grants a chosen correspondent a
 bounded, revocable, effortless right to reach you---one that resists
 impersonation and works \emph{before} the sender adopts \textit{cs-mail}. We call
 it an \emph{express lane}. Before describing it, two pieces of background make it
@@ -137,7 +132,8 @@ issuance, safety, and lifetime rules it needs to actually work.
 \section{The Solution: Express Lanes}
 
 An express lane is a recipient-granted, revocable path without a relationship-request charge for one sender
-you have chosen, bounded in purpose and time. Three properties make it safe.
+you have chosen, bounded in purpose and time. It concerns the relationship and is
+usually not scoped to a particular conversation. Three properties make it useful.
 
 \paragraph{What it limits.}
 A lane controls \emph{who} may reach you, \emph{how much}, and for \emph{how
@@ -191,12 +187,12 @@ These permission paths explain the main cases:
 \textbf{Who} & \textbf{How they reach you} & \textbf{How it is granted and ended}
 \\
 \midrule
-A stranger & Submits one charged relationship request, with any permitted
+A stranger & Selects a request class and submits one charged request, with permitted
 follow-ups. & Explicit sender authorization; decision or expiry settles the request. \\
-A person you accept & Writes with no request charge. & You accept the relationship; you
+A standing contact & Writes with no request charge. & You grant standing permission; you
 revoke it. \\
-An organization you chose & Travels an express lane with no request charge, bounded in purpose
-and time. & Issued from a decision you already made; you revoke it or let it
+A bounded contact & Travels an express lane with no request charge, bounded in purpose
+and time. & You grant a lane, including through request acceptance; revoke it or let it
 lapse. \\
 \bottomrule
 \end{tabular}
@@ -212,8 +208,7 @@ obsolescence.
 \section{How You Get One: Issuance}
 
 An express lane should feel like a consequence of a decision you already made,
-never a settings screen you must remember to visit. Two moments cover almost
-everything:
+never a settings screen you must remember to visit. Three useful moments are:
 
 \begin{enumerate}[leftmargin=2em]
     \item \textbf{When you hand over your address.} Signing up, checking out, or
@@ -221,7 +216,15 @@ everything:
     one line, to open an express lane for it.
     \item \textbf{When you write first.} Emailing the bank yourself auto-opens a
     return lane, since you have plainly invited a reply.
+    \item \textbf{When you accept a request with bounded permission.} Professor
+    Bob may welcome Alice's research proposal with a purpose- or time-limited
+    relationship lane. Acceptance commits the lane and full request refund
+    obligation together, without granting standing permission.
 \end{enumerate}
+
+The class determines collateral; the lane states granted permission. Both are
+implemented in the Rust libraries. A separate lane-management grant also resolves
+a pending request with the full refund; already-terminal settlements stay fixed.
 
 For a legacy sender the grant cannot complete on a promise; it completes on proof.
 When you sign up on \texttt{bank.com}, the client remembers that you were on
@@ -295,7 +298,8 @@ A scoped capability already authorizes communication without a request charge,
 solicitation, or new-request history increment. Blocking overrides it. Express
 lanes give that capability a practical issuance flow, domain binding for legacy
 senders, and activity-based lifetime with an optional persistent mode. A lane
-grant creates no charge and settles no separate request.
+grant creates no charge. Accepting a request with a lane also settles that
+request; later lane expiry or revocation does not reopen the settled money.
 
 \paragraph{Declarations remain minimal.}
 The authenticated envelope exposes only the coarse purpose, origin mode, validity,
@@ -313,13 +317,5 @@ paid service, extend a pending relationship request, or create a pool contributi
 Eligibility for an allocation depends on the completed year's membership rules,
 not renewal of either service or a lane. Those lifecycles remain separate even
 when their events occur close together.
-
-\section{Where This Leaves \textit{cs-mail}}
-
-Express lanes complete the permission model: strangers submit a relationship
-request, accepted contacts write without a request charge, and chosen
-organizations use a bounded grant. Each path reflects a different relationship
-and gives the recipient a clear way to end it. Reaching the recipient depends
-on permission they granted and can withdraw.
 
 \end{document}

@@ -1,4 +1,4 @@
-//! Endpoint encryption and provider-opaque ciphertext records for native mail.
+//! HPKE encryption for native endpoints and the explicitly authorized custody boundary.
 
 use core::fmt;
 
@@ -51,13 +51,38 @@ pub struct ContentKeyCertificate {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ContentCertificateDigest(pub [u8; 32]);
 
-/// An endpoint-only secret. It deliberately has no serialization or `Debug` implementation.
+/// A private HPKE key held at an endpoint or custody boundary. It deliberately has
+/// no serialization or `Debug` implementation.
 pub struct EndpointSecretKey {
     reference: ContentKeyRef,
     private: <Kem as KemTrait>::PrivateKey,
 }
 
 impl EndpointSecretKey {
+    /// Imports a host-provisioned custody secret; callers keep it outside message storage.
+    /// # Errors
+    /// Rejects an empty reference or invalid key bytes. No secret serialization is exposed.
+    pub fn from_secret_bytes(
+        reference: ContentKeyRef,
+        bytes: &[u8; 32],
+    ) -> Result<(Self, EndpointPublicKey), ContentError> {
+        if reference.0 == 0 || *bytes == [0; 32] {
+            return Err(ContentError::InvalidPublicKey);
+        }
+        let private = <Kem as KemTrait>::PrivateKey::from_bytes(bytes)
+            .map_err(|_| ContentError::InvalidPublicKey)?;
+        let public = Kem::sk_to_pk(&private).to_bytes();
+        let mut public_bytes = [0; 32];
+        public_bytes.copy_from_slice(public.as_slice());
+        Ok((
+            Self { reference, private },
+            EndpointPublicKey {
+                reference,
+                bytes: public_bytes,
+            },
+        ))
+    }
+
     pub fn generate(reference: ContentKeyRef) -> (Self, EndpointPublicKey) {
         let (private, public) = Kem::gen_keypair();
         let bytes = public.to_bytes();

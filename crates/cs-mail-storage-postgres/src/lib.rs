@@ -26,6 +26,8 @@ pub use retention::{LifecyclePolicy, RetentionReport};
 mod work;
 pub use work::{WorkFailure, WorkItem, WorkPayload, WorkQueue, WorkReport};
 mod accounts;
+mod consent;
+mod correspondence;
 mod key_claims;
 pub use accounts::{PostgresAccountRepository, ProductAccountSnapshot, ProductIdentitySnapshot};
 mod billing;
@@ -69,8 +71,11 @@ const MIGRATION_3: &str = include_str!("../migrations/0003_outbox_content_retent
 const MIGRATION_4: &str = include_str!("../migrations/0004_express_lanes.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_protocol_foundations.sql");
 const MIGRATION_6: &str = include_str!("../migrations/0006_authenticated_message_envelopes.sql");
-const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 8;
+const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 9;
 const MIGRATION_15: &str = include_str!("../migrations/0015_product_accounts.sql");
+const MIGRATION_18: &str = include_str!("../migrations/0018_request_classes.sql");
+const MIGRATION_17: &str = include_str!("../migrations/0017_content_consent.sql");
+const MIGRATION_16: &str = include_str!("../migrations/0016_correspondence.sql");
 const MIGRATION_14: &str = include_str!("../migrations/0014_utility_billing.sql");
 const MIGRATION_13: &str = include_str!("../migrations/0013_annual_distribution.sql");
 const MIGRATION_12: &str = include_str!("../migrations/0012_record_lifecycle.sql");
@@ -82,6 +87,8 @@ const MIGRATION_7: &str = include_str!("../migrations/0007_relationship_requests
 
 #[derive(Debug)]
 pub enum StorageError {
+    Consent(cs_mail_consent::ConsentError),
+    Correspondence(cs_mail_correspondence::CorrespondenceError),
     Identity(identity_contract::Error),
     Database(postgres::Error),
     Protocol(ProtocolError),
@@ -110,6 +117,8 @@ pub enum StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Correspondence(error) => error.fmt(formatter),
+            Self::Consent(error) => error.fmt(formatter),
             Self::Identity(error) => write!(formatter, "identity error: {error}"),
             Self::UnsupportedStoredFinancialFormat(version) => write!(
                 formatter,
@@ -161,6 +170,8 @@ impl fmt::Display for StorageError {
 impl std::error::Error for StorageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Correspondence(e) => Some(e),
+            Self::Consent(e) => Some(e),
             Self::Identity(e) => Some(e),
             Self::Database(e) => Some(e),
             Self::Serialization(e) => Some(e),
@@ -173,6 +184,16 @@ impl std::error::Error for StorageError {
 impl From<identity_contract::Error> for StorageError {
     fn from(value: identity_contract::Error) -> Self {
         Self::Identity(value)
+    }
+}
+impl From<cs_mail_consent::ConsentError> for StorageError {
+    fn from(value: cs_mail_consent::ConsentError) -> Self {
+        Self::Consent(value)
+    }
+}
+impl From<cs_mail_correspondence::CorrespondenceError> for StorageError {
+    fn from(value: cs_mail_correspondence::CorrespondenceError) -> Self {
+        Self::Correspondence(value)
     }
 }
 
@@ -637,15 +658,23 @@ impl PostgresEngine {
         let balances = load_balances(&mut transaction, &self.aggregate_key)?;
         let ledger = LedgerView::from_balances(aggregate.ledger_revision, aggregate.unit, balances);
         ledger.total_value()?;
+        let lane = transaction
+            .query_opt(
+                "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1",
+                &[&self.aggregate_key],
+            )?
+            .map(|r| r.get::<_, Json<Lane>>(0).0);
         transaction.commit()?;
-        Ok(SettlementSnapshot::complete(
+        let mut snapshot = SettlementSnapshot::complete(
             aggregate.revision,
             aggregate.state,
             history,
             payments,
             messages,
             ledger,
-        ))
+        );
+        snapshot.lane = lane;
+        Ok(snapshot)
     }
 
     /// Claims due scheduled tasks using `SKIP LOCKED` worker semantics.
@@ -858,6 +887,9 @@ fn migrate(client: &mut Client) -> Result<(), StorageError> {
         (13_i64, MIGRATION_13),
         (14_i64, MIGRATION_14),
         (15_i64, MIGRATION_15),
+        (16_i64, MIGRATION_16),
+        (17_i64, MIGRATION_17),
+        (18_i64, MIGRATION_18),
     ] {
         if transaction
             .query_opt(

@@ -1,6 +1,6 @@
 # C-SQD domain model
 
-Confirmed product rules, corrected September 15, 2026. Start here when changing
+Confirmed product rules, updated September 21, 2026. Start here when changing
 the code or documentation. These rules record the user's confirmed clarifications.
 The [deployment profile](cs_mail_deployment_profile.tex) gives the detailed
 financial-program requirements; the [protocol specification](cs_mail_protocol_spec.tex)
@@ -8,7 +8,22 @@ governs requests and communication permission. The
 [Rust architecture](cs_mail_rust_reference_architecture.tex) describes their
 implementation. Implementation choices must not silently become product rules.
 
+Native conversations and onward reuse follow the separately agreed
+[headless conversation contract](cs_mail_membranes_portals_conversation_policy_source/HEADLESS_CONVERSATIONS.md).
+It defines the one-to-one correspondence scope, two-party policy relaxation,
+reference/copy lifetimes, and the atomic encrypted-mailbox delivery boundary.
+
+Managed decryption and replacement-device message access follow the
+[consent and key-custody contract](cs_mail_membranes_portals_conversation_policy_source/CONSENT_AND_KEY_CUSTODY.md).
+Authentication, retained-copy entitlement and scoped consent are separate
+authorities. CSQD decryption requires consent; it is not prohibited categorically.
+
 ## Person, account, and authority
+
+The [product identity model](docs/product-identity-model.md) defines one durable
+login identity per product, multiple authentication methods, and the shared
+subject association across cs-mail and Phoros. A shared subject identifier does
+not establish biological identity or satisfy Phoros's separate enrollment policy.
 
 - For the current product, one identifiable person has one account and may have
   multiple email addresses. Identity is tied to a verified bank account.
@@ -88,13 +103,39 @@ Closure preserves a minimal route for outstanding distributions and refunds.
 It does not require renewal to receive money already owed. Full account
 management, bank-account replacement, and detailed erasure policy remain deferred.
 
-## Request refunds remain actual refunds
+## Request classes, permission, and refunds
 
-A relationship request has one conditional charge `C + S`. Acceptance refunds
-the full charge; expiry refunds `S`; rejection retains `C` and moves `S` into
+Recipients publish up to eight user-defined request classes describing the
+approaches they welcome, and select collateral `S` for each from
+the deployment's bounded menu. The sender selects a class; that class and its
+financial terms are fixed for the request. The operator sets processing component
+`C`. These are recipient-defined invitations, not permanent relationship types
+or a CSQD ranking of purposes. Misrepresentation can lead to ordinary rejection;
+there is no separate misclassification penalty or reputation mechanism.
+
+The recipient may accept a request with standing directed permission or with an
+express lane. Both modes record a full `C + S` refund obligation and commit the
+granted permission with settlement. An express lane concerns the relationship;
+it may be scoped, for example by purpose, time, or volume, but is usually not
+scoped to a particular conversation. A request class does not itself grant
+permission. Lane expiry or revocation does not reopen the settled request.
+
+Each request has one conditional charge. Expiry refunds `S`; rejection retains `C` and moves `S` into
 pending forfeiture for the pool. Cancellation before submission returns the full
 charge. These are real capture-linked refund obligations, unlike the reporting
-classification within an annual distribution. Follow-ups add no charge.
+classification within an annual distribution. Follow-ups add no charge. Class
+switching cannot bypass pending-request limits or principal-recipient history.
+
+A lane grant also resolves a pending request when issued through lane management.
+During preparation it cancels submission and voids or refunds the full charge;
+a submitted request still pending is accepted with the full refund, including
+after its decision deadline. Already-terminal financial settlements stay fixed.
+The lane determines future access without a new bond, subject to its scope and
+validity. Native correspondence enforces that permission across conversations.
+
+The Rust implementation uses checked class publications, immutable signed class
+snapshots, and atomic lane/settlement effects. See
+[implementation and cutover](docs/request-classes-implementation.md).
 
 ## Enforcement boundaries
 

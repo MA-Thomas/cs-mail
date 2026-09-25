@@ -5,6 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-consent = { path = "../cs-mail-consent" }
+cs-mail-correspondence = { path = "../cs-mail-correspondence" }
 identity-contract.workspace = true
 cs-mail-accounts = { path = "../cs-mail-accounts" }
 cs-mail-application = { path = "../cs-mail-application" }
@@ -23,6 +25,8 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+cs-mail-key-custody = { path = "../cs-mail-key-custody" }
+cs-mail-client = { path = "../cs-mail-client" }
 identity-application = { path = "../../../identity-model/identity-application" }
 identity-storage-postgres = { path = "../../../identity-model/identity-storage-postgres" }
 cs-mail-test-support = { path = "../cs-mail-test-support" }

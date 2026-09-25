@@ -1,5 +1,8 @@
 [workspace]
 members = [
+    "crates/cs-mail-consent",
+    "crates/cs-mail-key-custody",
+    "crates/cs-mail-correspondence",
     "crates/cs-mail-test-support",
     "crates/cs-mail-accounts",
     "crates/cs-mail-identity-client",

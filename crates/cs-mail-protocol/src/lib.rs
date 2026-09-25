@@ -26,6 +26,7 @@ pub use model::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct PolicySnapshot {
+    pub selected_class: Option<pricing::SelectedRequestClass>,
     pub pricing_policy_version: PolicyVersion,
     pub protocol_version: ProtocolVersion,
     pub policy_version: PolicyVersion,
@@ -166,6 +167,7 @@ pub enum ProtocolCommand {
         expected_policy_version: Version,
     },
     IssueRequestTerms {
+        class_id: cs_mail_primitives::RequestClassId,
         quote_id: QuoteId,
         declaration_digest: Option<MessageDeclarationDigest>,
     },
@@ -254,6 +256,7 @@ pub enum ProtocolEventKind {
     MessageValidityClosed(RequestId),
     DeclarationMismatch(RequestId),
     RelationshipAccepted,
+    RelationshipLaneGranted(LaneId),
     RelationshipRejected,
     RelationshipBlocked,
     RelationshipUnblocked,
@@ -353,6 +356,7 @@ impl From<LedgerError> for ProtocolError {
 }
 
 struct ManifestBuilder {
+    lane: Option<cs_mail_capabilities::Lane>,
     next: ProtocolState,
     history: RequestHistory,
     payments: BTreeMap<RequestId, cs_mail_finance::RequestFinancials>,
@@ -372,6 +376,7 @@ struct ManifestBuilder {
 impl ManifestBuilder {
     fn new(snapshot: &SettlementSnapshot, context: &TransitionContext) -> Self {
         Self {
+            lane: snapshot.lane.clone(),
             next: snapshot.state.clone(),
             history: snapshot.history.clone(),
             payments: snapshot.payments.clone(),
@@ -427,6 +432,25 @@ pub fn transition(
     authorized: &KernelCommand<ProtocolCommand>,
     context: &TransitionContext,
 ) -> Result<TransitionManifest, ProtocolError> {
+    validate_snapshot(snapshot, context)?;
+    let actor = authorized.actor();
+    let command = authorized.command();
+    authorize(
+        &snapshot.state,
+        actor,
+        command,
+        context.policy.recipient_provider,
+    )?;
+    let mut manifest = ManifestBuilder::new(snapshot, context);
+
+    apply_command(&mut manifest, context, actor, command)?;
+    manifest.finish(snapshot)
+}
+
+fn validate_snapshot(
+    snapshot: &SettlementSnapshot,
+    context: &TransitionContext,
+) -> Result<(), ProtocolError> {
     if context.protocol_version != ProtocolVersion(2) {
         return Err(ProtocolError::ProtocolVersionMismatch);
     }
@@ -452,18 +476,7 @@ pub fn transition(
     {
         return Err(ProtocolError::IncompleteSnapshot);
     }
-    let actor = authorized.actor();
-    let command = authorized.command();
-    authorize(
-        &snapshot.state,
-        actor,
-        command,
-        context.policy.recipient_provider,
-    )?;
-    let mut manifest = ManifestBuilder::new(snapshot, context);
-
-    apply_command(&mut manifest, context, actor, command)?;
-    manifest.finish(snapshot)
+    Ok(())
 }
 
 fn apply_command(
@@ -501,10 +514,11 @@ fn apply_command(
             context.admission,
         )?,
         ProtocolCommand::IssueRequestTerms {
+            class_id,
             quote_id,
             declaration_digest,
         } => {
-            issue_terms(manifest, context, *quote_id, *declaration_digest)?;
+            issue_terms(manifest, context, *class_id, *quote_id, *declaration_digest)?;
         }
         ProtocolCommand::CreateRequest {
             payment_method,
@@ -628,6 +642,7 @@ fn authorize(
 fn issue_terms(
     manifest: &mut ManifestBuilder,
     context: &TransitionContext,
+    class_id: cs_mail_primitives::RequestClassId,
     quote_id: QuoteId,
     declaration_digest: Option<MessageDeclarationDigest>,
 ) -> Result<(), ProtocolError> {
@@ -640,11 +655,23 @@ fn issue_terms(
         return Ok(());
     }
     match manifest.next.relationship.state {
+        state
+            if state != RelationshipState::Blocked
+                && manifest
+                    .lane
+                    .as_ref()
+                    .is_some_and(|l| l.provides_relationship_access(context.now)) =>
+        {
+            manifest.terms = Some(TermsOutcome::NoChargeRequired);
+        }
         RelationshipState::Accepted => {
             manifest.terms = Some(TermsOutcome::NoChargeRequired);
         }
         RelationshipState::Blocked => return Err(ProtocolError::ContactBlocked),
-        RelationshipState::Unknown | RelationshipState::Rejected | RelationshipState::Revoked => {
+        RelationshipState::Unknown
+        | RelationshipState::Rejected
+        | RelationshipState::Revoked
+        | RelationshipState::ExpressLane(_) => {
             if manifest.history.pending_submission.is_some() {
                 return Err(ProtocolError::RequestAlreadyExists);
             }
@@ -658,7 +685,13 @@ fn issue_terms(
                 .now
                 .checked_add(policy.quote_lifetime)
                 .ok_or(ProtocolError::ArithmeticOverflow)?;
+            let selected_class = policy
+                .selected_class
+                .clone()
+                .filter(|c| c.id() == class_id)
+                .ok_or(ProtocolError::PolicyInvalid)?;
             let terms = RequestTerms {
+                selected_class,
                 pricing_policy_version: policy.pricing_policy_version,
                 quote_id,
                 protocol_version: context.protocol_version,
@@ -708,6 +741,7 @@ fn issue_terms(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // Reservation, frozen terms and capture form one transition.
 fn create_request(
     manifest: &mut ManifestBuilder,
     context: &TransitionContext,
@@ -719,7 +753,17 @@ fn create_request(
     match manifest.next.relationship.state {
         RelationshipState::Accepted => return Err(ProtocolError::RelationshipAccepted),
         RelationshipState::Blocked => return Err(ProtocolError::ContactBlocked),
-        RelationshipState::Unknown | RelationshipState::Rejected | RelationshipState::Revoked => {}
+        RelationshipState::Unknown
+        | RelationshipState::Rejected
+        | RelationshipState::Revoked
+        | RelationshipState::ExpressLane(_) => {}
+    }
+    if manifest
+        .lane
+        .as_ref()
+        .is_some_and(|l| l.provides_relationship_access(context.now))
+    {
+        return Err(ProtocolError::RelationshipAccepted);
     }
     let submission_deadline = validate_request_terms(manifest, context, terms)?;
     if manifest.next.requests.contains_key(&request_id)
@@ -1132,7 +1176,9 @@ fn relationship_decision(
                 let deadline = submission.decision_deadline;
                 if manifest.now <= deadline {
                     match decision {
-                        Decision::Accept => settle_accepted(manifest, id)?,
+                        Decision::Accept => {
+                            settle_accepted(manifest, id, AcceptancePermission::Standing)?;
+                        }
                         Decision::Reject | Decision::Block => settle_rejected(manifest, id)?,
                     }
                 } else {
@@ -1154,13 +1200,54 @@ fn relationship_decision(
     Ok(())
 }
 
-fn settle_accepted(manifest: &mut ManifestBuilder, id: RequestId) -> Result<(), ProtocolError> {
+/// Plans request settlement and the relationship status accompanying a lane grant.
+/// The application must commit this manifest and the validated lane together.
+/// # Errors
+/// Rejects incomplete context, blocked contact, or inconsistent financial state.
+pub fn accept_express_lane(
+    snapshot: &SettlementSnapshot,
+    lane: LaneId,
+    context: &TransitionContext,
+) -> Result<TransitionManifest, ProtocolError> {
+    validate_snapshot(snapshot, context)?;
+    if snapshot.state.relationship.state == RelationshipState::Blocked {
+        return Err(ProtocolError::ContactBlocked);
+    }
+    let mut manifest = ManifestBuilder::new(snapshot, context);
+    manifest.next.relationship.state = RelationshipState::ExpressLane(lane);
+    manifest.next.relationship.version =
+        next_relationship_version(manifest.next.relationship.version)?;
+    manifest.next.relationship.last_event = Some(manifest.event);
+    manifest.next.relationship.changed_at = manifest.now;
+    if let Some(request) = manifest.next.active_request().cloned() {
+        match request.lifecycle {
+            RequestLifecycle::PreparingSubmission(_) => {
+                cancel_submission(&mut manifest, request.id, ReservedCancellation::Ordinary)?;
+            }
+            RequestLifecycle::AwaitingRecipientDecision(_) => settle_accepted(
+                &mut manifest,
+                request.id,
+                AcceptancePermission::ExpressLane(lane),
+            )?,
+            _ => {}
+        }
+    }
+    manifest.event(ProtocolEventKind::RelationshipLaneGranted(lane));
+    manifest.finish(snapshot)
+}
+
+fn settle_accepted(
+    manifest: &mut ManifestBuilder,
+    id: RequestId,
+    permission: AcceptancePermission,
+) -> Result<(), ProtocolError> {
     let mut request = manifest.next.requests[&id].clone();
     if !request.lifecycle.is_awaiting_recipient_decision() {
         return Err(ProtocolError::InvalidState);
     }
     settle_financials(manifest, id, RequestSettlement::Accepted)?;
     request.lifecycle = RequestLifecycle::Accepted {
+        permission,
         submission: request
             .lifecycle
             .submission()
@@ -1519,6 +1606,13 @@ mod tests {
             cs_mail_ledger::LedgerState::new(SettlementUnit(1)).view(),
         );
         let policy = PolicySnapshot {
+            selected_class: Some(
+                crate::pricing::SelectedRequestClass::new(
+                    cs_mail_primitives::RequestClassId(1),
+                    "Test class".into(),
+                )
+                .unwrap(),
+            ),
             pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
             protocol_version: ProtocolVersion(2),
             policy_version: PolicyVersion(1),
@@ -1557,6 +1651,7 @@ mod tests {
         };
         let command = KernelCommand::new(
             ProtocolCommand::IssueRequestTerms {
+                class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(1),
                 declaration_digest: None,
             },

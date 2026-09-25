@@ -6,8 +6,8 @@ use cs_mail_security::{CommandDigest, OutcomeDigest, ReceiptKind, ReceiptPayload
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum Operation {
     Protocol(KernelCommand<ProtocolCommand>),
-    Message(BondFreeAdmission),
-    Grant(Lane),
+    Message(Box<BondFreeAdmission>),
+    Grant(cs_mail_capabilities::ValidatedLaneGrant),
     Control(LaneControl),
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -205,7 +205,7 @@ impl PostgresEngine {
             Ok((
                 a.idempotency_key,
                 Sha256::digest(a.signing_bytes()?).into(),
-                Operation::Message(a.clone()),
+                Operation::Message(Box::new(a.clone())),
             ))
         })
     }
@@ -235,7 +235,7 @@ impl PostgresEngine {
                 policy,
             )?;
             let registry = registry_locked(tx, key)?;
-            let lane = Lane::from_verified_grant(
+            let lane = cs_mail_capabilities::ValidatedLaneGrant::verify(
                 signed,
                 &registry.active_verifying_key(
                     g.recipient_operational_key,
@@ -377,9 +377,16 @@ impl PostgresEngine {
                 apply_free(&mut tx, &key, a, now, received_position, content_available)
                     .map(ReceivedOutcome::Message)
             }
-            Operation::Grant(l) => apply_grant(&mut tx, &key, l.clone(), now, received_position)
-                .map(Box::new)
-                .map(ReceivedOutcome::Lane),
+            Operation::Grant(l) => apply_grant(
+                &mut tx,
+                &key,
+                l.clone(),
+                now,
+                received_position,
+                policy.clone(),
+            )
+            .map(Box::new)
+            .map(ReceivedOutcome::Lane),
             Operation::Control(c) => apply_control(&mut tx, &key, c, now, received_position)
                 .map(Box::new)
                 .map(ReceivedOutcome::Lane),
@@ -609,20 +616,30 @@ fn apply_protocol(
     if matches!(
         authorized.command(),
         ProtocolCommand::IssueRequestTerms { .. }
-    ) {
+    ) && aggregate.state.active_request().is_none()
+        && aggregate.state.relationship.state != RelationshipState::Accepted
+        && !load_current_lane(transaction, aggregate_key)?
+            .as_ref()
+            .is_some_and(|l| l.provides_relationship_access(now))
+    {
         let row = transaction
             .query_opt(
-                "SELECT policy,preference FROM cs_recipient_pricing WHERE recipient=$1",
+                "SELECT policy,classes FROM cs_recipient_pricing WHERE recipient=$1",
                 &[&aggregate.state.relationship.key.recipient.0.to_string()],
             )?
             .ok_or(ProtocolError::PolicyInvalid)?;
         let pricing = row
             .get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)
             .0;
-        let preference = row
-            .get::<_, Option<Json<cs_mail_protocol::pricing::RecipientCollateralPreference>>>(1)
+        let classes = row
+            .try_get::<_, Option<Json<cs_mail_protocol::pricing::RecipientRequestClasses>>>(1)?
             .map(|p| p.0);
-        policy.apply_pricing(&pricing.resolve_quote(preference.as_ref())?);
+        let ProtocolCommand::IssueRequestTerms { class_id, .. } = authorized.command() else {
+            unreachable!()
+        };
+        policy.apply_pricing(
+            &pricing.resolve_quote(&classes.ok_or(ProtocolError::PolicyInvalid)?, *class_id)?,
+        );
         if billing::arrangement(transaction, policy.financial.scope, policy.unit)?.0
             != policy.payment_provider_key
         {
@@ -655,7 +672,7 @@ fn apply_protocol(
     let ledger = LedgerView::from_balances(aggregate.ledger_revision, aggregate.unit, balances);
     let (history, payments, messages) =
         load_domain_records(transaction, aggregate_key, &aggregate.state, false, target)?;
-    let snapshot = SettlementSnapshot::complete(
+    let mut snapshot = SettlementSnapshot::complete(
         aggregate.revision,
         aggregate.state,
         history,
@@ -663,6 +680,7 @@ fn apply_protocol(
         messages,
         ledger,
     );
+    snapshot.lane = load_current_lane(transaction, aggregate_key)?;
     validate_issued_quote(transaction, aggregate_key, authorized.command())?;
     let next_revision = aggregate
         .revision
@@ -786,59 +804,93 @@ fn assess_protocol_admission(
 fn apply_grant(
     transaction: &mut Transaction<'_>,
     aggregate_key: &str,
-    lane: Lane,
+    grant: cs_mail_capabilities::ValidatedLaneGrant,
     now: CanonicalTime,
     received_position: JournalPosition,
+    policy: PolicySnapshot,
 ) -> Result<LaneOperationOutcome, StorageError> {
     let aggregate = load_locked_aggregate(transaction, aggregate_key)?;
-    if aggregate.state.relationship.state == RelationshipState::Blocked {
-        return Err(StorageError::Protocol(ProtocolError::ContactBlocked));
-    }
-    if lane.grant.sender != aggregate.state.relationship.key.sender
-        || lane.grant.recipient != aggregate.state.relationship.key.recipient
-    {
-        return Err(StorageError::BondFreeNotAuthorized);
-    }
-
-    if let Some(row) = transaction.query_opt(
-        "SELECT lane FROM cs_capability_lanes WHERE aggregate_key = $1 FOR UPDATE",
-        &[&aggregate_key],
-    )? {
-        let existing = row.get::<_, Json<Lane>>("lane").0;
-        if existing == lane {
-            return Ok(LaneOperationOutcome {
-                lane,
-                changed: false,
-                replayed: false,
-            });
-        }
-        if existing != lane
-            && (existing.grant.id != lane.grant.id || lane.grant.version <= existing.grant.version)
-        {
-            return Err(StorageError::DuplicateConflict);
-        }
-    }
-    let position = advance_aggregate_revision(
+    let balances = load_balances(transaction, aggregate_key)?;
+    let ledger = LedgerView::from_balances(aggregate.ledger_revision, aggregate.unit, balances);
+    let (history, payments, messages) =
+        load_domain_records(transaction, aggregate_key, &aggregate.state, false, None)?;
+    let mut snapshot = SettlementSnapshot::complete(
+        aggregate.revision,
+        aggregate.state,
+        history,
+        payments,
+        messages,
+        ledger,
+    );
+    snapshot.lane = load_current_lane(transaction, aggregate_key)?;
+    let context = TransitionContext {
+        admission: Ok(()),
+        now,
+        journal_position: received_position,
+        protocol_version: policy.protocol_version,
+        policy,
+    };
+    let lane = grant.clone().activate()?;
+    let decision =
+        cs_mail_application::relationships::LaneAcceptance::decide(&snapshot, grant, &context)
+            .map_err(|e| match e {
+                cs_mail_application::relationships::LaneAcceptanceError::Protocol(e) => {
+                    StorageError::Protocol(e)
+                }
+                cs_mail_application::relationships::LaneAcceptanceError::Capability(e) => {
+                    StorageError::Capability(e)
+                }
+            })?;
+    let Some(decision) = decision else {
+        return Ok(LaneOperationOutcome {
+            lane,
+            changed: false,
+            replayed: false,
+        });
+    };
+    let (lane, manifest) = decision.into_effects();
+    record_journal_position(
         transaction,
         aggregate_key,
-        aggregate.revision,
+        aggregate
+            .revision
+            .checked_add(1)
+            .ok_or(StorageError::NumericRange)?,
+        "capability",
         now,
-        Some(received_position),
+        received_position,
+    )?;
+    let ledger = snapshot.ledger.apply(&manifest.ledger_batch)?;
+    persist_manifest(
+        transaction,
+        aggregate_key,
+        &manifest,
+        &ledger,
+        now,
+        received_position,
     )?;
     upsert_lane(transaction, aggregate_key, &lane, now)?;
     persist_schedules(transaction, aggregate_key, &[lane.schedule_change()])?;
     insert_capability_event(
         transaction,
         aggregate_key,
-        position,
+        received_position,
         &CapabilityEvent::LaneGranted(lane.grant.id),
     )?;
-
     Ok(LaneOperationOutcome {
-        changed: true,
         lane,
+        changed: true,
         replayed: false,
     })
+}
+
+fn load_current_lane(tx: &mut Transaction<'_>, key: &str) -> Result<Option<Lane>, StorageError> {
+    Ok(tx
+        .query_opt(
+            "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1 FOR UPDATE",
+            &[&key],
+        )?
+        .map(|r| r.get::<_, Json<Lane>>(0).0))
 }
 
 fn apply_control(
@@ -1086,7 +1138,7 @@ impl PostgresEngine {
             Ok((
                 a.idempotency_key,
                 Sha256::digest(a.signing_bytes()?).into(),
-                Operation::Message(a.clone()),
+                Operation::Message(Box::new(a.clone())),
             ))
         })
     }
@@ -1376,19 +1428,19 @@ impl PostgresEngine {
             .key
             .recipient;
         if let Some(row) = tx.query_opt(
-            "SELECT policy,preference FROM cs_recipient_pricing WHERE recipient=$1 FOR UPDATE",
+            "SELECT policy,classes FROM cs_recipient_pricing WHERE recipient=$1 FOR UPDATE",
             &[&recipient.0.to_string()],
         )? {
             let previous = row
                 .get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)
                 .0;
-            let preference = row
-                .get::<_, Option<Json<cs_mail_protocol::pricing::RecipientCollateralPreference>>>(1)
+            let classes = row
+                .try_get::<_, Option<Json<cs_mail_protocol::pricing::RecipientRequestClasses>>>(1)?
                 .map(|p| p.0);
             if previous != *pricing && previous.version >= pricing.version {
                 return Err(StorageError::VersionConflict);
             }
-            if pricing.resolve(preference.as_ref()).is_none() {
+            if classes.as_ref().is_some_and(|c| !pricing.permits(c)) {
                 return Err(ProtocolError::PolicyInvalid.into());
             }
         }
@@ -1396,13 +1448,39 @@ impl PostgresEngine {
         tx.commit()?;
         Ok(())
     }
+    /// Reads the recipient's published classes, if any.
     /// # Errors
-    /// Rejects invalid recipient authority, unsupported amounts and conflicting versions.
-    pub fn set_collateral_preference(
+    /// Returns storage or invalid-record errors.
+    pub fn request_classes(
         &self,
-        signed: &cs_mail_security::SignedCollateralPreference,
-        now: CanonicalTime,
+    ) -> Result<Option<cs_mail_protocol::pricing::RecipientRequestClasses>, StorageError> {
+        let recipient = self.snapshot()?.state.relationship.key.recipient;
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let row = client.query_opt(
+            "SELECT classes FROM cs_recipient_pricing WHERE recipient=$1",
+            &[&recipient.0.to_string()],
+        )?;
+        row.map(|r| {
+            r.try_get::<_, Option<Json<cs_mail_protocol::pricing::RecipientRequestClasses>>>(0)
+                .map(|j| j.map(|v| v.0))
+        })
+        .transpose()
+        .map(Option::flatten)
+        .map_err(StorageError::from)
+    }
+}
+impl cs_mail_application::request_classes::RequestClassesStore for PostgresEngine {
+    type Error = StorageError;
+    fn transact_request_classes(
+        &self,
+        signed: &cs_mail_security::SignedRequestClasses,
         policy: &PolicySnapshot,
+        decide: impl FnOnce(
+            cs_mail_application::request_classes::PublicationContext,
+        ) -> Result<
+            cs_mail_application::request_classes::PublicationDecision,
+            StorageError,
+        >,
     ) -> Result<(), StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
@@ -1417,46 +1495,32 @@ impl PostgresEngine {
             .state
             .relationship
             .key;
-        if relationship.recipient != signed.preference.recipient
-            || relationship.reference != signed.scope.relationship
-            || policy.recipient_provider != signed.scope.intended_provider
-        {
-            return Err(SecurityError::SigningScopeMismatch.into());
-        }
         let registry = registry_locked(&mut tx, &self.aggregate_key)?;
-        let key = registry.active_verifying_key(
-            signed.operational_key,
-            ActorRef::Recipient(signed.preference.recipient),
-            now,
-        )?;
-        signed.verify(&key)?;
         let row = tx.query_one(
-            "SELECT policy,preference FROM cs_recipient_pricing WHERE recipient=$1 FOR UPDATE",
+            "SELECT policy,classes FROM cs_recipient_pricing WHERE recipient=$1 FOR UPDATE",
             &[&relationship.recipient.0.to_string()],
         )?;
-        let pricing = row
-            .get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)
-            .0;
-        if signed.preference.version == 0 || pricing.resolve(Some(&signed.preference)).is_none() {
-            return Err(ProtocolError::PolicyInvalid.into());
+        let context = cs_mail_application::request_classes::PublicationContext {
+            scope: cs_mail_security::SigningScope {
+                deployment_domain: signed.scope.deployment_domain,
+                intended_provider: policy.recipient_provider,
+                relationship: relationship.reference,
+            },
+            recipient: relationship.recipient,
+            registry,
+            pricing: row
+                .try_get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)?
+                .0,
+            current: row
+                .try_get::<_, Option<Json<cs_mail_protocol::pricing::RecipientRequestClasses>>>(1)?
+                .map(|j| j.0),
+        };
+        if let Some(classes) = decide(context)?.into_effects() {
+            tx.execute(
+                "UPDATE cs_recipient_pricing SET classes=$2 WHERE recipient=$1",
+                &[&relationship.recipient.0.to_string(), &Json(classes)],
+            )?;
         }
-        if let Some(Json(old)) =
-            row.get::<_, Option<Json<cs_mail_protocol::pricing::RecipientCollateralPreference>>>(1)
-        {
-            if old == signed.preference {
-                return Ok(());
-            }
-            if signed.preference.version <= old.version {
-                return Err(StorageError::VersionConflict);
-            }
-        }
-        tx.execute(
-            "UPDATE cs_recipient_pricing SET preference=$2 WHERE recipient=$1",
-            &[
-                &relationship.recipient.0.to_string(),
-                &Json(&signed.preference),
-            ],
-        )?;
         tx.commit()?;
         Ok(())
     }

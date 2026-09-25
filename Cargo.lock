@@ -420,6 +420,10 @@ version = "0.1.0"
 dependencies = [
  "cs-mail-accounts",
  "cs-mail-billing",
+ "cs-mail-capabilities",
+ "cs-mail-consent",
+ "cs-mail-content",
+ "cs-mail-correspondence",
  "cs-mail-finance",
  "cs-mail-ledger",
  "cs-mail-primitives",
@@ -460,12 +464,16 @@ dependencies = [
 name = "cs-mail-client"
 version = "0.1.0"
 dependencies = [
+ "cs-mail-application",
  "cs-mail-billing",
  "cs-mail-content",
+ "cs-mail-correspondence",
  "cs-mail-finance",
  "cs-mail-primitives",
  "cs-mail-protocol",
  "cs-mail-security",
+ "getrandom 0.4.3",
+ "serde_json",
 ]
 
 [[package]]
@@ -483,12 +491,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "cs-mail-consent"
+version = "0.1.0"
+dependencies = [
+ "cs-mail-content",
+ "cs-mail-primitives",
+ "serde",
+]
+
+[[package]]
 name = "cs-mail-content"
 version = "0.1.0"
 dependencies = [
  "cs-mail-primitives",
  "hpke",
  "serde",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "cs-mail-correspondence"
+version = "0.1.0"
+dependencies = [
+ "cs-mail-primitives",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
 ]
 
@@ -511,6 +538,19 @@ dependencies = [
  "identity-contract",
  "reqwest",
  "serde_json",
+]
+
+[[package]]
+name = "cs-mail-key-custody"
+version = "0.1.0"
+dependencies = [
+ "cs-mail-application",
+ "cs-mail-consent",
+ "cs-mail-content",
+ "cs-mail-correspondence",
+ "cs-mail-primitives",
+ "serde_json",
+ "zeroize",
 ]
 
 [[package]]
@@ -600,9 +640,13 @@ dependencies = [
  "cs-mail-application",
  "cs-mail-billing",
  "cs-mail-capabilities",
+ "cs-mail-client",
+ "cs-mail-consent",
  "cs-mail-content",
+ "cs-mail-correspondence",
  "cs-mail-finance",
  "cs-mail-identity-client",
+ "cs-mail-key-custody",
  "cs-mail-ledger",
  "cs-mail-primitives",
  "cs-mail-privacy",

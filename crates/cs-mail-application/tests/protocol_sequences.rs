@@ -96,6 +96,13 @@ fn serialized_requests_use_submission_terminology() {
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
+        selected_class: Some(
+            cs_mail_protocol::pricing::SelectedRequestClass::new(
+                cs_mail_primitives::RequestClassId(1),
+                "Test class".into(),
+            )
+            .unwrap(),
+        ),
         pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
         protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
@@ -190,6 +197,7 @@ impl Fixture {
         let result = self
             .sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(id),
                     declaration_digest: None,
                 },
@@ -314,6 +322,7 @@ fn one_request_one_charge_and_quote_cannot_be_reused() {
     let result = f
         .sender(
             ProtocolCommand::IssueRequestTerms {
+                class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(2),
                 declaration_digest: None,
             },
@@ -405,6 +414,7 @@ fn rejection_exports_pending_forfeiture_and_starts_cooldown() {
     assert!(matches!(
         f.sender(
             ProtocolCommand::IssueRequestTerms {
+                class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(2),
                 declaration_digest: None
             },
@@ -622,6 +632,7 @@ fn unauthorized_decisions_and_invalid_policy_are_rejected() {
     assert!(matches!(
         f.sender(
             ProtocolCommand::IssueRequestTerms {
+                class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(2),
                 declaration_digest: None
             },
@@ -667,6 +678,7 @@ fn concurrent_creations_commit_only_one_charge_intent() {
     let issued = f
         .sender(
             ProtocolCommand::IssueRequestTerms {
+                class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(1),
                 declaration_digest: None,
             },
@@ -918,6 +930,7 @@ fn concurrent_aliases_reserve_exactly_one_pending_submission() {
         let result = f
             .sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
                 },

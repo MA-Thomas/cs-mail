@@ -60,6 +60,37 @@ pub fn provision(
         purchase_service(engine, policy, billing, record.reference, at)?;
     }
     engine.initialize_key_registry(&provider_keys, at)?;
+    engine.configure_ingress(policy.financial.scope.deployment_domain, policy)?;
+    if engine.request_classes()?.is_none() {
+        let record = all_keys
+            .records()
+            .find(|r| r.actor == cs_mail_protocol::ActorRef::Recipient(recipient))
+            .unwrap();
+        let classes = cs_mail_protocol::pricing::RecipientRequestClasses::new(
+            recipient,
+            1,
+            vec![cs_mail_protocol::pricing::RequestClass::new(
+                RequestClassId(1),
+                "Test class".into(),
+                policy.collateral,
+            )?],
+        )?;
+        let signer = cs_mail_security::CommandSigner::from_secret_bytes(
+            record.actor,
+            record.reference,
+            &[u8::try_from(record.reference.0).unwrap(); 32],
+        );
+        let scope = cs_mail_security::SigningScope {
+            deployment_domain: policy.financial.scope.deployment_domain,
+            intended_provider: policy.recipient_provider,
+            relationship: engine.snapshot()?.state.relationship.key.reference,
+        };
+        cs_mail_application::request_classes::RequestClassesService::new(engine).publish(
+            &signer.sign_request_classes(scope, classes)?,
+            policy,
+            || at,
+        )?;
+    }
     Ok(())
 }
 fn enroll_persona(

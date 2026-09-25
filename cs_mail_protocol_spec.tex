@@ -38,8 +38,9 @@
 \begin{abstract}
 The \textit{cs-mail} protocol makes permission to communicate a directed
 relationship. A sender who lacks permission may submit a relationship request
-with an initial encrypted message and one conditional charge. The recipient may
-accept, reject, or leave the request to expire. These outcomes determine refunds
+under a recipient-defined class, with an initial encrypted message and one
+conditional charge. The recipient may accept with standing permission or an
+express lane, reject, or leave the request to expire. These outcomes determine refunds
 and forfeitures; permitted follow-up messages create no further charge. This
 specification defines the request lifecycle, authenticated decisions, financial
 obligations, and privacy boundaries. The C-SQD deployment adds a company-owned
@@ -48,16 +49,17 @@ pool and annual equal member allocations under its financial-program profile.
 
 \section{Reading the Protocol Through One Request}
 
-Alice wants to establish permission to write to Bob. Bob has not accepted her
+Alice wants to propose research collaboration to Professor Bob. Bob has not accepted her
 public identity, and no scoped capability authorizes her message. Alice obtains
-terms for a dollar-denominated relationship request: processing component $C=0.50$ and refundable
+terms for his published research request class: processing component $C=0.50$ and refundable
 collateral component $S=5.00$. She authorizes a charge of $5.50$ associated with
 that request. Submission occurs once funding is finalized, encrypted content is
 durable, and the service can commit a retryable delivery intent.
 
 Bob sees one relationship request. If his settings permit follow-ups, Alice may
 add messages to it without another charge or a later decision deadline. Accepting
-Alice grants future permission and records a $5.50$ refund obligation. Rejecting
+the request grants either standing directed permission or a relationship-level
+express lane and records a $5.50$ refund obligation. Rejecting
 her retains $0.50$ as processing revenue and records $5.00$ as pending forfeiture.
 Bob does not acquire a personal claim on that collateral. If the request expires
 without a timely decision, the processing amount is retained and $5.00$ is due
@@ -76,6 +78,10 @@ architecture identifies its implementation boundaries; the desktop plan describe
 the remaining product work. Conformance to the contract does not by itself
 establish readiness for live financial operations. The words \MUST, \MUSTNOT, \SHOULD,
 \SHOULDNOT, and \MAY{} describe conformance to this draft.
+Request classes and lane acceptance are implemented by the Rust libraries.
+Signed quote requests select a recipient-defined class; the signed lane-grant
+API coordinates permission and request settlement. Product transports remain
+deployment work.
 
 The protocol governs directed permission, one charge per request, request
 outcomes, financial obligations, authenticated admission, replay, and privacy.
@@ -122,24 +128,30 @@ globally comparable identifier.
 
 The relationship has state
 \[
-A_{ij}\in\{\texttt{unknown},\texttt{accepted},\texttt{rejected},
+A_{ij}\in\{\texttt{unknown},\texttt{accepted},\texttt{expressLane},\texttt{rejected},
 \texttt{revoked},\texttt{blocked}\}.
 \]
 Its record contains a scoped directed-pair handle, monotonically increasing
 version, latest canonical event position, and transition time. Accepted ordinary
 communication requires no request charge. A valid scoped capability can authorize
 narrower communication without establishing acceptance. Blocking overrides both.
+Acceptance of a \emph{request} with a lane does not set the relationship to
+\texttt{accepted}; it records \texttt{expressLane} with its lane identifier.
+Request classes describe proposed approaches, not enduring
+relationship types or automatic permission grants.
 
 Unknown, rejected, and revoked relationships may be eligible for a new request
 under recipient and anti-abuse policy. Thus a request is needed when standing
-permission is absent, not only when no relationship record exists. Rejection
+permission and valid lane access are absent, not only when no relationship
+record exists. Rejection
 declines a request; blocking prohibits further ordinary contact until removed.
 
 \Needspace{17\baselineskip}
 \subsection{The relationship request}
 
 A request is the economic unit. It \MUST{} have a unique scoped identifier,
-directed relationship and generation, immutable quote, initial-message binding,
+directed relationship and generation, selected recipient-defined request class,
+immutable quote, initial-message binding,
 original charge reference, creation time, submission deadline, optional submission
 time and decision deadline, state, and version. The request lifecycle has two
 nonterminal states. Submission commits the initial communication for delivery;
@@ -155,12 +167,15 @@ the request.
 \end{description}
 The terminal outcomes are \texttt{Accepted}, \texttt{Rejected},
 \texttt{Expired}, and \texttt{Cancelled}.
+An accepted request records whether it granted standing permission or an express
+lane; both modes have the same refund consequence.
 
 At most one nonterminal request
 \MUST{} exist per directed public-identity pair. Creation and external-charge
 dispatch \MUST{} enforce that constraint even across devices or different
 idempotency keys. A second submission returns the existing request or a stable
-conflict; it does not authorize another charge.
+conflict; it does not authorize another charge. Selecting a different request
+class \MUSTNOT{} evade this constraint.
 
 The charge purchases submission of a relationship request with an initial
 communication. It does not guarantee acceptance, attention, inbox prominence,
@@ -192,7 +207,8 @@ second charge against the pending request.
 
 Before creating a request, the sender obtains signed terms containing the quote
 identifier; protocol, policy, and financial-program versions; scoped parties and
-service operator; relationship and request-history versions; $C$ and $S$;
+service operator; relationship and request-history versions; the selected class
+and its published meaning; $C$ and $S$;
 settlement unit; submission and decision durations; request eligibility time;
 quote issue and expiry times; and refund and forfeiture rules. The terms
 \MUST{} include the applicable corporate-share rate or an immutable reference
@@ -204,12 +220,14 @@ The base charge is
 Q=C+S.
 \]
 The service operator sets $C$, a bounded menu for $S$, and a default selection.
-A recipient may choose from that menu through an authenticated preference. The
+A recipient publishes at most eight user-defined request classes and chooses collateral for each from that
+menu through authenticated preferences. The sender selects from those classes. The
 C-SQD defaults are specified in the deployment profile; the protocol does not
 embed a particular price or currency. The full
 amount and possible outcomes \MUST{} be disclosed before authorization. The
 corporate share is an allocation from eligible forfeitures, not an additional
-sender fee. Quoted financial terms \MUST{} remain immutable after creation.
+sender fee. The selected class and quoted financial terms \MUST{} remain
+immutable after creation.
 
 Recipient preferences affect new quotes only. A preference change \MUSTNOT{}
 alter the amount on an existing request. The base request has no additional
@@ -266,7 +284,7 @@ external execution, not claiming immediate receipt by the sender's bank.
 \toprule
 Outcome & Financial consequence \\
 \midrule
-Accepted in time & Refund $C+S$ to the original sender. \\
+Standing acceptance in time; lane grant while pending & Refund $C+S$ to the original sender. \\
 Rejected in time & Retain $C$ as processing revenue; record $S$ as pending forfeiture. \\
 Blocked in time while awaiting a decision & Apply the rejection allocation and prohibit future contact. \\
 Expired without timely decision & Retain $C$; refund $S$. \\
@@ -291,6 +309,7 @@ user spending balances. Refunds and member payables \MUSTNOT{} fund another
 request, transfer between users, or become on-demand wallet withdrawals.
 
 A terminal request transition \MUST{} atomically commit its relationship effect,
+any lane granted by bounded acceptance,
 request outcome, ledger obligations, scheduled-work changes, and external-effect
 intents. Workers execute those intents after commit. A payment or refund remains
 pending until authenticated provider evidence and reconciliation establish its
@@ -346,12 +365,14 @@ creating another operation.
 \subsection{Issue terms and create the request}
 
 \texttt{IssueRequestTerms} checks relationship state, current request, recipient
-policy, and principal-scoped history. A blocked pair is refused. Accepted ordinary
+policy, and principal-scoped history. Class-aware terms must additionally bind
+the sender's selection to the recipient's published class and collateral. A blocked pair is refused. Accepted ordinary
 communication requires no request charge. An existing nonterminal request is
 returned as such; only an eligible new request receives a charge quote.
 
 \texttt{CreateRequest} validates the quote signature, expiry, unit, versions,
-initial-message binding, and sender authorization. Under the directed-pair
+initial-message binding, and sender authorization. The class-aware extension must
+preserve the selected class and its terms. Under the directed-pair
 uniqueness boundary it creates a \texttt{PreparingSubmission} request, fixes its terms,
 schedules submission timeout, and records one external payment intent. It creates
 no recipient solicitation and does not advance request history.
@@ -372,7 +393,7 @@ submission timeout with expiry, and store the initial delivery intent and one
 logical solicitation effect.
 
 If cancellation or timeout wins first, submission cannot revive the request. If
-acceptance occurs while it is preparing, cancel the request and return its full
+standing acceptance occurs while it is preparing, cancel the request and return its full
 captured amount; the message may subsequently use accepted-sender admission.
 Blocking before submission cancels it in full and prevents delivery. No message
 becomes visible before its durable admission commits.
@@ -393,7 +414,7 @@ stale authority. If standing acceptance now permits delivery, the sender may use
 that path with authenticated admission; a failed follow-up must not silently
 become a newly charged request.
 
-\subsection{Accept the relationship}
+\subsection{Accept with standing permission or an express lane}
 
 \texttt{AcceptRelationship} is authorized by the recipient for the directed
 public-identity pair. It establishes accepted permission. If the current request
@@ -405,6 +426,20 @@ A late acceptance grants future permission but cannot reopen a logically expired
 or terminal request. Its expiry obligations must still be materialized. Accepting
 one public identity \MUSTNOT{} accept sibling identities or reset the private
 principal's new-request history.
+
+For a submitted request still awaiting a decision, the recipient may accept by
+granting an express lane. The transition \MUST{} commit the recipient-authorized
+lane, accepted request outcome, full refund obligation, closure of the
+solicitation, and cancellation of expiry together. It \MUSTNOT{} establish
+standing acceptance. The lane concerns the relationship, may be scoped by purpose,
+time, or volume, and is usually not scoped to a particular conversation.
+Its subsequent expiry or revocation \MUSTNOT{} reopen the request's settlement.
+
+A separate lane-management grant has the same effect on a pending request.
+During preparation it cancels submission and voids or refunds the full charge.
+A submitted request still pending receives the full refund even after its deadline;
+already-terminal settlements remain fixed. The lane governs future access without
+a new bond, subject to its scope and validity.
 
 \subsection{Reject, block, unblock, and revoke}
 
@@ -447,7 +482,8 @@ client or losing a network connection is not itself a cancellation command.
 Creation, submission, follow-up policy changes, and recipient decisions \MUST{}
 serialize for the directed pair. Decisions carry an expected relationship
 version; the first valid committed decision changes it and stale conflicting
-decisions fail without partial effects. Submission and cancellation share the
+decisions fail without partial effects. Bounded acceptance must include its lane
+in that same decision boundary. Submission and cancellation share the
 request version. No execution may both advance request history and cancel the
 same request before submission.
 
@@ -459,9 +495,10 @@ Subsequent processing of an older request must preserve current permission.
 Request history is keyed by $(P_i,I_j)$ through a scoped assertion. It contains a
 new-request level, eligibility time, policy version, and canonical event position.
 Initial submission advances it atomically; follow-ups and cancelled preparation do
-not. Acceptance bypasses that history for the accepted public identity without
+not. Standing acceptance bypasses that history for the accepted public identity without
 erasing it for aliases. Cross-identity request creation \MUST{} observe the shared
 history boundary so concurrent aliases cannot all use stale initial terms.
+Changing request classes \MUSTNOT{} reset or partition that history.
 
 The deployment defines cooldowns after expiry and rejection, recipient overrides,
 and explicit invitation rules. Any decay or forgiveness of history requires a
@@ -496,7 +533,7 @@ Condition & Required behavior \\
 \texttt{AlreadyTerminal}, \texttt{Duplicate} & Return the recorded result for exact replay. A conflicting payload fails. \\
 \texttt{VersionConflict} & Refresh state; apply no partial outcome. \\
 \texttt{MessageValidityClosed} & Refuse this message; cancel a still-preparing initial request, but do not settle a submitted request because a follow-up is stale. \\
-\texttt{CapabilityScopeMismatch} & Consume no allowance and charge nothing automatically. \\
+\texttt{CapabilityScopeMismatch} & Consume no allowance and charge nothing automatically; an invalid bounded-acceptance grant must not leave a partial settlement. \\
 \texttt{UnsupportedCriticalExtension} & Refuse admission dependent on the extension; unwind a still-preparing initial request. \\
 \texttt{PrivacyScopeViolation}, \texttt{LinkageErased} & Refuse excess disclosure or reconstruction of erased linkage. \\
 \texttt{ContentKeyUnavailable} & Return an endpoint recovery error; do not request provider decryption or change settlement. \\
@@ -525,6 +562,9 @@ hard validity interval, enforceable count or rate, version, and revocation rules
 An opaque handle identifies the pair; it does not supply authority without the
 grant. Admission compares authenticated declarations exactly under versioned
 matching rules. It does not verify the semantic truth of encrypted content.
+The request class records the proposed approach; the lane separately states the
+permission actually granted. A class label is not itself a capability or a
+lane-purpose constraint.
 
 For legacy senders, a DMARC pass under RFC~9989 is evidence of authorized use of
 the visible author domain, not proof of purpose, safety, company identity, or
@@ -541,8 +581,10 @@ follow-up is refused, the last branch is unavailable. Capability mismatch never
 silently converts a message into a charged request.
 
 Capability-authorized delivery creates no request, forfeiture, solicitation, or
-new-request history increment. Grant, renewal, expiry, and revocation do not
-settle an existing request. Blocking invalidates capability authority; unblocking
+new-request history increment. Acceptance with a lane settles the request and
+grants the lane atomically; later lane changes do not reopen that settlement.
+Independent issuance during a pending request remains an open interaction.
+Blocking invalidates capability authority; unblocking
 does not restore it. The lane's activity clock cannot extend a request deadline
 or establish distribution-program activity by itself.
 
@@ -761,6 +803,9 @@ operator manipulation remain relevant risks. Providers \MUST{} make acceptance
 available, issue signed decision receipts, and preserve timely decisions rather
 than manufacture expiry. Pricing and financial-program policies \MUST{} include
 review, dispute, correction, and audit procedures.
+Recipients judge whether an approach fits their published class. Misrepresentation
+may lead to ordinary rejection; this model adds no separate misclassification
+penalty or reputation mechanism and does not guarantee truthful declarations.
 
 Protocol policy fixes request economics and deterministic transitions. Admission
 policy evaluates authenticated envelopes, permission, recipient follow-up
@@ -783,6 +828,8 @@ without exposing unrelated recipient rules or enabling enumeration.
 Versioned exchanges \MUST{} cover identities, scoped continuity assertions,
 request terms and identifiers, payment/admission evidence, message envelopes,
 capabilities, recipient decisions, outcome receipts, and financial obligations.
+The class-aware extension must bind the selected class and distinguish the
+permission granted on acceptance; exact representations remain implementation work.
 Equivalent canonical inputs must yield equivalent request outcomes. Signatures
 and idempotency domains \MUST{} prevent reuse across deployments and versions.
 
@@ -799,7 +846,7 @@ enabled. SMTP downgrade must be visible before transmission and in the envelope.
 Conformance \MUST{} preserve the following together:
 \begin{enumerate}[leftmargin=2em,nosep]
 \item One nonterminal request per directed pair, one authorized charge per request,
-      and no additional financial effect from follow-ups or retries.
+      across all classes, and no additional financial effect from follow-ups or retries.
 \item One request deadline fixed at submission; timely-decision priority and no
       retroactive reopening of a terminal or logically expired request.
 \item Full return before submission; no ordinary cancellation after submission.
@@ -820,7 +867,11 @@ Conformance \MUST{} preserve the following together:
 \end{enumerate}
 
 A reference suite should begin with one request and three permitted messages:
-acceptance creates one refund obligation and future permission. It should then
+each acceptance mode creates one full refund obligation and its stated permission.
+The extension must exercise fixed class terms, class-switching attempts, atomic
+lane acceptance versus conflicting decisions, and lane expiry without reopening
+settlement. These are required extension scenarios, not claims about existing tests.
+The suite should also
 exercise disabled follow-ups, concurrent creation, alias rotation, cancellation
 versus submission, a late capture after cancellation, timely decisions delayed in
 queues, late acceptance, duplicate and out-of-order provider evidence, and failed

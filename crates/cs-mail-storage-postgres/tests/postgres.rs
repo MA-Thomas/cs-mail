@@ -76,6 +76,13 @@ fn state(attempt_seed: u128) -> ProtocolState {
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
+        selected_class: Some(
+            cs_mail_protocol::pricing::SelectedRequestClass::new(
+                cs_mail_primitives::RequestClassId(1),
+                "Test class".into(),
+            )
+            .unwrap(),
+        ),
         pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
         protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
@@ -223,6 +230,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
                 },
@@ -395,6 +403,7 @@ fn admission_requires_durable_correctly_scoped_ciphertext() {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(44),
                     declaration_digest: None,
                 },
@@ -574,6 +583,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
             .to_bytes(),
         grant,
     };
+    exercise_lane_settlement(&signed);
     support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
     engine
         .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
@@ -655,7 +665,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
         .execute(
             recipient(
                 ProtocolCommand::AcceptRelationship {
-                    expected_version: Version(0),
+                    expected_version: Version(1),
                 },
                 94,
             ),
@@ -719,7 +729,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
         .execute(
             recipient(
                 ProtocolCommand::BlockRelationship {
-                    expected_version: Version(1),
+                    expected_version: Version(2),
                 },
                 92,
             ),
@@ -734,6 +744,125 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
         sign_and_admit(&engine, &blocked, test_time(5)),
         Err(StorageError::Protocol(ProtocolError::ContactBlocked))
     ));
+}
+
+// Claim: granting access commits its refund atomically, including preparation and
+// overdue-but-pending requests; replay and terminal requests cannot duplicate settlement.
+#[allow(clippy::too_many_lines)] // Keep each settlement and rollback observation together.
+fn exercise_lane_settlement(signed: &SignedLaneGrant) {
+    for situation in 0..4 {
+        let url = database_url();
+        let engine = PostgresEngine::connect(
+            &url,
+            aggregate_key("lane-settlement"),
+            &state(900 + situation),
+            UNIT,
+        )
+        .unwrap();
+        if situation == 0 {
+            prepare_request_submission(&engine, 1);
+            confirm_capture(&engine, RequestId(1), 2);
+        } else {
+            submit_initial_request(&engine);
+        }
+        let at = if situation < 2 { 5 } else { 54 };
+        if situation == 3 {
+            let version = engine.snapshot().unwrap().state.requests[&RequestId(1)].version;
+            engine
+                .execute(
+                    command_signer(ActorRef::Provider(PROVIDER), OperationalKeyRef(3), 3)
+                        .sign(
+                            signing_scope(),
+                            ProtocolVersion(2),
+                            IdempotencyKey(80),
+                            ProtocolCommand::ExpireRequest {
+                                request_id: RequestId(1),
+                                expected_request_version: version.into(),
+                            },
+                        )
+                        .unwrap(),
+                    test_time(54),
+                    policy(),
+                )
+                .unwrap();
+        }
+        let handle = engine
+            .receive_grant(
+                signed,
+                IdempotencyKey(90),
+                DEPLOYMENT_DOMAIN,
+                || test_time(at),
+                policy(),
+            )
+            .unwrap();
+        if situation == 1 {
+            let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+            db.batch_execute("CREATE FUNCTION fail_lane() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected lane persistence failure'; END $$; CREATE TRIGGER fail_lane BEFORE INSERT ON cs_capability_events FOR EACH ROW EXECUTE FUNCTION fail_lane();").unwrap();
+            assert!(engine.process_received(&handle).is_err());
+            assert!(engine.lane().unwrap().is_none());
+            assert!(
+                engine.snapshot().unwrap().payments[&RequestId(1)]
+                    .settlement()
+                    .is_none()
+            );
+            db.batch_execute(
+                "DROP TRIGGER fail_lane ON cs_capability_events; DROP FUNCTION fail_lane();",
+            )
+            .unwrap();
+        }
+        assert!(matches!(
+            engine.process_received(&handle).unwrap(),
+            cs_mail_storage_postgres::ReceivedOutcome::Lane(_)
+        ));
+        let snapshot = engine.snapshot().unwrap();
+        assert_eq!(
+            snapshot.state.relationship.state,
+            RelationshipState::ExpressLane(signed.grant.id)
+        );
+        let refund = snapshot.payments[&RequestId(1)]
+            .refund()
+            .operation()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            refund.amount,
+            Money::from_minor_units(if situation == 3 { 8 } else { 10 })
+        );
+        if situation == 1 || situation == 2 {
+            assert!(matches!(
+                snapshot.state.requests[&RequestId(1)].lifecycle,
+                RequestLifecycle::Accepted {
+                    permission: cs_mail_protocol::AcceptancePermission::ExpressLane(_),
+                    ..
+                }
+            ));
+        }
+        engine.process_received(&handle).unwrap();
+        assert_eq!(
+            engine.snapshot().unwrap().payments[&RequestId(1)]
+                .refund()
+                .operation(),
+            Some(&refund)
+        );
+        let terms = engine
+            .execute(
+                sender(
+                    ProtocolCommand::IssueRequestTerms {
+                        class_id: cs_mail_primitives::RequestClassId(999),
+                        quote_id: QuoteId(99),
+                        declaration_digest: None,
+                    },
+                    99,
+                ),
+                test_time(at + 1),
+                policy(),
+            )
+            .unwrap();
+        assert_eq!(
+            terms.transition.terms_outcome,
+            Some(TermsOutcome::NoChargeRequired)
+        );
+    }
 }
 
 fn confirm_capture(engine: &PostgresEngine, id: RequestId, at: u64) {
@@ -754,6 +883,7 @@ fn submit_initial_request(engine: &PostgresEngine) {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
                 },
@@ -1405,6 +1535,7 @@ fn policy_change_after_upload_cancels_submission_with_void_or_full_refund() {
             .execute(
                 sender(
                     ProtocolCommand::IssueRequestTerms {
+                        class_id: cs_mail_primitives::RequestClassId(1),
                         quote_id: QuoteId(1),
                         declaration_digest: None,
                     },
@@ -1558,6 +1689,7 @@ fn issued_quote_remains_bound_to_its_original_signing_authority() {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
                 },
@@ -1624,6 +1756,7 @@ fn prepare_request_submission(engine: &PostgresEngine, id: u128) {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(id),
                     declaration_digest: None,
                 },
@@ -1914,6 +2047,7 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
                 },
@@ -1992,6 +2126,7 @@ fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
         .unwrap();
     let submission = sender(
         ProtocolCommand::IssueRequestTerms {
+            class_id: cs_mail_primitives::RequestClassId(1),
             quote_id: QuoteId(1),
             declaration_digest: None,
         },
@@ -2019,6 +2154,7 @@ fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
     let duplicate = engine.execute(
         sender(
             ProtocolCommand::IssueRequestTerms {
+                class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(1),
                 declaration_digest: None,
             },
@@ -2035,6 +2171,7 @@ fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
 
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+#[allow(clippy::too_many_lines)] // Publication bounds, signatures and immutable quote evidence.
 fn recipient_pricing_is_signed_and_changes_only_new_quotes() {
     use cs_mail_protocol::pricing::*;
     let url = database_url();
@@ -2047,13 +2184,53 @@ fn recipient_pricing_is_signed_and_changes_only_new_quotes() {
     engine
         .configure_request_pricing(&RequestPricingPolicy {
             version: 2,
+            collateral_choices: vec![8, 100, 250, 500, 1000, 2500]
+                .into_iter()
+                .map(Money::from_minor_units)
+                .collect(),
             ..RequestPricingPolicy::default()
         })
+        .unwrap();
+    // Claim: only recipient-authored, bounded publications can affect new quotes;
+    // changing their contents must not reinterpret old signed terms.
+    let publisher = command_signer(ActorRef::Recipient(RECIPIENT), OperationalKeyRef(2), 2);
+    let eight = (1..=8)
+        .map(|id| {
+            RequestClass::new(
+                cs_mail_primitives::RequestClassId(id),
+                format!("User invitation {id}"),
+                Money::from_minor_units(500),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let publication = RecipientRequestClasses::new(RECIPIENT, 2, eight.clone()).unwrap();
+    let mut nine = eight;
+    nine.push(
+        RequestClass::new(
+            cs_mail_primitives::RequestClassId(9),
+            "Ninth".into(),
+            Money::from_minor_units(500),
+        )
+        .unwrap(),
+    );
+    assert!(RecipientRequestClasses::new(RECIPIENT, 3, nine.clone()).is_err());
+    let invalid = serde_json::json!({"recipient": RECIPIENT, "version": 3, "classes": nine});
+    assert!(serde_json::from_value::<RecipientRequestClasses>(invalid).is_err());
+    cs_mail_application::request_classes::RequestClassesService::new(&engine)
+        .publish(
+            &publisher
+                .sign_request_classes(signing_scope(), publication)
+                .unwrap(),
+            &policy(),
+            || test_time(0),
+        )
         .unwrap();
     let before = engine
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(10),
                     declaration_digest: None,
                 },
@@ -2070,22 +2247,31 @@ fn recipient_pricing_is_signed_and_changes_only_new_quotes() {
     assert_eq!(original.processing_charge, Money::from_minor_units(50));
     assert_eq!(original.collateral, Money::from_minor_units(500));
     let signed = command_signer(ActorRef::Recipient(RECIPIENT), OperationalKeyRef(2), 2)
-        .sign_collateral_preference(
+        .sign_request_classes(
             signing_scope(),
-            RecipientCollateralPreference {
-                recipient: RECIPIENT,
-                version: 1,
-                amount: Money::from_minor_units(1000),
-            },
+            RecipientRequestClasses::new(
+                RECIPIENT,
+                3,
+                vec![
+                    RequestClass::new(
+                        cs_mail_primitives::RequestClassId(1),
+                        "Another user description".into(),
+                        Money::from_minor_units(1000),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
         )
         .unwrap();
-    engine
-        .set_collateral_preference(&signed, test_time(2), &policy())
+    cs_mail_application::request_classes::RequestClassesService::new(&engine)
+        .publish(&signed, &policy(), || test_time(2))
         .unwrap();
     let after = engine
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(11),
                     declaration_digest: None,
                 },
@@ -2100,11 +2286,28 @@ fn recipient_pricing_is_signed_and_changes_only_new_quotes() {
     };
     assert_eq!(next.collateral, Money::from_minor_units(1000));
     assert_eq!(original.collateral, Money::from_minor_units(500));
+    assert_eq!(original.selected_class.description(), "User invitation 1");
+    assert_eq!(
+        next.selected_class.description(),
+        "Another user description"
+    );
     let mut forged = signed;
-    forged.preference.amount = Money::from_minor_units(2500);
+    forged.classes = RecipientRequestClasses::new(
+        RECIPIENT,
+        4,
+        vec![
+            RequestClass::new(
+                cs_mail_primitives::RequestClassId(1),
+                "Altered".into(),
+                Money::from_minor_units(2500),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
     assert!(
-        engine
-            .set_collateral_preference(&forged, test_time(4), &policy())
+        cs_mail_application::request_classes::RequestClassesService::new(&engine)
+            .publish(&forged, &policy(), || test_time(4))
             .is_err()
     );
 }

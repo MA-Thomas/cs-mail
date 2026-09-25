@@ -73,7 +73,7 @@
 This plan develops a native desktop pilot, an operator administration CLI, and a
 reusable client core around the revised relationship-request model. Alice makes
 a simulated annual service purchase, then authorizes one conditional charge for
-a request to Bob. She sends permitted follow-ups without another charge and sees
+a request under one of Bob's published classes. She sends permitted follow-ups without another charge and sees
 the outcome of his decision. The service then carries
 a simulated forfeiture through maturity, annual allocation, and one automatic
 bank payment with rebate/excess reporting. Each milestone requires a usable journey and evidence of failure
@@ -98,6 +98,9 @@ collection, funded coverage, and automatic lump-sum distribution preparation. Si
 service and client APIs, PostgreSQL transactions, and worker libraries exercise
 those rules with a simulated external provider. They are the foundation for the
 pilot, not a completed running server or desktop application.
+Request classes and acceptance with an express lane are agreed extensions that
+must be implemented before the corresponding journeys below can be demonstrated.
+Unresolved interactions remain listed in the domain model.
 
 The current code replaces deprecated labels and quarterly types directly.
 Product work must not recreate them through aliases, fallback readers, or parallel
@@ -223,8 +226,8 @@ Baseline & Implemented domain contracts & Current conformance and PostgreSQL tes
 0 & Product foundation is ready & Buildable skeleton and dependency checks \\
 1 & Operator starts the service & Bootstrap, simulator, CLI, and restart demo \\
 2 & Alice owns an identity and funded service & Enrollment, annual charge, coverage, and reopen demo \\
-3 & Alice requests a relationship & One conditional charge and encrypted submission \\
-4 & Bob controls the request & Decisions, follow-up policy, and accurate activity views \\
+3 & Alice selects a request class & Fixed class terms, one charge, encrypted submission \\
+4 & Bob chooses the permission & Standing or lane acceptance, rejection, follow-up controls \\
 5 & Time and failure are recoverable & Deadline, provider-event, and crash matrix \\
 5b & The member cycle is demonstrable & Annual allocation and one bank payment with recovery \\
 6 & A small pilot can use it & Signed builds, recovery, restore, and usability evidence \\
@@ -314,12 +317,15 @@ and completed recovery remain deferred.
 
 \section{Milestone 3: Submit One Encrypted Relationship Request}
 
-With funded service available, Alice resolves Bob and reviews $C$, $S$, the total
+With funded service available, Alice resolves Bob, selects a published request
+class, and reviews $C$, $S$, the total
 conditional charge, the request
 deadline rule, and possible refunds. The UI identifies the value as simulated.
 She authorizes one request, encrypts the initial message, and obtains signed
 evidence of submission after the simulator finalizes funding and delivery
 preparation is durable.
+Recipients define up to eight classes. The selected class and financial terms remain fixed. Versioned simulation fixtures
+can supply Bob's classes until the preference UI in Milestone~4 is available.
 
 The client state machine persists the request and operation references across
 quote, create, payment preparation, ciphertext upload, and submission. An existing
@@ -327,7 +333,7 @@ request in preparation or awaiting a decision is resumed instead of charged agai
 visible before durable admission. Bob receives an encrypted inbox record and
 decrypts at his endpoint.
 
-Test two-device creation with distinct command keys, capture failure, uncertainty,
+Test two-device creation and class switching without duplicate requests, capture failure, uncertainty,
 expired terms, wrong scope, modified declarations, ciphertext tampering, and
 network loss at each boundary. A declined charge admits nothing; an unknown
 charge is reconciled under its original identity. Alice's request activity must
@@ -340,14 +346,16 @@ real currency remain deferred.
 
 \section{Milestone 4: Make Bob's Decision and Follow-Up Controls Real}
 
-Bob sees one request with its grouped messages and a clear decision deadline.
-Acceptance grants future communication and records one full refund obligation;
+Bob sees the chosen class, one request with its grouped messages, and a clear
+decision deadline. He may accept with standing directed permission or an express
+lane. Either records one full refund obligation together with the permission;
 rejection records processing revenue and pending forfeiture; blocking additionally
 prevents contact. The UI explains permission first, then money, and never
 describes rejection as a payment to Bob.
 
-Expose the recipient's collateral menu and default with authenticated preference
-updates. Changing a selection affects the next quote, leaving already authorized
+Expose recipient-defined classes with a collateral selection for each from the
+deployment's bounded menu. Authenticated preference updates affect future quotes,
+leaving already authorized
 requests intact. Implement recipient follow-up preferences with bounded count/rate controls and
 canonical admission enforcement. Alice can add a message only when the identified
 request and current policy allow it. Its own delivery state remains visible, but
@@ -355,16 +363,19 @@ the charge and common deadline remain unchanged. Closing or dismissing the
 recipient's prompt is not a decision.
 
 Show request charges and refund status separately from member distribution
-statements. Accepted sending uses standing permission rather than a zero-value
-quote. Block/unblock management preserves the difference between rejection and
+statements. Sending uses the granted standing permission or lane rather than a
+zero-value quote. A lane concerns the relationship, may be scoped, and is usually
+not specific to one conversation. The native correspondence API now supports
+that lane admission path. Block/unblock management preserves the difference between rejection and
 prohibition, and projection rebuild after restart reproduces canonical state.
 
-Tests cover one request with three messages and one refund, disabled follow-ups,
+Tests cover both acceptance modes with one refund, atomic lane/settlement failure,
+one request with three messages, disabled follow-ups,
 allowance replay, policy-change races, decision races, alias history, and block
 before versus after submission. A follow-up refusal must not start another charge.
-Demonstrate accept, reject, block/unblock, and allowed/disabled follow-ups from
+Demonstrate standing and lane acceptance, reject, block/unblock, and allowed/disabled follow-ups from
 both clients. Exit evidence includes reviewed financial wording and encrypted
-accepted-message delivery.
+standing- and lane-authorized delivery.
 
 \section{Milestone 5: Recover Across Time and Failure}
 
@@ -386,7 +397,11 @@ the service can finish refunds and payments. Reconciliation can continue queryin
 an uncertain bank operation; it must not initiate unbounded new funding attempts.
 
 Exercise timely acceptance delayed behind expiry processing and late acceptance
-after a closed window. Preserve current permission while materializing old
+after a closed window for the existing standing-permission path. Bounded-acceptance
+timing edge cases require their own product decision before implementation.
+For a timely bounded acceptance, verify that retries do not duplicate the grant
+or refund and later lane expiry or revocation does not reopen settlement.
+Preserve current permission while materializing old
 financial outcomes. Offline recipients and cursor replay must not duplicate
 delivery or financial effects. Retention must protect content still needed by
 undelivered work while eventually deleting eligible records.
@@ -501,7 +516,8 @@ than presenting that fixture as a business commitment.
 \section{Completion and the First Assignment}
 
 The pilot is complete when clean installations can enroll and recover identities,
-exchange encrypted relationship requests and accepted messages, enforce follow-up
+select published request classes, exchange encrypted requests and messages under
+standing or lane permission, enforce follow-up
 preferences, survive deadlines and failures, and reproduce an annual allocation and member payment cycle
 with correct unpaid obligations. The operator can deploy, reconcile, restore,
 and support it without arbitrary database edits. The published pilot policy

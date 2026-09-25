@@ -3,7 +3,7 @@
 mod authority;
 pub use authority::AuthoritySnapshot;
 mod pricing;
-pub use pricing::SignedCollateralPreference;
+pub use pricing::SignedRequestClasses;
 
 use std::collections::BTreeMap;
 use std::fmt;

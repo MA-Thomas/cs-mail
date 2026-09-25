@@ -2,9 +2,10 @@
 
 cs-mail is a communication protocol that puts economic friction at the boundary
 of a new relationship rather than on every message. Accepted senders communicate
-without protocol message fees. An unaccepted sender submits a relationship request with one conditional charge;
-the recipient's relationship-level decision determines both future permission
-and settlement.
+without protocol message fees. A sender seeking permission selects a recipient's
+published request class and authorizes one conditional charge. The recipient can
+accept with standing permission or an express lane, or reject; that decision
+determines both future permission and settlement.
 
 ## Start here
 
@@ -26,7 +27,7 @@ The documents have distinct roles:
 5. **[Desktop MVP build plan](cs_mail_desktop_mvp_build_plan.pdf)** — product
    milestones that build on the existing Rust libraries.
 6. **[Express-lane memo](cs_mail_express_lanes.pdf)** — a worked introduction to
-   bounded permission for organizations.
+   bounded relationship permission for people and organizations.
 7. **[Express-lane implementation plan](cs_mail_express_lanes_implementation.pdf)** —
    lane authority, lifetime, domain authentication, and product integration.
 
@@ -48,23 +49,29 @@ A product account has an independent `AccountId` and `PrincipalRef`, with a
 product-scoped binding to the shared identity service and a verified bank
 association. Exact subject bindings and persona ownership are unique; bank
 ownership does not establish universal person uniqueness. Phoros enrollment
-requires a separate, stricter policy. C-SQD uses one configured payment-processing
+requires its own ceremony and, when cs-mail account control is established during
+that ceremony, adopts the same underlying subject. Each product retains one
+durable login identity with multiple authentication methods. See the
+[product identity model](docs/product-identity-model.md). C-SQD uses one configured payment-processing
 arrangement. See [shared identity integration](docs/shared-identity-contract.md)
 for the contract, migration behavior, service setup, and coordinated build.
 
-For an unaccepted sender, terms fix a processing component `C` and collateral
-`S` for one relationship request. Submission requires authenticated evidence that
+Recipients define up to eight classes of their own, with collateral
+selected from the deployment's bounded menu. The sender's chosen class, processing
+component `C`, and collateral `S` are fixed for one request. Submission requires authenticated evidence that
 the request-specific funding of `C + S` has met the provider's finality policy.
-The current pricing defaults are `C = $0.50` and `S = $5.00`, with recipients
-selecting `S` from a versioned bounded menu. Cancellation before submission returns the full charge. Acceptance
-records a full refund and grants directed permission. Rejection retains `C` as
+The default operator processing charge is `C = $0.50`; recipients select `S`
+for each class from a versioned bounded menu. Cancellation before submission returns the full charge. Acceptance
+records a full refund obligation together with standing directed permission or
+an express lane. A lane concerns the relationship and may be scoped by purpose,
+time, or volume; it is usually not specific to a conversation. Rejection retains `C` as
 processing revenue and sends `S` into pending forfeiture for the separate C-SQD
 member program. Expiry retains `C` and refunds `S`. Refund obligations remain
 outstanding until the payment processor confirms them.
 
 Follow-up messages, when permitted, belong to the same request and create no
 additional charge or decision deadline. Principal-recipient history coordinates
-eligibility across sender aliases. Accepted communication and valid express lanes
+eligibility across sender aliases and request classes. Accepted communication and valid express lanes
 require no request charge. A recipient block separately prohibits ordinary contact.
 
 The network allocates eligible pooled forfeitures once per UTC calendar year,
@@ -85,6 +92,8 @@ distribution remain separate transactions; distribution does not revoke coverage
   and request continuity across public aliases.
 - **Protocol identity**: the public persona to which directed permission applies.
 - **Relationship**: recipient-controlled permission, independent of any request.
+- **Request class**: a recipient-defined kind of approach with its collateral
+  requirement; selecting it proposes contact without granting permission.
 - **Request**: one solicitation with immutable terms, an initial message and a
   lifecycle carrying its submission preparation or submission facts.
 - **Request history**: shared eligibility and pending-submission coordination for one
@@ -132,6 +141,11 @@ and ingress APIs, privacy/retention types, and bounded adapter state machines. A
 coverage, automatic lump-sum distributions, and authorized scheduled payment work are
 implemented; the running server and desktop application remain product work.
 The protocol and architecture remain drafts dated September 2026.
+Recipient-defined request classes (up to eight), signed class-specific quotes,
+and lane acceptance with atomic refund settlement are implemented. Native
+correspondence also admits lane-authorized messages. See the
+[implementation notes](docs/request-classes-implementation.md) for the API and
+coordinated storage/signing-format cutover.
 
 This is not yet a production service. Network transports, TLS connection
 pooling, durable administrative key custody, KMS/HSM integration, external
@@ -149,6 +163,15 @@ The workspace is divided into focused libraries:
 
 - `cs-mail-primitives` defines scoped identifiers, checked money, canonical time,
   and versions.
+- `cs-mail-correspondence` defines native one-to-one conversations, current reuse
+  policy, immutable text/image documents, checked mixed-content selections and
+  attributed copies.
+  The [headless conversation contract](cs_mail_membranes_portals_conversation_policy_source/HEADLESS_CONVERSATIONS.md)
+  documents the signed application API, encrypted mailboxes and implementation limits.
+- `cs-mail-consent` owns checked, purpose-specific decryption grants and their lifecycle.
+- `cs-mail-key-custody` implements local consent-authorized decryption and resealing
+  with a host-provisioned secret outside the database. See the
+  [consent and recovery contract](cs_mail_membranes_portals_conversation_policy_source/CONSENT_AND_KEY_CUSTODY.md).
 - `cs-mail-ledger` provides atomic value-conserving transfers and balance
   projections.
 - `cs-mail-protocol` implements the pure deterministic transition kernel and its
@@ -171,14 +194,14 @@ The workspace is divided into focused libraries:
 - `cs-mail-security` provides Ed25519 command authentication, canonical receipt-
   time key rotation and revocation, a hash-chained transparency log, golden
   vectors, and threshold recovery ceremonies.
-- `cs-mail-content` provides authenticated endpoint-only HPKE content encryption using X25519,
+- `cs-mail-content` provides authenticated HPKE content encryption using X25519,
   HKDF-SHA-256, and ChaCha20-Poly1305, with authenticated binding to message,
   sender, recipient, content reference, and protocol version.
 - `cs-mail-worker` recovers received commands and pending signed artifacts,
   materializes deadlines as ordinary commands, and runs bounded delivery, request
   payment, utility payment, annual allocation, and member payment batches with
   failure isolation.
-- `cs-mail-client` keeps plaintext and content private keys at the endpoint and
+- `cs-mail-client` performs local composition/decryption and scoped recovery-response opening, and
   supplies separately scoped billing command signing.
 - `cs-mail-service` supplies trusted-time signed-command ingress and bounded
   encrypted-content upload around the durable engine.
@@ -225,7 +248,7 @@ CS_MAIL_TEST_DATABASE_URL='postgresql://postgres@localhost:5432/postgres' \
   cargo test -p cs-mail-storage-postgres --test postgres -- --ignored
 ```
 
-The fourteen schema migrations are embedded in the storage crate and applied under
+The seventeen schema migrations are embedded in the storage crate and applied under
 a database advisory lock. They cover protocol/ledger durability, encrypted
 content, retention, capabilities, financial programs, independent domain owners,
 authenticated receipt ordering, unified external work, annual allocation, utility
@@ -257,6 +280,9 @@ the canonical review artifacts; `output/` is ignored to avoid duplicate generate
 copies.
 
 ## Rust domain boundaries
+
+The [ten Rust-domain design principles](docs/rust-domain-principles.md) are the
+shared architectural reference for cs-mail and identity-model.
 
 See [the September domain update](docs/rust-domain-update.md) for account lifecycle,
 identity changes, key ownership, disclosure, delivery fencing and the coordinated

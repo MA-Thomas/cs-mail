@@ -4,6 +4,8 @@
 
 The normative version 1 protocol is owned by identity-model:
 [shared identity contract](../../identity-model/docs/shared-identity-contract.md).
+The [product identity model](product-identity-model.md) is the current source for
+login ownership, authentication methods and future Phoros subject adoption.
 Both repositories consume its small `identity-contract` crate; cs-mail does not
 import the identity domain implementation in production. Test-only dependencies
 exercise both implementations against separate PostgreSQL schemas and over HTTP.
@@ -76,8 +78,9 @@ revoked keys reject authorization. Relationship registries accept provider/sched
 keys only. Account-key revocation requires an explicit AccountId. Account registries keep their own transparency logs. Receipt snapshots retain
 separate source registries, so revocation does not rewrite previously accepted
 commands. Provider/scheduler authority remains local to the provider relationship.
-Registering further devices is currently an administrative API; end-user recovery,
-key registration, account linking, and subject corrections are later ceremonies.
+Additional operational keys and explicit device-key recovery preserve the product
+login. OIDC authentication methods and recovery to the same external subject are
+provider-owned. Phoros subject adoption and subject corrections remain deferred.
 
 ## Builds, checks, and release order
 
@@ -113,12 +116,14 @@ distribution, retention and protocol tests remain part of the same regression ru
 
 ## Deliberate scope boundaries
 
-This implements first-time bank-backed cs-mail enrollment and its service boundary.
+This implements bank-backed cs-mail enrollment, device-key recovery, bank rebinding
+and their service boundary.
 It does not launch a hosted service, configure a live bank provider or OIDC tenant,
-provide an account UI, or enable Phoros enrollment/recovery/linking. The identity
+provide an account UI, or enable Phoros enrollment or cross-product subject adoption. The identity
 service accepts only the cs-mail bank-ownership policy. Historical assurance and
 fixture recovery outcomes cannot upgrade that policy. Its signed eligibility is a
-bounded-time capability, not instantaneous global revocation; shared security-event
-propagation and stronger sensitive-action/recovery policy belong to later stages.
+bounded-time capability, not instantaneous global revocation. Product security events
+have an ordered reconciliation path; cross-product broadcasts and additional recovery
+review remain separate work.
 
 See [refactor decisions](identity-refactor-design.md) for the transition table, repository boundaries, runtime ownership and focused verification policy.

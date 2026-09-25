@@ -21,8 +21,8 @@ use cs_mail_protocol::{
 };
 use minicbor::{Decoder, Encoder};
 
-const SIGNING_DOMAIN: &str = "cs-mail/command/v5";
-const QUOTE_SIGNING_DOMAIN: &str = "cs-mail/request-terms/v5";
+const SIGNING_DOMAIN: &str = "cs-mail/command/v6";
+const QUOTE_SIGNING_DOMAIN: &str = "cs-mail/request-terms/v6";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandTarget {
@@ -257,10 +257,12 @@ fn encode_command(
                 .u64(expected_policy_version.0)?;
         }
         ProtocolCommand::IssueRequestTerms {
+            class_id,
             quote_id,
             declaration_digest,
         } => {
-            encoder.array(3)?.u8(0)?;
+            encoder.array(4)?.u8(0)?;
+            encode_id(encoder, class_id.0)?;
             encode_id(encoder, quote_id.0)?;
             encode_optional_declaration_digest(encoder, *declaration_digest)?;
         }
@@ -386,7 +388,8 @@ fn decode_command(decoder: &mut Decoder<'_>) -> Result<ProtocolCommand, WireErro
             message_valid_until: MessageValidityUntil(CanonicalTime(decoder.u64()?)),
             expected_policy_version: Version(decoder.u64()?),
         }),
-        0 if length == 3 => Ok(ProtocolCommand::IssueRequestTerms {
+        0 if length == 4 => Ok(ProtocolCommand::IssueRequestTerms {
+            class_id: cs_mail_primitives::RequestClassId(decode_id(decoder)?),
             quote_id: QuoteId(decode_id(decoder)?),
             declaration_digest: decode_optional_declaration_digest(decoder)?,
         }),
@@ -458,7 +461,9 @@ fn encode_version_command(
 }
 
 fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &RequestTerms) -> Result<(), WireError> {
-    encoder.array(31)?;
+    encoder.array(33)?;
+    encode_id(encoder, terms.selected_class.id().0)?;
+    encoder.str(terms.selected_class.description())?;
     encode_id(encoder, terms.quote_id.0)?;
     encoder.u16(terms.protocol_version.0)?;
     encoder.u64(terms.policy_version.0)?;
@@ -528,7 +533,12 @@ fn decode_financial_scope(
 }
 
 fn decode_terms(decoder: &mut Decoder<'_>) -> Result<RequestTerms, WireError> {
-    expect_array(decoder, 31)?;
+    expect_array(decoder, 33)?;
+    let selected_class = cs_mail_protocol::pricing::SelectedRequestClass::new(
+        cs_mail_primitives::RequestClassId(decode_id(decoder)?),
+        decoder.str()?.into(),
+    )
+    .map_err(|_| WireError::InvalidIdentifier)?;
     let quote_id = QuoteId(decode_id(decoder)?);
     let protocol_version = ProtocolVersion(decoder.u16()?);
     let policy_version = PolicyVersion(decoder.u64()?);
@@ -538,6 +548,7 @@ fn decode_terms(decoder: &mut Decoder<'_>) -> Result<RequestTerms, WireError> {
     let (relationship_version, relationship_bytes) = decode_scoped_ref(decoder)?;
     let (subject_version, subject_bytes) = decode_scoped_ref(decoder)?;
     Ok(RequestTerms {
+        selected_class,
         pricing_policy_version,
         quote_id,
         protocol_version,
@@ -681,6 +692,7 @@ mod tests {
     fn every_command_variant_round_trips_canonically() {
         let commands = [
             ProtocolCommand::IssueRequestTerms {
+                class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(1),
                 declaration_digest: Some(MessageDeclarationDigest([1; 32])),
             },
@@ -689,6 +701,11 @@ mod tests {
 
                 message_id: MessageId(4),
                 terms: Box::new(RequestTerms {
+                    selected_class: cs_mail_protocol::pricing::SelectedRequestClass::new(
+                        cs_mail_primitives::RequestClassId(1),
+                        "Test class".into(),
+                    )
+                    .unwrap(),
                     pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
                     quote_id: QuoteId(5),
                     protocol_version: ProtocolVersion(2),

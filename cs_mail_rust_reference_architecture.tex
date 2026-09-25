@@ -82,36 +82,26 @@ explicitly bounded services.
 \end{abstract}
 
 \paragraph{Status and reading order.}
-The \textit{Protocol Specification} and the normative financial-program section
-of the \textit{Deployment and Migration Profile} control the rules. This document
-describes the current Rust domain and persistence boundaries. The workspace
-contains the request kernel, annual finance and billing domains, PostgreSQL
-coordination, signed service/client APIs, and worker libraries. A running product
-server, desktop application, and live payment-processor adapter remain product
-work; the simulator and integration tests exercise the underlying contracts.
-The \href{DOMAIN_MODEL.md}{C-SQD domain model} records the confirmed product
-rules and deferred account/calendar decisions. Implementation choices must not
-be promoted to product requirements without an explicit product decision.
+The \textit{Protocol Specification}, normative financial-program profile, and
+\href{DOMAIN_MODEL.md}{C-SQD domain model} control the rules. This document
+describes the Rust libraries and durable boundaries; a running product server,
+desktop application, and live payment adapter remain product work. Request
+classes and atomic lane acceptance are implemented, including native lane sends.
+The implementation notes describe the coordinated format cutover.
 
 \section{One Request, Three Messages, One Decision}
 
-Alice creates a relationship request to Bob. The signed quote fixes $C+S$ and
-the request's policy versions. Creation stores one payment intent; a worker
-obtains funding-finality evidence from the external provider. Submission then
-commits the encrypted content reference, delivery intent, common decision
-deadline, and one recipient solicitation. The public-identity pair has one
-nonterminal request, even if Alice submits from several devices.
+Alice selects Bob's research class; signed terms fix the class, $C+S$, and policy
+versions. Creation records one payment intent. After finalized funding, submission
+commits encrypted content, delivery intent, a deadline, and one solicitation.
+The directed pair has one nonterminal request across devices and classes.
 
-Bob permits follow-ups, so Alice adds two messages. Each has distinct ciphertext,
-authenticated declarations, and delivery state. Admission consumes Bob's permitted
-allowance, but creates no additional charge or request-history increment and
-does not move the decision deadline.
+Bob permits two follow-ups. Each has its own ciphertext, authenticated declarations,
+and delivery state; allowance is consumed, but charge, history, and deadline do not change.
 
-When Bob accepts, the system grants permission and records one refund obligation
-for $C+S$. It closes the request and cancels expiry in the same transaction. A
-worker then executes the refund. Alice may write under standing acceptance while
-the provider is still confirming that refund: permission and the obligation are
-already committed, although external payment completion remains pending.
+Standing or lane acceptance atomically commits its permission, one $C+S$ refund
+obligation, request closure, and expiry cancellation. Alice may use the permission
+while refund execution awaits processor confirmation.
 
 \begin{figure}[H]
 \centering
@@ -153,6 +143,7 @@ It carries versions and enough completeness evidence to distinguish no current
 request from a missing projection. Historical pending refunds may still exist
 after a request closes; they remain separate obligations rather than additional
 open relationship requests.
+Bounded acceptance also requires the authorized lane grant and protected capability state.
 
 The pure function has a compact shape:
 \begin{lstlisting}
@@ -175,6 +166,8 @@ result. Forfeitures and holds are explicit outputs as well. This lets one
 transition describe both permission and the money that follows from it.
 
 An acceptance includes its required request outcome and refund obligation.
+The extension must coordinate the lane grant in that same commit for bounded
+acceptance, without changing the relationship to standing acceptance.
 A rejection records pending forfeiture without crediting the recipient.
 Follow-up admission cannot introduce another charge. The manifest's fields are
 public Rust data; correctness comes from the transition, validated commit path,
@@ -197,7 +190,9 @@ deadline for completing funding and preparing the initial message.
 Once those requirements are satisfied, \texttt{SubmitRequestToRecipient} commits
 the initial delivery. The lifecycle becomes \texttt{AwaitingRecipientDecision};
 its \texttt{RequestSubmission} records submission time and decision deadline.
-Acceptance, rejection, and expiry close the submitted request. These names
+Acceptance, rejection, and expiry close the submitted request. In the extension,
+an accepted request identifies standing permission or a lane; the latter concerns
+the relationship and is usually not scoped to one conversation. These names
 identify what is being prepared and whose decision is pending. ``Admission''
 remains the broader per-message permission check.
 
@@ -216,14 +211,16 @@ basis-point arithmetic. Submission deadlines, decision deadlines, message
 validity, annual allocation cutoffs, service intervals, and payment dates answer
 different questions and remain explicit inputs.
 
-Quoted financial terms stay fixed for a request. The deployment's
-\texttt{RequestPricingPolicy} resolves a bounded collateral menu and default;
-a recipient's signed preference selects an allowed amount for future quotes.
-The resolver returns checked \texttt{ResolvedRequestPricing}. Durable quote
-issuance requires published policy and records its version in signed terms;
-there is no fallback to raw caller-supplied prices when policy is missing.
-Current follow-up policy can change and is checked for each message. Neither
-preference updates nor notification settings rewrite an existing quote.
+Quoted financial terms stay fixed for a request. The operator's
+\texttt{RequestPricingPolicy} bounds collateral and sets the processing charge.
+\texttt{RecipientRequestClasses} checks at most eight user-defined classes and
+unique IDs, including on deserialization. The application authenticates the
+recipient's publication under protected current authority. The resolver returns
+checked \texttt{ResolvedRequestPricing}; signed terms retain a
+\texttt{SelectedRequestClass} snapshot. There is no fallback to caller-supplied
+prices or an invented default class. Class edits do not rewrite existing quotes
+or partition principal-recipient history. Current follow-up policy is checked
+separately for each message.
 
 \section{Payment Work Is a Recoverable Conversation}
 
@@ -404,8 +401,10 @@ a new payment operation, and it requires explicit sender authorization.
 Follow-up policy updates, request closure, and delivery admission serialize.
 Content and a retryable delivery effect must be durable before admission commits.
 Message validity is checked independently of the request's common deadline.
-Lanes retain their signed scope and hard validity limits; granting or revoking a
-lane does not settle a request or create member activity.
+Lanes retain their signed scope and hard validity limits. Bounded acceptance must
+commit lane authority with request settlement; later lane changes do not reopen
+the outcome or create member activity. Independent issuance during a pending
+request and bounded-acceptance timing edge cases remain open in the domain model.
 
 Scheduled work includes submission timeout, request expiry, payment
 reconciliation, annual allocation, member payment preparation, and retention.
@@ -416,7 +415,8 @@ state. They do not assume that a row remains unchanged because a job was queued.
 
 Principal-scoped new-request history needs its own concurrency guard shared by
 aliases. It advances only at initial submission. A follow-up, cancelled preparation,
-or key rotation cannot bypass that distinction. Late acceptance changes future
+key rotation, or class switching cannot bypass that distinction. Existing late
+standing acceptance changes future
 permission while old expiry processing preserves that permission and materializes
 only the old request's financial obligation.
 
@@ -434,6 +434,11 @@ Capabilities own lane grants and allowance. Security verifies communication
 and pricing authority; billing commands have their own signing contract. The
 application layer coordinates complete use cases, including the billing/finance
 automatic distribution, without acquiring either domain's policy decisions.
+For bounded acceptance, capabilities validate the grant, protocol determines
+settlement, and application coordination commits both atomically. A grant also
+resolves a pending request when issued separately: preparation is cancelled with
+void/full refund, and a submitted request still pending is accepted even after its
+deadline. Terminal settlements stay fixed; future access follows the lane.
 
 PostgreSQL owns durable transactions, ordering, uniqueness, journals, and outbox
 work. Workers lease that work, call domain operations through the application or
@@ -504,6 +509,10 @@ once. Variants reject into pending forfeiture, expire into a collateral refund,
 disable follow-ups, and race policy changes with admission. Other tests exercise
 two-device creation, alias history, cancellation followed by late capture,
 duplicate/out-of-order notifications, and unknown commit recovery.
+Existing scenarios now exercise fixed class terms, publication limits, lane/refund
+rollback and retry, preparation and late grants, and native lane allowance. Shared
+history and terminal settlement remain domain invariants; passing scenarios are
+limited evidence, not exhaustive proof.
 
 Financial-program tests reproduce a year from fixed input manifests, exclude
 refundable and immature funds, assess each eligible lot once, preserve quoted

@@ -25,6 +25,7 @@ pub struct RelationshipKey {
 pub enum RelationshipState {
     Unknown,
     Accepted,
+    ExpressLane(LaneId),
     Rejected,
     Revoked,
     Blocked,
@@ -131,6 +132,13 @@ pub struct RequestSubmission {
     pub at: CanonicalTime,
     pub decision_deadline: CanonicalTime,
 }
+/// Historical permission granted by acceptance; current lane validity is separate.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum AcceptancePermission {
+    Standing,
+    ExpressLane(LaneId),
+}
+
 /// Every submitted outcome retains its submission facts; cancellation has none.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RequestLifecycle {
@@ -139,6 +147,7 @@ pub enum RequestLifecycle {
     /// Initial delivery is committed and the recipient decision window has started.
     AwaitingRecipientDecision(RequestSubmission),
     Accepted {
+        permission: AcceptancePermission,
         submission: RequestSubmission,
         event: EventRef,
     },
@@ -191,6 +200,7 @@ impl RequestLifecycle {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RequestTerms {
+    pub selected_class: crate::pricing::SelectedRequestClass,
     pub pricing_policy_version: PolicyVersion,
     pub quote_id: QuoteId,
     pub protocol_version: ProtocolVersion,
@@ -363,6 +373,7 @@ impl ProtocolState {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SettlementSnapshot {
+    pub lane: Option<cs_mail_capabilities::Lane>,
     pub revision: u64,
     pub state: ProtocolState,
     pub history: RequestHistory,
@@ -395,6 +406,7 @@ impl SettlementSnapshot {
             messages,
             ledger,
             complete: true,
+            lane: None,
         }
     }
 

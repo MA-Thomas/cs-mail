@@ -9,6 +9,7 @@
 \usepackage{microtype}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
+\usepackage{needspace}
 
 \hypersetup{
     colorlinks=true,
@@ -17,7 +18,7 @@
 }
 
 \title{\textit{cs-mail} Express Lanes --- Implementation Plan\\
-\large Recipient-Granted Communication for Chosen Organizations}
+\large Recipient-Granted Relationship Permission}
 \author{C-SQD}
 \date{Draft 0.6 --- September 2026}
 
@@ -37,7 +38,8 @@ boundaries. Interface sketches below explain the design, while the
 controls admission and request outcomes; the C-SQD financial profile controls
 the separate member program. The user-facing
 explanation of the feature is the companion memo, \textit{Express Lanes for
-Transactional Mail}.}}
+Bounded Communication}. The Rust grant API now coordinates lane permission
+with pending-request settlement; native correspondence enforces lane admission.}}
 \end{center}
 
 \paragraph{Current account scope.}
@@ -55,6 +57,9 @@ signed scope, validates durable content, consumes allowance, and records deliver
 It creates no refund or forfeiture. Accepted delivery and permitted follow-ups
 also move no request value, although a follow-up must join an identified request
 that is awaiting a decision under current recipient policy.
+Accepting a request with a lane is a distinct recipient decision: it commits the
+grant and full request refund obligation together. Later messages use the lane's
+ordinary uncharged admission path.
 
 This distinction places lane evaluation at the durable admission boundary. It
 does not imply that the request kernel runs only when money moves: relationship
@@ -65,7 +70,7 @@ financial object or turn a lane message into a charged request.
 \section{Settled Design Decisions}
 
 \begin{enumerate}[leftmargin=2em]
-    \item \textbf{Edge subsystem, not kernel state.} A lane is evaluated at the
+    \item \textbf{Lane admission at the edge.} A lane is evaluated at the
     admission edge, before the kernel is consulted---mirroring how accepted
     delivery already avoids the kernel. It uses a bounded, idempotent in-memory model for tests and a durable
     PostgreSQL coordinator for admitted delivery.
@@ -89,10 +94,9 @@ financial object or turn a lane message into a charged request.
     most one of \{blocked, lane-authorized, neither\}. Blocking hard-revokes any
     lane; granting a lane to a blocked pair requires an explicit unblock;
     unblocking leaves the pair unaccepted without restoring a lane.
-    \item \textbf{Issuance is recipient-initiated only.} Lanes are granted at
-    address handover (checkout, signup, booking) or by replying to an
-    organization first. The ``accept for receipts only'' first-contact path is
-    removed.
+    \item \textbf{Issuance is recipient-authorized.} Lanes may follow address
+    handover, writing first, or acceptance of a relationship request with bounded
+    permission. Selecting a request class does not itself authorize a lane.
     \item \textbf{Volume and declared scope are enforced.} Each lane carries a
     maximum message count per interval that admission consumes atomically, a
     versioned declared-purpose constraint, an optional origin constraint, and the
@@ -100,9 +104,10 @@ financial object or turn a lane message into a charged request.
     declarations exactly. This proves what a sender or gateway declared; providers
     still cannot inspect encrypted content or certify that the declaration is
     semantically truthful.
-    \item \textbf{Lane events do not settle requests.} Grant, renewal, lapse, and
-    revocation change lane authority only. A separate pending request retains its
-    deadline and financial outcome rules.
+    \item \textbf{Acceptance and later lane changes are distinct.} Bounded
+    acceptance grants the lane and settles its request atomically. Subsequent
+    renewal, lapse, and revocation do not reopen that settlement. A separate
+    lane-management grant also resolves a pending request.
 \end{enumerate}
 
 \section{The Admission Decision}
@@ -128,7 +133,7 @@ directed \texttt{(sender, recipient)} pair at a single canonical boundary, is:
     \item else, if a request is being prepared or awaiting a decision, return its scoped
     state without creating a new request;
     \item otherwise offer an eligible new-request flow, with explicit sender
-    authorization before any charge.
+    selection of a published recipient request class and authorization before any charge.
 \end{enumerate}
 
 The second and third branches share one durable uncharged admission path. A lane
@@ -166,10 +171,12 @@ message validity returns \texttt{MessageValidityClosed}: it does not settle an
 submitted request merely because one follow-up message is stale. An initial
 request still being prepared that cannot be submitted instead follows the full cancellation/refund rule.
 
+\Needspace{30\baselineskip}
 \section{The Lane Object and Its Store}
 
-A lane is a compact recipient-granted record. It carries no money and references
-no message content.
+A lane is a compact recipient-granted record concerning a relationship. It may
+be scoped by purpose, time, or volume, but is usually not specific to one
+conversation. It carries no money and references no message content.
 
 \begin{verbatim}
 struct Lane {
@@ -205,14 +212,18 @@ strings. The base purpose vocabulary includes \texttt{Unspecified}; future
 purposes and schemas use namespaced identifiers. Unknown noncritical schemas do
 not prevent lane delivery, while an unsupported critical schema is refused before
 allowance is consumed.
+The selected request class describes the proposed approach; the lane's purpose
+constraint describes granted permission. Their representations must not silently
+equate these distinct meanings.
 
 The lane store is a new, compartmentalized access domain: its own database table,
 credentials, encryption keys, and access role, per the specification's
 relationship-graph privacy requirements. It is not a column on the relationship
 aggregate and not part of \texttt{protocol\_state}. A ledger or telemetry
-compromise must not yield the list of organizations a recipient trusts. Grant,
-renew, and revoke operations are idempotent record transitions with no ledger
-coupling, exactly like the existing adapter books.
+compromise must not yield the list of correspondents a recipient trusts. Ordinary
+lane transitions remain capability-owned. Acceptance with a lane requires an
+application coordinator, now implemented, to commit the grant with the protocol-owned request
+outcome and refund obligation, rather than two independently successful calls.
 
 The storage coordinator enforces one invariant under the relationship aggregate
 lock: for any directed pair, at most one of \{blocked, lane-authorized\} holds at
@@ -357,14 +368,17 @@ A lane is granted only by a deliberate recipient act:
     grant time.
     \item \textbf{On replying first.} Writing to an organization auto-opens a
     return lane, since the recipient has plainly invited a reply.
+    \item \textbf{On accepting a request with a lane.} The recipient grants
+    bounded relationship permission and the full $C+S$ refund obligation in one
+    decision. The request's class supplies context, not standing permission.
 \end{itemize}
 
-The first-contact ``accept for receipts only'' path is removed. A cold sender submits
-one eligible relationship request; it can be accepted as a full standing contact, rejected,
-or left to expire, but it is not granted a lane from that interaction. The
-consequence is minor and recoverable: an organization one would have preferred to
-keep on a narrow lane must instead be reached through handover or a reply, or
-accepted fully. Issuance neither charges the sender nor settles that request.
+A cold sender selects from the recipient's published request classes. Acceptance
+may grant standing permission or a lane; either returns the full charge. Rejection
+and expiry retain their existing allocations. A lane grant during preparation
+cancels submission and voids or refunds the full charge. A submitted request still
+pending receives the full refund even after its deadline. Terminal settlements
+remain fixed; future access follows the lane without a new bond.
 
 \section{Changes by Crate}
 
@@ -372,7 +386,7 @@ accepted fully. Issuance neither charges the sender nor settles that request.
     \item \textbf{\texttt{cs-mail-capabilities}} holds the lane ``book'': the
     lane record, subject enum, purpose and origin constraints, declaration-
     authority rules, and idempotent grant/renew/revoke transitions, with no ledger
-    coupling and the block/lane mutual-exclusion invariant. Its admission check
+    coupling in ordinary lane operations and the block/lane mutual-exclusion invariant. Its admission check
     performs exact versioned declaration matching before consuming allowance.
     \item \textbf{\texttt{cs-mail-adapters}} defines the async, library-neutral
     SMTP authentication request, typed failures, and versioned evidence model,
@@ -382,7 +396,8 @@ accepted fully. Issuance neither charges the sender nor settles that request.
     limits, and receipt-time skew checks.
     \item \textbf{\texttt{cs-mail-storage-postgres}} gains a migration for the
     compartmentalized lane table under its own access role and keys, plus the
-    transactional block/lane coordination.\par
+    transactional block/lane coordination. The bounded-acceptance extension must
+    also commit the lane, request outcome, refund work, and receipt together.\par
     \item \textbf{\texttt{cs-mail-primitives}, \texttt{cs-mail-worker}, and
     \texttt{cs\_schedules}} supply shared task types and the existing lease for
     lane horizon tasks (lapse or review); no new scheduling substrate.
@@ -406,8 +421,10 @@ accepted fully. Issuance neither charges the sender nor settles that request.
     Lane grants and renewal remain in capabilities, and annual eligibility and
     allocations remain in finance. None is inferred from another's activity.
     \item \textbf{\texttt{cs-mail-protocol::transition}} (the settlement kernel)
-    owns request outcomes. Lane operations do not invent new request settlement,
-    while shared admission coordination observes the revised request contract.
+    owns request outcomes. The application coordinates its bounded-acceptance
+    effects with the capability grant; the capability domain does not choose
+    refund policy. Checked publications allow at most eight user-defined classes;
+    signed terms retain the selected class and its fixed financial terms.
 \end{itemize}
 
 \section{Build Order}
@@ -427,7 +444,8 @@ evidence for this revision.
     domain-to-identity resolution, and the legacy subject, with independent SPF
     and DKIM evidence and expected-domain mismatch enforcement.
     \item \textbf{Issuance flows.} Record the expected domain at address handover, confirm the first
-    authenticated message, and authorize a return lane when the recipient writes first.
+    authenticated message, authorize a return lane when the recipient writes first,
+    and implement atomic acceptance of a request with a lane.
     \item \textbf{Authenticated declaration enforcement.} Bind constrained purpose and origin declarations to native
     content and uncharged admission signing bytes, add explicit gateway authority,
     and reject mismatches without consuming lane allowance.
@@ -463,8 +481,11 @@ evidence for this revision.
 
 Add conformance stories for a lane message while a relationship request is open,
 lane revocation followed by an allowed or refused request follow-up, and a block
-racing both paths. Granting a lane does not accept the relationship or refund its
-request. Lane expiry cannot extend the request deadline, and an unsupported
+racing both paths. Add extension scenarios for class-bound quotes and bounded
+acceptance: one full refund obligation and one lane commit, no standing acceptance,
+no partial outcome on conflict or failure, and no duplicate effects on retry.
+Later lane expiry or revocation must not reopen that settlement. Lane expiry
+cannot extend a request deadline, and an unsupported
 declaration cannot silently start a charged request.
 
 An admitted lane message may renew the lane's activity horizon. It must not count

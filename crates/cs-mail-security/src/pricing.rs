@@ -2,23 +2,23 @@ use super::{
     ActorRef, CommandSigner, OperationalKeyRef, SecurityError, Signature, Signer, SigningScope,
     VerifyingKey,
 };
-use cs_mail_protocol::pricing::RecipientCollateralPreference;
+use cs_mail_protocol::pricing::RecipientRequestClasses;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SignedCollateralPreference {
+pub struct SignedRequestClasses {
     pub scope: SigningScope,
     pub operational_key: OperationalKeyRef,
-    pub preference: RecipientCollateralPreference,
+    pub classes: RecipientRequestClasses,
     pub signature: Vec<u8>,
 }
-impl SignedCollateralPreference {
+impl SignedRequestClasses {
     fn bytes(&self) -> Result<Vec<u8>, SecurityError> {
         serde_json::to_vec(&(
-            "cs-mail/recipient-collateral/v1",
+            "cs-mail/recipient-request-classes/v1",
             self.scope,
             self.operational_key,
-            &self.preference,
+            &self.classes,
         ))
         .map_err(|_| SecurityError::InvalidSignature)
     }
@@ -35,18 +35,18 @@ impl SignedCollateralPreference {
 impl CommandSigner {
     /// # Errors
     /// Requires the recipient's own operational signer.
-    pub fn sign_collateral_preference(
+    pub fn sign_request_classes(
         &self,
         scope: SigningScope,
-        preference: RecipientCollateralPreference,
-    ) -> Result<SignedCollateralPreference, SecurityError> {
-        if self.actor != ActorRef::Recipient(preference.recipient) || preference.version == 0 {
+        classes: RecipientRequestClasses,
+    ) -> Result<SignedRequestClasses, SecurityError> {
+        if self.actor != ActorRef::Recipient(classes.recipient()) || classes.version() == 0 {
             return Err(SecurityError::InvalidSignature);
         }
-        let mut signed = SignedCollateralPreference {
+        let mut signed = SignedRequestClasses {
             scope,
             operational_key: self.reference,
-            preference,
+            classes,
             signature: Vec::new(),
         };
         signed.signature = self.signing_key.sign(&signed.bytes()?).to_bytes().to_vec();

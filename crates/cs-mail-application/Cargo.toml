@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-capabilities = { path = "../cs-mail-capabilities" }
+cs-mail-consent = { path = "../cs-mail-consent" }
+cs-mail-correspondence = { path = "../cs-mail-correspondence" }
+cs-mail-content = { path = "../cs-mail-content" }
+ed25519-dalek.workspace = true
 identity-contract.workspace = true
 cs-mail-security = { path = "../cs-mail-security" }
 cs-mail-accounts = { path = "../cs-mail-accounts" }

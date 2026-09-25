@@ -16,10 +16,11 @@
 \usepackage{tabularx}
 \usepackage{placeins}
 \usepackage{accsupp}
+\usepackage{needspace}
 \setlength{\emergencystretch}{1.5em}
 \hypersetup{
   pdftitle={Membranes and Portals: A Spatial Interface for cs-mail},
-  pdfsubject={Conversation-level privacy and reuse policy revision}
+  pdfsubject={Conversation reuse and recipient-defined request classes}
 }
 \setlength{\parskip}{5pt plus 1pt}
 
@@ -68,22 +69,25 @@ Rendering all of this as another three-column email client would conceal much of
 
 The membrane and portals are one proposed answer.
 
+\Needspace{12\baselineskip}
 \section{The membrane: communication has a boundary}
 
 A \term{membrane} is the visible representation of the boundary around a user's communication space. Established, permitted relationships live inside it. First-contact attempts begin outside it. Express lanes form deliberately constructed passages through it.
 
+Recipients can publish up to eight classes of their own at that boundary, with collateral selected for each from the deployment's bounded menu. The sender chooses a class and authorizes its fixed terms. These entry points describe invitations to approach; they are not permission grants or permanent kinds of relationship.
+
 The membrane therefore represents protocol state spatially. It is not merely an illustration surrounding an inbox. Its geometry and transitions should correspond to meaningful changes in access:
 
 \begin{itemize}[leftmargin=*]
-    \item granting a sender standing permission creates a route through the membrane;
+    \item accepting a request with standing permission opens an ongoing route; accepting with an express lane opens a bounded route, with the full request refund obligation recorded in either case;
     \item revoking that permission closes the future route while preserving the historical correspondence;
     \item a first-contact request can be pulled inward for inspection without thereby granting future access;
-    \item an express lane creates a constrained passage, potentially limited by identity, purpose, duration, or message density.
+    \item an express lane concerns the relationship, potentially limited by identity, purpose, duration, or message density, and is usually not scoped to one conversation.
 \end{itemize}
 
 This gives a user a perceptible answer to a question that conventional email clients answer poorly: \emph{who can reach me, and under what conditions?}
 
-The spatial distinction should remain semantically stable. ``Inside'' should consistently indicate some form of authorized relationship. ``Outside'' should consistently indicate that no standing route exists. Animation is useful when it explains a state transition, for example when accepting a first-contact request visibly opens a route. It should not exist merely to make the product feel futuristic.
+The spatial distinction should remain semantically stable. ``Inside'' should indicate authorized communication; a bounded route should remain distinguishable from standing permission. A published request entry point invites an approach without opening either route. Animation is useful when it explains a state transition, such as acceptance opening the route actually granted. It should not exist merely to make the product feel futuristic.
 
 \section{Portals: correspondence is something one moves through}
 
@@ -99,6 +103,7 @@ Selecting an object need not replace the current screen. It may expand within th
 
 ``Portal'' is therefore an interaction principle rather than a commitment to a literal glowing circle. The visual language can evolve. The essential property is continuity of context: users should be able to move into relevant correspondence and back out without repeatedly destroying and reconstructing their working arrangement.
 
+\Needspace{10\baselineskip}
 \section{The complementary roles of membranes and portals}
 
 The two concepts solve different problems:
@@ -255,6 +260,7 @@ Every symbolic control needs a readable name and a non-drag equivalent: ``Add re
 \label{sec:reuse-policy}
 
 A \term{reuse policy} specifies the relationship scope within which a conversation's contents may be referenced, quoted, or shared. It concerns onward use of correspondence, separately from permission to contact someone through the membrane and authorization to retrieve a particular object.
+Request classes do not determine this policy: two research requests involving different correspondents do not share a reuse boundary merely because their labels match.
 
 \begin{quote}
 \textbf{Each conversation has a single current reuse policy governing Reference, Quotation, and Sharing together. By default, these operations are permitted within and across relationships. A conversation may instead be restricted to reuse within its originating relationship, including other conversations within that relationship. The current policy applies to all messages in the conversation, regardless of when they were sent.}
@@ -606,7 +612,7 @@ The membrane and portal metaphors should impose discipline rather than license a
     \item \textbf{Motion should communicate state change.} Animation should explain where an object came from, where it went, or what relationship changed.
     \item \textbf{Reading should remain conventional.} Once a user is reading or writing prose, legibility and familiar text interaction take priority over spatial novelty.
     \item \textbf{Spatial manipulation must not imply disclosure.} Workspace arrangement is private unless the user explicitly performs a transmitting or sharing action.
-    \item \textbf{Consequential actions must remain explicit.} Granting permission, revoking access, sharing content, changing a conversation's reuse policy, and creating an express lane should never occur as accidental side effects of exploratory gestures.
+    \item \textbf{Consequential actions must remain explicit.} Selecting a request class, inspecting a request, and granting standing or lane permission are distinct actions. Permission, disclosure, and policy changes must not occur as accidental side effects of exploratory gestures.
     \item \textbf{One policy governs the whole conversation.} Reference, Quotation, and Sharing use the same current setting for all messages. Policy controls must name the conversation and must not imply a selected-message exception or independent operation toggles.
     \item \textbf{Source identity must survive local organization.} Moving a portal, regrouping messages, or changing a transport rendering must not release the source conversation's restriction. Reproduction and already-delivered copies need an explicit provenance model.
     \item \textbf{Recipient agency and enforcement limits remain visible.} Private reading and workspace activity should not notify counterparties. A reuse restriction does not erase existing records or guarantee that readable content cannot be retained independently.
@@ -617,6 +623,8 @@ The membrane and portal metaphors should impose discipline rather than license a
 \section{Implementation note}
 
 The interaction model does not inherently require a game engine. A desktop \csmail{} client can plausibly implement the ordinary reading and composition surfaces with standard HTML/CSS UI, while an SVG or similar vector layer renders membrane geometry, connections, clipping, and transitions. Portal expansion can be expressed as interpolation between spatial layouts while ordinary text controls remain conventional interface elements. More advanced GPU rendering can remain an optimization for effects that later prove difficult to achieve performantly; it need not define the initial architecture.
+
+Request classes, atomic lane acceptance, and native lane-based delivery are implemented in the headless libraries. A separate lane-management grant also resolves a pending request; future access follows the lane without a new bond. Conversation reuse policy remains separate from contact permission.
 
 This separation is desirable in its own right. The spatial layer communicates relationships and state, while the ordinary UI layer preserves mature browser behavior for text selection, editing, accessibility, keyboard navigation, and responsive layout.
 
@@ -636,7 +644,7 @@ If \csmail{} changes the structure of electronic correspondence, its interface s
 \appendix
 \section{Concept Mockups}
 
-The following mockups were generated during the design exploration. They are illustrative rather than prescriptive: the typography, colors, geometry, and individual controls may change. Their purpose is to make the membrane, portal, and spatial-composition concepts concrete. They predate the conversation-level reuse policy and therefore omit its scope indicator and restriction states. The prose and notation in Sections~\ref{sec:reference-language}--\ref{sec:composition} govern those later refinements; these historical images are retained unchanged.
+The following mockups were generated during the design exploration. They are illustrative rather than prescriptive: typography, colors, geometry, and controls may change. They predate the conversation-level reuse policy and request classes, so omit their indicators and the two acceptance choices. The current prose governs those refinements; these historical images are retained unchanged.
 
 \begin{figure}[H]
     \centering

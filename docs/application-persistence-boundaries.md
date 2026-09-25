@@ -1,5 +1,9 @@
 # Application and persistence boundaries
 
+The subsequent [product identity alignment](product-identity-model.md) introduces
+product-scoped durable login bindings and shared-enrollment schema version 2.
+The schema/version statements below describe the earlier application cutover.
+
 The September follow-up moves the account, billing, shared-identity enrollment,
 identity-change and encrypted-disclosure workflows into application-owned Rust.
 It replaces their earlier PostgreSQL business entry points. There are no forwarding

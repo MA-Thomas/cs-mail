@@ -37,6 +37,13 @@ mod tests {
 
     fn policy() -> PolicySnapshot {
         PolicySnapshot {
+            selected_class: Some(
+                cs_mail_protocol::pricing::SelectedRequestClass::new(
+                    cs_mail_primitives::RequestClassId(1),
+                    "Test class".into(),
+                )
+                .unwrap(),
+            ),
             pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
             protocol_version: ProtocolVersion(2),
             policy_version: PolicyVersion(1),
@@ -112,6 +119,7 @@ mod tests {
                 ProtocolVersion(2),
                 IdempotencyKey(1),
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
                 },
@@ -151,6 +159,7 @@ mod tests {
             .execute(
                 sender(
                     ProtocolCommand::IssueRequestTerms {
+                        class_id: cs_mail_primitives::RequestClassId(1),
                         quote_id: QuoteId(1),
                         declaration_digest: None,
                     },
@@ -214,6 +223,7 @@ mod tests {
                 sender_as(
                     old_sender,
                     ProtocolCommand::IssueRequestTerms {
+                        class_id: cs_mail_primitives::RequestClassId(1),
                         quote_id: QuoteId(1),
                         declaration_digest: None,
                     },
@@ -300,6 +310,7 @@ mod tests {
             sender_as(
                 new_sender,
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(2),
                     declaration_digest: None,
                 },
@@ -319,6 +330,7 @@ mod tests {
                 sender_as(
                     new_sender,
                     ProtocolCommand::IssueRequestTerms {
+                        class_id: cs_mail_primitives::RequestClassId(1),
                         quote_id: QuoteId(2),
                         declaration_digest: None,
                     },

@@ -32,7 +32,8 @@
 \textit{cs-mail} makes permission to communicate explicit. Accepted contacts
 write without protocol message charges under their providers' service terms. A sender without permission may submit
 one relationship request, accompanied by a communication and a conditional
-charge. Acceptance produces a full refund; expiry retains the processing amount;
+charge under a recipient-defined request class. Acceptance grants standing
+permission or an express lane and produces a full refund; expiry retains the processing amount;
 rejection also forfeits the collateral component. Forfeitures support a
 company-owned pool for annual equal allocations among qualifying active members,
 after a disclosed corporate allocation. The recipient does not receive the money
@@ -50,8 +51,9 @@ someone attempt delivery repeatedly, leaving the recipient and their provider
 to sort wanted correspondence from unwanted contact. Filters can help, but they
 do not give the sender a clear account of whether an ongoing relationship exists.
 
-\textit{cs-mail} starts with that relationship. A recipient accepts a particular
-public identity, granting permission for future communication in that direction.
+\textit{cs-mail} starts with that relationship. A recipient publishes the kinds
+of approach they welcome and can grant a particular public identity standing
+permission or a bounded express lane for communication in that direction.
 Accepted correspondence carries no protocol message charge. The exceptional
 event is a request to establish permission where it is absent.
 
@@ -91,8 +93,10 @@ their separate lifecycles.
 
 \section{Alice Requests a Relationship with Bob}
 
-Bob has not accepted Alice. She sees a dollar-denominated quote with a processing component of
-$0.50$ and collateral of $5.00$, for a total charge of $5.50$. She reviews the
+Alice wants to propose research collaboration to Professor Bob, who has not
+accepted her. Bob publishes research, press, and other request classes, choosing
+lower collateral for research than press. Alice selects research and, in this example, sees a quote
+with processing component $0.50$ and collateral $5.00$, totaling $5.50$. She reviews the
 outcomes and decision window, authorizes the request, and supplies an encrypted
 initial message. The service submits the request to Bob once funding is finalized
 and delivery preparation is durable. Submission starts one decision clock and
@@ -100,11 +104,12 @@ creates one request for Bob to consider.
 
 \begin{center}
 \small
-\begin{tabularx}{\textwidth}{@{}p{0.15\textwidth}Y Y@{}}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.22\textwidth}Y Y@{}}
 \toprule
 Outcome & The original charge & Future contact \\
 \midrule
-Accept & All $5.50$ is due back to Alice. & Alice gains standing permission to write to Bob. \\
+Accept with standing permission & All $5.50$ is due back to Alice. & Alice gains standing permission to write to Bob. \\
+Accept with a lane & All $5.50$ is due back to Alice. & Alice may write within the express lane's scope. \\
 Reject & $0.50$ is processing revenue; $5.00$ becomes pending forfeiture. & Alice remains unaccepted and must wait until another request is eligible. \\
 Expire & $0.50$ is processing revenue; $5.00$ is due back to Alice. & No standing permission is granted. \\
 \bottomrule
@@ -112,14 +117,16 @@ Expire & $0.50$ is processing revenue; $5.00$ is due back to Alice. & No standin
 \end{center}
 
 The processing amount is standardized by deployment policy. Bob chooses his
-collateral requirement from a bounded menu, with $5.00$ as the default. Alice
-always sees the resulting total before authorizing it. Bob may allow follow-up
+collateral requirement for each class from a bounded menu, with $5.00$ as the
+default. These are Bob's invitations, not universal prices for academic or press
+contact. Alice's selected class and financial terms stay fixed for this request.
+Bob may allow follow-up
 messages while this request awaits his decision. If he does, Alice
 can add context without another charge, another request prompt, or a later
 deadline. If he does not, the service refuses the follow-up. A sender cannot
 evade that choice by paying again against the same pending request.
 
-When Bob accepts, the service records permission and the refund obligation
+In either acceptance mode, the service records permission and the refund obligation
 together. The payment processor may confirm the refund afterward, so Alice's
 statement distinguishes a refund due from a refund completed. Bob's acceptance
 is directed: it does not automatically accept Bob as a sender to Alice or grant
@@ -145,9 +152,10 @@ returns the charge in full. Blocking after finalization does not reopen money.
 
 The service records when an authenticated decision arrives. A timely acceptance
 must not lose to an expiry worker merely because processing was delayed. A late
-acceptance can grant future permission, but it cannot change an already closed
-request's financial outcome. These rules make deadline behavior explainable to
-both parties.
+standing acceptance can grant future permission, but it cannot change an already closed
+request's financial outcome. This existing standing-acceptance rule does not
+yet specify bounded acceptance during preparation or after the deadline; those
+interactions remain open in the domain model.
 
 \section{Where Forfeited Collateral Goes}
 
@@ -226,9 +234,9 @@ The configured payment processor executes the operations recorded by the ledger.
 \section{Persistence Without Repeated Charges Inside a Request}
 
 One request per directed identity pair does not by itself stop someone from
-returning after every expiry or rotating addresses. New requests therefore remain
+returning after every expiry, rotating addresses, or switching request classes. New requests therefore remain
 subject to recipient policy and principal-scoped history. Initial submission
-advances that history; an allowed follow-up does not. Acceptance of a public
+advances that history; an allowed follow-up does not. Standing acceptance of a public
 identity bypasses the request gate for that identity without erasing the history
 that applies to its aliases.
 
@@ -241,17 +249,21 @@ The base request has only the processing and collateral components described
 above. Follow-up limits and new-request cooldowns govern persistence without
 adding another financial component.
 
-\section{Permission for Organizations: Express Lanes}
+\section{Bounded Relationship Permission: Express Lanes}
 
 Some wanted correspondence is narrower than standing personal acceptance. A
 member may want a bank's fraud alerts or an airline's itinerary notices without
-inviting unlimited communication from that organization. An express lane is a
+inviting unlimited communication from that organization. Bob may likewise welcome
+Alice's approach with bounded permission rather than standing acceptance. An express lane is a
 recipient-signed, revocable grant bounded by sender, declared purpose, count or
-rate, and time.
+rate, and time. It concerns the relationship and is usually not scoped to one
+conversation.
 
 A valid lane authorizes messages without a relationship-request charge. Its
 messages do not contribute to forfeitures or create a request solicitation.
-Granting, renewing, or revoking a lane does not settle a separate pending request.
+Accepting a request with a lane grants that permission and records the full refund
+together. Later renewal, expiry, or revocation does not reopen its settlement.
+Independent lane issuance alongside a pending request remains an open interaction.
 A block overrides the lane. If lane authority ends, the sender must satisfy the
 remaining permission rules, including any existing request's follow-up policy;
 another charge is never automatic.
@@ -321,7 +333,10 @@ corporate share assessed once; did every qualifying member receive an equal
 allocation; and does every unpaid allocation remain recorded? These checks do
 not require publishing the underlying correspondence graph.
 
-The incentives still deserve scrutiny. The operator earns processing revenue on
+Misrepresenting an approach can lead to ordinary rejection; no special
+misclassification penalty is needed. A lower bond still permits cheaper unwanted
+attempts, so this incentive is not a guarantee of truthful classification.
+The operator earns processing revenue on
 unsuccessful requests and a share of eligible forfeitures. Equal distributions
 remove the direct rejection bounty but do not eliminate duplicate-member farming,
 fabricated activity, collusion, or manipulation of deadlines. Visible acceptance,
@@ -350,5 +365,7 @@ identifies open launch parameters. The architecture and desktop plan translate
 that model into staged implementation. Together they preserve the central
 experience: permission is explicit, a pending request carries one charge, and
 ordinary communication within an accepted relationship carries no request charge.
+Request classes and acceptance with a lane are agreed extensions awaiting
+implementation; the existing libraries are the starting point for that work.
 
 \end{document}

@@ -2,6 +2,9 @@
 
 # Identity refactor decisions
 
+The later [product identity alignment](product-identity-model.md) defines durable
+product logins, authentication methods and deferred Phoros subject adoption.
+
 This is a breaking development update. Databases are disposable: create fresh schemas from the checked-in SQL. There is no compatibility layer, backfill, or data-conversion path.
 
 ## Ownership and boundaries

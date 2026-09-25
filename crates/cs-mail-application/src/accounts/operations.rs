@@ -34,6 +34,28 @@ pub struct AccountState {
     pub registry: KeyRegistry,
     pub product: String,
 }
+impl AccountState {
+    /// Shared live persona authority for signed correspondence and consent commands.
+    /// # Errors
+    /// Rejects foreign products, inactive accounts and keys for another persona.
+    pub fn persona_key(
+        &self,
+        product: &str,
+        persona: ProtocolIdentity,
+        reference: OperationalKeyRef,
+        at: CanonicalTime,
+    ) -> Result<[u8; 32], SecurityError> {
+        let (actor, key) = self.registry.active_actor(reference, at)?;
+        if self.product != product
+            || !self.control.allows_service()
+            || !self.control.personas().contains(&persona)
+            || !matches!(actor, ActorRef::Sender(p) | ActorRef::Recipient(p) if p == persona)
+        {
+            return Err(SecurityError::SigningScopeMismatch);
+        }
+        Ok(key)
+    }
+}
 pub struct CommandContext {
     pub state: AccountState,
     pub prior: Option<(SignedAccountCommand, AccountControl)>,
@@ -275,7 +297,6 @@ impl<'a, R: AccountStore, C: AccountClock + ?Sized> AccountService<'a, R, C> {
                     financial = Some((context.account, source));
                     None
                 }
-                IdentityChange::LinkLogin => None,
             };
             state
                 .control

@@ -130,13 +130,23 @@ pub struct IngressService<C> {
 impl<C: CanonicalClock> IngressService<C> {
     /// # Errors
     /// Rejects invalid recipient authority or an amount outside the configured menu.
-    pub fn set_collateral_preference(
+    pub fn set_request_classes(
         &self,
-        signed: &cs_mail_security::SignedCollateralPreference,
+        signed: &cs_mail_security::SignedRequestClasses,
     ) -> Result<(), ServiceError> {
-        self.engine
-            .set_collateral_preference(signed, self.clock.now(), &self.policy.protocol)?;
+        cs_mail_application::request_classes::RequestClassesService::new(&self.engine).publish(
+            signed,
+            &self.policy.protocol,
+            || self.clock.now(),
+        )?;
         Ok(())
+    }
+    /// # Errors
+    /// Returns storage or invalid-publication errors.
+    pub fn request_classes(
+        &self,
+    ) -> Result<Option<cs_mail_protocol::pricing::RecipientRequestClasses>, ServiceError> {
+        Ok(self.engine.request_classes()?)
     }
     /// Authenticates the billing command independently of service coverage. Expired service
     /// never prevents a member from inspecting or collecting an existing allocation.

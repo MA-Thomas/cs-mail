@@ -173,6 +173,37 @@ fn push_bytes(target: &mut Vec<u8>, bytes: &[u8]) -> Result<(), CapabilityError>
     Ok(())
 }
 
+/// Checked grant contents; signing authority is established separately at receipt.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "LaneGrant", into = "LaneGrant")]
+pub struct ValidatedLaneGrant(LaneGrant);
+impl TryFrom<LaneGrant> for ValidatedLaneGrant {
+    type Error = String;
+    fn try_from(grant: LaneGrant) -> Result<Self, Self::Error> {
+        grant.validate().map_err(|e| format!("{e:?}"))?;
+        Ok(Self(grant))
+    }
+}
+impl From<ValidatedLaneGrant> for LaneGrant {
+    fn from(value: ValidatedLaneGrant) -> Self {
+        value.0
+    }
+}
+impl ValidatedLaneGrant {
+    /// # Errors
+    /// Rejects invalid contents or recipient signatures.
+    pub fn verify(signed: &SignedLaneGrant, key: &[u8; 32]) -> Result<Self, CapabilityError> {
+        signed.verify(key)?;
+        signed.grant.validate()?;
+        Ok(Self(signed.grant.clone()))
+    }
+    /// # Errors
+    /// Rejects overflow when deriving the lane horizon.
+    pub fn activate(self) -> Result<Lane, CapabilityError> {
+        Lane::from_grant(self.0)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignedLaneGrant {
     pub grant: LaneGrant,
@@ -316,6 +347,21 @@ impl Lane {
             task: ScheduleTask::LaneHorizon(self.grant.id),
             at: self.horizon_at,
         }
+    }
+
+    /// Established access, including a scheduled start; admission checks `not_before`.
+    pub fn provides_relationship_access(&self, now: CanonicalTime) -> bool {
+        self.state == LaneState::Active
+            && now < self.grant.not_after
+            && (self.grant.mode != LaneMode::Expiring || now < self.horizon_at)
+    }
+
+    /// Whether this lane currently provides access, independent of message scope.
+    pub fn is_current(&self, now: CanonicalTime) -> bool {
+        self.state == LaneState::Active
+            && now >= self.grant.not_before
+            && now < self.grant.not_after
+            && (self.grant.mode != LaneMode::Expiring || now < self.horizon_at)
     }
 
     /// Checks pair, evidence, state, and validity without consuming allowance.

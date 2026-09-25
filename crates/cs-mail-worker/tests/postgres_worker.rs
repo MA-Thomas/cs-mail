@@ -70,6 +70,13 @@ fn engine(url: &str, label: &str) -> PostgresEngine {
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
+        selected_class: Some(
+            cs_mail_protocol::pricing::SelectedRequestClass::new(
+                cs_mail_primitives::RequestClassId(1),
+                "Test class".into(),
+            )
+            .unwrap(),
+        ),
         pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
         protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
@@ -207,6 +214,7 @@ fn reserve(engine: &PostgresEngine, id: u128) {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(id),
                     declaration_digest: None,
                 },
@@ -615,6 +623,7 @@ fn blocked_inbox_still_signs_its_quote_and_recovers_across_relationship_workers(
         .unwrap();
     let issue = sender(
         ProtocolCommand::IssueRequestTerms {
+            class_id: cs_mail_primitives::RequestClassId(1),
             quote_id: QuoteId(9),
             declaration_digest: None,
         },

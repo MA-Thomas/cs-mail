@@ -64,7 +64,8 @@ exemption.
 
 \section{A Request from Charge to Outcome}
 
-Alice has no standing permission to write to Bob. She reviews one request quote,
+Alice has no standing permission to write to Bob. She selects one of Bob's
+published request classes and reviews its fixed quote,
 authorizes $C+S$, and supplies her initial encrypted communication. C-SQD records
 one request and asks the external provider to capture that charge under a stable
 operation key. Once funding satisfies the published finality policy and content is durable,
@@ -76,7 +77,8 @@ do not move the deadline, and do not generate another request prompt. If he does
 not permit them, C-SQD refuses the follow-up without selling another charge
 against the pending request.
 
-Acceptance records a full refund obligation and standing permission. Rejection
+Acceptance records a full refund obligation together with either standing
+directed permission or a relationship-level express lane. Rejection
 records processing revenue $C$ and pending forfeiture $S$. Silence through expiry
 records $C$ as revenue and a refund obligation for $S$. Bob receives no personal
 entitlement from rejecting Alice. Each obligation remains visible until the
@@ -121,11 +123,15 @@ may retain an annual allocation after choosing not to renew service.
 \subsection{Request pricing is fixed at authorization}
 
 The standard request quote combines processing amount $C=\$0.50$ with a
-recipient-selected collateral amount $S$. The current default is $S=\$5.00$;
+recipient-selected collateral amount $S$ for the chosen request class. The current default is $S=\$5.00$;
 the bounded menu is $\$1$, $\$2.50$, $\$5$, $\$10$, and $\$25$. The deployment
 versions the processing amount, menu, and default. A recipient's authenticated
-preference must select an allowed value. A later preference or policy change
-must not alter an existing request's signed quote.
+preference must select an allowed value for each class. Recipients define the
+classes and their descriptions; C-SQD does not prescribe purpose-based prices.
+The sender's selected class and financial terms must remain fixed for the request.
+A later preference or policy change must not alter that request's signed quote.
+Both timely acceptance modes must record the full $C+S$ refund obligation with
+the granted permission; subsequent lane expiry or revocation must not reopen it.
 
 \subsection{Ownership and the limits on its use}
 
@@ -353,7 +359,8 @@ exporting a universal principal identifier.
 
 \section{The Recipient and Sender Experience}
 
-The sender sees the price of one relationship request, its initial communication,
+The sender sees the recipient's request classes and their collateral requirements,
+then the chosen class, price, and initial communication for one request,
 the possible refunds, and the decision window. The interface distinguishes preparation for submission, waiting for the
 recipient's decision, and the terminal outcome, with external refund status
 shown separately. It does not present available or withdrawable funds. A
@@ -366,11 +373,13 @@ lump-sum distribution as separate transactions, with the rebate/excess breakdown
 as reporting. A member who does not renew can still inspect
 and receive a finalized allocation.
 
-The recipient sees one grouped request and the choices accept, reject, and block.
+The recipient sees the selected class, one grouped request, and choices to accept
+with standing permission, accept with an express lane, reject, or block.
 The explanation starts with future permission, then the financial consequence.
 Rejecting does not earn the recipient that request's collateral. Dismissing the
-prompt is not a decision. A late acceptance grants future permission without
-reopening the closed request's refund outcome.
+prompt is not a decision. Existing late standing acceptance does not reopen the
+closed request's refund outcome. Bounded-acceptance edge cases remain open
+in the domain model.
 
 Follow-up controls belong beside request preferences and are enforced at
 admission. Recipients may disable follow-ups or set bounded counts and rates;
@@ -381,7 +390,8 @@ The proposed request policy uses a 30-day decision window, a 30-day cooldown
 after expiry, and a 90-day cooldown after rejection. Cooldowns run from the
 canonical decision deadline for expiry and the canonical timely rejection/block
 event for rejection allocation, subject to any later principal-history bound.
-These values remain proposals. A finalized policy must define recipient-imposed
+These values remain proposals. Switching classes cannot bypass a pending request
+or principal-recipient history. A finalized policy must define recipient-imposed
 longer limits, explicit invitations that can shorten ordinary cooldowns, and
 behavior after revocation. Blocking always requires an authenticated unblock;
 an invitation cannot silently remove it.
@@ -396,7 +406,7 @@ Within the funded service boundary, inbound processing checks blocking, standing
 acceptance, and an applicable recipient-granted lane. It then checks whether an authenticated message may join
 an identified request awaiting a decision. Only an eligible new request reaches the payment
 invitation flow. The web authorization binds the directed parties, request,
-initial content/declarations, amount, immutable terms, and deadlines. It never
+selected request class, initial content/declarations, amount, immutable terms, and deadlines. It never
 asks the sender to top up a general account.
 
 Subsequent legacy mail must prove its association and satisfy current follow-up
@@ -405,15 +415,19 @@ failed lane or follow-up cannot silently authorize a new charge. Invitations
 need rate limits, anti-enumeration controls, clear expiry, and abuse reporting.
 Outbound downgrade must be disclosed before the sender commits to that route.
 
-Express-lane messages carry no request charge or pool contribution. Granting or
-ending a lane does not settle a pending request. Domain-authentication evidence
+Express-lane messages carry no request charge or pool contribution. Acceptance
+with a lane settles its request; later lane changes do not reopen that outcome.
+A lane concerns the relationship and is usually not specific to one conversation.
+A separate lane-management grant also resolves a pending request with the full
+refund; terminal settlements remain fixed. Domain-authentication evidence
 supports the lane's sender scope, not the truth of its declared purpose or a
 member's active-use eligibility.
 
 \section{Incentives, Review, and Later Federation}
 
 Equal member distributions remove a direct rejection bounty, but they do not
-remove economic incentives. C-SQD earns $C$ on unsuccessful requests and a share
+remove economic incentives. Misclassification faces ordinary rejection, without
+a separate penalty or reputation mechanism. C-SQD earns $C$ on unsuccessful requests and a share
 of eligible forfeitures. It should publish pricing controls and preserve signed
 decision evidence so neither the service nor a recipient can manufacture expiry
 by hiding acceptance. Review should address duplicate members, fabricated
@@ -429,9 +443,10 @@ the former recipient-collateral clearing example transfers unchanged to federati
 
 \section{A Staged Launch}
 
-Start with a deterministic model of one request and its outcomes. Add durable
-ordering, double-entry obligations, and recovery through a simulated external
-provider. A desktop pilot can use nonredeemable simulated amounts while testing
+Extend the current deterministic model with request classes and acceptance with
+a lane, preserving the unresolved interactions listed in the domain model.
+Validate durable ordering, double-entry obligations, and recovery through a
+simulated external provider. A desktop pilot can use nonredeemable amounts while testing
 real encryption, request/follow-up permission, deadlines, and failure behavior.
 
 Before live value, the service needs approved payment and program policies,
