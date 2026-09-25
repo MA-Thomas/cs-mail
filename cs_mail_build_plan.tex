@@ -52,7 +52,7 @@
 \title{\textit{cs-mail} Product Build Plan\\
 \large Server, Administration, Member Desktop, and Sender Request Page}
 \author{C-SQD}
-\date{Draft 0.5 --- 25 September 2026}
+\date{Draft 0.6 --- 25 September 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -64,7 +64,8 @@ This plan turns the implemented Rust domain into a runnable product. It builds
 the core relationship-request loop end to end first---operator service, identity
 enrollment, request, decision, and settlement, driven from a command-line
 client---and then adds depth: a public request page for senders without an
-account, the macOS member application, recovery across time and failure, the
+account and their ordinary-email correspondence after acceptance, the macOS
+member application, recovery across time and failure, the
 annual service and member-cycle experience, and a small pilot. cs-mail's core is
 also required by the future Phoros Account, so user testing informs design rather
 than deciding whether development continues. The pilot introduces no real
@@ -85,8 +86,11 @@ request only at its third and fourth milestones. This draft reorders the work:
     billing domains from the start, with simulated evidence supplied by
     development support code. No fixture or bypass path is later replaced.
     \item A public \emph{sender request page} lets a person without a cs-mail
-    account pick a request class, pay, and write a message. It first requires a
-    guest-sender domain design (Milestone~3a).
+    account---a \emph{guest}---pick a request class, pay, and write a message.
+    After acceptance, guest correspondence is ordinary email in both directions,
+    through the deployment's own mail receiver. The guest-sender design
+    (Milestone~3a) is recorded in
+    \href{docs/guest-sender-design.md}{\texttt{docs/guest-sender-design.md}}.
     \item The macOS application follows the proven loop. Billing and distribution
     \emph{experience} moves later; its domain rules are already implemented.
     \item Each milestone names the conjectures its tests challenge, following
@@ -128,11 +132,15 @@ reviewed cutover in the owning domain, not patched in an adapter.
     \item \textbf{Member application (macOS, Tauri).} Holds endpoint keys, the
     encrypted inbox, request decisions, request classes, lanes, blocks, and
     financial status. Native content is end-to-end encrypted.
-    \item \textbf{Sender request page (web).} Lets a person without a cs-mail
-    account select a recipient's published request class, authorize one
-    conditional charge, and write a message. The page is served by the provider,
-    so it cannot carry the end-to-end promise; its messages are labeled as an
-    explicit privacy downgrade, like inbound SMTP.
+    \item \textbf{Sender request page (web).} Lets a guest---a person without a
+    cs-mail account---select a recipient's published request class, authorize
+    one conditional charge, and write a message. The page is served by the
+    provider, so it cannot carry the end-to-end promise; its messages are
+    labeled as an explicit privacy downgrade.
+    \item \textbf{Email, for guests.} After acceptance, a guest corresponds from
+    their own mailbox. The member's replies arrive from the member's cs-mail
+    address; the guest's replies return through the deployment's own mail
+    receiver. The member consents to the downgrade per conversation.
     \item \textbf{Developer CLI.} Drives member journeys before the desktop
     application exists and remains a development and operations tool.
     \item \textbf{Administration CLI.} An authenticated operator client.
@@ -154,9 +162,10 @@ executes or fails a member payment. All amounts are explicitly nonredeemable.
 Users receive no spendable test-credit wallet; the operator configures simulator
 scenarios.
 
-\paragraph{Out of scope for the pilot.} Independent-provider federation, a full
-SMTP relay, public signup, live payments, mobile releases, and multi-region
-operation.
+\paragraph{Out of scope for the pilot.} Independent-provider federation,
+general email hosting (members emailing arbitrary external addresses), public
+signup, live payments, mobile releases, and multi-region operation. Email is in
+scope only for guest conversations and transactional notices.
 
 \section{Architecture of the Product Layer}
 
@@ -168,7 +177,10 @@ crates/
   cs-mail-api-types             # add when transport contracts need it
   cs-mail-mobile-ffi            # Milestone 8
 apps/
-  cs-maild                      # HTTP API, workers, sender page hosting
+  cs-maild                      # HTTP API, workers, sender page hosting,
+                                #   outbound guest and notice email
+  cs-mail-mx                    # own receive-only SMTP receiver (MX),
+                                #   using cs-mail-smtp-gateway
   cs-mail-admin                 # authenticated operator CLI
   cs-mail-cli                   # developer member client
   cs-mail-desktop               # Tauri shell and macOS adapters
@@ -245,8 +257,9 @@ Stage & Result & Exit evidence \\
 0 & Product skeleton & Buildable apps, inward dependencies, quality gate \\
 1 & Service and identity boot & Clean start, restart, invites, simulator scenarios \\
 2 & Core loop from the CLI & Every request outcome, from a clean database \\
-3a & Guest-sender domain design & Agreed types, evidence, ownership, and rules \\
+3a & Guest-sender domain design & Recorded design; open decisions settled \\
 3b & Sender request page & A guest completes a request; every outcome settles \\
+3c & Guest email correspondence & Accepted guest and member correspond by email \\
 4 & macOS member application & Milestone 2 journeys in the app, keys in keychain \\
 5 & Time and failure & Crash, race, and deadline claims challenged \\
 6 & Annual service and member cycle & A full simulated year, including nonrenewal \\
@@ -257,7 +270,7 @@ Stage & Result & Exit evidence \\
 \end{center}
 
 Each stage depends on the preceding one, except that Milestone~4 may proceed
-before 3b if the guest-sender design remains unresolved. A milestone is complete
+before 3b or 3c if the guest-sender work is not ready. A milestone is complete
 when its demonstration runs from a clean checkout and its claims have been
 challenged, not merely when new code compiles.
 
@@ -339,55 +352,111 @@ confuses?
 
 \section{Milestone 3a: Guest-Sender Domain Design}
 
-The current domain recognizes two senders: members, with an account, verified bank
-association, and protocol identity; and organizational legacy senders, identified
-by a DMARC-authenticated domain. A person using the request page without an
-account is neither. Before any request-page code, record in the domain model and a
-design note:
+The current domain recognized two senders: members, with an account, verified
+bank association, and protocol identity; and organizational legacy senders,
+identified by a DMARC-authenticated domain. A guest is neither. The agreed design
+is recorded in \href{docs/guest-sender-design.md}{\texttt{docs/guest-sender-design.md}}
+and summarized in the domain model:
 
 \begin{itemize}
-    \item the guest sender as a distinct type, and what evidence (for example a
-    verified email address or payment evidence) identifies one and what that
-    evidence establishes;
-    \item who owns guest eligibility and anti-abuse history, given that
-    principal-recipient history is keyed on a principal a guest does not have;
-    \item what acceptance grants a guest---permission bound to verified
-    evidence, a path to membership, or a bounded lane;
-    \item how refunds reach a guest's payment method without an account;
-    \item how guest messages are marked as non-end-to-end and how that label
-    reaches the recipient.
+    \item A guest is a distinct sender kind, identified by one verified mailbox
+    and mapped at the edge to a synthetic protocol identity, following the
+    legacy-sender precedent. The request kernel is unchanged; lanes gain a
+    guest-mailbox subject.
+    \item Mailbox verification establishes control of the mailbox, not
+    personhood. The payment processor's instrument fingerprint is an anti-abuse
+    signal, not an identity claim.
+    \item Guest request history is grouped by both mailbox and payment
+    fingerprint; linked histories merge prospectively to the most restrictive
+    state.
+    \item Accepted guests communicate free and indefinitely, subject to the
+    recipient's block and revocation. Refunds return to the funding payment
+    method; forfeitures enter the member pool.
+    \item The recipient sees the guest's email address. Guest content is not
+    end-to-end; each member reply by email requires per-conversation downgrade
+    consent.
 \end{itemize}
 
-Follow the existing treatment of legacy senders where it fits. This is the one
-planned change to the core domain; it is made as a reviewed cutover, not an
-adapter-level extension. \textbf{Exit:} the agreed design, with its conjectures
-stated. If it remains unresolved, Milestone~4 proceeds first.
+\textbf{Decided (25 September 2026):} a receive-only Rust receiver
+(\texttt{apps/cs-mail-mx}); SMTP-level rejection of a blocked guest's mail;
+outbound email through a delivery service at first, DKIM-signed with the
+deployment domain's key; and indefinite retention of mailbox and payment
+fingerprint evidence by default, disclosed to the guest before payment.
+\textbf{Exit:} complete; the domain model reflects the design.
 
 \section{Milestone 3b: Sender Request Page}
 
-Each member has a public request link. A guest opens it, selects a published
-class, reviews $C$, $S$, the refund rules and the privacy label, authorizes one
-simulated charge, and writes a message. Encryption to the recipient's key on
-arrival is an application use case; plaintext is not stored or logged. The
-recipient decides from the developer CLI until Milestone~4. The guest receives
-outcome and refund notices by email.
-
-Optionally, unknown senders emailing a member's address receive an automatic
-reply with the request link, using \texttt{cs-mail-smtp-gateway} for sender
-authentication. This is in scope only if relay operations stay small.
+Each member has a public request link. A guest verifies their mailbox, selects a
+published class, reviews $C$, $S$, the refund rules, the privacy label, the
+fact that the recipient will see their address, and the indefinite retention of
+their mailbox and payment evidence, authorizes one simulated charge,
+and writes a message. Encryption to the recipient's key on arrival is an
+application use case; plaintext is not stored or logged. The recipient decides
+from the developer CLI until Milestone~4. Verification codes and outcome and
+refund notices are sent as DKIM-signed email from the deployment domain.
 
 \begin{claims}
-\claim{PostgreSQL}{A guest cannot exceed pending-request limits for one recipient by changing email addresses.}
-    {Repeated requests under fresh addresses from the same payment evidence all reach the recipient. The strength of this claim is set by 3a.}
-    {The request page would become a spam channel.}
+\claim{PostgreSQL}{Changing mailbox while reusing a payment instrument cannot reset request history or bypass a pending request.}
+    {A second mailbox with the same fingerprint submits while the first request is pending, or at a lower history level.}
+    {The request page would become a harassment channel.}
+\claim{PostgreSQL}{No two distinct sender subjects resolve to the same protocol identity.}
+    {Two subjects of any kind are registered under one identity.}
+    {Permission or blocks would apply to the wrong sender.}
 \claim{inspection and integration}{Guest-message plaintext is never written to storage, logs, or diagnostics.}
     {A secret-scan of the database, logs, and diagnostics after a guest request finds the message text.}
     {The downgrade label would understate the exposure.}
+\claim{PostgreSQL}{A guest refund returns only to the payment method that funded it.}
+    {A refund is directed to any other destination.}
+    {Refund redirection is a fraud path.}
 \end{claims}
 
 \textbf{Exit:} a guest completes a request end to end and every outcome settles.
 \textbf{Learning:} do strangers understand the page, and what collateral feels
 reasonable?
+
+\section{Milestone 3c: Guest Email Correspondence}
+
+Build and run \texttt{apps/cs-mail-mx}, the deployment's own receive-only SMTP
+receiver and MX for the deployment domain. It is a separate, minimally privileged
+process that hands each message with its full connection context to
+\texttt{cs-mail-smtp-gateway}, answers \texttt{250} only after durable admission,
+uses permanent \texttt{5xx} for refusals and \texttt{4xx} for temporary failures,
+offers STARTTLS, and publishes MTA-STS. After
+acceptance, the member's replies are sent as threaded email from the member's
+protocol identity address, with a per-conversation reply address, under that
+conversation's downgrade consent. The guest's replies, and new mail from a
+guest that holds permission, are admitted only when DMARC passes and the From
+address exactly matches the verified mailbox; mail from domains with missing or
+permissive DMARC policy is held for confirmation on the request page. Unknown
+senders to a member's address receive an automatic reply with the request link
+only when DMARC passes; otherwise the message is rejected, avoiding backscatter.
+A blocked or revoked guest's mail is rejected at the SMTP level.
+Send outbound mail through an email delivery service, DKIM-signed with the
+deployment domain's key; the downgrade consent discloses that the service sees
+reply plaintext. Publish SPF, DKIM, and DMARC for the deployment domain; process
+bounces and complaints.
+
+\begin{claims}
+\claim{integration}{A message with a forged From address for a guest's mailbox is not admitted.}
+    {A message failing DMARC alignment for the guest's domain reaches the member.}
+    {Anyone could speak as an accepted guest.}
+\claim{integration}{A forwarded reply token alone cannot post into the conversation.}
+    {A message from a different mailbox carrying a valid token is admitted.}
+    {Forwarding a thread would grant permission.}
+\claim{PostgreSQL}{No member reply leaves as email without that conversation's downgrade consent.}
+    {An outbound message is sent for a conversation lacking consent.}
+    {The member's plaintext would leave without agreement.}
+\claim{integration}{A blocked or revoked guest's mail is rejected with a permanent SMTP error and never delivered.}
+    {Mail from the guest's mailbox is accepted with \texttt{250} after the block or revocation.}
+    {Blocking is the recipient's primary control once guests message freely.}
+\claim{PostgreSQL, crash injection}{The receiver never answers \texttt{250} before the message is durably admitted.}
+    {A crash after \texttt{250} loses the message, or an accepted message is later refused.}
+    {Senders would believe mail was delivered when it was not.}
+\end{claims}
+
+\textbf{Exit:} an accepted guest and a member exchange threaded email in both
+directions from a clean deployment. \textbf{Learning:} does the correspondence
+feel like ordinary email to guests?
 
 \section{Milestone 4: macOS Member Application}
 
@@ -484,7 +553,9 @@ abuse intake; deletion procedures; backup and restore; and release rollback.
 Backups and retained obligation records respect separate keys and access roles.
 
 Recruit recipients who receive substantial unsolicited contact and senders who
-want to reach them, including guests if Milestone~3b has shipped. Nondeveloper
+want to reach them, including guests if Milestones~3b and~3c have shipped.
+Configure the deployment domain's MX, SPF, DKIM, and DMARC records and monitor
+outbound deliverability. Nondeveloper
 testers use clean machines and the pilot guide without direct database repair.
 
 \begin{claims}
@@ -518,7 +589,8 @@ cross-product account linking on explicit, granular, revocable consent.
 \begin{itemize}
     \item Bank-account replacement, full account management, and detailed
     erasure policy.
-    \item Independent-provider federation and full SMTP relay operations.
+    \item Independent-provider federation and general email hosting.
+    \item Converting a guest into a member while keeping existing relationships.
     \item A full web inbox for members.
 \end{itemize}
 
@@ -535,7 +607,7 @@ Do not bypass signed execution, write canonical tables from a CLI, persist
 plaintext for convenience, hide an uncertain charge, add tests merely to
 accompany code, or weaken an existing check to finish a milestone. A domain change
 requires an explicit decision and a reviewed cutover. Scope does not expand to
-live value, federation, or a full SMTP relay because an adapter exists.
+live value, federation, or general email hosting because an adapter exists.
 
 If reconciliation fails, preserve the affected evidence and investigate the
 specific obligation. If secrets leak, stop accumulating affected data until the

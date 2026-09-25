@@ -35,6 +35,9 @@ not establish biological identity or satisfy Phoros's separate enrollment policy
   messages, relationship records, and telemetry.
 - Organizational legacy senders and possible future protocol participants do not
   establish organizational C-SQD accounts as part of this product.
+- Guests (people without an account who approach a member through the request
+  page or by email) are senders, not accounts. They do not enroll in the identity
+  service or receive a subject. See [Guest senders](#guest-senders).
 - Account actions require explicit account authority. Permission to send messages
   is not permission to change financial policy. Separate signing contexts do not
   require a second user-managed billing credential.
@@ -138,6 +141,41 @@ validity. Native correspondence enforces that permission across conversations.
 The Rust implementation uses checked class publications, immutable signed class
 snapshots, and atomic lane/settlement effects. See
 [implementation and cutover](docs/request-classes-implementation.md).
+
+## Guest senders
+
+A guest is a person without a cs-mail account who approaches a member by paying a
+request bond. Individuals use this path; organizations use the legacy-domain path.
+The full design is in [guest senders](docs/guest-sender-design.md).
+
+- A guest is identified by one verified mailbox and mapped at the edge to a
+  synthetic protocol identity, following the legacy-sender precedent. The request
+  kernel is unchanged. Lanes can name a guest mailbox as their subject.
+- Mailbox verification establishes control of the mailbox, not personhood. The
+  payment processor's instrument fingerprint is an anti-abuse signal, not an
+  identity claim.
+- Guest request history is grouped by both mailbox and payment fingerprint.
+  Evidence that links two histories merges them prospectively into the most
+  restrictive state. Several mailboxes and several payment instruments can still
+  produce separate histories; each approach still costs `C`.
+- A guest request has the same single conditional charge and settlement as any
+  request. Refunds return to the funding payment method. Forfeitures enter the
+  member pool; guests receive no distributions.
+- After acceptance, a guest communicates free and indefinitely, subject to the
+  recipient's block and revocation, by ordinary email in both directions. The
+  member's replies come from the member's protocol identity address. The guest's
+  inbound mail is admitted only with DMARC passing and an exact match to the
+  verified mailbox; a reply token alone is never sufficient.
+  A blocked or revoked guest's mail is rejected at the SMTP level. Automatic
+  replies go only to senders whose domain passes DMARC.
+- The recipient sees the guest's email address, and the guest is told so before
+  paying. Guest content is not end-to-end encrypted. Each member reply by email
+  requires that conversation's explicit downgrade consent.
+- Mailbox and payment-fingerprint evidence is retained indefinitely by default
+  and disclosed to the guest before payment. Outbound guest mail is sent through
+  an email delivery service, signed with the deployment domain's key; the member's
+  downgrade consent discloses that the service sees reply plaintext.
+- Converting a guest into a member while keeping relationships is deferred.
 
 ## Enforcement boundaries
 
