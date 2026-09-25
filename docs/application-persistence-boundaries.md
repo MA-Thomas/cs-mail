@@ -1,5 +1,7 @@
 # Application and persistence boundaries
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 The subsequent [product identity alignment](product-identity-model.md) introduces
 product-scoped durable login bindings and shared-enrollment schema version 2.
 The schema/version statements below describe the earlier application cutover.

@@ -1,5 +1,7 @@
 # Rust domain update — 2026-09-20
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 This change replaces the superseded interfaces and assumes fresh databases. It does
 not provide legacy provisioning, deserialization defaults for replaced records, or
 an upgrade migration for an existing deployment. Both sibling repositories must be

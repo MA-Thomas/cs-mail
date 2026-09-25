@@ -1,5 +1,7 @@
 # C-SQD domain model
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](docs/rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 Confirmed product rules, updated September 21, 2026. Start here when changing
 the code or documentation. These rules record the user's confirmed clarifications.
 The [deployment profile](cs_mail_deployment_profile.tex) gives the detailed

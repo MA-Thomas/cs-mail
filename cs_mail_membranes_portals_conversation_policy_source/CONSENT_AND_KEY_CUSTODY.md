@@ -1,5 +1,7 @@
 # Recoverable message access with scoped consent
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](../docs/rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 Product decision and implemented first slice, 2026-09-21. This supersedes the
 assumption that CSQD must be cryptographically incapable of decrypting ordinary
 cs-mail. The requirement is that decryption requires scoped user consent. These

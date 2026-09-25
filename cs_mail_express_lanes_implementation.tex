@@ -42,6 +42,9 @@ Bounded Communication}. The Rust grant API now coordinates lane permission
 with pending-request settlement; native correspondence enforces lane admission.}}
 \end{center}
 
+\medskip\noindent\fbox{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{\small\textbf{Design principles.} Before changing the implementation or this design, read the \href{docs/rust-domain-principles.md}{Rust-domain design principles} (\texttt{docs/rust-domain-principles.md}). They are binding for cs-mail and identity-model; new work must not regress them.}}\medskip
+
+
 \paragraph{Current account scope.}
 The current C-SQD product has one identifiable person per account, tied to a
 verified bank account, with multiple email addresses permitted. Organizational

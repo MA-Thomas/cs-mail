@@ -9,7 +9,9 @@ determines both future permission and settlement.
 
 ## Start here
 
-Read the **[C-SQD domain model](DOMAIN_MODEL.md)** first. It records the confirmed
+Before changing code or design, read the **[Rust-domain design principles](docs/rust-domain-principles.md)**. They are binding for cs-mail and identity-model; new work must not regress them.
+
+Then read the **[C-SQD domain model](DOMAIN_MODEL.md)**. It records the confirmed
 product rules and deferred decisions for future implementation and documentation.
 
 The documents have distinct roles:
@@ -24,8 +26,10 @@ The documents have distinct roles:
 4. **[Rust reference architecture](cs_mail_rust_reference_architecture.pdf)** —
    the implemented domain owners, pure transitions, durable transactions, and
    recoverable external work.
-5. **[Desktop MVP build plan](cs_mail_desktop_mvp_build_plan.pdf)** — product
-   milestones that build on the existing Rust libraries.
+5. **[Product build plan](cs_mail_build_plan.pdf)** — product milestones:
+   server and administration, the core request loop from a CLI, the guest
+   sender request page, the macOS member application, recovery, the annual
+   member cycle, and the pilot.
 6. **[Express-lane memo](cs_mail_express_lanes.pdf)** — a worked introduction to
    bounded relationship permission for people and organizations.
 7. **[Express-lane implementation plan](cs_mail_express_lanes_implementation.pdf)** —
@@ -272,7 +276,7 @@ latexmk -pdf cs_mail_rust_reference_architecture.tex
 latexmk -pdf cs_mail_deployment_profile.tex
 latexmk -pdf cs_mail_express_lanes.tex
 latexmk -pdf cs_mail_express_lanes_implementation.tex
-latexmk -pdf cs_mail_desktop_mvp_build_plan.tex
+latexmk -pdf cs_mail_build_plan.tex
 ```
 
 Generated auxiliary files can be removed with `latexmk -c`. Root-level PDFs are

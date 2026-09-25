@@ -1,5 +1,7 @@
 # Request classes and lane acceptance
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 Recipients publish up to eight of their own classes. No purpose taxonomy is
 hard-coded. A class has a stable `RequestClassId`, user-authored description, and
 collateral selected from the operator's menu; the operator still sets `C`.

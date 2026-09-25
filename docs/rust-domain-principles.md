@@ -1,5 +1,7 @@
 # Rust-domain design principles
 
+> A copy of this document is kept at `identity-model/docs/rust-domain-principles.md`. Keep the two in step; only their relative links differ.
+
 Shared architectural guidance for **cs-mail** and **identity-model**, agreed on
 2026-09-20. This is the canonical reference for the ten principles discussed
 during the refactoring review. These principles guide future work; they do not

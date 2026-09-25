@@ -2,6 +2,8 @@
 
 # Shared identity integration: stages 1–4
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 The normative version 1 protocol is owned by identity-model:
 [shared identity contract](../../identity-model/docs/shared-identity-contract.md).
 The [product identity model](product-identity-model.md) is the current source for

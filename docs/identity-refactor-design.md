@@ -2,6 +2,8 @@
 
 # Identity refactor decisions
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 The later [product identity alignment](product-identity-model.md) defines durable
 product logins, authentication methods and deferred Phoros subject adoption.
 
