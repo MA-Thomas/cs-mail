@@ -11,14 +11,19 @@ pub fn enroll(
     input: EnrollmentInput,
     at: CanonicalTime,
 ) -> Result<AccountId, StorageError> {
-    engine.accounts(move || at).configure_identity_service(
-        "https://identity.example.test",
-        "cs-mail/test",
-        SigningKey::from_bytes(&[80; 32]).verifying_key().to_bytes(),
-    )?;
+    engine
+        .deployment()
+        .accounts(move || at)
+        .configure_identity_service(
+            "https://identity.example.test",
+            "cs-mail/test",
+            SigningKey::from_bytes(&[80; 32]).verifying_key().to_bytes(),
+        )?;
     let operation = format!("fixture-account-{}", input.bank.account.0);
-    let p = cs_mail_application::accounts::AccountEnrollment::new(&engine.accounts(move || at))
-        .begin(&operation, &input)?;
+    let p = cs_mail_application::accounts::AccountEnrollment::new(
+        &engine.deployment().accounts(move || at),
+    )
+    .begin(&operation, &input)?;
     let decision = SignedDecision::sign(
         DecisionClaims {
             issuer: "https://identity.example.test".into(),
@@ -33,7 +38,7 @@ pub fn enroll(
         },
         &[80; 32],
     )?;
-    cs_mail_application::accounts::AccountEnrollment::new(&engine.accounts(move || at))
+    cs_mail_application::accounts::AccountEnrollment::new(&engine.deployment().accounts(move || at))
         .commit(&decision)
 }
 

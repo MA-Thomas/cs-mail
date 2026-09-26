@@ -94,24 +94,45 @@ fn serialized_requests_use_submission_terminology() {
     );
 }
 
-fn policy() -> PolicySnapshot {
-    PolicySnapshot {
-        selected_class: Some(
-            cs_mail_protocol::pricing::SelectedRequestClass::new(
-                cs_mail_primitives::RequestClassId(1),
-                "Test class".into(),
+fn pricing(version: u64, processing_charge: u64) -> pricing::RequestPricingPolicy {
+    pricing::RequestPricingPolicy::new(
+        PolicyVersion(version),
+        SettlementUnit(1),
+        Money::from_minor_units(processing_charge),
+        Money::from_minor_units(1),
+        Money::from_minor_units(1000),
+    )
+    .unwrap()
+}
+/// Trusted harness pricing: `C = 2`; recipient 20 publishes class 1 with `S = 8`.
+fn priced(store: &cs_mail_application::InMemoryStore) {
+    store.configure_request_pricing(pricing(1, 2)).unwrap();
+    store
+        .configure_request_classes(
+            pricing::RecipientRequestClasses::new(
+                ProtocolIdentity(20),
+                1,
+                vec![
+                    pricing::RequestClass::new(
+                        RequestClassId(1),
+                        "Test class".into(),
+                        Money::from_minor_units(8),
+                    )
+                    .unwrap(),
+                ],
             )
             .unwrap(),
-        ),
-        pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
+        )
+        .unwrap();
+}
+fn policy() -> PolicySnapshot {
+    PolicySnapshot {
         protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
         privacy_profile_version: PrivacyProfileVersion(1),
         retention_policy_version: RetentionPolicyVersion(1),
         recipient_provider: ProviderRef(30),
         unit: SettlementUnit(1),
-        processing_charge: Money::from_minor_units(2),
-        collateral: Money::from_minor_units(8),
         submission_window: Duration(10),
         decision_window: Duration(50),
         quote_lifetime: Duration(20),
@@ -141,7 +162,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        Self {
+        let fixture = Self {
             engine: InMemoryEngine::new(
                 ProtocolState::initial(
                     PrincipalRef(1),
@@ -162,7 +183,9 @@ impl Fixture {
             provider: SimulatedProcessor::new([7; 32]),
             policy: policy(),
             next_key: 1,
-        }
+        };
+        priced(fixture.engine.store());
+        fixture
     }
     fn execute(
         &mut self,
@@ -352,7 +375,10 @@ fn submission_requires_verified_capture_and_policy_changes_do_not_reprice() {
         Err(EngineError::Protocol(ProtocolError::PaymentNotConfirmed))
     ));
     f.policy.policy_version = PolicyVersion(2);
-    f.policy.processing_charge = Money::from_minor_units(900);
+    f.engine
+        .store()
+        .configure_request_pricing(pricing(2, 900))
+        .unwrap();
     f.policy.backoff = vec![Duration(0), Duration(900)];
     f.payment(1, false, 2);
     f.submit(1, 3).unwrap();
@@ -865,6 +891,7 @@ fn aliases() -> (Fixture, Fixture) {
         [9; 32],
         cs_mail_primitives::ProtocolVersion(2),
     ));
+    priced(&store);
     let make = |sender| Fixture {
         engine: store
             .register(
@@ -1116,6 +1143,7 @@ fn initial_message_refusal_cancels_request_submission_with_void_or_full_refund()
             protocol_version: ProtocolVersion(2),
             policy: f.policy,
             admission: Err(AdmissionFailure::UnsupportedCriticalExtension),
+            pricing: pricing::QuotePricing::NotRequested,
         };
         let manifest = transition(&snapshot, &command, &context).unwrap();
         assert!(matches!(
@@ -1187,6 +1215,7 @@ fn refused_followup_preserves_request_awaiting_decision_and_its_finances() {
         protocol_version: ProtocolVersion(2),
         policy: f.policy,
         admission: Err(AdmissionFailure::UnsupportedCriticalExtension),
+        pricing: pricing::QuotePricing::NotRequested,
     };
     assert_eq!(
         transition(&before, &command, &context),

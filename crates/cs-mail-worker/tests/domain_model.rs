@@ -5,7 +5,7 @@ use cs_mail_finance::*;
 use cs_mail_primitives::*;
 use cs_mail_protocol::{ActorRef, ProtocolState};
 use cs_mail_security::KeyRegistry;
-use cs_mail_storage_postgres::PostgresEngine;
+use cs_mail_storage_postgres::{PostgresDeployment, PostgresEngine};
 use cs_mail_worker::{
     run_annual_distribution_batch, run_member_payment_batch, run_utility_payment_batch,
 };
@@ -50,11 +50,16 @@ fn setup() -> (String, PostgresEngine) {
         ProtocolIdentity(20),
         at(2025, 1, 1),
     );
-    let engine = PostgresEngine::connect(&url, "domain", &state, SettlementUnit(1)).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship("domain", &state, SettlementUnit(1))
+        .unwrap();
     engine
+        .deployment()
         .configure_payment_arrangement(scope(), SettlementUnit(1), key(7), key(77))
         .unwrap();
     engine
+        .deployment()
         .configure_financial_program(scope(), SettlementUnit(1), key(42), key(7))
         .unwrap();
     engine
@@ -97,7 +102,10 @@ fn account_command(
     id: u128,
     time: CanonicalTime,
 ) -> Vec<PaymentOperation> {
-    let account = engine.billing_account(BillingAccountId(1)).unwrap();
+    let account = engine
+        .deployment()
+        .billing_account(BillingAccountId(1))
+        .unwrap();
     let signed = SignedBillingCommand::sign(
         account.id(),
         OperationalKeyRef(1),
@@ -108,7 +116,7 @@ fn account_command(
         &[1; 32],
     )
     .unwrap();
-    cs_mail_application::billing::operations::BillingService::new(engine, &|| time)
+    cs_mail_application::billing::operations::BillingService::new(engine.deployment(), &|| time)
         .execute_command(&signed)
         .unwrap()
 }
@@ -119,6 +127,7 @@ fn program_command(
     time: CanonicalTime,
 ) {
     let revision = engine
+        .deployment()
         .financial_program(SettlementUnit(1))
         .unwrap()
         .revision();
@@ -131,7 +140,10 @@ fn program_command(
         &[42; 32],
     )
     .unwrap();
-    engine.execute_financial_command(&signed, time).unwrap();
+    engine
+        .deployment()
+        .execute_financial_command(&signed, time)
+        .unwrap();
 }
 fn offer(version: u64, year: u16) -> ServiceOffer {
     ServiceOffer::new(
@@ -147,8 +159,9 @@ fn offer(version: u64, year: u16) -> ServiceOffer {
 #[ignore = "requires isolated PostgreSQL"]
 fn collection_is_advance_fixed_and_rechecks_a_queued_source() {
     let (_url, engine) = setup();
+    let deployment = engine.deployment();
     for (v, y) in [(1, 2026), (2, 2027)] {
-        engine.publish_service_offer(&offer(v, y)).unwrap();
+        deployment.publish_service_offer(&offer(v, y)).unwrap();
     }
     let first = account_command(
         &engine,
@@ -171,14 +184,14 @@ fn collection_is_advance_fixed_and_rechecks_a_queued_source() {
     let mut processor = SimulatedProcessor::new([7; 32]);
     let lease = Duration(30_000);
     assert_eq!(
-        run_utility_payment_batch(&engine, &mut processor, &|| at(2025, 9, 30), lease, 10)
+        run_utility_payment_batch(deployment, &mut processor, &|| at(2025, 9, 30), lease, 10)
             .unwrap()
             .claimed,
         0
     );
     processor.pend_next_submission();
     assert_eq!(
-        run_utility_payment_batch(&engine, &mut processor, &|| at(2025, 10, 1), lease, 10)
+        run_utility_payment_batch(deployment, &mut processor, &|| at(2025, 10, 1), lease, 10)
             .unwrap()
             .retried,
         1
@@ -186,13 +199,14 @@ fn collection_is_advance_fixed_and_rechecks_a_queued_source() {
     processor
         .resolve(first.id, FinancialEventId(900), PaymentOutcome::Failed)
         .unwrap();
-    run_utility_payment_batch(&engine, &mut processor, &|| at(2025, 10, 2), lease, 10).unwrap();
+    run_utility_payment_batch(deployment, &mut processor, &|| at(2025, 10, 2), lease, 10).unwrap();
     let report =
-        run_utility_payment_batch(&engine, &mut processor, &|| at(2026, 10, 1), lease, 10).unwrap();
+        run_utility_payment_batch(deployment, &mut processor, &|| at(2026, 10, 1), lease, 10)
+            .unwrap();
     assert_eq!(report.retried, 1);
     assert_eq!(processor.operation_count(), 1);
     assert!(processor.lookup(second.id).unwrap().is_none());
-    cs_mail_application::billing::operations::BillingService::new(&engine, &|| at(2025, 1, 1))
+    cs_mail_application::billing::operations::BillingService::new(deployment, &|| at(2025, 1, 1))
         .reverify_funding(&bank(1, 2))
         .unwrap();
     let retry = account_command(
@@ -205,8 +219,8 @@ fn collection_is_advance_fixed_and_rechecks_a_queued_source() {
     )
     .remove(0);
     assert_ne!(retry.id, first.id);
-    run_utility_payment_batch(&engine, &mut processor, &|| at(2026, 11, 1), lease, 10).unwrap();
-    let account = engine.billing_account(BillingAccountId(1)).unwrap();
+    run_utility_payment_batch(deployment, &mut processor, &|| at(2026, 11, 1), lease, 10).unwrap();
+    let account = deployment.billing_account(BillingAccountId(1)).unwrap();
     assert_eq!(
         account.contracts()[&ServiceContractId(first.id.0)]
             .offer()
@@ -239,10 +253,11 @@ fn bank_identity_and_account_authority_cannot_be_substituted() {
     );
     assert!(
         engine
+            .deployment()
             .configure_payment_arrangement(scope(), SettlementUnit(1), key(8), key(77))
             .is_err()
     );
-    let repository = engine.accounts(|| at(2025, 2, 1));
+    let repository = engine.deployment().accounts(|| at(2025, 2, 1));
     let product = repository.persona_account(ProtocolIdentity(10)).unwrap();
     let signed = cs_mail_accounts::control::SignedAccountCommand {
         account: product,
@@ -287,6 +302,7 @@ fn bank_identity_and_account_authority_cannot_be_substituted() {
     .unwrap();
     assert!(
         engine
+            .deployment()
             .execute_financial_command(&ghost, at(2025, 2, 1))
             .is_err()
     );
@@ -294,7 +310,10 @@ fn bank_identity_and_account_authority_cannot_be_substituted() {
 /// Fixture setup only: the pool contains a matured, unassessed $170 forfeiture.
 /// Allocation, scheduling, payment and reconciliation below use production entry points.
 fn seed_pool(url: &str, engine: &PostgresEngine) {
-    let mut program = engine.financial_program(SettlementUnit(1)).unwrap();
+    let mut program = engine
+        .deployment()
+        .financial_program(SettlementUnit(1))
+        .unwrap();
     program
         .record_forfeiture(
             Forfeiture {
@@ -399,7 +418,10 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
         start,
     );
     seed_pool(&url, &engine);
-    engine.publish_service_offer(&offer(1, 2026)).unwrap();
+    engine
+        .deployment()
+        .publish_service_offer(&offer(1, 2026))
+        .unwrap();
     account_command(
         &engine,
         BillingCommand::PurchaseService {
@@ -410,17 +432,32 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
     );
     let mut processor = SimulatedProcessor::new([7; 32]);
     let lease = Duration(30_000);
-    run_utility_payment_batch(&engine, &mut processor, &|| at(2025, 10, 1), lease, 10).unwrap();
+    run_utility_payment_batch(
+        engine.deployment(),
+        &mut processor,
+        &|| at(2025, 10, 1),
+        lease,
+        10,
+    )
+    .unwrap();
     assert!(
         !engine
+            .deployment()
             .billing_account(BillingAccountId(1))
             .unwrap()
             .covers(at(2025, 10, 1))
     );
-    run_annual_distribution_batch(&engine, SettlementUnit(1), &|| at(2026, 1, 1), lease, 10)
-        .unwrap();
+    run_annual_distribution_batch(
+        engine.deployment(),
+        SettlementUnit(1),
+        &|| at(2026, 1, 1),
+        lease,
+        10,
+    )
+    .unwrap();
     assert!(
         engine
+            .deployment()
             .financial_program(SettlementUnit(1))
             .unwrap()
             .payables()
@@ -429,7 +466,7 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
             .payment()
             .is_none()
     );
-    let repository = engine.accounts(|| at(2026, 2, 1));
+    let repository = engine.deployment().accounts(|| at(2026, 2, 1));
     let product = repository.persona_account(ProtocolIdentity(10)).unwrap();
     let product_name = repository
         .product_account(product)
@@ -453,8 +490,12 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
             .unwrap(),
         )
         .unwrap();
-    run_annual_distribution_batch(&engine, SettlementUnit(1), &|| due, lease, 10).unwrap();
-    let program = engine.financial_program(SettlementUnit(1)).unwrap();
+    run_annual_distribution_batch(engine.deployment(), SettlementUnit(1), &|| due, lease, 10)
+        .unwrap();
+    let program = engine
+        .deployment()
+        .financial_program(SettlementUnit(1))
+        .unwrap();
     let payable = program.payables().next().unwrap();
     let op = payable.pending().next().unwrap();
     assert_eq!(op.amount, Money::from_minor_units(17000));
@@ -463,9 +504,16 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
     assert_eq!(payable.excess(), Money::from_minor_units(5000));
     processor.lose_next_response();
     assert_eq!(
-        run_member_payment_batch(&engine, &mut processor, SettlementUnit(1), due, lease, 10)
-            .unwrap()
-            .retried,
+        run_member_payment_batch(
+            engine.deployment(),
+            &mut processor,
+            SettlementUnit(1),
+            due,
+            lease,
+            10
+        )
+        .unwrap()
+        .retried,
         1
     );
     drop(engine);
@@ -476,10 +524,13 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
         ProtocolIdentity(20),
         at(2025, 1, 1),
     );
-    let engine = PostgresEngine::connect(&url, "domain", &state, SettlementUnit(1)).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship("domain", &state, SettlementUnit(1))
+        .unwrap();
     assert_eq!(
         run_member_payment_batch(
-            &engine,
+            engine.deployment(),
             &mut processor,
             SettlementUnit(1),
             at(2026, 3, 2),
@@ -492,6 +543,7 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
     );
     assert_eq!(processor.operation_count(), 2);
     let statement = engine
+        .deployment()
         .financial_program(SettlementUnit(1))
         .unwrap()
         .member_statement(MemberId(1));

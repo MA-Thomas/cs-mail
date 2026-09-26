@@ -54,7 +54,7 @@ impl NativeClient {
     /// Requires a recipient signer and a valid preference version.
     pub fn sign_request_classes(
         &self,
-        scope: SigningScope,
+        scope: cs_mail_security::RecipientSigningScope,
         classes: cs_mail_protocol::pricing::RecipientRequestClasses,
     ) -> Result<cs_mail_security::SignedRequestClasses, SecurityError> {
         self.command_signer.sign_request_classes(scope, classes)

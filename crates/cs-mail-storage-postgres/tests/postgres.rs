@@ -27,7 +27,10 @@ use cs_mail_protocol::{
 use cs_mail_security::{
     CommandSigner, KeyRegistry, ProviderSigner, SignedCommandBytes, SigningScope,
 };
-use cs_mail_storage_postgres::{DurableExecutionOutcome, PostgresEngine, StorageError};
+use cs_mail_storage_postgres::{
+    DurableExecutionOutcome, PostgresDeployment, PostgresEngine, RelationshipQueue, StorageError,
+    WorkClaims,
+};
 use ed25519_dalek::{Signer, SigningKey};
 
 const SENDER: ProtocolIdentity = ProtocolIdentity(10);
@@ -76,22 +79,12 @@ fn state(attempt_seed: u128) -> ProtocolState {
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
-        selected_class: Some(
-            cs_mail_protocol::pricing::SelectedRequestClass::new(
-                cs_mail_primitives::RequestClassId(1),
-                "Test class".into(),
-            )
-            .unwrap(),
-        ),
-        pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
         protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
         privacy_profile_version: PrivacyProfileVersion(1),
         retention_policy_version: RetentionPolicyVersion(1),
         recipient_provider: PROVIDER,
         unit: UNIT,
-        processing_charge: Money::from_minor_units(2),
-        collateral: Money::from_minor_units(8),
         submission_window: Duration(10),
         decision_window: Duration(50),
         quote_lifetime: Duration(20),
@@ -225,7 +218,10 @@ fn native_declarations() -> MessageDeclarations {
 fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
     let url = database_url();
     let key = aggregate_key("durable");
-    let engine = PostgresEngine::connect(&url, &key, &state(1), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(1), UNIT)
+        .unwrap();
     let issued = engine
         .execute(
             sender(
@@ -316,7 +312,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
 
     let claimed = engine
         .claim_work(
-            cs_mail_storage_postgres::WorkQueue::Delivery,
+            cs_mail_storage_postgres::RelationshipQueue::Delivery,
             test_time(4),
             Duration(10),
             10,
@@ -332,7 +328,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
     assert!(
         engine
             .claim_work(
-                cs_mail_storage_postgres::WorkQueue::Delivery,
+                cs_mail_storage_postgres::RelationshipQueue::Delivery,
                 test_time(5),
                 Duration(10),
                 10
@@ -342,7 +338,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
     );
     let reclaimed = engine
         .claim_work(
-            cs_mail_storage_postgres::WorkQueue::Delivery,
+            cs_mail_storage_postgres::RelationshipQueue::Delivery,
             test_time(14),
             Duration(10),
             10,
@@ -352,7 +348,10 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
     assert!(engine.complete_work(&reclaimed[0], test_time(15)).unwrap());
 
     drop(engine);
-    let reopened = PostgresEngine::connect(&url, &key, &state(1), UNIT).unwrap();
+    let reopened = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(1), UNIT)
+        .unwrap();
     let before_acceptance = reopened.snapshot().unwrap();
     assert!(matches!(
         before_acceptance.state.requests[&RequestId(1)].lifecycle,
@@ -398,7 +397,10 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
 #[allow(clippy::too_many_lines)]
 fn admission_requires_durable_correctly_scoped_ciphertext() {
     let url = database_url();
-    let engine = PostgresEngine::connect(&url, aggregate_key("content"), &state(2), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(aggregate_key("content"), &state(2), UNIT)
+        .unwrap();
     let terms = match engine
         .execute(
             sender(
@@ -507,8 +509,14 @@ fn admission_requires_durable_correctly_scoped_ciphertext() {
 fn database_row_lock_serializes_conflicting_decisions() {
     let url = database_url();
     let key = aggregate_key("race");
-    let first = PostgresEngine::connect(&url, &key, &state(3), UNIT).unwrap();
-    let second = PostgresEngine::connect(&url, &key, &state(3), UNIT).unwrap();
+    let first = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(3), UNIT)
+        .unwrap();
+    let second = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(3), UNIT)
+        .unwrap();
     let accept = thread::spawn(move || {
         first.execute(
             recipient(
@@ -552,7 +560,10 @@ fn database_row_lock_serializes_conflicting_decisions() {
 #[allow(clippy::too_many_lines)]
 fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
     let url = database_url();
-    let engine = PostgresEngine::connect(&url, aggregate_key("lane"), &state(4), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(aggregate_key("lane"), &state(4), UNIT)
+        .unwrap();
     let recipient_signing = SigningKey::from_bytes(&[2; 32]);
     let grant = LaneGrant {
         id: LaneId(90),
@@ -752,13 +763,14 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
 fn exercise_lane_settlement(signed: &SignedLaneGrant) {
     for situation in 0..4 {
         let url = database_url();
-        let engine = PostgresEngine::connect(
-            &url,
-            aggregate_key("lane-settlement"),
-            &state(900 + situation),
-            UNIT,
-        )
-        .unwrap();
+        let engine = PostgresDeployment::connect(&url)
+            .unwrap()
+            .relationship(
+                aggregate_key("lane-settlement"),
+                &state(900 + situation),
+                UNIT,
+            )
+            .unwrap();
         if situation == 0 {
             prepare_request_submission(&engine, 1);
             confirm_capture(&engine, RequestId(1), 2);
@@ -964,7 +976,11 @@ fn financial_command(
     command: cs_mail_finance::ProgramCommand,
     at: CanonicalTime,
 ) -> cs_mail_finance::ProgramOutcome {
-    let revision = engine.financial_program(UNIT).unwrap().revision();
+    let revision = engine
+        .deployment()
+        .financial_program(UNIT)
+        .unwrap()
+        .revision();
     let signed = cs_mail_finance::SignedProgramCommand::sign(
         cs_mail_finance::FinancialScope::new(
             [7; 32],
@@ -980,7 +996,10 @@ fn financial_command(
         &[42; 32],
     )
     .unwrap();
-    engine.execute_financial_command(&signed, at).unwrap()
+    engine
+        .deployment()
+        .execute_financial_command(&signed, at)
+        .unwrap()
 }
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
@@ -993,11 +1012,15 @@ fn forfeiture_and_allocation_survive_reconnect() {
     use cs_mail_primitives::{FinancialEventId, MemberId};
     let url = database_url();
     let key = aggregate_key("finance");
-    let engine = PostgresEngine::connect(&url, &key, &state(90), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(90), UNIT)
+        .unwrap();
     support::arrangement(&engine, &policy()).unwrap();
     let provider = SimulatedProcessor::new([7; 32]);
     support::arrangement(&engine, &policy()).unwrap();
     engine
+        .deployment()
         .configure_financial_program(
             cs_mail_finance::FinancialScope::new(
                 [7; 32],
@@ -1069,6 +1092,7 @@ fn forfeiture_and_allocation_survive_reconnect() {
             ProgramCommand::Enroll {
                 member: MemberId(member),
                 identity_digest: engine
+                    .deployment()
                     .accounts(|| cs_mail_primitives::CanonicalTime(0))
                     .product_account(account_id)
                     .unwrap()
@@ -1082,7 +1106,11 @@ fn forfeiture_and_allocation_survive_reconnect() {
             test_time(0),
         );
     }
-    let revision = engine.financial_program(UNIT).unwrap().revision();
+    let revision = engine
+        .deployment()
+        .financial_program(UNIT)
+        .unwrap()
+        .revision();
     let unauthorized = SignedProgramCommand::sign(
         cs_mail_finance::FinancialScope::new(
             [7; 32],
@@ -1100,10 +1128,18 @@ fn forfeiture_and_allocation_survive_reconnect() {
     .unwrap();
     assert!(
         engine
+            .deployment()
             .execute_financial_command(&unauthorized, schedule.cutoff)
             .is_err()
     );
-    assert_eq!(engine.financial_program(UNIT).unwrap().revision(), revision);
+    assert_eq!(
+        engine
+            .deployment()
+            .financial_program(UNIT)
+            .unwrap()
+            .revision(),
+        revision
+    );
     submit_initial_request(&engine);
     engine
         .execute(
@@ -1122,6 +1158,7 @@ fn forfeiture_and_allocation_survive_reconnect() {
         .id;
     assert_eq!(
         engine
+            .deployment()
             .financial_program(UNIT)
             .unwrap()
             .ledger()
@@ -1146,7 +1183,11 @@ fn forfeiture_and_allocation_survive_reconnect() {
             test_time(DAY_MILLIS),
         );
     }
-    let revision = engine.financial_program(UNIT).unwrap().revision();
+    let revision = engine
+        .deployment()
+        .financial_program(UNIT)
+        .unwrap()
+        .revision();
     let finalize = SignedProgramCommand::sign(
         cs_mail_finance::FinancialScope::new(
             [7; 32],
@@ -1163,6 +1204,7 @@ fn forfeiture_and_allocation_survive_reconnect() {
     )
     .unwrap();
     let outcome = engine
+        .deployment()
         .execute_financial_command(&finalize, schedule.cutoff)
         .unwrap();
     let ProgramOutcome::AnnualAllocation(ref allocation) = outcome else {
@@ -1171,15 +1213,19 @@ fn forfeiture_and_allocation_survive_reconnect() {
     assert_eq!(allocation.each, Money::from_minor_units(4));
     assert_eq!(allocation.members, vec![MemberId(1), MemberId(2)]);
     drop(engine);
-    let engine = PostgresEngine::connect(&url, &key, &state(90), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(90), UNIT)
+        .unwrap();
     support::arrangement(&engine, &policy()).unwrap();
     assert_eq!(
         engine
+            .deployment()
             .execute_financial_command(&finalize, schedule.cutoff)
             .unwrap(),
         outcome
     );
-    let program = engine.financial_program(UNIT).unwrap();
+    let program = engine.deployment().financial_program(UNIT).unwrap();
     assert_eq!(program.payables().count(), 2);
     assert_eq!(program.ledger().total_value(), Ok(Money::ZERO));
 }
@@ -1192,10 +1238,17 @@ fn concurrent_distribution_finalization_records_one_allocation() {
     };
     let url = database_url();
     let key = aggregate_key("distribution-race");
-    let first = PostgresEngine::connect(&url, &key, &state(100), UNIT).unwrap();
-    let second = PostgresEngine::connect(&url, &key, &state(100), UNIT).unwrap();
+    let first = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(100), UNIT)
+        .unwrap();
+    let second = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(100), UNIT)
+        .unwrap();
     support::arrangement(&first, &policy()).unwrap();
     first
+        .deployment()
         .configure_financial_program(
             cs_mail_finance::FinancialScope::new(
                 [7; 32],
@@ -1229,7 +1282,11 @@ fn concurrent_distribution_finalization_records_one_allocation() {
         ProgramCommand::PublishAnnualDistribution(schedule.clone()),
         test_time(0),
     );
-    let revision = first.financial_program(UNIT).unwrap().revision();
+    let revision = first
+        .deployment()
+        .financial_program(UNIT)
+        .unwrap()
+        .revision();
     let command = SignedProgramCommand::sign(
         cs_mail_finance::FinancialScope::new(
             [7; 32],
@@ -1247,12 +1304,23 @@ fn concurrent_distribution_finalization_records_one_allocation() {
     .unwrap();
     let other = command.clone();
     let cutoff = schedule.cutoff;
-    let a = thread::spawn(move || first.execute_financial_command(&command, cutoff));
-    let b = thread::spawn(move || second.execute_financial_command(&other, cutoff));
+    let a = thread::spawn(move || {
+        first
+            .deployment()
+            .execute_financial_command(&command, cutoff)
+    });
+    let b = thread::spawn(move || {
+        second
+            .deployment()
+            .execute_financial_command(&other, cutoff)
+    });
     let results = [a.join().unwrap().unwrap(), b.join().unwrap().unwrap()];
     assert_eq!(results[0], results[1]);
-    let reopened = PostgresEngine::connect(&url, &key, &state(100), UNIT).unwrap();
-    let program = reopened.financial_program(UNIT).unwrap();
+    let reopened = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(100), UNIT)
+        .unwrap();
+    let program = reopened.deployment().financial_program(UNIT).unwrap();
     assert_eq!(program.revision(), revision + 1);
     assert!(program.distribution(schedule.id).is_some());
 }
@@ -1262,7 +1330,10 @@ fn concurrent_distribution_finalization_records_one_allocation() {
 fn domain_owners_are_separate_and_history_survives_alias_registration() {
     let url = database_url();
     let key = aggregate_key("domain-owners");
-    let first = PostgresEngine::connect(&url, &key, &state(500), UNIT).unwrap();
+    let first = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(500), UNIT)
+        .unwrap();
     support::provision(&first, &policy(), registry(), SENDER, test_time(0)).unwrap();
     submit_initial_request(&first);
     let alias = ProtocolState::initial_scoped(
@@ -1272,7 +1343,10 @@ fn domain_owners_are_separate_and_history_survives_alias_registration() {
         RECIPIENT,
         test_time(10),
     );
-    let second = PostgresEngine::connect(&url, aggregate_key("alias"), &alias, UNIT).unwrap();
+    let second = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(aggregate_key("alias"), &alias, UNIT)
+        .unwrap();
     assert_eq!(
         second.snapshot().unwrap().history,
         first.snapshot().unwrap().history
@@ -1296,7 +1370,10 @@ fn domain_owners_are_separate_and_history_survives_alias_registration() {
     assert!(state["requests"]["1"].get("capture").is_none());
     let original = first.snapshot().unwrap();
     drop(first);
-    let reopened = PostgresEngine::connect(&url, &key, &crate::state(500), UNIT).unwrap();
+    let reopened = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &crate::state(500), UNIT)
+        .unwrap();
     assert_eq!(reopened.snapshot().unwrap(), original);
     assert_eq!(original.messages.len(), 1);
     assert_eq!(original.payments.len(), 1);
@@ -1339,7 +1416,10 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
     use sha2::Digest;
     let url = database_url();
     let key = aggregate_key("received-order");
-    let engine = PostgresEngine::connect(&url, &key, &state(90), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(90), UNIT)
+        .unwrap();
     support::arrangement(&engine, &policy()).unwrap();
     submit_initial_request(&engine);
     let scheduler = command_signer(ActorRef::Scheduler(PROVIDER), OperationalKeyRef(4), 4);
@@ -1366,9 +1446,11 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
     );
     // Revocation affects new receipts; accepted commands retain their frozen authority.
     engine
+        .deployment()
         .accounts(|| cs_mail_primitives::CanonicalTime(0))
         .revoke_account_key(
             engine
+                .deployment()
                 .accounts(|| cs_mail_primitives::CanonicalTime(0))
                 .persona_account(RECIPIENT)
                 .unwrap(),
@@ -1397,7 +1479,10 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
         .unwrap();
     assert!(handle.position() < expired.position());
     drop(engine);
-    let reopened = PostgresEngine::connect(&url, &key, &state(90), UNIT).unwrap();
+    let reopened = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(90), UNIT)
+        .unwrap();
     // Processing the later handle must apply the earlier receipt first.
     let outcome = reopened.process_received(&expired).unwrap();
     assert!(
@@ -1448,8 +1533,10 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_receipts() {
     let url = database_url();
-    let engine =
-        PostgresEngine::connect(&url, aggregate_key("revocation"), &state(91), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(aggregate_key("revocation"), &state(91), UNIT)
+        .unwrap();
     support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
     engine
         .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
@@ -1464,9 +1551,11 @@ fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_recei
         .verify(&command, test_time(1), ProtocolVersion(2), signing_scope())
         .unwrap();
     engine
+        .deployment()
         .accounts(|| cs_mail_primitives::CanonicalTime(0))
         .revoke_account_key(
             engine
+                .deployment()
                 .accounts(|| cs_mail_primitives::CanonicalTime(0))
                 .persona_account(RECIPIENT)
                 .unwrap(),
@@ -1521,9 +1610,10 @@ fn policy_change_after_upload_cancels_submission_with_void_or_full_refund() {
     use cs_mail_protocol::admission::{AdmissionFailure, AdmissionPolicy};
     for captured in [false, true] {
         let url = database_url();
-        let engine =
-            PostgresEngine::connect(&url, aggregate_key("policy-change"), &state(92), UNIT)
-                .unwrap();
+        let engine = PostgresDeployment::connect(&url)
+            .unwrap()
+            .relationship(aggregate_key("policy-change"), &state(92), UNIT)
+            .unwrap();
         let supported = AdmissionPolicy {
             version: Version(1),
             supported_critical_schemas: std::collections::BTreeSet::from([
@@ -1683,8 +1773,10 @@ fn policy_change_after_upload_cancels_submission_with_void_or_full_refund() {
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 fn issued_quote_remains_bound_to_its_original_signing_authority() {
     let url = database_url();
-    let engine =
-        PostgresEngine::connect(&url, aggregate_key("quote-authority"), &state(93), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(aggregate_key("quote-authority"), &state(93), UNIT)
+        .unwrap();
     let issued = engine
         .execute(
             sender(
@@ -1789,19 +1881,35 @@ fn prepare_request_submission(engine: &PostgresEngine, id: u128) {
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 fn reclaimed_work_fences_stale_completion_retry_and_foreign_engines() {
-    use cs_mail_storage_postgres::{WorkFailure, WorkQueue};
+    use cs_mail_storage_postgres::WorkFailure;
     let url = database_url();
     let key = aggregate_key("fencing");
-    let engine = PostgresEngine::connect(&url, &key, &state(200), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(200), UNIT)
+        .unwrap();
     prepare_request_submission(&engine, 1);
     let old = engine
-        .claim_work(WorkQueue::RequestPayments, test_time(3), Duration(10), 1)
+        .claim_work(
+            RelationshipQueue::RequestPayments,
+            test_time(3),
+            Duration(10),
+            1,
+        )
         .unwrap()
         .remove(0);
     drop(engine);
-    let engine = PostgresEngine::connect(&url, &key, &state(200), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(200), UNIT)
+        .unwrap();
     let new = engine
-        .claim_work(WorkQueue::RequestPayments, test_time(13), Duration(10), 1)
+        .claim_work(
+            RelationshipQueue::RequestPayments,
+            test_time(13),
+            Duration(10),
+            1,
+        )
         .unwrap()
         .remove(0);
     assert_eq!(old.id, new.id);
@@ -1815,8 +1923,10 @@ fn reclaimed_work_fences_stale_completion_retry_and_foreign_engines() {
     let mut other_state = state(201);
     other_state.relationship.key.reference = RelationshipRef::from_u128_for_test(999);
     other_state.relationship.key.sender = ProtocolIdentity(999);
-    let other =
-        PostgresEngine::connect(&url, aggregate_key("foreign"), &other_state, UNIT).unwrap();
+    let other = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(aggregate_key("foreign"), &other_state, UNIT)
+        .unwrap();
     assert!(!other.complete_work(&new, test_time(14)).unwrap());
     assert!(
         engine
@@ -1825,17 +1935,27 @@ fn reclaimed_work_fences_stale_completion_retry_and_foreign_engines() {
     );
     assert!(
         engine
-            .claim_work(WorkQueue::RequestPayments, test_time(100), Duration(10), 1)
+            .claim_work(
+                RelationshipQueue::RequestPayments,
+                test_time(100),
+                Duration(10),
+                1
+            )
             .unwrap()
             .is_empty()
     );
     assert!(
         engine
-            .resume_work(WorkQueue::RequestPayments, new.id, test_time(100))
+            .resume_work(RelationshipQueue::RequestPayments, new.id, test_time(100))
             .unwrap()
     );
     let resumed = engine
-        .claim_work(WorkQueue::RequestPayments, test_time(100), Duration(10), 1)
+        .claim_work(
+            RelationshipQueue::RequestPayments,
+            test_time(100),
+            Duration(10),
+            1,
+        )
         .unwrap()
         .remove(0);
     assert!(engine.complete_work(&resumed, test_time(101)).unwrap());
@@ -1846,10 +1966,13 @@ fn reclaimed_work_fences_stale_completion_retry_and_foreign_engines() {
 #[allow(clippy::too_many_lines)] // One end-to-end recovery sequence.
 fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
     use cs_mail_finance::PaymentProcessor;
-    use cs_mail_storage_postgres::{LifecyclePolicy, ReceivedOutcome, WorkQueue};
+    use cs_mail_storage_postgres::{LifecyclePolicy, ReceivedOutcome};
     let url = database_url();
     let key = aggregate_key("erasure");
-    let engine = PostgresEngine::connect(&url, &key, &state(202), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(202), UNIT)
+        .unwrap();
     engine
         .configure_lifecycle(&LifecyclePolicy {
             version: RetentionPolicyVersion(1),
@@ -1930,7 +2053,12 @@ fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
     );
     // All provider obligations are now completed; acknowledge the replay-safe leftover work.
     for item in engine
-        .claim_work(WorkQueue::RequestPayments, test_time(23), Duration(10), 100)
+        .claim_work(
+            RelationshipQueue::RequestPayments,
+            test_time(23),
+            Duration(10),
+            100,
+        )
         .unwrap()
     {
         engine.complete_work(&item, test_time(23)).unwrap();
@@ -1977,7 +2105,10 @@ fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
 fn ciphertext_retention_honors_extended_deadlines_and_scoped_holds() {
     let url = database_url();
     let key = aggregate_key("content-retention");
-    let engine = PostgresEngine::connect(&url, &key, &state(203), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(203), UNIT)
+        .unwrap();
     let (secret, _) = EndpointSecretKey::generate(ContentKeyRef(1));
     let (_, public) = EndpointSecretKey::generate(ContentKeyRef(2));
     let record = encrypt(
@@ -2042,7 +2173,10 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
     use cs_mail_storage_postgres::ReceivedOutcome;
     let url = database_url();
     let key = aggregate_key("atomic-work");
-    let engine = PostgresEngine::connect(&url, &key, &state(204), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(&key, &state(204), UNIT)
+        .unwrap();
     let issued = engine
         .execute(
             sender(
@@ -2115,8 +2249,10 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
 fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
     use cs_mail_storage_postgres::{LifecyclePolicy, ReceivedOutcome};
     let url = database_url();
-    let engine =
-        PostgresEngine::connect(&url, aggregate_key("quote-retention"), &state(205), UNIT).unwrap();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(aggregate_key("quote-retention"), &state(205), UNIT)
+        .unwrap();
     engine
         .configure_lifecycle(&LifecyclePolicy {
             version: RetentionPolicyVersion(1),
@@ -2169,147 +2305,465 @@ fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
     ));
 }
 
-#[test]
-#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
-#[allow(clippy::too_many_lines)] // Publication bounds, signatures and immutable quote evidence.
-fn recipient_pricing_is_signed_and_changes_only_new_quotes() {
-    use cs_mail_protocol::pricing::*;
-    let url = database_url();
-    let engine =
-        PostgresEngine::connect(&url, aggregate_key("pricing"), &state(902), UNIT).unwrap();
-    support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
-    engine
-        .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
-        .unwrap();
-    engine
-        .configure_request_pricing(&RequestPricingPolicy {
-            version: 2,
-            collateral_choices: vec![8, 100, 250, 500, 1000, 2500]
-                .into_iter()
-                .map(Money::from_minor_units)
+mod request_pricing {
+    //! Claims of `docs/request-pricing-design.md`, challenged against `PostgreSQL`.
+    use super::*;
+    use cs_mail_application::request_pricing::RequestPricingService;
+    use cs_mail_protocol::RequestTerms;
+    use cs_mail_protocol::pricing::{RecipientRequestClasses, RequestClass, RequestPricingPolicy};
+    use cs_mail_security::RecipientSigningScope;
+
+    const SIBLING: ProtocolIdentity = ProtocolIdentity(21);
+
+    fn operator_policy(version: u64, charge: u64, min: u64, max: u64) -> RequestPricingPolicy {
+        RequestPricingPolicy::new(
+            PolicyVersion(version),
+            UNIT,
+            Money::from_minor_units(charge),
+            Money::from_minor_units(min),
+            Money::from_minor_units(max),
+        )
+        .unwrap()
+    }
+    fn scope() -> RecipientSigningScope {
+        RecipientSigningScope {
+            deployment_domain: DEPLOYMENT_DOMAIN,
+            provider: PROVIDER,
+        }
+    }
+    fn classes(
+        recipient: ProtocolIdentity,
+        version: u64,
+        entries: &[(u128, &str, u64)],
+    ) -> RecipientRequestClasses {
+        RecipientRequestClasses::new(
+            recipient,
+            version,
+            entries
+                .iter()
+                .map(|(id, description, collateral)| {
+                    RequestClass::new(
+                        cs_mail_primitives::RequestClassId(*id),
+                        (*description).into(),
+                        Money::from_minor_units(*collateral),
+                    )
+                    .unwrap()
+                })
                 .collect(),
-            ..RequestPricingPolicy::default()
-        })
-        .unwrap();
-    // Claim: only recipient-authored, bounded publications can affect new quotes;
-    // changing their contents must not reinterpret old signed terms.
-    let publisher = command_signer(ActorRef::Recipient(RECIPIENT), OperationalKeyRef(2), 2);
-    let eight = (1..=8)
-        .map(|id| {
-            RequestClass::new(
-                cs_mail_primitives::RequestClassId(id),
-                format!("User invitation {id}"),
-                Money::from_minor_units(500),
-            )
-            .unwrap()
-        })
-        .collect::<Vec<_>>();
-    let publication = RecipientRequestClasses::new(RECIPIENT, 2, eight.clone()).unwrap();
-    let mut nine = eight;
-    nine.push(
-        RequestClass::new(
-            cs_mail_primitives::RequestClassId(9),
-            "Ninth".into(),
-            Money::from_minor_units(500),
         )
-        .unwrap(),
-    );
-    assert!(RecipientRequestClasses::new(RECIPIENT, 3, nine.clone()).is_err());
-    let invalid = serde_json::json!({"recipient": RECIPIENT, "version": 3, "classes": nine});
-    assert!(serde_json::from_value::<RecipientRequestClasses>(invalid).is_err());
-    cs_mail_application::request_classes::RequestClassesService::new(&engine)
-        .publish(
-            &publisher
-                .sign_request_classes(signing_scope(), publication)
-                .unwrap(),
-            &policy(),
-            || test_time(0),
-        )
-        .unwrap();
-    let before = engine
-        .execute(
+        .unwrap()
+    }
+    /// Signs as `actor` with key `reference` and `secret`, whatever the key's registration.
+    fn publish(
+        engine: &PostgresEngine,
+        actor: ActorRef,
+        reference: u128,
+        secret: u8,
+        publication: RecipientRequestClasses,
+        at: u64,
+    ) -> Result<(), StorageError> {
+        let signed = command_signer(actor, OperationalKeyRef(reference), secret)
+            .sign_request_classes(scope(), publication)
+            .unwrap();
+        RequestPricingService::new(engine.deployment())
+            .publish_classes(&signed, scope(), || test_time(at))
+    }
+    fn quote(
+        engine: &PostgresEngine,
+        class: u128,
+        quote: u128,
+        at: u64,
+    ) -> Result<RequestTerms, StorageError> {
+        let outcome = engine.execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
-                    class_id: cs_mail_primitives::RequestClassId(1),
-                    quote_id: QuoteId(10),
+                    class_id: cs_mail_primitives::RequestClassId(class),
+                    quote_id: QuoteId(quote),
                     declaration_digest: None,
                 },
-                10,
+                quote,
             ),
-            test_time(1),
+            test_time(at),
             policy(),
+        )?;
+        let Some(TermsOutcome::ChargeRequired(terms)) = outcome.transition.terms_outcome else {
+            panic!("an unknown relationship must receive charged terms")
+        };
+        Ok(*terms)
+    }
+    fn provisioned(label: &str, seed: u128) -> PostgresEngine {
+        let engine = PostgresDeployment::connect(&database_url())
+            .unwrap()
+            .relationship(aggregate_key(label), &state(seed), UNIT)
+            .unwrap();
+        support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
+        engine
+    }
+
+    #[test]
+    #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+    #[allow(clippy::too_many_lines)] // One narrative: publish, narrow, refuse, republish.
+    fn class_outside_current_bounds_cannot_be_quoted_until_republished() {
+        // Claim: a class outside the current bounds cannot be quoted, although its
+        // publication was valid when made. Falsified by any quote for such a class.
+        let engine = provisioned("pricing-bounds", 902);
+        let recipient = ActorRef::Recipient(RECIPIENT);
+        publish(
+            &engine,
+            recipient,
+            2,
+            2,
+            classes(RECIPIENT, 2, &[(1, "Wide", 500), (2, "Narrow", 8)]),
+            1,
         )
         .unwrap();
-    let TermsOutcome::ChargeRequired(original) = before.transition.terms_outcome.unwrap() else {
-        panic!("quote expected")
-    };
-    assert_eq!(original.pricing_policy_version, PolicyVersion(2));
-    assert_eq!(original.processing_charge, Money::from_minor_units(50));
-    assert_eq!(original.collateral, Money::from_minor_units(500));
-    let signed = command_signer(ActorRef::Recipient(RECIPIENT), OperationalKeyRef(2), 2)
-        .sign_request_classes(
-            signing_scope(),
+        let wide = quote(&engine, 1, 10, 2).unwrap();
+        assert_eq!(
+            (
+                wide.pricing_policy_version,
+                wide.processing_charge,
+                wide.collateral
+            ),
+            (
+                PolicyVersion(1),
+                Money::from_minor_units(2),
+                Money::from_minor_units(500)
+            )
+        );
+        let pricing = RequestPricingService::new(engine.deployment());
+        let report = pricing
+            .publish_policy(&operator_policy(2, 3, 1, 100), || test_time(3))
+            .unwrap();
+        assert!(report.changed);
+        assert_eq!(report.addresses_with_unquotable_classes, 1);
+        // Stale and conflicting operator versions are refused; an exact replay is not.
+        assert!(
+            pricing
+                .publish_policy(&operator_policy(1, 9, 1, 100), || test_time(3))
+                .is_err()
+        );
+        assert!(
+            pricing
+                .publish_policy(&operator_policy(2, 4, 1, 100), || test_time(3))
+                .is_err()
+        );
+        assert!(
+            !pricing
+                .publish_policy(&operator_policy(2, 3, 1, 100), || test_time(3))
+                .unwrap()
+                .changed
+        );
+
+        assert!(matches!(
+            quote(&engine, 1, 11, 4),
+            Err(StorageError::Protocol(
+                ProtocolError::RequestClassOutsidePolicy
+            ))
+        ));
+        assert!(matches!(
+            quote(&engine, 9, 12, 4),
+            Err(StorageError::Protocol(ProtocolError::RequestClassUnknown))
+        ));
+        let narrow = quote(&engine, 2, 13, 4).unwrap();
+        assert_eq!(
+            (
+                narrow.pricing_policy_version,
+                narrow.processing_charge,
+                narrow.collateral
+            ),
+            (
+                PolicyVersion(2),
+                Money::from_minor_units(3),
+                Money::from_minor_units(8)
+            )
+        );
+        // The earlier quote keeps its terms.
+        assert_eq!(engine.signed_quote(QuoteId(10)).unwrap().terms, wide);
+
+        let current = engine
+            .deployment()
+            .request_classes(RECIPIENT)
+            .unwrap()
+            .unwrap();
+        let policy_now = engine
+            .deployment()
+            .request_pricing_policy()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            policy_now
+                .class_status(&current)
+                .iter()
+                .map(|(class, quotable)| (class.id().0, *quotable))
+                .collect::<Vec<_>>(),
+            vec![(1, false), (2, true)]
+        );
+        let offer = policy_now.sender_offer(&current);
+        assert_eq!(offer.processing_charge, Money::from_minor_units(3));
+        assert_eq!(
+            offer.classes.iter().map(|c| c.id().0).collect::<Vec<_>>(),
+            vec![2]
+        );
+
+        // Publications outside the current bounds are refused whole.
+        assert!(matches!(
+            publish(
+                &engine,
+                recipient,
+                2,
+                2,
+                classes(RECIPIENT, 3, &[(1, "Wide", 500)]),
+                5
+            ),
+            Err(StorageError::Protocol(
+                ProtocolError::RequestClassOutsidePolicy
+            ))
+        ));
+        publish(
+            &engine,
+            recipient,
+            2,
+            2,
+            classes(RECIPIENT, 3, &[(1, "Wide again", 100), (2, "Narrow", 8)]),
+            5,
+        )
+        .unwrap();
+        let again = quote(&engine, 1, 14, 6).unwrap();
+        assert_eq!(again.collateral, Money::from_minor_units(100));
+        assert_eq!(again.selected_class.description(), "Wide again");
+
+        // Existing publication checks: count, stale version, replay, altered signature.
+        let nine = (1..=9).map(|id| (id, "Class", 10)).collect::<Vec<_>>();
+        assert!(
             RecipientRequestClasses::new(
                 RECIPIENT,
-                3,
-                vec![
-                    RequestClass::new(
-                        cs_mail_primitives::RequestClassId(1),
-                        "Another user description".into(),
-                        Money::from_minor_units(1000),
+                4,
+                nine.iter()
+                    .map(|(id, d, s)| {
+                        RequestClass::new(
+                            cs_mail_primitives::RequestClassId(*id),
+                            (*d).into(),
+                            Money::from_minor_units(*s),
+                        )
+                        .unwrap()
+                    })
+                    .collect()
+            )
+            .is_err()
+        );
+        assert!(
+            publish(
+                &engine,
+                recipient,
+                2,
+                2,
+                classes(RECIPIENT, 2, &[(1, "Old", 10)]),
+                7
+            )
+            .is_err()
+        );
+        publish(
+            &engine,
+            recipient,
+            2,
+            2,
+            classes(RECIPIENT, 3, &[(1, "Wide again", 100), (2, "Narrow", 8)]),
+            7,
+        )
+        .unwrap();
+        let mut forged = command_signer(recipient, OperationalKeyRef(2), 2)
+            .sign_request_classes(scope(), classes(RECIPIENT, 4, &[(1, "Mine", 10)]))
+            .unwrap();
+        forged.classes = classes(RECIPIENT, 4, &[(1, "Altered", 90)]);
+        assert!(
+            RequestPricingService::new(engine.deployment())
+                .publish_classes(&forged, scope(), || test_time(8))
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+    #[allow(clippy::too_many_lines)] // Sets up a second address before challenging authority.
+    fn publication_is_authorized_only_by_a_key_of_its_own_address() {
+        // Claim: a publication signed for one address cannot be applied to another,
+        // including another address of the same account.
+        let engine = provisioned("pricing-authority", 903);
+        let accounts = engine.deployment().accounts(|| test_time(1));
+        let account = accounts.persona_account(RECIPIENT).unwrap();
+        let service =
+            cs_mail_application::accounts::operations::AccountService::new(&accounts, &|| {
+                test_time(1)
+            });
+        let command = |command, key: u128| {
+            cs_mail_accounts::control::SignedAccountCommand {
+                account,
+                operational_key: OperationalKeyRef(2),
+                expected_revision: accounts.account_control(account).unwrap().revision(),
+                idempotency_key: IdempotencyKey(key),
+                product: "cs-mail/test".into(),
+                command,
+                signature: vec![],
+            }
+            .sign(&[2; 32])
+            .unwrap()
+        };
+        service
+            .execute_command(&command(
+                cs_mail_accounts::control::AccountCommand::AddPersona(SIBLING),
+                70_001,
+            ))
+            .unwrap();
+        service
+            .execute_command(&command(
+                cs_mail_accounts::control::AccountCommand::RegisterKey(
+                    cs_mail_accounts::control::NewOperationalKey::prove(
+                        account,
+                        "cs-mail/test",
+                        OperationalKeyRef(40),
+                        ActorRef::Recipient(SIBLING),
+                        &[40; 32],
                     )
                     .unwrap(),
-                ],
-            )
-            .unwrap(),
+                ),
+                70_002,
+            ))
+            .unwrap();
+        let recipient_classes = engine.deployment().request_classes(RECIPIENT).unwrap();
+
+        // Each address publishes its own set with its own key.
+        publish(
+            &engine,
+            ActorRef::Recipient(SIBLING),
+            40,
+            40,
+            classes(SIBLING, 1, &[(1, "Sibling", 20)]),
+            2,
         )
         .unwrap();
-    cs_mail_application::request_classes::RequestClassesService::new(&engine)
-        .publish(&signed, &policy(), || test_time(2))
-        .unwrap();
-    let after = engine
-        .execute(
-            sender(
-                ProtocolCommand::IssueRequestTerms {
-                    class_id: cs_mail_primitives::RequestClassId(1),
-                    quote_id: QuoteId(11),
-                    declaration_digest: None,
-                },
-                11,
-            ),
-            test_time(3),
-            policy(),
-        )
-        .unwrap();
-    let TermsOutcome::ChargeRequired(next) = after.transition.terms_outcome.unwrap() else {
-        panic!("quote expected")
-    };
-    assert_eq!(next.collateral, Money::from_minor_units(1000));
-    assert_eq!(original.collateral, Money::from_minor_units(500));
-    assert_eq!(original.selected_class.description(), "User invitation 1");
-    assert_eq!(
-        next.selected_class.description(),
-        "Another user description"
-    );
-    let mut forged = signed;
-    forged.classes = RecipientRequestClasses::new(
-        RECIPIENT,
-        4,
-        vec![
-            RequestClass::new(
-                cs_mail_primitives::RequestClassId(1),
-                "Altered".into(),
-                Money::from_minor_units(2500),
+        let sibling_classes = engine.deployment().request_classes(SIBLING).unwrap();
+        assert_eq!(
+            sibling_classes,
+            Some(classes(SIBLING, 1, &[(1, "Sibling", 20)]))
+        );
+        // The recipient's key cannot publish for its sibling address...
+        assert!(
+            publish(
+                &engine,
+                ActorRef::Recipient(SIBLING),
+                2,
+                2,
+                classes(SIBLING, 2, &[(1, "Via recipient key", 30)]),
+                3,
             )
-            .unwrap(),
-        ],
-    )
-    .unwrap();
-    assert!(
-        cs_mail_application::request_classes::RequestClassesService::new(&engine)
-            .publish(&forged, &policy(), || test_time(4))
             .is_err()
-    );
+        );
+        // ...nor the sibling's key for the recipient, nor another account's key.
+        assert!(
+            publish(
+                &engine,
+                ActorRef::Recipient(RECIPIENT),
+                40,
+                40,
+                classes(RECIPIENT, 5, &[(1, "Via sibling key", 30)]),
+                3,
+            )
+            .is_err()
+        );
+        assert!(
+            publish(
+                &engine,
+                ActorRef::Recipient(RECIPIENT),
+                1,
+                1,
+                classes(RECIPIENT, 5, &[(1, "Via sender key", 30)]),
+                3,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            engine.deployment().request_classes(SIBLING).unwrap(),
+            sibling_classes
+        );
+        assert_eq!(
+            engine.deployment().request_classes(RECIPIENT).unwrap(),
+            recipient_classes
+        );
+        // Quotes to the recipient still use the recipient's own classes.
+        let terms = quote(&engine, 1, 20, 4).unwrap();
+        assert_eq!(terms.selected_class.description(), "Test class");
+    }
+
+    #[test]
+    #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+    fn concurrent_quotes_carry_one_publication_and_one_policy_version() {
+        // Claim: a quote issued concurrently with a republication or a policy change carries
+        // the terms of exactly one publication and one policy version.
+        const ROUNDS: u64 = 24;
+        let url = database_url();
+        let key = aggregate_key("pricing-race");
+        let engine = PostgresDeployment::connect(&url)
+            .unwrap()
+            .relationship(key.clone(), &state(904), UNIT)
+            .unwrap();
+        support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
+        drop(engine);
+        let publisher = {
+            let url = url.clone();
+            let key = key.clone();
+            std::thread::spawn(move || {
+                let engine = PostgresDeployment::connect(&url)
+                    .unwrap()
+                    .relationship(key, &state(904), UNIT)
+                    .unwrap();
+                let pricing = RequestPricingService::new(engine.deployment());
+                for n in 2..=ROUNDS {
+                    publish(
+                        &engine,
+                        ActorRef::Recipient(RECIPIENT),
+                        2,
+                        2,
+                        classes(RECIPIENT, n, &[(1, &format!("v{n}"), 3 * n)]),
+                        n,
+                    )
+                    .unwrap();
+                    if n % 3 == 0 {
+                        pricing
+                            .publish_policy(&operator_policy(n, 100 + n, 1, 1000), || test_time(n))
+                            .unwrap();
+                    }
+                }
+            })
+        };
+        let quoter = std::thread::spawn(move || {
+            let engine = PostgresDeployment::connect(&url)
+                .unwrap()
+                .relationship(key, &state(904), UNIT)
+                .unwrap();
+            (0..ROUNDS)
+                .map(|i| quote(&engine, 1, u128::from(1_000 + i), 100 + i).unwrap())
+                .collect::<Vec<_>>()
+        });
+        publisher.join().unwrap();
+        for terms in quoter.join().unwrap() {
+            let description = terms.selected_class.description().to_owned();
+            let expected_collateral = if description == "Test class" {
+                8
+            } else {
+                3 * description[1..].parse::<u64>().unwrap()
+            };
+            assert_eq!(
+                terms.collateral,
+                Money::from_minor_units(expected_collateral)
+            );
+            let version = terms.pricing_policy_version.0;
+            let expected_charge = if version == 1 { 2 } else { 100 + version };
+            assert_eq!(
+                terms.processing_charge,
+                Money::from_minor_units(expected_charge)
+            );
+        }
+    }
 }
 
 fn test_time(value: u64) -> CanonicalTime {

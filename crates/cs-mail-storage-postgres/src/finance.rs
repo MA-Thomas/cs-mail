@@ -173,7 +173,7 @@ pub(super) fn persist_forfeitures(
     }
     Ok(())
 }
-impl PostgresEngine {
+impl PostgresDeployment {
     /// Configures separate administration and payment-verification authority once.
     /// This startup API is not an unauthenticated network endpoint.
     /// # Errors
@@ -283,9 +283,8 @@ impl PostgresEngine {
         if let cs_mail_finance::ProgramCommand::PublishAnnualDistribution(schedule) =
             &signed.command
         {
-            work::enqueue(
+            work::enqueue_deployment(
                 &mut tx,
-                &self.aggregate_key,
                 work::WorkSource::AnnualAllocation(schedule.id),
                 &WorkPayload::AnnualAllocation {
                     unit: signed.unit,
@@ -299,7 +298,7 @@ impl PostgresEngine {
             cs_mail_finance::ProgramCommand::FinalizeAnnualDistribution(_)
                 | cs_mail_finance::ProgramCommand::CompensateMember { .. }
         ) {
-            enqueue_distribution_preparation(&mut tx, &self.aggregate_key, &program)?;
+            enqueue_distribution_preparation(&mut tx, &program)?;
         }
         if program.revision() != previous {
             save_program(&mut tx, &program, &command, at)?;
@@ -327,60 +326,6 @@ impl PostgresEngine {
         .map_err(StorageError::Finance)?;
         tx.commit()?;
         Ok(program)
-    }
-    /// Returns a request's still-pending operation and whether capture cancellation is required.
-    /// # Errors
-    /// Returns snapshot errors or missing requests.
-    pub fn authorize_request_dispatch(
-        &self,
-        request: RequestId,
-        operation: PaymentOperationId,
-    ) -> Result<Option<cs_mail_finance::ProcessorRequest>, StorageError> {
-        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let mut tx = client.transaction()?;
-        ingress::require_drained(&mut tx)?;
-        let row = tx.query_opt(
-            "SELECT f.financials,a.protocol_format_version FROM cs_request_financials f JOIN cs_relationship_aggregates a USING(aggregate_key) WHERE f.aggregate_key=$1 AND f.request_id=$2",
-            &[&self.aggregate_key, &request.0.to_string()],
-        )?;
-        if let Some(row) = &row {
-            let version: i16 = row.get(1);
-            if version != CURRENT_PROTOCOL_FORMAT_VERSION {
-                return Err(StorageError::UnsupportedStoredProtocolFormat(version));
-            }
-        }
-        let request = row.and_then(|r| {
-            r.get::<_, Json<cs_mail_finance::RequestFinancials>>(0)
-                .0
-                .pending_payment(operation)
-        });
-        if let Some(cs_mail_finance::ProcessorRequest::Submit(operation)) = &request {
-            billing::authorize_source(&mut tx, operation)?;
-        }
-        tx.commit()?;
-        Ok(request)
-    }
-    /// Applies independently signed provider evidence through the ordinary atomic transition.
-    /// # Errors
-    /// Rejects evidence that fails the request's immutable provider key and operation binding.
-    pub fn confirm_request_payment(
-        &self,
-        request: RequestId,
-        receipt: SignedPaymentEvidence,
-        now: CanonicalTime,
-        policy: PolicySnapshot,
-    ) -> Result<ReceivedOutcome, StorageError> {
-        let key = payment_event_key(&receipt);
-        let command = KernelCommand::new(
-            ProtocolCommand::RecordPayment {
-                request_id: request,
-                receipt,
-            },
-            ActorRef::Provider(policy.recipient_provider),
-            OperationalKeyRef(0),
-            key,
-        );
-        self.execute_system(command, now, policy)
     }
     /// Loads one pending payable operation; completed/obsolete work returns None.
     /// # Errors
@@ -443,6 +388,63 @@ impl PostgresEngine {
         Ok(())
     }
 }
+impl PostgresEngine {
+    /// Returns a request's still-pending operation and whether capture cancellation is required.
+    /// # Errors
+    /// Returns snapshot errors or missing requests.
+    pub fn authorize_request_dispatch(
+        &self,
+        request: RequestId,
+        operation: PaymentOperationId,
+    ) -> Result<Option<cs_mail_finance::ProcessorRequest>, StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut tx = client.transaction()?;
+        ingress::require_drained(&mut tx)?;
+        let row = tx.query_opt(
+            "SELECT f.financials,a.protocol_format_version FROM cs_request_financials f JOIN cs_relationship_aggregates a USING(aggregate_key) WHERE f.aggregate_key=$1 AND f.request_id=$2",
+            &[&self.aggregate_key, &request.0.to_string()],
+        )?;
+        if let Some(row) = &row {
+            let version: i16 = row.get(1);
+            if version != CURRENT_PROTOCOL_FORMAT_VERSION {
+                return Err(StorageError::UnsupportedStoredProtocolFormat(version));
+            }
+        }
+        let request = row.and_then(|r| {
+            r.get::<_, Json<cs_mail_finance::RequestFinancials>>(0)
+                .0
+                .pending_payment(operation)
+        });
+        if let Some(cs_mail_finance::ProcessorRequest::Submit(operation)) = &request {
+            billing::authorize_source(&mut tx, operation)?;
+        }
+        tx.commit()?;
+        Ok(request)
+    }
+    /// Applies independently signed provider evidence through the ordinary atomic transition.
+    /// # Errors
+    /// Rejects evidence that fails the request's immutable provider key and operation binding.
+    pub fn confirm_request_payment(
+        &self,
+        request: RequestId,
+        receipt: SignedPaymentEvidence,
+        now: CanonicalTime,
+        policy: PolicySnapshot,
+    ) -> Result<ReceivedOutcome, StorageError> {
+        let key = payment_event_key(&receipt);
+        let command = KernelCommand::new(
+            ProtocolCommand::RecordPayment {
+                request_id: request,
+                receipt,
+            },
+            ActorRef::Provider(policy.recipient_provider),
+            OperationalKeyRef(0),
+            key,
+        );
+        self.execute_system(command, now, policy)
+    }
+}
+
 fn payment_event_key(receipt: &SignedPaymentEvidence) -> IdempotencyKey {
     let mut h = Sha256::new();
     h.update(b"cs-mail/payment-event/v1");
@@ -475,7 +477,7 @@ pub(super) fn persist_forfeiture_holds(
     Ok(())
 }
 
-impl PostgresEngine {
+impl PostgresDeployment {
     /// The signed, published annual schedule authorizes this deterministic cutoff operation.
     /// # Errors
     /// Rejects missing schedules, premature/out-of-order finalization and storage failures.
@@ -501,7 +503,7 @@ impl PostgresEngine {
                 at,
             )?;
         }
-        enqueue_distribution_preparation(&mut tx, &self.aggregate_key, &program)?;
+        enqueue_distribution_preparation(&mut tx, &program)?;
         tx.commit()?;
         Ok(())
     }
@@ -509,13 +511,11 @@ impl PostgresEngine {
 
 fn enqueue_distribution_preparation(
     tx: &mut Transaction<'_>,
-    aggregate: &str,
     program: &FinancialProgram,
 ) -> Result<(), StorageError> {
     for payable in program.payables() {
-        work::enqueue(
+        work::enqueue_deployment(
             tx,
-            aggregate,
             work::WorkSource::PrepareDistribution(payable.id()),
             &WorkPayload::PrepareDistribution {
                 unit: program.unit(),

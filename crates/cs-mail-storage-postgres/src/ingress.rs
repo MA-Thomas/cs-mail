@@ -111,16 +111,61 @@ pub(super) fn registry_locked(
     ];
     let mut included = std::collections::BTreeSet::new();
     for persona in participants {
-        if let Some(row) = tx.query_opt("SELECT a.id,a.registry,a.control FROM cs_persona_owners p JOIN cs_product_accounts a ON a.id=p.account WHERE p.identity=$1 FOR SHARE OF a", &[&persona.0.to_string()])? {
-            if !row.get::<_,Json<cs_mail_accounts::control::AccountControl>>(2).0.allows_service() { continue; }
-            let id: String = row.get(0);
-            if included.insert(id.clone()) {
-                let personas = tx.query("SELECT identity FROM cs_persona_owners WHERE account=$1", &[&id])?.into_iter().map(|r| r.get::<_,String>(0).parse::<u128>().map(cs_mail_primitives::ProtocolIdentity).map_err(|_| StorageError::NumericRange)).collect::<Result<_,_>>()?;
-                snapshot.add_account(cs_mail_primitives::AccountId(id.parse().map_err(|_| StorageError::NumericRange)?), personas, row.get::<_,Json<KeyRegistry>>(1).0)?;
-            }
+        if let Some(id) = persona_authority(tx, persona, &mut snapshot, &included)? {
+            included.insert(id);
         }
     }
     Ok(snapshot)
+}
+/// Adds the authority of the account owning `persona`, if that account may use the service.
+/// This is the only source of user-key authority.
+pub(super) fn add_persona_authority(
+    tx: &mut Transaction<'_>,
+    persona: cs_mail_primitives::ProtocolIdentity,
+    snapshot: &mut cs_mail_security::AuthoritySnapshot,
+) -> Result<(), StorageError> {
+    persona_authority(tx, persona, snapshot, &std::collections::BTreeSet::new())?;
+    Ok(())
+}
+fn persona_authority(
+    tx: &mut Transaction<'_>,
+    persona: cs_mail_primitives::ProtocolIdentity,
+    snapshot: &mut cs_mail_security::AuthoritySnapshot,
+    included: &std::collections::BTreeSet<String>,
+) -> Result<Option<String>, StorageError> {
+    let Some(row) = tx.query_opt("SELECT a.id,a.registry,a.control FROM cs_persona_owners p JOIN cs_product_accounts a ON a.id=p.account WHERE p.identity=$1 FOR SHARE OF a", &[&persona.0.to_string()])? else {
+        return Ok(None);
+    };
+    if !row
+        .get::<_, Json<cs_mail_accounts::control::AccountControl>>(2)
+        .0
+        .allows_service()
+    {
+        return Ok(None);
+    }
+    let id: String = row.get(0);
+    if included.contains(&id) {
+        return Ok(None);
+    }
+    let personas = tx
+        .query(
+            "SELECT identity FROM cs_persona_owners WHERE account=$1",
+            &[&id],
+        )?
+        .into_iter()
+        .map(|r| {
+            r.get::<_, String>(0)
+                .parse::<u128>()
+                .map(cs_mail_primitives::ProtocolIdentity)
+                .map_err(|_| StorageError::NumericRange)
+        })
+        .collect::<Result<_, _>>()?;
+    snapshot.add_account(
+        cs_mail_primitives::AccountId(id.parse().map_err(|_| StorageError::NumericRange)?),
+        personas,
+        row.get::<_, Json<KeyRegistry>>(1).0,
+    )?;
+    Ok(Some(id))
 }
 
 impl PostgresEngine {
@@ -590,7 +635,7 @@ fn apply_protocol(
     aggregate_key: &str,
     authorized: &KernelCommand<ProtocolCommand>,
     now: CanonicalTime,
-    mut policy: PolicySnapshot,
+    policy: PolicySnapshot,
     journal_position: JournalPosition,
     content_available: bool,
 ) -> Result<DurableExecutionOutcome, StorageError> {
@@ -613,39 +658,16 @@ fn apply_protocol(
             now,
         )?;
     }
-    if matches!(
-        authorized.command(),
-        ProtocolCommand::IssueRequestTerms { .. }
-    ) && aggregate.state.active_request().is_none()
-        && aggregate.state.relationship.state != RelationshipState::Accepted
-        && !load_current_lane(transaction, aggregate_key)?
-            .as_ref()
-            .is_some_and(|l| l.provides_relationship_access(now))
+    let pricing = if let ProtocolCommand::IssueRequestTerms { class_id, .. } = authorized.command()
     {
-        let row = transaction
-            .query_opt(
-                "SELECT policy,classes FROM cs_recipient_pricing WHERE recipient=$1",
-                &[&aggregate.state.relationship.key.recipient.0.to_string()],
-            )?
-            .ok_or(ProtocolError::PolicyInvalid)?;
-        let pricing = row
-            .get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)
-            .0;
-        let classes = row
-            .try_get::<_, Option<Json<cs_mail_protocol::pricing::RecipientRequestClasses>>>(1)?
-            .map(|p| p.0);
-        let ProtocolCommand::IssueRequestTerms { class_id, .. } = authorized.command() else {
-            unreachable!()
-        };
-        policy.apply_pricing(
-            &pricing.resolve_quote(&classes.ok_or(ProtocolError::PolicyInvalid)?, *class_id)?,
-        );
-        if billing::arrangement(transaction, policy.financial.scope, policy.unit)?.0
-            != policy.payment_provider_key
-        {
-            return Err(ProtocolError::PolicyInvalid.into());
-        }
-    }
+        pricing::resolve_price(
+            transaction,
+            aggregate.state.relationship.key.recipient,
+            *class_id,
+        )?
+    } else {
+        cs_mail_protocol::pricing::QuotePricing::NotRequested
+    };
     let target = match authorized.command() {
         ProtocolCommand::CreateRequest { request_id, .. }
         | ProtocolCommand::SubmitRequestToRecipient { request_id, .. }
@@ -712,8 +734,23 @@ fn apply_protocol(
         journal_position,
         protocol_version: policy.protocol_version,
         policy,
+        pricing,
     };
     let manifest = transition(&snapshot, authorized, &context)?;
+    // Charged terms must name the configured payment arrangement's processor. Checked only
+    // when the kernel requires a charge, as before the pricing cutover.
+    if matches!(
+        manifest.terms_outcome,
+        Some(TermsOutcome::ChargeRequired(_))
+    ) && billing::arrangement(
+        transaction,
+        context.policy.financial.scope,
+        context.policy.unit,
+    )?
+    .0 != context.policy.payment_provider_key
+    {
+        return Err(ProtocolError::PolicyInvalid.into());
+    }
     match authorized.command() {
         ProtocolCommand::CreateRequest { request_id, .. } => {
             let account =
@@ -829,6 +866,7 @@ fn apply_grant(
         journal_position: received_position,
         protocol_version: policy.protocol_version,
         policy,
+        pricing: cs_mail_protocol::pricing::QuotePricing::NotRequested,
     };
     let lane = grant.clone().activate()?;
     let decision =
@@ -1152,7 +1190,7 @@ impl PostgresEngine {
         lease: Duration,
         limit: i64,
     ) -> Result<WorkReport, StorageError> {
-        let items = self.claim_work(WorkQueue::Artifacts, now, lease, limit)?;
+        let items = self.claim_work(work::RelationshipQueue::Artifacts, now, lease, limit)?;
         let mut report = WorkReport {
             claimed: items.len(),
             ..WorkReport::default()
@@ -1406,122 +1444,4 @@ fn classify_refusal(error: StorageError) -> Result<Refusal, StorageError> {
         StorageError::Security(SecurityError::InvalidSignature) => Refusal::InvalidQuote,
         error => return Err(error),
     })
-}
-
-impl PostgresEngine {
-    /// Trusted deployment configuration of the recipient's bounded pricing menu.
-    /// # Errors
-    /// Rejects invalid policies, stale versions and menus excluding an existing preference.
-    pub fn configure_request_pricing(
-        &self,
-        pricing: &cs_mail_protocol::pricing::RequestPricingPolicy,
-    ) -> Result<(), StorageError> {
-        if !pricing.valid() {
-            return Err(ProtocolError::PolicyInvalid.into());
-        }
-        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let mut tx = client.transaction()?;
-        require_drained(&mut tx)?;
-        let recipient = load_locked_aggregate(&mut tx, &self.aggregate_key)?
-            .state
-            .relationship
-            .key
-            .recipient;
-        if let Some(row) = tx.query_opt(
-            "SELECT policy,classes FROM cs_recipient_pricing WHERE recipient=$1 FOR UPDATE",
-            &[&recipient.0.to_string()],
-        )? {
-            let previous = row
-                .get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)
-                .0;
-            let classes = row
-                .try_get::<_, Option<Json<cs_mail_protocol::pricing::RecipientRequestClasses>>>(1)?
-                .map(|p| p.0);
-            if previous != *pricing && previous.version >= pricing.version {
-                return Err(StorageError::VersionConflict);
-            }
-            if classes.as_ref().is_some_and(|c| !pricing.permits(c)) {
-                return Err(ProtocolError::PolicyInvalid.into());
-            }
-        }
-        tx.execute("INSERT INTO cs_recipient_pricing(recipient,policy) VALUES($1,$2) ON CONFLICT(recipient) DO UPDATE SET policy=EXCLUDED.policy", &[&recipient.0.to_string(), &Json(pricing)])?;
-        tx.commit()?;
-        Ok(())
-    }
-    /// Reads the recipient's published classes, if any.
-    /// # Errors
-    /// Returns storage or invalid-record errors.
-    pub fn request_classes(
-        &self,
-    ) -> Result<Option<cs_mail_protocol::pricing::RecipientRequestClasses>, StorageError> {
-        let recipient = self.snapshot()?.state.relationship.key.recipient;
-        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let row = client.query_opt(
-            "SELECT classes FROM cs_recipient_pricing WHERE recipient=$1",
-            &[&recipient.0.to_string()],
-        )?;
-        row.map(|r| {
-            r.try_get::<_, Option<Json<cs_mail_protocol::pricing::RecipientRequestClasses>>>(0)
-                .map(|j| j.map(|v| v.0))
-        })
-        .transpose()
-        .map(Option::flatten)
-        .map_err(StorageError::from)
-    }
-}
-impl cs_mail_application::request_classes::RequestClassesStore for PostgresEngine {
-    type Error = StorageError;
-    fn transact_request_classes(
-        &self,
-        signed: &cs_mail_security::SignedRequestClasses,
-        policy: &PolicySnapshot,
-        decide: impl FnOnce(
-            cs_mail_application::request_classes::PublicationContext,
-        ) -> Result<
-            cs_mail_application::request_classes::PublicationDecision,
-            StorageError,
-        >,
-    ) -> Result<(), StorageError> {
-        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let mut tx = client.transaction()?;
-        require_drained(&mut tx)?;
-        validate_ingress_scope(
-            &mut tx,
-            &self.aggregate_key,
-            signed.scope.deployment_domain,
-            policy,
-        )?;
-        let relationship = load_locked_aggregate(&mut tx, &self.aggregate_key)?
-            .state
-            .relationship
-            .key;
-        let registry = registry_locked(&mut tx, &self.aggregate_key)?;
-        let row = tx.query_one(
-            "SELECT policy,classes FROM cs_recipient_pricing WHERE recipient=$1 FOR UPDATE",
-            &[&relationship.recipient.0.to_string()],
-        )?;
-        let context = cs_mail_application::request_classes::PublicationContext {
-            scope: cs_mail_security::SigningScope {
-                deployment_domain: signed.scope.deployment_domain,
-                intended_provider: policy.recipient_provider,
-                relationship: relationship.reference,
-            },
-            recipient: relationship.recipient,
-            registry,
-            pricing: row
-                .try_get::<_, Json<cs_mail_protocol::pricing::RequestPricingPolicy>>(0)?
-                .0,
-            current: row
-                .try_get::<_, Option<Json<cs_mail_protocol::pricing::RecipientRequestClasses>>>(1)?
-                .map(|j| j.0),
-        };
-        if let Some(classes) = decide(context)?.into_effects() {
-            tx.execute(
-                "UPDATE cs_recipient_pricing SET classes=$2 WHERE recipient=$1",
-                &[&relationship.recipient.0.to_string(), &Json(classes)],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
 }

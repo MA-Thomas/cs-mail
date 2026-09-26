@@ -18,7 +18,9 @@ use cs_mail_protocol::{ActorRef, PolicySnapshot, ProtocolCommand, ProtocolState,
 use cs_mail_security::{
     CommandSigner, KeyRegistry, ProviderSigner, SignedCommandBytes, SigningScope,
 };
-use cs_mail_storage_postgres::{DurableExecutionOutcome, PostgresEngine, StorageError, WorkItem};
+use cs_mail_storage_postgres::{
+    DurableExecutionOutcome, PostgresDeployment, PostgresEngine, StorageError, WorkItem,
+};
 use cs_mail_worker::{DeliverySink, deliver_batch, run_schedule_batch};
 
 const SENDER: ProtocolIdentity = ProtocolIdentity(102);
@@ -49,43 +51,34 @@ fn database_url() -> String {
 
 fn engine(url: &str, label: &str) -> PostgresEngine {
     let attempt_seed = if label == "delivery" { 1_001 } else { 1_002 };
-    PostgresEngine::connect(
-        url,
-        format!(
-            "worker-{label}-{}-{}",
-            std::process::id(),
-            NEXT_KEY.fetch_add(1, Ordering::Relaxed)
-        ),
-        &ProtocolState::initial_scoped(
-            RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
-            RequestHistoryRef::from_u128_for_test(attempt_seed),
-            SENDER,
-            RECIPIENT,
-            test_time(0),
-        ),
-        UNIT,
-    )
-    .unwrap()
+    PostgresDeployment::connect(url)
+        .unwrap()
+        .relationship(
+            format!(
+                "worker-{label}-{}-{}",
+                std::process::id(),
+                NEXT_KEY.fetch_add(1, Ordering::Relaxed)
+            ),
+            &ProtocolState::initial_scoped(
+                RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
+                RequestHistoryRef::from_u128_for_test(attempt_seed),
+                SENDER,
+                RECIPIENT,
+                test_time(0),
+            ),
+            UNIT,
+        )
+        .unwrap()
 }
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
-        selected_class: Some(
-            cs_mail_protocol::pricing::SelectedRequestClass::new(
-                cs_mail_primitives::RequestClassId(1),
-                "Test class".into(),
-            )
-            .unwrap(),
-        ),
-        pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
         protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
         privacy_profile_version: PrivacyProfileVersion(1),
         retention_policy_version: RetentionPolicyVersion(1),
         recipient_provider: PROVIDER,
         unit: UNIT,
-        processing_charge: Money::from_minor_units(2),
-        collateral: Money::from_minor_units(8),
         submission_window: Duration(10),
         decision_window: Duration(50),
         quote_lifetime: Duration(20),
@@ -650,19 +643,20 @@ fn blocked_inbox_still_signs_its_quote_and_recovers_across_relationship_workers(
     let pending = engine
         .receive_signed(&create, DEPLOYMENT_DOMAIN, || test_time(2), policy())
         .unwrap();
-    let other = PostgresEngine::connect(
-        &url,
-        "other-worker",
-        &ProtocolState::initial_scoped(
-            RelationshipRef::from_u128_for_test(999),
-            RequestHistoryRef::from_u128_for_test(999),
-            SENDER,
-            ProtocolIdentity(999),
-            test_time(0),
-        ),
-        UNIT,
-    )
-    .unwrap();
+    let other = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(
+            "other-worker",
+            &ProtocolState::initial_scoped(
+                RelationshipRef::from_u128_for_test(999),
+                RequestHistoryRef::from_u128_for_test(999),
+                SENDER,
+                ProtocolIdentity(999),
+                test_time(0),
+            ),
+            UNIT,
+        )
+        .unwrap();
     for host in [&other, &engine] {
         assert!(matches!(
             run_received_batch(host, &provider_signer(), test_time(3), Duration(10), 100),
@@ -696,6 +690,7 @@ fn published_annual_period_is_finalized_by_durable_work() {
     let provider = SimulatedProcessor::new([7; 32]);
     support::arrangement(&engine, &policy()).unwrap();
     engine
+        .deployment()
         .configure_financial_program(
             policy().financial.scope,
             UNIT,
@@ -728,11 +723,12 @@ fn published_annual_period_is_finalized_by_durable_work() {
     )
     .unwrap();
     engine
+        .deployment()
         .execute_financial_command(&command, test_time(0))
         .unwrap();
     assert_eq!(
         cs_mail_worker::run_annual_distribution_batch(
-            &engine,
+            engine.deployment(),
             UNIT,
             &|| test_time(schedule.cutoff.0 - 1),
             Duration(30_000),
@@ -744,7 +740,7 @@ fn published_annual_period_is_finalized_by_durable_work() {
     );
     assert_eq!(
         cs_mail_worker::run_annual_distribution_batch(
-            &engine,
+            engine.deployment(),
             UNIT,
             &|| schedule.cutoff,
             Duration(30_000),
@@ -754,11 +750,11 @@ fn published_annual_period_is_finalized_by_durable_work() {
         .completed,
         1
     );
-    let finalized = engine.financial_program(UNIT).unwrap();
+    let finalized = engine.deployment().financial_program(UNIT).unwrap();
     assert!(finalized.distribution(schedule.id).is_some());
     assert_eq!(
         cs_mail_worker::run_annual_distribution_batch(
-            &engine,
+            engine.deployment(),
             UNIT,
             &|| schedule.cutoff,
             Duration(30_000),
@@ -768,7 +764,10 @@ fn published_annual_period_is_finalized_by_durable_work() {
         .claimed,
         0
     );
-    assert_eq!(finalized, engine.financial_program(UNIT).unwrap());
+    assert_eq!(
+        finalized,
+        engine.deployment().financial_program(UNIT).unwrap()
+    );
 }
 
 fn test_time(value: u64) -> CanonicalTime {

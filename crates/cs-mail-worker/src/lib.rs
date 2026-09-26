@@ -5,7 +5,8 @@ use cs_mail_finance::{PaymentError, PaymentOutcome, PaymentProcessor};
 use cs_mail_primitives::{CanonicalTime, Duration, OperationalKeyRef, ProviderRef, SettlementUnit};
 use cs_mail_protocol::{EffectIntent, PolicySnapshot};
 use cs_mail_storage_postgres::{
-    PostgresEngine, StorageError, WorkFailure, WorkItem, WorkPayload, WorkQueue, WorkReport,
+    DeploymentQueue, PostgresDeployment, PostgresEngine, RelationshipQueue, StorageError,
+    WorkClaims, WorkFailure, WorkItem, WorkPayload, WorkReport,
 };
 
 pub trait DeliverySink {
@@ -41,7 +42,7 @@ impl From<StorageError> for WorkerError {
 }
 
 fn finish(
-    engine: &PostgresEngine,
+    engine: &impl WorkClaims,
     item: &WorkItem,
     now: CanonicalTime,
     result: Result<(), (WorkFailure, bool)>,
@@ -113,7 +114,7 @@ fn pending_outcome(outcome: PaymentOutcome) -> Result<(), (WorkFailure, bool)> {
 /// # Errors
 /// Returns claim/acknowledgement errors; per-item failures retain their durable work.
 pub fn run_annual_distribution_batch(
-    engine: &PostgresEngine,
+    engine: &PostgresDeployment,
     unit: SettlementUnit,
     clock: &impl cs_mail_application::accounts::AccountClock,
     lease: Duration,
@@ -122,8 +123,8 @@ pub fn run_annual_distribution_batch(
     let now = clock.now();
     let mut report = WorkReport::default();
     for queue in [
-        WorkQueue::AnnualAllocations(unit),
-        WorkQueue::DistributionPreparation,
+        DeploymentQueue::AnnualAllocations(unit),
+        DeploymentQueue::DistributionPreparation,
     ] {
         let items = engine.claim_work(queue, now, lease, limit)?;
         report.claimed += items.len();
@@ -149,14 +150,14 @@ pub fn run_annual_distribution_batch(
 /// # Errors
 /// Returns durable claim/acknowledgement errors; individual failures remain recorded.
 pub fn run_utility_payment_batch<P: PaymentProcessor>(
-    engine: &PostgresEngine,
+    engine: &PostgresDeployment,
     provider: &mut P,
     clock: &impl cs_mail_application::accounts::AccountClock,
     lease: Duration,
     limit: i64,
 ) -> Result<WorkReport, WorkerError> {
     let now = clock.now();
-    let items = engine.claim_work(WorkQueue::UtilityPayments, now, lease, limit)?;
+    let items = engine.claim_work(DeploymentQueue::UtilityPayments, now, lease, limit)?;
     let mut report = WorkReport {
         claimed: items.len(),
         ..WorkReport::default()
@@ -217,7 +218,7 @@ pub fn deliver_batch<S: DeliverySink>(
     lease: Duration,
     limit: i64,
 ) -> Result<WorkReport, WorkerError> {
-    let items = engine.claim_work(WorkQueue::Delivery, now, lease, limit)?;
+    let items = engine.claim_work(RelationshipQueue::Delivery, now, lease, limit)?;
     let mut report = WorkReport {
         claimed: items.len(),
         ..WorkReport::default()
@@ -255,7 +256,7 @@ pub fn run_payment_batch<P: PaymentProcessor>(
     limit: i64,
     policy: &PolicySnapshot,
 ) -> Result<WorkReport, WorkerError> {
-    let items = engine.claim_work(WorkQueue::RequestPayments, now, lease, limit)?;
+    let items = engine.claim_work(RelationshipQueue::RequestPayments, now, lease, limit)?;
     let mut report = WorkReport {
         claimed: items.len(),
         ..WorkReport::default()
@@ -290,14 +291,14 @@ pub fn run_payment_batch<P: PaymentProcessor>(
 /// # Errors
 /// Returns claim or acknowledgement storage errors.
 pub fn run_member_payment_batch<P: PaymentProcessor>(
-    engine: &PostgresEngine,
+    engine: &PostgresDeployment,
     provider: &mut P,
     unit: SettlementUnit,
     now: CanonicalTime,
     lease: Duration,
     limit: i64,
 ) -> Result<WorkReport, WorkerError> {
-    let items = engine.claim_work(WorkQueue::MemberPayments(unit), now, lease, limit)?;
+    let items = engine.claim_work(DeploymentQueue::MemberPayments(unit), now, lease, limit)?;
     let mut report = WorkReport {
         claimed: items.len(),
         ..WorkReport::default()

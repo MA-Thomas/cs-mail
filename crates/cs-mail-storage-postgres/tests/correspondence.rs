@@ -9,7 +9,7 @@ use cs_mail_correspondence::*;
 use cs_mail_finance::{BankVerification, FinancialScope};
 use cs_mail_primitives::*;
 use cs_mail_protocol::{ActorRef, ProtocolState, RelationshipState};
-use cs_mail_storage_postgres::{PostgresAccountRepository, PostgresEngine, StorageError};
+use cs_mail_storage_postgres::{PostgresAccountRepository, PostgresDeployment, StorageError};
 use ed25519_dalek::SigningKey;
 use postgres::{Client, NoTls};
 use std::sync::{
@@ -70,13 +70,10 @@ impl Fixture {
                     );
                     state.relationship.state = RelationshipState::Accepted;
                     engines.push(
-                        PostgresEngine::connect(
-                            &url,
-                            format!("pair-{a}-{b}"),
-                            &state,
-                            SettlementUnit(1),
-                        )
-                        .unwrap(),
+                        PostgresDeployment::connect(&url)
+                            .unwrap()
+                            .relationship(format!("pair-{a}-{b}"), &state, SettlementUnit(1))
+                            .unwrap(),
                     );
                 }
             }
@@ -89,9 +86,11 @@ impl Fixture {
             [9; 32],
             ProtocolVersion(2),
         );
-        host.configure_payment_arrangement(scope, SettlementUnit(1), key(7), key(77))
+        host.deployment()
+            .configure_payment_arrangement(scope, SettlementUnit(1), key(7), key(77))
             .unwrap();
-        host.configure_financial_program(scope, SettlementUnit(1), key(42), key(7))
+        host.deployment()
+            .configure_financial_program(scope, SettlementUnit(1), key(42), key(7))
             .unwrap();
         let mut accounts = vec![];
         let mut clients = vec![];

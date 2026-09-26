@@ -22,6 +22,7 @@ mod tests {
         ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, ReceiptRef, RelationshipRef,
         RequestHistoryRef, RequestId, RetentionPolicyVersion, SettlementUnit, Version, WireVersion,
     };
+    use cs_mail_protocol::pricing::{RecipientRequestClasses, RequestClass, RequestPricingPolicy};
     use cs_mail_protocol::{
         ActorRef, KernelCommand, PolicySnapshot, ProtocolCommand, ProtocolError, ProtocolState,
         TermsOutcome,
@@ -35,24 +36,50 @@ mod tests {
     const RECIPIENT: ProtocolIdentity = ProtocolIdentity(20);
     const PROVIDER: ProviderRef = ProviderRef(30);
 
-    fn policy() -> PolicySnapshot {
-        PolicySnapshot {
-            selected_class: Some(
-                cs_mail_protocol::pricing::SelectedRequestClass::new(
-                    cs_mail_primitives::RequestClassId(1),
-                    "Test class".into(),
+    fn pricing(version: u64, processing_charge: u64) -> RequestPricingPolicy {
+        RequestPricingPolicy::new(
+            PolicyVersion(version),
+            SettlementUnit(1),
+            Money::from_minor_units(processing_charge),
+            Money::from_minor_units(1),
+            Money::from_minor_units(1000),
+        )
+        .unwrap()
+    }
+    /// Trusted harness pricing for `RECIPIENT`: class 1 with collateral `collateral`.
+    fn priced(
+        store: &cs_mail_application::InMemoryStore,
+        policy: RequestPricingPolicy,
+        version: u64,
+        collateral: u64,
+    ) {
+        store.configure_request_pricing(policy).unwrap();
+        store
+            .configure_request_classes(
+                RecipientRequestClasses::new(
+                    RECIPIENT,
+                    version,
+                    vec![
+                        RequestClass::new(
+                            cs_mail_primitives::RequestClassId(1),
+                            "Test class".into(),
+                            Money::from_minor_units(collateral),
+                        )
+                        .unwrap(),
+                    ],
                 )
                 .unwrap(),
-            ),
-            pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
+            )
+            .unwrap();
+    }
+    fn policy() -> PolicySnapshot {
+        PolicySnapshot {
             protocol_version: ProtocolVersion(2),
             policy_version: PolicyVersion(1),
             privacy_profile_version: PrivacyProfileVersion(1),
             retention_policy_version: RetentionPolicyVersion(1),
             recipient_provider: PROVIDER,
             unit: SettlementUnit(1),
-            processing_charge: Money::from_minor_units(2),
-            collateral: Money::from_minor_units(8),
             submission_window: Duration(10),
             decision_window: Duration(20),
             quote_lifetime: Duration(20),
@@ -155,6 +182,7 @@ mod tests {
             ),
         )
         .unwrap();
+        priced(engine.store(), pricing(1, 2), 1, 8);
         let issued = engine
             .execute(
                 sender(
@@ -174,8 +202,7 @@ mod tests {
         };
         let mut changed = policy();
         changed.policy_version = PolicyVersion(2);
-        changed.processing_charge = Money::from_minor_units(200);
-        changed.collateral = Money::from_minor_units(800);
+        priced(engine.store(), pricing(2, 200), 2, 800);
         changed.submission_window = Duration(2);
         engine
             .execute(
@@ -217,6 +244,7 @@ mod tests {
             [9; 32],
             cs_mail_primitives::ProtocolVersion(2),
         ));
+        priced(&store, pricing(1, 2), 1, 8);
         let first = store.register(first_state, SettlementUnit(1)).unwrap();
         let issued = first
             .execute(

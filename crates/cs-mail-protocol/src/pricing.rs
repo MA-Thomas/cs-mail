@@ -1,62 +1,133 @@
-//! Recipient-defined request classes resolve into immutable quotes; existing requests are unaffected.
-use cs_mail_primitives::{Money, ProtocolIdentity, RequestClassId};
+//! CSQD's request pricing policy and recipient-defined request classes. Quotes resolve one
+//! class against the current policy into an immutable [`RequestPrice`]; issued terms never
+//! change afterwards.
+use cs_mail_primitives::{Money, PolicyVersion, ProtocolIdentity, RequestClassId, SettlementUnit};
 use serde::{Deserialize, Serialize};
+
+/// The operator's single cs-mail-wide pricing policy: processing component `C` and the
+/// bounds within which every request class's collateral `S` must lie. A published
+/// version is immutable.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "PolicyInput")]
 pub struct RequestPricingPolicy {
-    pub version: u64,
-    pub processing_charge: Money,
-    /// Suggested amount when composing a new class; never an implicit request class.
-    pub default_collateral: Money,
-    pub collateral_choices: Vec<Money>,
+    version: PolicyVersion,
+    unit: SettlementUnit,
+    processing_charge: Money,
+    collateral_min: Money,
+    collateral_max: Money,
 }
-impl Default for RequestPricingPolicy {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            processing_charge: Money::from_minor_units(50),
-            default_collateral: Money::from_minor_units(500),
-            collateral_choices: [100, 250, 500, 1000, 2500]
-                .map(Money::from_minor_units)
-                .to_vec(),
-        }
+#[derive(Deserialize)]
+struct PolicyInput {
+    version: PolicyVersion,
+    unit: SettlementUnit,
+    processing_charge: Money,
+    collateral_min: Money,
+    collateral_max: Money,
+}
+impl TryFrom<PolicyInput> for RequestPricingPolicy {
+    type Error = String;
+    fn try_from(v: PolicyInput) -> Result<Self, Self::Error> {
+        Self::new(
+            v.version,
+            v.unit,
+            v.processing_charge,
+            v.collateral_min,
+            v.collateral_max,
+        )
+        .map_err(|e| format!("{e:?}"))
     }
 }
 impl RequestPricingPolicy {
-    pub fn valid(&self) -> bool {
-        self.version != 0
-            && !self.processing_charge.is_zero()
-            && self.collateral_choices.contains(&self.default_collateral)
-            && self.collateral_choices.windows(2).all(|p| p[0] < p[1])
-            && self
-                .collateral_choices
-                .iter()
-                .all(|s| !s.is_zero() && self.processing_charge.checked_add(*s).is_some())
+    /// # Errors
+    /// Rejects a zero version or charge, empty or inverted bounds, and a maximum charge
+    /// `C + collateral_max` that cannot be represented.
+    pub fn new(
+        version: PolicyVersion,
+        unit: SettlementUnit,
+        processing_charge: Money,
+        collateral_min: Money,
+        collateral_max: Money,
+    ) -> Result<Self, crate::ProtocolError> {
+        if version.0 == 0
+            || processing_charge.is_zero()
+            || collateral_min.is_zero()
+            || collateral_min > collateral_max
+            || processing_charge.checked_add(collateral_max).is_none()
+        {
+            return Err(crate::ProtocolError::PolicyInvalid);
+        }
+        Ok(Self {
+            version,
+            unit,
+            processing_charge,
+            collateral_min,
+            collateral_max,
+        })
     }
-    /// Checks the complete recipient publication against this operator's menu.
+    pub const fn version(&self) -> PolicyVersion {
+        self.version
+    }
+    pub const fn unit(&self) -> SettlementUnit {
+        self.unit
+    }
+    pub const fn processing_charge(&self) -> Money {
+        self.processing_charge
+    }
+    pub const fn collateral_min(&self) -> Money {
+        self.collateral_min
+    }
+    pub const fn collateral_max(&self) -> Money {
+        self.collateral_max
+    }
+    /// Whether one class's collateral lies within the current bounds.
+    pub fn quotable(&self, class: &RequestClass) -> bool {
+        self.collateral_min <= class.collateral && class.collateral <= self.collateral_max
+    }
+    /// Whether every class of a publication lies within the current bounds.
     pub fn permits(&self, classes: &RecipientRequestClasses) -> bool {
-        self.valid()
-            && classes
+        classes.classes.iter().all(|c| self.quotable(c))
+    }
+    /// What a sender may choose from now: `C` and the currently quotable classes.
+    pub fn sender_offer(&self, classes: &RecipientRequestClasses) -> SenderOffer {
+        SenderOffer {
+            policy_version: self.version,
+            processing_charge: self.processing_charge,
+            classes: classes
                 .classes
                 .iter()
-                .all(|c| self.collateral_choices.contains(&c.collateral))
+                .filter(|c| self.quotable(c))
+                .cloned()
+                .collect(),
+        }
     }
+    /// The recipient's own view: every published class and whether it is quotable now.
+    pub fn class_status(&self, classes: &RecipientRequestClasses) -> Vec<(RequestClass, bool)> {
+        classes
+            .classes
+            .iter()
+            .map(|c| (c.clone(), self.quotable(c)))
+            .collect()
+    }
+    /// Prices one class of a recipient's current publication.
     /// # Errors
-    /// Rejects unknown classes or collateral outside the operator's menu.
-    pub fn resolve_quote(
+    /// `ClassUnknown` when the publication has no such class, and `ClassOutsidePolicy`
+    /// when its collateral lies outside the current bounds.
+    pub fn quote(
         &self,
         classes: &RecipientRequestClasses,
         id: RequestClassId,
-    ) -> Result<ResolvedRequestPricing, crate::ProtocolError> {
-        if !self.permits(classes) {
-            return Err(crate::ProtocolError::PolicyInvalid);
-        }
+    ) -> Result<RequestPrice, PricingRefusal> {
         let class = classes
             .classes
             .iter()
             .find(|c| c.id() == id)
-            .ok_or(crate::ProtocolError::PolicyInvalid)?;
-        Ok(ResolvedRequestPricing {
-            version: cs_mail_primitives::PolicyVersion(self.version),
+            .ok_or(PricingRefusal::ClassUnknown)?;
+        if !self.quotable(class) {
+            return Err(PricingRefusal::ClassOutsidePolicy);
+        }
+        Ok(RequestPrice {
+            policy_version: self.version,
+            unit: self.unit,
             processing_charge: self.processing_charge,
             collateral: class.collateral,
             selected: class.selection.clone(),
@@ -198,18 +269,118 @@ impl RecipientRequestClasses {
     }
 }
 
+/// Why a requested class cannot be priced.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum PricingRefusal {
+    /// No operator pricing policy has been published.
+    NoPolicy,
+    /// The recipient has not published the requested class.
+    ClassUnknown,
+    /// The class's collateral lies outside the current bounds; it cannot be quoted until
+    /// the recipient republishes.
+    ClassOutsidePolicy,
+}
+impl From<PricingRefusal> for crate::ProtocolError {
+    fn from(refusal: PricingRefusal) -> Self {
+        match refusal {
+            PricingRefusal::NoPolicy => Self::PolicyInvalid,
+            PricingRefusal::ClassUnknown => Self::RequestClassUnknown,
+            PricingRefusal::ClassOutsidePolicy => Self::RequestClassOutsidePolicy,
+        }
+    }
+}
+
+/// The host's pricing input to one transition. A refusal is surfaced only when the
+/// request actually needs a charge; an accepted relationship or a live lane needs none.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum QuotePricing {
+    /// The command does not request terms.
+    NotRequested,
+    /// The requested class resolved to a price under the current policy.
+    Resolved(RequestPrice),
+    /// The requested class cannot be priced.
+    Refused(PricingRefusal),
+}
+impl QuotePricing {
+    /// The single rule for pricing a requested class from the current operator policy and
+    /// the recipient's current publication, used by every storage adapter.
+    pub fn resolve(
+        policy: Option<&RequestPricingPolicy>,
+        classes: Option<&RecipientRequestClasses>,
+        class: RequestClassId,
+    ) -> Self {
+        let Some(policy) = policy else {
+            return Self::Refused(PricingRefusal::NoPolicy);
+        };
+        let Some(classes) = classes else {
+            return Self::Refused(PricingRefusal::ClassUnknown);
+        };
+        match policy.quote(classes, class) {
+            Ok(price) => Self::Resolved(price),
+            Err(refusal) => Self::Refused(refusal),
+        }
+    }
+}
+
+/// The classes a sender can currently choose, with the processing component they add.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolvedRequestPricing {
-    version: cs_mail_primitives::PolicyVersion,
+pub struct SenderOffer {
+    pub policy_version: PolicyVersion,
+    pub processing_charge: Money,
+    pub classes: Vec<RequestClass>,
+}
+
+/// The price of one request class under one policy version, fixed when terms are issued.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "PriceInput")]
+pub struct RequestPrice {
+    policy_version: PolicyVersion,
+    unit: SettlementUnit,
     processing_charge: Money,
     collateral: Money,
     selected: SelectedRequestClass,
 }
-impl crate::PolicySnapshot {
-    pub fn apply_pricing(&mut self, pricing: &ResolvedRequestPricing) {
-        self.pricing_policy_version = pricing.version;
-        self.processing_charge = pricing.processing_charge;
-        self.collateral = pricing.collateral;
-        self.selected_class = Some(pricing.selected.clone());
+#[derive(Deserialize)]
+struct PriceInput {
+    policy_version: PolicyVersion,
+    unit: SettlementUnit,
+    processing_charge: Money,
+    collateral: Money,
+    selected: SelectedRequestClass,
+}
+impl TryFrom<PriceInput> for RequestPrice {
+    type Error = String;
+    fn try_from(v: PriceInput) -> Result<Self, Self::Error> {
+        if v.policy_version.0 == 0
+            || v.processing_charge.is_zero()
+            || v.collateral.is_zero()
+            || v.processing_charge.checked_add(v.collateral).is_none()
+        {
+            return Err("invalid request price".into());
+        }
+        Ok(Self {
+            policy_version: v.policy_version,
+            unit: v.unit,
+            processing_charge: v.processing_charge,
+            collateral: v.collateral,
+            selected: v.selected,
+        })
+    }
+}
+impl RequestPrice {
+    pub const fn policy_version(&self) -> PolicyVersion {
+        self.policy_version
+    }
+    pub const fn unit(&self) -> SettlementUnit {
+        self.unit
+    }
+    pub const fn processing_charge(&self) -> Money {
+        self.processing_charge
+    }
+    pub const fn collateral(&self) -> Money {
+        self.collateral
+    }
+    pub const fn selected(&self) -> &SelectedRequestClass {
+        &self.selected
     }
 }

@@ -5,11 +5,29 @@ use cs_mail_finance::{BankVerification, PaymentProcessor, SimulatedProcessor};
 use cs_mail_primitives::*;
 use cs_mail_storage_postgres::{PostgresEngine, StorageError};
 use ed25519_dalek::SigningKey;
+/// Processing component `C` of the regression fixtures' pricing policy.
+pub const FIXTURE_PROCESSING_CHARGE: u64 = 2;
+/// Collateral `S` of the fixtures' single published class.
+pub const FIXTURE_COLLATERAL: u64 = 8;
+/// The regression fixtures' operator pricing policy: `C = 2`, collateral bounds 1..=1000.
+/// # Errors
+/// Never fails for these constants; returns the constructor's error type.
+pub fn fixture_pricing(
+    unit: SettlementUnit,
+) -> Result<cs_mail_protocol::pricing::RequestPricingPolicy, cs_mail_protocol::ProtocolError> {
+    cs_mail_protocol::pricing::RequestPricingPolicy::new(
+        PolicyVersion(1),
+        unit,
+        Money::from_minor_units(FIXTURE_PROCESSING_CHARGE),
+        Money::from_minor_units(1),
+        Money::from_minor_units(1000),
+    )
+}
 pub fn arrangement(
     engine: &PostgresEngine,
     policy: &cs_mail_protocol::PolicySnapshot,
 ) -> Result<(), StorageError> {
-    engine.configure_payment_arrangement(
+    engine.deployment().configure_payment_arrangement(
         policy.financial.scope,
         policy.unit,
         SimulatedProcessor::new([7; 32]).verifying_key(),
@@ -46,7 +64,11 @@ pub fn provision(
             provider_keys.register(record.reference, record.actor, record.verifying_key, at)?;
             continue;
         };
-        let account = match engine.accounts(move || at).persona_account(persona) {
+        let account = match engine
+            .deployment()
+            .accounts(move || at)
+            .persona_account(persona)
+        {
             Ok(account) => account,
             Err(StorageError::Identity(identity_contract::Error::Invalid)) => {
                 enroll_persona(engine, policy, persona, record, sender, at)?
@@ -54,6 +76,7 @@ pub fn provision(
             Err(error) => return Err(error),
         };
         let billing = engine
+            .deployment()
             .accounts(move || at)
             .product_account(account)?
             .billing;
@@ -61,7 +84,12 @@ pub fn provision(
     }
     engine.initialize_key_registry(&provider_keys, at)?;
     engine.configure_ingress(policy.financial.scope.deployment_domain, policy)?;
-    if engine.request_classes()?.is_none() {
+    let pricing =
+        cs_mail_application::request_pricing::RequestPricingService::new(engine.deployment());
+    if engine.deployment().request_pricing_policy()?.is_none() {
+        pricing.publish_policy(&fixture_pricing(policy.unit)?, || at)?;
+    }
+    if engine.deployment().request_classes(recipient)?.is_none() {
         let record = all_keys
             .records()
             .find(|r| r.actor == cs_mail_protocol::ActorRef::Recipient(recipient))
@@ -72,7 +100,7 @@ pub fn provision(
             vec![cs_mail_protocol::pricing::RequestClass::new(
                 RequestClassId(1),
                 "Test class".into(),
-                policy.collateral,
+                Money::from_minor_units(FIXTURE_COLLATERAL),
             )?],
         )?;
         let signer = cs_mail_security::CommandSigner::from_secret_bytes(
@@ -80,16 +108,11 @@ pub fn provision(
             record.reference,
             &[u8::try_from(record.reference.0).unwrap(); 32],
         );
-        let scope = cs_mail_security::SigningScope {
+        let scope = cs_mail_security::RecipientSigningScope {
             deployment_domain: policy.financial.scope.deployment_domain,
-            intended_provider: policy.recipient_provider,
-            relationship: engine.snapshot()?.state.relationship.key.reference,
+            provider: policy.recipient_provider,
         };
-        cs_mail_application::request_classes::RequestClassesService::new(engine).publish(
-            &signer.sign_request_classes(scope, classes)?,
-            policy,
-            || at,
-        )?;
+        pricing.publish_classes(&signer.sign_request_classes(scope, classes)?, scope, || at)?;
     }
     Ok(())
 }
@@ -134,15 +157,14 @@ fn purchase_service(
     reference: OperationalKeyRef,
     at: CanonicalTime,
 ) -> Result<(), StorageError> {
-    if !engine.billing_account(id)?.contracts().is_empty() {
+    if !engine
+        .deployment()
+        .billing_account(id)?
+        .contracts()
+        .is_empty()
+    {
         return Ok(());
     }
-    engine.configure_request_pricing(&cs_mail_protocol::pricing::RequestPricingPolicy {
-        version: 1,
-        processing_charge: policy.processing_charge,
-        default_collateral: policy.collateral,
-        collateral_choices: vec![policy.collateral],
-    })?;
     let offer = ServiceOffer::new(
         PolicyVersion(1),
         ServicePeriod::annual(1971, 1, 1, LeapDayRule::February28)?,
@@ -150,7 +172,7 @@ fn purchase_service(
         Money::from_minor_units(12000),
         policy.unit,
     )?;
-    engine.publish_service_offer(&offer)?;
+    engine.deployment().publish_service_offer(&offer)?;
     let signed = SignedBillingCommand::sign(
         id,
         reference,
@@ -162,17 +184,15 @@ fn purchase_service(
         },
         &[u8::try_from(reference.0).unwrap(); 32],
     )?;
-    let op = cs_mail_application::billing::operations::BillingService::new(engine, &|| at)
-        .execute_command(&signed)?
-        .remove(0);
-    cs_mail_application::billing::operations::BillingService::new(engine, &|| at)
+    let op =
+        cs_mail_application::billing::operations::BillingService::new(engine.deployment(), &|| at)
+            .execute_command(&signed)?
+            .remove(0);
+    cs_mail_application::billing::operations::BillingService::new(engine.deployment(), &|| at)
         .authorize_dispatch(id, ServiceContractId(op.id.0), op.id)?;
     let mut processor = SimulatedProcessor::new([7; 32]);
     let receipt = processor.submit(&op).unwrap();
-    cs_mail_application::billing::operations::BillingService::new(engine, &|| at).confirm_payment(
-        id,
-        ServiceContractId(op.id.0),
-        &receipt,
-    )?;
+    cs_mail_application::billing::operations::BillingService::new(engine.deployment(), &|| at)
+        .confirm_payment(id, ServiceContractId(op.id.0), &receipt)?;
     Ok(())
 }

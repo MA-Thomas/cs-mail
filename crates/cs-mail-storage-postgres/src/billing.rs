@@ -57,7 +57,7 @@ pub(super) fn arrangement(
             .map_err(|_| BillingError::Conflict)?,
     ))
 }
-impl PostgresEngine {
+impl PostgresDeployment {
     /// Trusted deployment configuration: exactly one payment-processing arrangement.
     /// # Errors
     /// Rejects missing keys, incompatible existing configuration, or database failures.
@@ -287,7 +287,7 @@ impl From<cs_mail_finance::ProgramError> for StorageError {
         Self::Finance(error)
     }
 }
-impl BillingStore for PostgresEngine {
+impl BillingStore for PostgresDeployment {
     type Error = StorageError;
     fn billing<T>(
         &self,
@@ -362,9 +362,8 @@ impl BillingStore for PostgresEngine {
                 tx.execute("INSERT INTO cs_billing_journal(account,event,entry) VALUES($1,$2,$3)", &[&id, &journal.receipt.evidence.event_id.0.to_string(), &Json(serde_json::json!({"at":journal.at,"receipt":journal.receipt,"postings":journal.postings}))])?;
             }
             if let Some(work) = writes.work {
-                work::enqueue(
+                work::enqueue_deployment(
                     &mut tx,
-                    &self.aggregate_key,
                     work::WorkSource::PaymentAttempt(work.operation),
                     &WorkPayload::UtilityPayment {
                         account: work.account,
@@ -420,9 +419,8 @@ impl BillingStore for PostgresEngine {
             )?;
         }
         if let Some(op) = operation {
-            work::enqueue(
+            work::enqueue_deployment(
                 &mut tx,
-                &self.aggregate_key,
                 work::WorkSource::PaymentAttempt(op.id),
                 &WorkPayload::MemberPayment {
                     unit,

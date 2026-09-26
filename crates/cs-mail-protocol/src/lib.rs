@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use cs_mail_ledger::{LedgerBatch, LedgerError};
 use cs_mail_primitives::{
     CanonicalTime, ContentRef, DeliveryIntentRef, Duration, EventRef, IdempotencyKey,
-    JournalPosition, LaneId, MessageDeclarationDigest, MessageId, MessageValidityUntil, Money,
+    JournalPosition, LaneId, MessageDeclarationDigest, MessageId, MessageValidityUntil,
     OperationalKeyRef, PolicyVersion, PrivacyProfileVersion, ProtocolIdentity, ProtocolVersion,
     ProviderRef, QuoteId, RelationshipVersion, RequestId, RequestVersion, RetentionPolicyVersion,
     SettlementUnit, Version,
@@ -26,17 +26,12 @@ pub use model::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct PolicySnapshot {
-    pub selected_class: Option<pricing::SelectedRequestClass>,
-    pub pricing_policy_version: PolicyVersion,
     pub protocol_version: ProtocolVersion,
     pub policy_version: PolicyVersion,
     pub privacy_profile_version: PrivacyProfileVersion,
     pub retention_policy_version: RetentionPolicyVersion,
     pub recipient_provider: ProviderRef,
     pub unit: SettlementUnit,
-    pub processing_charge: Money,
-    pub collateral: Money,
-
     pub submission_window: Duration,
     pub decision_window: Duration,
     pub quote_lifetime: Duration,
@@ -57,11 +52,7 @@ impl PolicySnapshot {
     }
 
     fn validate(&self) -> Result<(), ProtocolError> {
-        if self
-            .processing_charge
-            .checked_add(self.collateral)
-            .is_none_or(Money::is_zero)
-            || self.financial.validate().is_err()
+        if self.financial.validate().is_err()
             || self.payment_provider_key == [0; 32]
             || self.decision_window.0 == 0
             || self.backoff.is_empty()
@@ -82,6 +73,9 @@ pub struct TransitionContext {
     pub journal_position: JournalPosition,
     pub protocol_version: ProtocolVersion,
     pub policy: PolicySnapshot,
+    /// The host's resolution of the class requested by `IssueRequestTerms`, against the
+    /// current pricing policy and the recipient's current publication.
+    pub pricing: pricing::QuotePricing,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -319,7 +313,9 @@ pub enum ProtocolError {
     QuoteVersionStale,
     RelationshipAccepted,
     ContactBlocked,
-    BackoffActive { next_eligible: CanonicalTime },
+    BackoffActive {
+        next_eligible: CanonicalTime,
+    },
     InsufficientFunds,
     RequestAlreadyExists,
     PaymentNotConfirmed,
@@ -340,6 +336,11 @@ pub enum ProtocolError {
     IncompleteSnapshot,
     ProtocolVersionMismatch,
     PolicyInvalid,
+    /// The recipient has not published the requested class.
+    RequestClassUnknown,
+    /// The class's collateral lies outside the current pricing bounds; it cannot be quoted
+    /// until the recipient republishes.
+    RequestClassOutsidePolicy,
     ArithmeticOverflow,
     LedgerInvariant,
 }
@@ -685,14 +686,17 @@ fn issue_terms(
                 .now
                 .checked_add(policy.quote_lifetime)
                 .ok_or(ProtocolError::ArithmeticOverflow)?;
-            let selected_class = policy
-                .selected_class
-                .clone()
-                .filter(|c| c.id() == class_id)
-                .ok_or(ProtocolError::PolicyInvalid)?;
+            let price = match &context.pricing {
+                pricing::QuotePricing::Resolved(price) => price,
+                pricing::QuotePricing::Refused(refusal) => return Err((*refusal).into()),
+                pricing::QuotePricing::NotRequested => return Err(ProtocolError::PolicyInvalid),
+            };
+            if price.selected().id() != class_id || price.unit() != policy.unit {
+                return Err(ProtocolError::PolicyInvalid);
+            }
             let terms = RequestTerms {
-                selected_class,
-                pricing_policy_version: policy.pricing_policy_version,
+                selected_class: price.selected().clone(),
+                pricing_policy_version: price.policy_version(),
                 quote_id,
                 protocol_version: context.protocol_version,
                 policy_version: policy.policy_version,
@@ -705,8 +709,8 @@ fn issue_terms(
                 recipient_provider: policy.recipient_provider,
                 relationship_version: manifest.next.relationship.version,
                 history_version: manifest.history.version,
-                processing_charge: policy.processing_charge,
-                collateral: policy.collateral,
+                processing_charge: price.processing_charge(),
+                collateral: price.collateral(),
                 request_level: manifest.history.level,
                 eligibility_time: manifest.history.earliest_next_submission,
                 unit: policy.unit,
@@ -1606,22 +1610,12 @@ mod tests {
             cs_mail_ledger::LedgerState::new(SettlementUnit(1)).view(),
         );
         let policy = PolicySnapshot {
-            selected_class: Some(
-                crate::pricing::SelectedRequestClass::new(
-                    cs_mail_primitives::RequestClassId(1),
-                    "Test class".into(),
-                )
-                .unwrap(),
-            ),
-            pricing_policy_version: cs_mail_primitives::PolicyVersion(1),
             protocol_version: ProtocolVersion(2),
             policy_version: PolicyVersion(1),
             privacy_profile_version: PrivacyProfileVersion(1),
             retention_policy_version: RetentionPolicyVersion(1),
             recipient_provider: ProviderRef(30),
             unit: SettlementUnit(1),
-            processing_charge: Money::from_minor_units(2),
-            collateral: Money::from_minor_units(8),
             submission_window: Duration(10),
             decision_window: Duration(50),
             quote_lifetime: Duration(20),
@@ -1648,6 +1642,7 @@ mod tests {
             journal_position: JournalPosition(1),
             protocol_version: ProtocolVersion(2),
             policy,
+            pricing: crate::pricing::QuotePricing::NotRequested,
         };
         let command = KernelCommand::new(
             ProtocolCommand::IssueRequestTerms {

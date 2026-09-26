@@ -128,25 +128,61 @@ pub struct IngressService<C> {
 }
 
 impl<C: CanonicalClock> IngressService<C> {
+    /// Publishes a recipient address's classes, signed by a key of that address.
     /// # Errors
-    /// Rejects invalid recipient authority or an amount outside the configured menu.
+    /// Rejects a foreign scope or key, collateral outside the current bounds, an altered
+    /// replay or a stale version.
     pub fn set_request_classes(
         &self,
         signed: &cs_mail_security::SignedRequestClasses,
     ) -> Result<(), ServiceError> {
-        cs_mail_application::request_classes::RequestClassesService::new(&self.engine).publish(
-            signed,
-            &self.policy.protocol,
-            || self.clock.now(),
-        )?;
+        cs_mail_application::request_pricing::RequestPricingService::new(self.engine.deployment())
+            .publish_classes(
+                signed,
+                cs_mail_security::RecipientSigningScope {
+                    deployment_domain: self.policy.deployment_domain,
+                    provider: self.policy.protocol.recipient_provider,
+                },
+                || self.clock.now(),
+            )?;
         Ok(())
     }
+    /// What a sender may choose when approaching `recipient`: `C` and the classes that can
+    /// be quoted now. `None` when no policy or publication exists.
     /// # Errors
-    /// Returns storage or invalid-publication errors.
-    pub fn request_classes(
+    /// Returns storage errors.
+    pub fn request_offer(
         &self,
-    ) -> Result<Option<cs_mail_protocol::pricing::RecipientRequestClasses>, ServiceError> {
-        Ok(self.engine.request_classes()?)
+        recipient: cs_mail_primitives::ProtocolIdentity,
+    ) -> Result<Option<cs_mail_protocol::pricing::SenderOffer>, ServiceError> {
+        let deployment = self.engine.deployment();
+        Ok(
+            match (
+                deployment.request_pricing_policy()?,
+                deployment.request_classes(recipient)?,
+            ) {
+                (Some(policy), Some(classes)) => Some(policy.sender_offer(&classes)),
+                _ => None,
+            },
+        )
+    }
+    /// The recipient's own view of its classes and whether each is quotable now.
+    /// # Errors
+    /// Returns storage errors.
+    pub fn request_class_status(
+        &self,
+        recipient: cs_mail_primitives::ProtocolIdentity,
+    ) -> Result<Vec<(cs_mail_protocol::pricing::RequestClass, bool)>, ServiceError> {
+        let deployment = self.engine.deployment();
+        Ok(
+            match (
+                deployment.request_pricing_policy()?,
+                deployment.request_classes(recipient)?,
+            ) {
+                (Some(policy), Some(classes)) => policy.class_status(&classes),
+                _ => Vec::new(),
+            },
+        )
     }
     /// Authenticates the billing command independently of service coverage. Expired service
     /// never prevents a member from inspecting or collecting an existing allocation.
@@ -159,14 +195,15 @@ impl<C: CanonicalClock> IngressService<C> {
         if command.scope != self.policy.protocol.financial.scope {
             return Err(ServiceError::SigningScopeMismatch);
         }
-        let operations =
-            cs_mail_application::billing::operations::BillingService::new(&self.engine, &|| {
-                self.clock.now()
-            })
-            .execute_command(command)?;
-        let account = self.engine.billing_account(command.account)?;
+        let operations = cs_mail_application::billing::operations::BillingService::new(
+            self.engine.deployment(),
+            &|| self.clock.now(),
+        )
+        .execute_command(command)?;
+        let account = self.engine.deployment().billing_account(command.account)?;
         let allocations = self
             .engine
+            .deployment()
             .financial_program(account.unit())?
             .member_statement(account.member());
         Ok(BillingOutcome {

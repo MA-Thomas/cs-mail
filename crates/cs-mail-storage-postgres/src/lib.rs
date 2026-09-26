@@ -24,7 +24,9 @@
 mod retention;
 pub use retention::{LifecyclePolicy, RetentionReport};
 mod work;
-pub use work::{WorkFailure, WorkItem, WorkPayload, WorkQueue, WorkReport};
+pub use work::{
+    DeploymentQueue, RelationshipQueue, WorkClaims, WorkFailure, WorkItem, WorkPayload, WorkReport,
+};
 mod accounts;
 mod consent;
 mod correspondence;
@@ -34,6 +36,7 @@ mod billing;
 mod domain;
 mod finance;
 mod ingress;
+mod pricing;
 use domain::{load_domain_records, persist_domain_records, persist_message};
 pub use ingress::{ReceivedCommand, ReceivedOutcome, Refusal};
 
@@ -74,6 +77,7 @@ const MIGRATION_6: &str = include_str!("../migrations/0006_authenticated_message
 const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 9;
 const MIGRATION_15: &str = include_str!("../migrations/0015_product_accounts.sql");
 const MIGRATION_18: &str = include_str!("../migrations/0018_request_classes.sql");
+const MIGRATION_19: &str = include_str!("../migrations/0019_request_pricing.sql");
 const MIGRATION_17: &str = include_str!("../migrations/0017_content_consent.sql");
 const MIGRATION_16: &str = include_str!("../migrations/0016_correspondence.sql");
 const MIGRATION_14: &str = include_str!("../migrations/0014_utility_billing.sql");
@@ -99,6 +103,7 @@ pub enum StorageError {
     DuplicateConflict,
     VersionConflict,
     NumericRange,
+    WorkScopeMismatch,
     PendingCommands,
     AdmissionRefused(cs_mail_protocol::admission::AdmissionFailure),
     LockPoisoned,
@@ -140,6 +145,9 @@ impl fmt::Display for StorageError {
             Self::VersionConflict => formatter.write_str("aggregate revision changed"),
             Self::NumericRange => {
                 formatter.write_str("value exceeds the PostgreSQL representation")
+            }
+            Self::WorkScopeMismatch => {
+                formatter.write_str("work belongs to a different owner scope")
             }
             Self::LockPoisoned => formatter.write_str("database client lock poisoned"),
             Self::Security(error) => write!(formatter, "security error: {error}"),
@@ -295,13 +303,63 @@ enum CapabilityEvent {
     LaneReviewReminder(LaneId),
 }
 
-pub struct PostgresEngine {
-    aggregate_key: String,
+/// Deployment-wide durable state: the schema, trusted configuration, product accounts,
+/// billing, the financial program and deployment-owned work. It exists before, and
+/// independently of, any relationship. Relationship engines are opened from it.
+#[derive(Clone)]
+pub struct PostgresDeployment {
     client: Arc<Mutex<Client>>,
 }
 
-impl PostgresEngine {
-    /// Account ownership is independent of this engine's relationship.
+impl PostgresDeployment {
+    /// Connects without transport TLS and applies the schema migrations.
+    /// Production callers should create a TLS-configured `Client` and use `from_client`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for connection or migration failures.
+    pub fn connect(database_url: &str) -> Result<Self, StorageError> {
+        Self::from_client(Client::connect(database_url, NoTls)?)
+    }
+
+    /// Uses a caller-configured client, including a TLS client created outside this
+    /// crate for production deployments, and applies the schema migrations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for migration or database failures.
+    pub fn from_client(mut client: Client) -> Result<Self, StorageError> {
+        migrate(&mut client)?;
+        Ok(Self {
+            client: Arc::new(Mutex::new(client)),
+        })
+    }
+
+    /// Opens one relationship aggregate, creating it idempotently from its initial state.
+    /// The engine shares this deployment's connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for bootstrap, serialization, or database failures.
+    pub fn relationship(
+        &self,
+        aggregate_key: impl Into<String>,
+        initial_state: &ProtocolState,
+        unit: SettlementUnit,
+    ) -> Result<PostgresEngine, StorageError> {
+        let aggregate_key = aggregate_key.into();
+        {
+            let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+            bootstrap(&mut client, &aggregate_key, initial_state, unit)?;
+        }
+        Ok(PostgresEngine {
+            aggregate_key,
+            client: self.client.clone(),
+            deployment: self.clone(),
+        })
+    }
+
+    /// Product accounts, enrollment, consent and correspondence storage.
     pub fn accounts(
         &self,
         clock: impl cs_mail_application::accounts::AccountClock + 'static,
@@ -311,43 +369,19 @@ impl PostgresEngine {
             clock: Arc::new(clock),
         }
     }
+}
 
-    /// Connects without transport TLS, migrates, and bootstraps an aggregate.
-    /// Production callers should create a TLS-configured `Client` and use `from_client`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for connection, migration, serialization, or numeric
-    /// conversion failures.
-    pub fn connect(
-        database_url: &str,
-        aggregate_key: impl Into<String>,
-        initial_state: &ProtocolState,
-        unit: SettlementUnit,
-    ) -> Result<Self, StorageError> {
-        let client = Client::connect(database_url, NoTls)?;
-        Self::from_client(client, aggregate_key, initial_state, unit)
-    }
+/// Durable execution of one relationship aggregate, opened from a [`PostgresDeployment`].
+pub struct PostgresEngine {
+    aggregate_key: String,
+    client: Arc<Mutex<Client>>,
+    deployment: PostgresDeployment,
+}
 
-    /// Builds an engine from a caller-configured client, including a TLS client
-    /// created outside this crate for production deployments.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for migration, bootstrap, serialization, or database failures.
-    pub fn from_client(
-        mut client: Client,
-        aggregate_key: impl Into<String>,
-        initial_state: &ProtocolState,
-        unit: SettlementUnit,
-    ) -> Result<Self, StorageError> {
-        migrate(&mut client)?;
-        let aggregate_key = aggregate_key.into();
-        bootstrap(&mut client, &aggregate_key, initial_state, unit)?;
-        Ok(Self {
-            aggregate_key,
-            client: Arc::new(Mutex::new(client)),
-        })
+impl PostgresEngine {
+    /// The deployment this relationship belongs to.
+    pub const fn deployment(&self) -> &PostgresDeployment {
+        &self.deployment
     }
 
     /// Installs the initial durable key authority without replacing an existing registry.
@@ -890,6 +924,7 @@ fn migrate(client: &mut Client) -> Result<(), StorageError> {
         (16_i64, MIGRATION_16),
         (17_i64, MIGRATION_17),
         (18_i64, MIGRATION_18),
+        (19_i64, MIGRATION_19),
     ] {
         if transaction
             .query_opt(

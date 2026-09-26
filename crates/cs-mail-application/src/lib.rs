@@ -5,7 +5,7 @@ pub mod accounts;
 pub mod billing;
 pub mod correspondence;
 pub mod relationships;
-pub mod request_classes;
+pub mod request_pricing;
 
 use cs_mail_primitives::{MessageId, RelationshipRef, RequestHistoryRef, RequestId};
 use cs_mail_protocol::{Message, RequestHistory};
@@ -121,6 +121,8 @@ struct StoreState {
     relationships: BTreeMap<RelationshipRef, EngineState>,
     histories: BTreeMap<RequestHistoryRef, RequestHistory>,
     programs: BTreeMap<SettlementUnit, ProgramState>,
+    request_pricing: Option<cs_mail_protocol::pricing::RequestPricingPolicy>,
+    request_classes: BTreeMap<ProtocolIdentity, cs_mail_protocol::pricing::RecipientRequestClasses>,
 }
 #[derive(Clone)]
 struct ProgramState {
@@ -149,6 +151,40 @@ impl InMemoryStore {
             scope,
             inner: Arc::new(Mutex::new(StoreState::default())),
         }
+    }
+    /// Trusted harness configuration of the current pricing policy. Authorized publication
+    /// and its version rules are `request_pricing::RequestPricingService`, exercised against
+    /// `PostgreSQL`.
+    /// # Errors
+    /// Rejects a poisoned lock.
+    pub fn configure_request_pricing(
+        &self,
+        policy: cs_mail_protocol::pricing::RequestPricingPolicy,
+    ) -> Result<(), EngineError> {
+        let mut world = self.inner.lock().map_err(|_| EngineError::LockPoisoned)?;
+        world.request_pricing = Some(policy);
+        Ok(())
+    }
+    /// Trusted harness configuration of one address's current classes, checked against the
+    /// current policy's bounds.
+    /// # Errors
+    /// Rejects a missing policy, out-of-bounds collateral and a poisoned lock.
+    pub fn configure_request_classes(
+        &self,
+        classes: cs_mail_protocol::pricing::RecipientRequestClasses,
+    ) -> Result<(), EngineError> {
+        let mut world = self.inner.lock().map_err(|_| EngineError::LockPoisoned)?;
+        let policy = world
+            .request_pricing
+            .as_ref()
+            .ok_or(EngineError::Protocol(ProtocolError::PolicyInvalid))?;
+        if !policy.permits(&classes) {
+            return Err(EngineError::Protocol(
+                ProtocolError::RequestClassOutsidePolicy,
+            ));
+        }
+        world.request_classes.insert(classes.recipient(), classes);
+        Ok(())
     }
     /// Registers a relationship without replacing existing history or program data.
     /// # Errors
@@ -207,6 +243,10 @@ impl InMemoryStore {
     }
 }
 impl InMemoryEngine {
+    /// The store shared by this engine's relationships.
+    pub const fn store(&self) -> &InMemoryStore {
+        &self.store
+    }
     /// Creates a relationship in a new store. Use a shared store for multiple aliases.
     /// # Errors
     /// Returns an initialization error.
@@ -224,6 +264,7 @@ impl InMemoryEngine {
     ///
     /// Returns an error when protocol, ledger, concurrency, idempotency, or
     /// arithmetic preconditions fail, or if the engine lock is poisoned.
+    #[allow(clippy::too_many_lines)] // One harness commit: protocol, ledger, program, journal.
     pub fn execute(
         &self,
         authorized: KernelCommand<ProtocolCommand>,
@@ -269,6 +310,11 @@ impl InMemoryEngine {
             journal_position: JournalPosition(inner.next_journal_position),
             protocol_version: policy.protocol_version,
             policy,
+            pricing: harness_price(
+                &world,
+                inner.protocol.relationship.key,
+                authorized.command(),
+            ),
         };
         let manifest = transition(&snapshot, &authorized, &context)?;
         // The replay record keeps the digest; release the original command body now.
@@ -504,6 +550,22 @@ fn apply_schedule_changes(
             }
         }
     }
+}
+
+/// Resolves a requested class against the harness's current policy and publication.
+fn harness_price(
+    world: &StoreState,
+    relationship: cs_mail_protocol::RelationshipKey,
+    command: &ProtocolCommand,
+) -> cs_mail_protocol::pricing::QuotePricing {
+    let ProtocolCommand::IssueRequestTerms { class_id, .. } = command else {
+        return cs_mail_protocol::pricing::QuotePricing::NotRequested;
+    };
+    cs_mail_protocol::pricing::QuotePricing::resolve(
+        world.request_pricing.as_ref(),
+        world.request_classes.get(&relationship.recipient),
+        *class_id,
+    )
 }
 
 pub fn initial_state(

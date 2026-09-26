@@ -43,7 +43,10 @@ fn engine(url: &str, label: &str, sender: ProtocolIdentity) -> PostgresEngine {
         RECIPIENT,
         test_time(0),
     );
-    let host = PostgresEngine::connect(url, label, &state, UNIT).unwrap();
+    let host = PostgresDeployment::connect(url)
+        .unwrap()
+        .relationship(label, &state, UNIT)
+        .unwrap();
     let mut providers = KeyRegistry::default();
     providers
         .register(
@@ -58,10 +61,17 @@ fn engine(url: &str, label: &str, sender: ProtocolIdentity) -> PostgresEngine {
     support::arrangement(&host, &policy()).unwrap();
     host.configure_ingress(DEPLOYMENT_DOMAIN, &policy())
         .unwrap();
-    host.accounts(|| test_time(0))
+    accounts_at(&host, 0)
         .configure_identity_service(ISSUER, PRODUCT, key(80))
         .unwrap();
     host
+}
+/// Account storage of the host's deployment, with its trusted clock fixed at `at`.
+fn accounts_at(
+    host: &PostgresEngine,
+    at: u64,
+) -> cs_mail_storage_postgres::PostgresAccountRepository {
+    host.deployment().accounts(move || test_time(at))
 }
 fn input(id: u128) -> EnrollmentInput {
     EnrollmentInput {
@@ -171,20 +181,19 @@ fn enrollment_survives_lost_responses_restart_and_duplicate_confirmation() {
     let cs = database_url();
     let ids = database_url();
     let host = engine(&cs, "first", SENDER);
-    let pending =
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
-            .begin("enrollment-1", &input(1))
-            .unwrap();
+    let pending = cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
+        .begin("enrollment-1", &input(1))
+        .unwrap();
     assert_eq!(
         pending,
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(1)))
+        cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 1))
             .begin("enrollment-1", &input(1))
             .unwrap()
     );
     let mut changed = input(1);
     changed.maximum_unresolved = 2;
     assert!(
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
+        cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
             .begin("enrollment-1", &changed)
             .is_err()
     );
@@ -197,7 +206,7 @@ fn enrollment_survives_lost_responses_restart_and_duplicate_confirmation() {
     let client = service(&ids, session);
     let host = engine(&cs, "first", SENDER);
     let id = cs_mail_application::accounts::reconcile_account_enrollment(
-        &host.accounts(|| test_time(0)),
+        &accounts_at(&host, 0),
         "enrollment-1",
         &client,
         &[83; 32],
@@ -205,13 +214,11 @@ fn enrollment_survives_lost_responses_restart_and_duplicate_confirmation() {
     .unwrap();
     assert_eq!(id, EnrollmentOutcome::Enrolled(pending.account()));
     let id = pending.account();
-    let account = host.accounts(|| test_time(0)).product_account(id).unwrap();
+    let account = accounts_at(&host, 0).product_account(id).unwrap();
     assert_eq!(account.principal, pending.principal());
     assert_eq!(account.billing, BillingAccountId(1));
     assert_eq!(
-        host.accounts(|| test_time(0))
-            .persona_principal(RECIPIENT)
-            .unwrap(),
+        accounts_at(&host, 0).persona_principal(RECIPIENT).unwrap(),
         pending.principal()
     );
     assert_ne!(account.membership_identity, pending.input().bank.person);
@@ -221,11 +228,9 @@ fn enrollment_survives_lost_responses_restart_and_duplicate_confirmation() {
     );
     // Exact replay survives expiration; no new authority is created.
     assert_eq!(
-        cs_mail_application::accounts::AccountEnrollment::new(
-            &host.accounts(move || test_time(2_000_000))
-        )
-        .commit(&issued_decision)
-        .unwrap(),
+        cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 2_000_000))
+            .commit(&issued_decision)
+            .unwrap(),
         id
     );
     let confirm = SignedRequest::sign(
@@ -239,7 +244,7 @@ fn enrollment_survives_lost_responses_restart_and_duplicate_confirmation() {
     assert_eq!(client.call(&confirm).unwrap(), Response::Confirmed); // ACK lost locally.
     assert_eq!(
         cs_mail_application::accounts::confirm_identity_enrollments(
-            &host.accounts(|| test_time(0)),
+            &accounts_at(&host, 0),
             &client,
             &[83; 32],
             10,
@@ -251,7 +256,7 @@ fn enrollment_survives_lost_responses_restart_and_duplicate_confirmation() {
     );
     assert_eq!(
         cs_mail_application::accounts::confirm_identity_enrollments(
-            &host.accounts(|| test_time(0)),
+            &accounts_at(&host, 0),
             &client,
             &[83; 32],
             10,
@@ -276,10 +281,9 @@ fn service_rejects_wrong_nonce_failed_bank_and_changed_operation() {
     let cs = database_url();
     let ids = database_url();
     let host = engine(&cs, "boundary", SENDER);
-    let pending =
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
-            .begin("boundary", &input(1))
-            .unwrap();
+    let pending = cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
+        .begin("boundary", &input(1))
+        .unwrap();
     let (mut session, bank) = proofs(&pending);
     session.nonce = Some("wrong".into());
     let bad = service(&ids, session);
@@ -301,16 +305,14 @@ fn service_rejects_wrong_nonce_failed_bank_and_changed_operation() {
     let mut altered = issued_decision.clone();
     altered.claims.intent.account = "attacker".into();
     assert!(
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
+        cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
             .commit(&altered)
             .is_err()
     );
     assert!(
-        cs_mail_application::accounts::AccountEnrollment::new(
-            &host.accounts(move || test_time(900_000))
-        )
-        .commit(&issued_decision)
-        .is_err()
+        cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 900_000))
+            .commit(&issued_decision)
+            .is_err()
     );
     let mut changed = bank;
     changed.claims.evidence_ref = "substituted".into();
@@ -333,17 +335,16 @@ fn account_and_outbox_rollback_together_and_can_retry() {
     let cs = database_url();
     let ids = database_url();
     let host = engine(&cs, "atomic", SENDER);
-    let pending =
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
-            .begin("atomic", &input(1))
-            .unwrap();
+    let pending = cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
+        .begin("atomic", &input(1))
+        .unwrap();
     let (session, bank) = proofs(&pending);
     let client = service(&ids, session);
     let issued_decision = decision(&client, &request(&pending, bank));
     let mut db = postgres::Client::connect(&cs, postgres::NoTls).unwrap();
     db.batch_execute("CREATE FUNCTION reject_identity_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected commit failure'; END $$; CREATE TRIGGER fail_outbox BEFORE INSERT ON cs_identity_outbox FOR EACH ROW EXECUTE FUNCTION reject_identity_outbox()").unwrap();
     assert!(
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
+        cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
             .commit(&issued_decision)
             .is_err()
     );
@@ -363,7 +364,7 @@ fn account_and_outbox_rollback_together_and_can_retry() {
     db.batch_execute("DROP TRIGGER fail_outbox ON cs_identity_outbox")
         .unwrap();
     assert_eq!(
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
+        cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
             .commit(&issued_decision)
             .unwrap(),
         pending.account()
@@ -376,10 +377,9 @@ fn concurrent_service_and_local_retries_converge() {
     let cs = database_url();
     let ids = database_url();
     let host = engine(&cs, "race", SENDER);
-    let pending =
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
-            .begin("race", &input(1))
-            .unwrap();
+    let pending = cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
+        .begin("race", &input(1))
+        .unwrap();
     let (session, bank) = proofs(&pending);
     let wire_request = request(&pending, bank);
     let c1 = service(&ids, session.clone());
@@ -410,11 +410,9 @@ fn concurrent_service_and_local_retries_converge() {
             let barrier = barrier.clone();
             thread::spawn(move || {
                 barrier.wait();
-                cs_mail_application::accounts::AccountEnrollment::new(
-                    &engine.accounts(move || test_time(0)),
-                )
-                .commit(&issued_decision)
-                .unwrap()
+                cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&engine, 0))
+                    .commit(&issued_decision)
+                    .unwrap()
             })
         })
         .collect::<Vec<_>>();
@@ -429,10 +427,9 @@ fn same_login_cannot_reserve_a_second_account() {
     let cs = database_url();
     let ids = database_url();
     let host = engine(&cs, "duplicate", SENDER);
-    let pending =
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
-            .begin("first", &input(1))
-            .unwrap();
+    let pending = cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
+        .begin("first", &input(1))
+        .unwrap();
     let (session, bank) = proofs(&pending);
     let client = service(&ids, session);
     decision(&client, &request(&pending, bank));
@@ -440,10 +437,9 @@ fn same_login_cannot_reserve_a_second_account() {
     other_input.persona = SENDER;
     other_input.actor = ActorRef::Sender(SENDER);
     other_input.key_ref = OperationalKeyRef(102);
-    let p2 =
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
-            .begin("second", &other_input)
-            .unwrap();
+    let p2 = cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
+        .begin("second", &other_input)
+        .unwrap();
     let (session, bank) = proofs(&p2);
     let client = service(&ids, session);
     assert_eq!(
@@ -459,14 +455,13 @@ fn revocation_applies_across_relationships_and_preserves_receipt_authority() {
     let ids = database_url();
     let host = engine(&cs, "one", SENDER);
     let e2 = engine(&cs, "two", ProtocolIdentity(11));
-    let pending =
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
-            .begin("keys", &input(1))
-            .unwrap();
+    let pending = cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
+        .begin("keys", &input(1))
+        .unwrap();
     let (session, bank) = proofs(&pending);
     let client = service(&ids, session);
     let result = cs_mail_application::accounts::enroll_with_identity(
-        &host.accounts(|| test_time(0)),
+        &accounts_at(&host, 0),
         "keys",
         EnrollmentEvidence {
             oidc_token: "token".into(),
@@ -494,7 +489,7 @@ fn revocation_applies_across_relationships_and_preserves_receipt_authority() {
         policy(),
     )
     .unwrap();
-    host.accounts(|| test_time(0))
+    accounts_at(&host, 0)
         .revoke_account_key(
             pending.account(),
             OperationalKeyRef(101),
@@ -536,7 +531,7 @@ fn revocation_applies_across_relationships_and_preserves_receipt_authority() {
             .is_ok()
     );
     assert!(
-        host.accounts(|| test_time(0))
+        accounts_at(&host, 0)
             .account_key_registry(pending.account())
             .unwrap()
             .transparency()
@@ -550,10 +545,9 @@ fn http_transport_preserves_signed_contract_and_reconciliation() {
     let cs = database_url();
     let ids = database_url();
     let host = engine(&cs, "http", SENDER);
-    let pending =
-        cs_mail_application::accounts::AccountEnrollment::new(&host.accounts(move || test_time(0)))
-            .begin("http", &input(1))
-            .unwrap();
+    let pending = cs_mail_application::accounts::AccountEnrollment::new(&accounts_at(&host, 0))
+        .begin("http", &input(1))
+        .unwrap();
     let (session, bank) = proofs(&pending);
     let service = service(&ids, session);
     let (address_tx, address_rx) = std::sync::mpsc::channel();
@@ -579,7 +573,7 @@ fn http_transport_preserves_signed_contract_and_reconciliation() {
     ))
     .unwrap();
     let result = cs_mail_application::accounts::enroll_with_identity(
-        &host.accounts(|| test_time(0)),
+        &accounts_at(&host, 0),
         "http",
         EnrollmentEvidence {
             oidc_token: "token".into(),
@@ -593,7 +587,7 @@ fn http_transport_preserves_signed_contract_and_reconciliation() {
     assert_eq!(result, EnrollmentOutcome::Enrolled(pending.account()));
     assert_eq!(
         cs_mail_application::accounts::confirm_identity_enrollments(
-            &host.accounts(|| test_time(0)),
+            &accounts_at(&host, 0),
             &client,
             &[83; 32],
             10,
@@ -605,7 +599,7 @@ fn http_transport_preserves_signed_contract_and_reconciliation() {
     );
     assert_eq!(
         cs_mail_application::accounts::reconcile_account_enrollment(
-            &host.accounts(|| test_time(0)),
+            &accounts_at(&host, 0),
             "http",
             &client,
             &[83; 32]
@@ -666,7 +660,7 @@ fn expired_or_reviewed_attempts_renew_the_same_binding() {
     let ids = database_url();
     let host = engine(&cs, "renewal", SENDER);
     let clock = cs_mail_test_support::enrollment::TestClock::default();
-    let repo = host.accounts(clock.clone());
+    let repo = host.deployment().accounts(clock.clone());
     let first = {
         clock.set(test_time(0));
         cs_mail_application::accounts::AccountEnrollment::new(&repo).begin("renew", &input(1))
@@ -704,7 +698,7 @@ fn expired_or_reviewed_attempts_renew_the_same_binding() {
     let cs = database_url();
     let host = engine(&cs, "review", SENDER);
     let clock = cs_mail_test_support::enrollment::TestClock::default();
-    let repo = host.accounts(clock.clone());
+    let repo = host.deployment().accounts(clock.clone());
     let pending = {
         clock.set(test_time(0));
         cs_mail_application::accounts::AccountEnrollment::new(&repo).begin("review", &input(1))
