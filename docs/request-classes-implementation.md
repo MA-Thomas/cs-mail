@@ -2,15 +2,24 @@
 
 > **Design principles.** Before changing code or this design, read the [Rust-domain design principles](rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
 
-Recipients publish up to eight of their own classes. No purpose taxonomy is
-hard-coded. A class has a stable `RequestClassId`, user-authored description, and
-collateral selected from the operator's menu; the operator still sets `C`.
+> **Updated 25 September 2026.** Pricing and publication follow the
+> [request pricing design](request-pricing-design.md), which replaced the operator
+> menu and relationship-scoped publication. Lane acceptance and settlement are
+> unchanged.
 
-`RequestClassesService` authenticates a `SignedRequestClasses` publication under
-protected current authority. `RecipientRequestClasses` checks the count and
-unique IDs, including on deserialization. The PostgreSQL adapter commits the
-whole versioned publication. `IngressService::request_classes` exposes it for
-sender selection. Publishing an empty collection creates no implicit class.
+Each protocol identity publishes up to eight of its own classes. No purpose
+taxonomy is hard-coded. A class has a stable `RequestClassId`, user-authored
+description, and collateral within the operator's cs-mail-wide bounds; the
+operator sets `C`.
+
+`RequestPricingService::publish_classes` authenticates a `SignedRequestClasses`
+publication against a key of that address, under protected current authority.
+`RecipientRequestClasses` checks the count and unique IDs, including on
+deserialization. The PostgreSQL adapter keeps the signed publication and commits
+the address's current classes. `IngressService::request_offer` exposes the
+currently quotable classes to senders and `request_class_status` shows the
+recipient which are quotable. Publishing an empty collection creates no implicit
+class.
 
 `IssueRequestTerms` includes `class_id`. Issued `RequestTerms` retain a checked
 `SelectedRequestClass` and the fixed collateral. Class changes cannot rewrite

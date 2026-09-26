@@ -29,7 +29,7 @@ The documents have distinct roles:
 5. **[Product build plan](cs_mail_build_plan.pdf)** — product milestones:
    server and administration, the core request loop from a CLI, the guest
    sender request page, the macOS member application, recovery, the annual
-   member cycle, and the pilot.
+   member cycle, and open enrollment.
 6. **[Express-lane memo](cs_mail_express_lanes.pdf)** — a worked introduction to
    bounded relationship permission for people and organizations.
 7. **[Express-lane implementation plan](cs_mail_express_lanes_implementation.pdf)** —
@@ -60,12 +60,12 @@ durable login identity with multiple authentication methods. See the
 arrangement. See [shared identity integration](docs/shared-identity-contract.md)
 for the contract, migration behavior, service setup, and coordinated build.
 
-Recipients define up to eight classes of their own, with collateral
-selected from the deployment's bounded menu. The sender's chosen class, processing
-component `C`, and collateral `S` are fixed for one request. Submission requires authenticated evidence that
+Each address (protocol identity) defines up to eight request classes of its own,
+each with collateral `S` within cs-mail-wide bounds; CSQD sets one processing
+component `C` (see the [request pricing design](docs/request-pricing-design.md)).
+The sender's chosen class, `C`, and `S` are fixed for one request. Submission requires authenticated evidence that
 the request-specific funding of `C + S` has met the provider's finality policy.
-The default operator processing charge is `C = $0.50`; recipients select `S`
-for each class from a versioned bounded menu. Cancellation before submission returns the full charge. Acceptance
+Cancellation before submission returns the full charge. Acceptance
 records a full refund obligation together with standing directed permission or
 an express lane. A lane concerns the relationship and may be scoped by purpose,
 time, or volume; it is usually not specific to a conversation. Rejection retains `C` as
@@ -189,7 +189,9 @@ The workspace is divided into focused libraries:
   coordinator prepares one bank payment for a payable using the account association;
   PostgreSQL uses that same coordinator.
 - `cs-mail-storage-postgres` applies the same manifests inside row-locked
-  PostgreSQL transactions and persists projections, ledger batches, transfers,
+  PostgreSQL transactions. `PostgresDeployment` holds deployment-wide state
+  (configuration, accounts, billing, the financial program, request pricing and
+  deployment-owned work) and opens a `PostgresEngine` per relationship. It persists projections, ledger batches, transfers,
   events, an authenticated command inbox, recoverable signed outcomes, leased
   external work with fenced claims, independent owner records, retention manifests,
   and leased schedules.
@@ -259,18 +261,18 @@ CS_MAIL_TEST_DATABASE_URL='postgresql://postgres@localhost:5432/cs_mail_test' \
 The PostgreSQL suites need an isolated test database. `scripts/quality-gate.sh
 --skip-postgres` skips them explicitly and reports them as skipped, not passed.
 
-The eighteen schema migrations are embedded in the storage crate and applied under
+The nineteen schema migrations are embedded in the storage crate and applied under
 a database advisory lock. They cover protocol/ledger durability, encrypted
 content, retention, capabilities, financial programs, independent domain owners,
 authenticated receipt ordering, unified external work, annual allocation, utility
-billing, and owner-specific lifecycle rules. Current protocol storage format is 8,
+billing, owner-specific lifecycle rules, and request pricing. Current protocol storage format is 8,
 financial storage format is 6, and command wire format is 6. This clean domain
 update requires a freshly initialized schema. Unsupported stored formats are
 rejected; the migrations do not convert populated older records.
 
-**Schema migration policy.** Until the first pilot data is created, a schema change
-may replace or renumber existing migrations and requires a fresh database; there is no
-upgrade path. From the creation of the first pilot data, migrations in cs-mail and
+**Schema migration policy.** Until the first user data is created (the first open
+enrollment), a schema change may replace or renumber existing migrations and requires a
+fresh database; there is no upgrade path. From the creation of the first user data, migrations in cs-mail and
 identity-model are forward-only: a merged migration is never edited, removed or
 renumbered, and every schema change is a new migration.
 There are no compatibility aliases or fallback readers for deprecated labels. The current connector deliberately uses `NoTls`; it is

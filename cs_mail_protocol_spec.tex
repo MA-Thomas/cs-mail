@@ -221,9 +221,12 @@ The base charge is
 \[
 Q=C+S.
 \]
-The service operator sets $C$, a bounded menu for $S$, and a default selection.
-A recipient publishes at most eight user-defined request classes and chooses collateral for each from that
-menu through authenticated preferences. The sender selects from those classes. The
+The service operator publishes one versioned pricing policy: $C$ and bounds
+$S_{\min} \le S \le S_{\max}$. Each recipient address publishes at most eight
+user-defined request classes, choosing $S$ for each within those bounds, signed by
+a key of that address and independent of any relationship. A class whose $S$ lies
+outside the current bounds \MUST{} NOT be quoted until the address republishes. The
+sender selects from the classes that can currently be quoted. The
 C-SQD defaults are specified in the deployment profile; the protocol does not
 embed a particular price or currency. The full
 amount and possible outcomes \MUST{} be disclosed before authorization. The

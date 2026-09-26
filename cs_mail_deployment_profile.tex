@@ -125,10 +125,12 @@ may retain an annual allocation after choosing not to renew service.
 \subsection{Request pricing is fixed at authorization}
 
 The standard request quote combines processing amount $C=\$0.50$ with a
-recipient-selected collateral amount $S$ for the chosen request class. The current default is $S=\$5.00$;
-the bounded menu is $\$1$, $\$2.50$, $\$5$, $\$10$, and $\$25$. The deployment
-versions the processing amount, menu, and default. A recipient's authenticated
-preference must select an allowed value for each class. Recipients define the
+recipient-selected collateral amount $S$ for the chosen request class. C-SQD
+publishes one versioned pricing policy for all of cs-mail: $C$ and the bounds
+within which every class's $S$ must lie. The bounds are not yet decided; until
+they are, development uses $\$1$ to $\$25$, the range of the former menu. Each
+recipient address sets $S$ for each of its classes within the bounds; a class
+outside the current bounds cannot be quoted until the address republishes. Recipients define the
 classes and their descriptions; C-SQD does not prescribe purpose-based prices.
 The sender's selected class and financial terms must remain fixed for the request.
 A later preference or policy change must not alter that request's signed quote.

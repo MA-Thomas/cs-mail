@@ -2,7 +2,7 @@
 
 > **Design principles.** Before changing code or this design, read the [Rust-domain design principles](docs/rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
 
-Confirmed product rules, updated September 21, 2026. Start here when changing
+Confirmed product rules, updated September 25, 2026. Start here when changing
 the code or documentation. These rules record the user's confirmed clarifications.
 The [deployment profile](cs_mail_deployment_profile.tex) gives the detailed
 financial-program requirements; the [protocol specification](cs_mail_protocol_spec.tex)
@@ -29,6 +29,12 @@ not establish biological identity or satisfy Phoros's separate enrollment policy
 
 - For the current product, one identifiable person has one account and may have
   multiple email addresses. Identity is tied to a verified bank account.
+- Enrollment is open to anyone who completes a fresh login and bank-ownership
+  verification. There are no invitations. The one-person-one-account rules are
+  the only gate: one cs-mail login per identity subject, one account per verified
+  bank token, and one member per bank-attested person. Before live payments, it
+  must be established that the bank-attested person reference is stable across
+  a person's bank accounts; otherwise two banks could yield two accounts.
 - Account, member, private principal, and public communication identity are
   distinct roles and scoped identifiers for that person, not permission to create
   multiple accounts or member shares. Keep bank and identity evidence out of
@@ -110,13 +116,23 @@ management, bank-account replacement, and detailed erasure policy remain deferre
 
 ## Request classes, permission, and refunds
 
-Recipients publish up to eight user-defined request classes describing the
-approaches they welcome, and select collateral `S` for each from
-the deployment's bounded menu. The sender selects a class; that class and its
-financial terms are fixed for the request. The operator sets processing component
-`C`. These are recipient-defined invitations, not permanent relationship types
-or a CSQD ranking of purposes. Misrepresentation can lead to ordinary rejection;
-there is no separate misclassification penalty or reputation mechanism.
+Each protocol identity (email address) publishes its own set of up to eight
+user-defined request classes describing the approaches it welcomes. Addresses of
+the same account have independent sets. Each class has its own collateral `S`,
+within cs-mail-wide bounds `collateral_min <= S <= collateral_max`. CSQD, the only
+provider, sets one processing component `C` for all of cs-mail; `C` and the bounds
+form one versioned operator policy. The sender selects a class; that class and its
+financial terms are fixed for the request. These are recipient-defined
+invitations, not permanent relationship types or a CSQD ranking of purposes.
+Misrepresentation can lead to ordinary rejection; there is no separate
+misclassification penalty or reputation mechanism.
+
+When the operator changes `C` or the bounds, issued quotes keep their terms. A
+published class whose collateral lies outside the current bounds cannot be
+quoted until the recipient republishes; it is never rewritten or clamped on the
+recipient's behalf. A publication is authorized only by a key of the address it
+concerns and is independent of any relationship. See the
+[request pricing design](docs/request-pricing-design.md).
 
 The recipient may accept a request with standing directed permission or with an
 express lane. Both modes record a full `C + S` refund obligation and commit the
@@ -140,7 +156,9 @@ validity. Native correspondence enforces that permission across conversations.
 
 The Rust implementation uses checked class publications, immutable signed class
 snapshots, and atomic lane/settlement effects. See
-[implementation and cutover](docs/request-classes-implementation.md).
+[implementation and cutover](docs/request-classes-implementation.md). The operator
+policy, per-address publication and quote pricing follow the
+[request pricing design](docs/request-pricing-design.md).
 
 ## Guest senders
 

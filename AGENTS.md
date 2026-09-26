@@ -27,7 +27,7 @@ Working conventions:
 - Applications (`apps/`) are adapters. Domain decisions belong in domain and application
   crates, and no library may depend on an application (the gate checks this). See
   [apps/README.md](apps/README.md).
-- Schema migrations: until the first pilot data is created, a schema change may replace
-  or renumber existing migrations and requires a fresh database. From the first pilot
-  data onward, migrations are forward-only: never edit, remove or renumber a merged
-  migration.
+- Schema migrations: until the first user data is created (the first open
+  enrollment), a schema change may replace or renumber existing migrations and
+  requires a fresh database. From the first user data onward, migrations are
+  forward-only: never edit, remove or renumber a merged migration.

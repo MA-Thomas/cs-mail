@@ -213,13 +213,20 @@ basis-point arithmetic. Submission deadlines, decision deadlines, message
 validity, annual allocation cutoffs, service intervals, and payment dates answer
 different questions and remain explicit inputs.
 
-Quoted financial terms stay fixed for a request. The operator's
-\texttt{RequestPricingPolicy} bounds collateral and sets the processing charge.
-\texttt{RecipientRequestClasses} checks at most eight user-defined classes and
-unique IDs, including on deserialization. The application authenticates the
-recipient's publication under protected current authority. The resolver returns
-checked \texttt{ResolvedRequestPricing}; signed terms retain a
-\texttt{SelectedRequestClass} snapshot. There is no fallback to caller-supplied
+Quoted financial terms stay fixed for a request. The operator's single versioned
+\texttt{RequestPricingPolicy} sets the processing charge and the collateral
+bounds. \texttt{RecipientRequestClasses} belongs to one protocol identity and
+checks at most eight user-defined classes and unique IDs, including on
+deserialization. \texttt{RequestPricingService} authenticates a publication
+against a key of that address alone, under a \texttt{RecipientSigningScope} that
+names no relationship, and rejects collateral outside the current bounds.
+\texttt{QuotePricing::resolve}, the single pricing rule used by every storage
+adapter, yields a checked \texttt{RequestPrice} or a \texttt{PricingRefusal} (no
+policy, unknown class, or a class now outside the bounds). The kernel receives it as
+\texttt{TransitionContext::pricing}, not as part of the policy snapshot, and
+surfaces a refusal only when a charge is required. Signed
+terms retain the policy version, $C$, $S$ and a \texttt{SelectedRequestClass}
+snapshot. There is no fallback to caller-supplied
 prices or an invented default class. Class edits do not rewrite existing quotes
 or partition principal-recipient history. Current follow-up policy is checked
 separately for each message.
@@ -443,7 +450,9 @@ void/full refund, and a submitted request still pending is accepted even after i
 deadline. Terminal settlements stay fixed; future access follows the lane.
 
 PostgreSQL owns durable transactions, ordering, uniqueness, journals, and outbox
-work. Workers lease that work, call domain operations through the application or
+work. \texttt{PostgresDeployment} holds deployment-wide state---configuration,
+accounts, billing, the financial program, request pricing and deployment-owned
+work---and opens a \texttt{PostgresEngine} for each relationship aggregate. Workers lease that work, call domain operations through the application or
 storage boundary, and reconcile external evidence. Payment adapters execute
 operations and translate provider evidence; they cannot set eligibility, invent
 new funding authority, or change request outcomes.

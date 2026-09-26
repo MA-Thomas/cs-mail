@@ -52,7 +52,7 @@
 \title{\textit{cs-mail} Product Build Plan\\
 \large Server, Administration, Member Desktop, and Sender Request Page}
 \author{C-SQD}
-\date{Draft 0.6 --- 25 September 2026}
+\date{Draft 0.7 --- 25 September 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -66,13 +66,27 @@ enrollment, request, decision, and settlement, driven from a command-line
 client---and then adds depth: a public request page for senders without an
 account and their ordinary-email correspondence after acceptance, the macOS
 member application, recovery across time and failure, the
-annual service and member-cycle experience, and a small pilot. cs-mail's core is
+annual service and member-cycle experience, and open enrollment. cs-mail's core is
 also required by the future Phoros Account, so user testing informs design rather
-than deciding whether development continues. The pilot introduces no real
+than deciding whether development continues. Open enrollment introduces no real
 redeemable value.
 \end{abstract}
 
 \medskip\noindent\fbox{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{\small\textbf{Design principles.} Before changing the implementation or this design, read the \href{docs/rust-domain-principles.md}{Rust-domain design principles} (\texttt{docs/rust-domain-principles.md}). They are binding for cs-mail and identity-model; new work must not regress them.}}\medskip
+
+\section{What Changed in Draft 0.7}
+
+\begin{itemize}
+    \item There are no invitations and no invite-only pilot. Enrollment is open
+    to anyone who completes a fresh login and bank-ownership verification; the
+    one-person-one-account rules are the only gate. Milestone~7 becomes an
+    open-enrollment launch with simulated value.
+    \item Request pricing is redesigned as Milestone~1b, ahead of Milestone~2: one
+    cs-mail-wide operator policy (processing component $C$ and collateral bounds)
+    and up to eight request classes per protocol identity, published
+    independently of any relationship. See
+    \href{docs/request-pricing-design.md}{\texttt{docs/request-pricing-design.md}}.
+\end{itemize}
 
 \section{What Changed From Draft 0.4}
 
@@ -125,7 +139,7 @@ aliases, fallback readers, or parallel implementations. When product work shows
 that a domain rule is wrong or incomplete, the change is made as an explicit,
 reviewed cutover in the owning domain, not patched in an adapter.
 
-\section{The Product and the Pilot}
+\section{The Product and Its Users}
 
 \paragraph{Clients and their roles.}
 \begin{itemize}
@@ -151,10 +165,14 @@ delivered by the provider on each page load, which conflicts with the promise th
 the provider cannot decrypt content. The client core compiles to WebAssembly, so
 the option remains available if that trust model is ever accepted or mitigated.
 
-\paragraph{Pilot.} An invite-only group served by one provider, one region, and
-one PostgreSQL deployment. Recipients are recruited from people who receive
-substantial unsolicited contact; senders are people trying to reach them,
-including guests once the request page ships.
+\paragraph{Enrollment.} Open to anyone who completes a fresh login and
+bank-ownership verification. There are no invitations. The one-person-one-account
+rules are the only gate: one cs-mail login per identity subject, one account per
+verified bank token, and one member per bank-attested person. The service is run
+by CSQD, the only provider, in one region on one PostgreSQL deployment. The
+intended recipients are people who receive substantial unsolicited contact;
+senders are people trying to reach them, including guests once the request page
+ships.
 
 \paragraph{Value.} A deterministic external-payment simulator approves,
 declines, delays, or reports an uncertain charge; confirms or fails a refund; and
@@ -162,9 +180,9 @@ executes or fails a member payment. All amounts are explicitly nonredeemable.
 Users receive no spendable test-credit wallet; the operator configures simulator
 scenarios.
 
-\paragraph{Out of scope for the pilot.} Independent-provider federation,
-general email hosting (members emailing arbitrary external addresses), public
-signup, live payments, mobile releases, and multi-region operation. Email is in
+\paragraph{Out of scope for this plan.} Independent-provider federation,
+general email hosting (members emailing arbitrary external addresses), live
+payments, mobile releases, and multi-region operation. Email is in
 scope only for guest conversations and transactional notices.
 
 \section{Architecture of the Product Layer}
@@ -231,7 +249,7 @@ versions are separate. Until the fresh-database policy ends (decided at
 Milestone~0), schema changes may replace earlier migrations; afterwards
 migrations are forward-only. Logs contain scoped references and typed errors, not
 plaintext, secrets, identity mappings, full signed commands, or complete financial
-snapshots. Retention policy is explicit before pilot data exists.
+snapshots. Retention policy is explicit before user data exists.
 
 \paragraph{Validation.} Tests challenge named conjectures whose falsification
 would matter; each milestone lists its claims and agrees its testing scope before
@@ -254,7 +272,8 @@ CS_MAIL_TEST_DATABASE_URL=... scripts/quality-gate.sh
 Stage & Result & Exit evidence \\
 \midrule
 0 & Product skeleton & Buildable apps, inward dependencies, quality gate \\
-1 & Service and identity boot & Clean start, restart, invites, simulator scenarios \\
+1 & Service and identity boot & Clean start, restart, open enrollment, simulator scenarios \\
+1b & Request pricing & Operator policy with collateral bounds; per-address classes \\
 2 & Core loop from the CLI & Every request outcome, from a clean database \\
 3a & Guest-sender domain design & Recorded design; open decisions settled \\
 3b & Sender request page & A guest completes a request; every outcome settles \\
@@ -262,7 +281,7 @@ Stage & Result & Exit evidence \\
 4 & macOS member application & Milestone 2 journeys in the app, keys in keychain \\
 5 & Time and failure & Crash, race, and deadline claims challenged \\
 6 & Annual service and member cycle & A full simulated year, including nonrenewal \\
-7 & Pilot & Signed builds, recovery, restore, pilot findings \\
+7 & Open enrollment & Signed builds, recovery, restore, launch findings \\
 8 & Portability and Phoros & Windows, Swift/Kotlin parity, Phoros integration \\
 \bottomrule
 \end{tabularx}
@@ -282,7 +301,7 @@ full quality gate without hiding individual checks, and document the inward
 dependency rule.
 
 \textbf{Decided (25 September 2026):} the fresh-database policy ends when the
-first pilot data is created. Until then a schema change may replace or renumber
+first user data is created, at the first open enrollment. Until then a schema change may replace or renumber
 existing migrations and requires a fresh database. From then on, migrations in
 cs-mail and identity-model are forward-only: a merged migration is never edited,
 removed, or renumbered.
@@ -298,26 +317,30 @@ suites, and binary checks, each reported separately; see
 
 \section{Milestone 1: The Service and Identity Boot}
 
-The operator can migrate an empty database, bootstrap one provider idempotently,
-start the API, create invites, publish service offers and request pricing, and
-select simulator scenarios---without editing SQL. Use Tokio, Axum, Rustls,
+The operator can migrate an empty database, bootstrap CSQD as the provider
+idempotently, start the API, publish service offers, and select simulator
+scenarios---without editing SQL. Deployment-level state (configuration, accounts,
+billing, and, from Milestone~1b, request pricing) is reached through a
+deployment-scoped storage handle, not a relationship-scoped engine. Use Tokio, Axum, Rustls,
 structured tracing, and Clap. Keep synchronous storage behind a bounded blocking
 boundary until a tested replacement is warranted. Readiness distinguishes process
 health from database readiness.
 
 The identity-model enrollment service runs beside \texttt{cs-maild}, with a
 development OIDC provider (the Keycloak realm in \texttt{identity-model/ci}) and
-simulated bank-ownership evidence from development support code. The payment
+simulated bank-ownership evidence from development support code. Enrollment is
+open: a fresh login and bank-ownership verification are the only requirements,
+and the one-person-one-account rules are the only gate. The payment
 simulator persists operation identities and supports delayed, duplicate,
 out-of-order, and failed results; its scenario changes are audited and separate
 from canonical financial writes.
 
 \begin{claims}
-\claim{PostgreSQL}{Repeating bootstrap cannot create a second provider authority or replace the key registry.}
-    {Two bootstrap runs, including one interrupted midway, leave two authorities or a changed registry.}
-    {Duplicate authority would let two keys speak for the provider.}
-\claim{PostgreSQL}{Replaying or concurrently redeeming one invite cannot enroll two accounts.}
-    {Two concurrent redemptions both succeed.}
+\claim{PostgreSQL}{Repeating bootstrap cannot install a second provider signing key or replace the key registry.}
+    {Two bootstrap runs, including one interrupted midway, leave two keys accepted as CSQD's or a changed registry.}
+    {Two keys could then sign quotes and receipts as the provider.}
+\claim{PostgreSQL}{Concurrent enrollments by the same person, through different logins or bank accounts, cannot create two accounts.}
+    {Two enrollment operations for one bank-attested person both activate.}
     {One account per person is an anti-abuse objective and a member-share rule.}
 \claim{PostgreSQL}{A restart cannot duplicate a simulated payment operation.}
     {A killed and restarted service shows two operations for one operation identity.}
@@ -326,6 +349,39 @@ from canonical financial writes.
 
 \textbf{Exit:} a clean-start transcript, restart demonstration, and redacted
 diagnostics.
+
+\section{Milestone 1b: Request Pricing}
+
+Replace the per-recipient pricing menu and relationship-scoped class publication
+with the agreed design in
+\href{docs/request-pricing-design.md}{\texttt{docs/request-pricing-design.md}}.
+CSQD publishes one versioned operator policy---processing component $C$ and
+cs-mail-wide collateral bounds---through the authenticated administration API.
+Each protocol identity publishes up to eight request classes, each with collateral
+within the bounds, signed by that address's own key and independent of any
+relationship. A class outside the current bounds cannot be quoted until the
+recipient republishes; issued quotes keep their terms. Quote prices become their
+own value rather than fields of the policy snapshot. The replaced tables, APIs and
+menu types are removed without aliases.
+
+\begin{claims}
+\claim{PostgreSQL}{A class outside the current bounds cannot be quoted, although its publication was valid when made.}
+    {After the operator narrows the bounds, a quote is issued for a class outside them.}
+    {Bounds that do not bind would let old classes escape policy indefinitely.}
+\claim{PostgreSQL}{A publication signed for one address cannot be applied to another, including another address of the same account.}
+    {A publication signed with address A's key changes address B's classes.}
+    {Each address's classes are its own consent to paid approaches.}
+\claim{PostgreSQL}{A quote issued concurrently with a republication or policy change carries the terms of exactly one publication and one policy version.}
+    {An issued quote combines $C$, $S$, or a description from different versions.}
+    {The charge and refund obligation must match what the sender was shown.}
+\end{claims}
+
+\textbf{Exit:} the operator changes the policy and a recipient's out-of-bounds
+class stops being quotable until republished, from a clean database.
+
+\textbf{Status: implemented (25 September 2026)}, with the deployment-scoped storage
+handle; the three claims are challenged against PostgreSQL. Publishing the operator
+policy moves behind the authenticated administration API in Milestone~1.
 
 \section{Milestone 2: The Core Loop From the Command Line}
 
@@ -476,7 +532,7 @@ coordinate enrollment and device management; the Tauri shell stays thin.
 
 Bob sees the chosen class, one request with its grouped messages, and a clear
 deadline, and decides with permission explained first and money second. He
-manages request classes with collateral from the operator's bounded menu,
+manages each address's request classes with collateral within the operator's bounds,
 follow-up preferences, lanes, and blocks. Financial status shows request charges
 and refunds separately from annual service and distributions. Interface
 components are shared with the request page.
@@ -550,7 +606,7 @@ preserving the minimal payment route.
 \textbf{Exit:} a full simulated year, including a nonrenewing member who is still
 paid.
 
-\section{Milestone 7: Run a Small Supported Pilot}
+\section{Milestone 7: Open Enrollment With Simulated Value}
 
 Package and sign the macOS application and versioned server and CLI artifacts.
 Complete user-held recovery and trusted-device enrollment with explicit device
@@ -560,11 +616,13 @@ encryption, recovery, and device loss; scoped diagnostics export; support and
 abuse intake; deletion procedures; backup and restore; and release rollback.
 Backups and retained obligation records respect separate keys and access roles.
 
-Recruit recipients who receive substantial unsolicited contact and senders who
-want to reach them, including guests if Milestones~3b and~3c have shipped.
+Open enrollment to the public, aiming first at recipients who receive substantial
+unsolicited contact and senders who want to reach them, including guests if
+Milestones~3b and~3c have shipped. Before live payments, establish that the
+bank-attested person reference is stable across a person's bank accounts.
 Configure the deployment domain's MX, SPF, DKIM, and DMARC records and monitor
 outbound deliverability. Nondeveloper
-testers use clean machines and the pilot guide without direct database repair.
+testers use clean machines and the user guide without direct database repair.
 
 \begin{claims}
 \claim{integration}{Restore followed by reconciliation reproduces every contract, request, refund, allocation, payable, and inbox state.}
@@ -576,7 +634,7 @@ testers use clean machines and the pilot guide without direct database repair.
 \end{claims}
 
 \textbf{Exit:} signed releases, restore and recovery records, resolved critical
-usability findings, and a written summary of pilot findings.
+usability findings, and a written summary of launch findings.
 
 \section{Milestone 8: Portability and Phoros}
 
