@@ -57,9 +57,13 @@ replace one atomic operation with unrelated repository `load` and `save` calls.
 - The existing cs-mail receipt-order barrier orders authorization with key revocation,
   trust rotation, account changes and financial writes. Billing operations retain the
   requirement that earlier received commands have been processed.
-- Key, persona, financial-account and funding ownership remain unique. Pending
-  enrollment reservations also prevent another account from acquiring their persona
-  or funding token. Constraints and protected lookups cover previously absent rows.
+- Key, persona and financial-account ownership remain unique, and each billing
+  account owns its funding sources. Pending enrollment reservations also prevent
+  another account from acquiring their persona, key, billing account or member. A
+  bank account is shared between accounts only through approved enrollment review;
+  rebinding to a bank account another account enrolled with is refused. Each capture
+  records the funding source it was reserved on. Constraints and protected lookups
+  cover previously absent rows.
 - Account changes and command outcomes commit together. Identity security effects,
   the accepted event and the new cursor commit together. Billing state, funding state,
   ledger postings, evidence receipts and payment work commit together.

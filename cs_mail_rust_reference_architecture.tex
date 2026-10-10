@@ -352,11 +352,14 @@ requires finalized funding, the current time within that fixed interval, and
 funding already completed at that time. Late funding grants no past service.
 Distribution does not alter the contract or revoke coverage.
 
-\texttt{BankVerification} binds person, member, account, bank token, scope, unit,
-and verification version under the configured bank authority. Verification
-produces an opaque \texttt{VerifiedBankAccount}, not a deserializable claim of
-verification. Trusted registration enforces one person/account, member and alias
-ownership, and explicit account actor grants. Bank replacement and broader
+\texttt{BankVerification} binds member, account, bank token, scope, unit, and
+verification version under the configured bank authority. Verification produces an
+opaque \texttt{VerifiedBankAccount}, not a deserializable claim of verification.
+Trusted registration enforces member and alias ownership and explicit account actor
+grants. Whether a person may hold a second account is decided by the identity
+service under cs-mail's evidence policy, with overlaps held for operator review;
+cs-mail keeps no person evidence. Accounts approved to share a bank account each
+keep their own funding source. Bank replacement and broader
 account-management UX remain deferred; this boundary is not a live bank connector.
 
 \texttt{SignedBillingCommand} binds account, scope, revision, idempotency, and

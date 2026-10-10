@@ -54,6 +54,31 @@ pub struct PostgresAccountRepository {
     pub(super) client: Arc<Mutex<Client>>,
     pub(super) clock: Arc<dyn cs_mail_application::accounts::AccountClock>,
 }
+/// Installs the identity service's issuer, product and decision key inside the bootstrap
+/// transaction. Enrollment callers cannot select trust roots; an existing different
+/// configuration is a conflict.
+pub(super) fn install_identity_trust(
+    tx: &mut Transaction<'_>,
+    issuer: &str,
+    product: &str,
+    key: [u8; 32],
+) -> Result<(), StorageError> {
+    DecisionVerifier::new(issuer.into(), product.into(), key)?;
+    let keys = vec![contract::DecisionKey::new(key, 0, None)?];
+    tx.execute("INSERT INTO cs_identity_configuration(singleton,issuer,product,decision_keys) VALUES(TRUE,$1,$2,$3) ON CONFLICT DO NOTHING",&[&issuer,&product,&Json(&keys)])?;
+    let r = tx.query_one(
+        "SELECT issuer,product,decision_keys FROM cs_identity_configuration WHERE singleton",
+        &[],
+    )?;
+    if r.get::<_, String>(0) != issuer
+        || r.get::<_, String>(1) != product
+        || r.get::<_, Json<Vec<contract::DecisionKey>>>(2).0 != keys
+    {
+        return Err(contract::Error::Conflict.into());
+    }
+    Ok(())
+}
+
 impl PostgresAccountRepository {
     /// # Errors
     /// Returns database connection or schema initialization failures.
@@ -104,33 +129,6 @@ impl PostgresAccountRepository {
         Ok(())
     }
 
-    /// Immutable trusted deployment configuration; enrollment callers cannot select trust roots.
-    /// # Errors
-    /// Rejects invalid keys or conflicting deployment configuration.
-    pub fn configure_identity_service(
-        &self,
-        issuer: &str,
-        product: &str,
-        key: [u8; 32],
-    ) -> Result<(), StorageError> {
-        DecisionVerifier::new(issuer.into(), product.into(), key)?;
-        let keys = vec![contract::DecisionKey::new(key, 0, None)?];
-        let mut db = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let mut tx = db.transaction()?;
-        tx.execute("INSERT INTO cs_identity_configuration(singleton,issuer,product,decision_keys) VALUES(TRUE,$1,$2,$3) ON CONFLICT DO NOTHING",&[&issuer,&product,&Json(&keys)])?;
-        let r = tx.query_one(
-            "SELECT issuer,product,decision_keys FROM cs_identity_configuration WHERE singleton",
-            &[],
-        )?;
-        if r.get::<_, String>(0) != issuer
-            || r.get::<_, String>(1) != product
-            || r.get::<_, Json<Vec<contract::DecisionKey>>>(2).0 != keys
-        {
-            return Err(contract::Error::Conflict.into());
-        }
-        tx.commit()?;
-        Ok(())
-    }
     /// Operator trust rotation is versioned and ordered with account authorization.
     /// # Errors
     /// Rejects invalid trust entries or a stale configuration revision.
@@ -257,6 +255,26 @@ impl cs_mail_application::accounts::EnrollmentRepository for PostgresAccountRepo
             self.clock.as_ref(),
         )?;
         if !existed {
+            // Receipt ordering serializes reservations, so this check cannot race; the
+            // unique columns remain only as a backstop. The rows fetched are candidates;
+            // `conflicts_with` decides.
+            let input = pending.input();
+            let candidates = tx.query(
+                "SELECT pending FROM cs_enrollment_operations WHERE billing=$1 OR member=$2 OR persona=$3 OR key_reference=$4",
+                &[&input.bank.account.0.to_string(), &input.bank.member.0.to_string(), &input.persona.0.to_string(), &input.key_ref.0.to_string()],
+            )?;
+            if candidates
+                .iter()
+                .any(|row| input.conflicts_with(row.get::<_, Json<PendingEnrollment>>(0).0.input()))
+                || tx
+                    .query_opt(
+                        "SELECT 1 FROM cs_persona_owners WHERE identity=$1",
+                        &[&input.persona.0.to_string()],
+                    )?
+                    .is_some()
+            {
+                return Err(contract::Error::Conflict.into());
+            }
             tx.execute("INSERT INTO cs_enrollment_operations(operation,pending,billing,member,persona,key_reference,bank_token) VALUES($1,$2,$3,$4,$5,$6,$7)", &[&operation,&Json(&pending),&pending.input().bank.account.0.to_string(),&pending.input().bank.member.0.to_string(),&pending.input().persona.0.to_string(),&pending.input().key_ref.0.to_string(),&pending.input().bank.bank_token.as_slice()])?;
             super::key_claims::reserve(&mut tx, &pending)?;
         }
@@ -486,19 +504,11 @@ fn persist_effects(
     }
     if let Some((financial, source)) = bank {
         let bank = financial.bank().evidence();
-        // Protect ownership against pending reservations, including absent source rows.
+        // A bank account another product account enrolled with is shared only through
+        // enrollment review; rebinding cannot reach it.
         if tx.query_opt("SELECT 1 FROM cs_enrollment_operations WHERE bank_token=$1 AND (account IS NULL OR account<>$2)", &[&bank.bank_token.as_slice(), &account])?.is_some() { return Err(contract::Error::Conflict.into()); }
-        let source_id = billing::source_key(bank.scope, &bank.bank_token);
+        let source_id = billing::source_key(bank.scope, bank.account, &bank.bank_token);
         tx.execute("INSERT INTO cs_funding_sources(source_key,account,record) VALUES($1,$2,$3) ON CONFLICT DO NOTHING", &[&source_id,&bank.account.0.to_string(),&Json(source)])?;
-        let owner: String = tx
-            .query_one(
-                "SELECT account FROM cs_funding_sources WHERE source_key=$1 FOR UPDATE",
-                &[&source_id],
-            )?
-            .get(0);
-        if owner != bank.account.0.to_string() {
-            return Err(contract::Error::Conflict.into());
-        }
         tx.execute(
             "UPDATE cs_billing_accounts SET record=$2 WHERE id=$1",
             &[&bank.account.0.to_string(), &Json(financial)],

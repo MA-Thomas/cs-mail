@@ -4,6 +4,7 @@
 pub mod accounts;
 pub mod billing;
 pub mod correspondence;
+pub mod operations;
 pub mod relationships;
 pub mod request_pricing;
 
@@ -109,13 +110,9 @@ struct StoreState {
         billing::operations::CollectionJournal,
     >,
     billing_ledgers: BTreeMap<cs_mail_primitives::BillingAccountId, cs_mail_ledger::LedgerView>,
-    funding_sources: BTreeMap<
-        [u8; 32],
-        (
-            cs_mail_primitives::BillingAccountId,
-            cs_mail_finance::FundingSource,
-        ),
-    >,
+    /// Each billing account's funding source per bank account.
+    funding_sources:
+        BTreeMap<(cs_mail_primitives::BillingAccountId, [u8; 32]), cs_mail_finance::FundingSource>,
     billing_work:
         BTreeMap<cs_mail_primitives::PaymentOperationId, cs_mail_finance::PaymentOperation>,
     relationships: BTreeMap<RelationshipRef, EngineState>,

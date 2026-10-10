@@ -36,6 +36,8 @@ mod billing;
 mod domain;
 mod finance;
 mod ingress;
+mod operations;
+pub use operations::Readiness;
 mod pricing;
 use domain::{load_domain_records, persist_domain_records, persist_message};
 pub use ingress::{ReceivedCommand, ReceivedOutcome, Refusal};
@@ -78,6 +80,8 @@ const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 9;
 const MIGRATION_15: &str = include_str!("../migrations/0015_product_accounts.sql");
 const MIGRATION_18: &str = include_str!("../migrations/0018_request_classes.sql");
 const MIGRATION_19: &str = include_str!("../migrations/0019_request_pricing.sql");
+const MIGRATION_20: &str = include_str!("../migrations/0020_shared_bank_accounts.sql");
+const MIGRATION_21: &str = include_str!("../migrations/0021_deployment.sql");
 const MIGRATION_17: &str = include_str!("../migrations/0017_content_consent.sql");
 const MIGRATION_16: &str = include_str!("../migrations/0016_correspondence.sql");
 const MIGRATION_14: &str = include_str!("../migrations/0014_utility_billing.sql");
@@ -94,6 +98,7 @@ pub enum StorageError {
     Consent(cs_mail_consent::ConsentError),
     Correspondence(cs_mail_correspondence::CorrespondenceError),
     Identity(identity_contract::Error),
+    Operations(cs_mail_operations::OperationsError),
     Database(postgres::Error),
     Protocol(ProtocolError),
     Ledger(LedgerError),
@@ -125,6 +130,7 @@ impl fmt::Display for StorageError {
             Self::Correspondence(error) => error.fmt(formatter),
             Self::Consent(error) => error.fmt(formatter),
             Self::Identity(error) => write!(formatter, "identity error: {error}"),
+            Self::Operations(error) => write!(formatter, "operations error: {error}"),
             Self::UnsupportedStoredFinancialFormat(version) => write!(
                 formatter,
                 "stored financial format {version} requires an explicit migration"
@@ -187,6 +193,11 @@ impl std::error::Error for StorageError {
             Self::Billing(e) => Some(e),
             _ => None,
         }
+    }
+}
+impl From<cs_mail_operations::OperationsError> for StorageError {
+    fn from(value: cs_mail_operations::OperationsError) -> Self {
+        Self::Operations(value)
     }
 }
 impl From<identity_contract::Error> for StorageError {
@@ -357,6 +368,17 @@ impl PostgresDeployment {
             client: self.client.clone(),
             deployment: self.clone(),
         })
+    }
+
+    /// The highest applied schema migration.
+    /// # Errors
+    /// Returns database errors.
+    pub fn schema_version(&self) -> Result<i64, StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        Ok(client
+            .query_one("SELECT max(version) FROM cs_schema_migrations", &[])?
+            .get::<_, Option<i64>>(0)
+            .unwrap_or(0))
     }
 
     /// Product accounts, enrollment, consent and correspondence storage.
@@ -925,6 +947,8 @@ fn migrate(client: &mut Client) -> Result<(), StorageError> {
         (17_i64, MIGRATION_17),
         (18_i64, MIGRATION_18),
         (19_i64, MIGRATION_19),
+        (20_i64, MIGRATION_20),
+        (21_i64, MIGRATION_21),
     ] {
         if transaction
             .query_opt(

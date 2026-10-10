@@ -167,8 +167,10 @@ the option remains available if that trust model is ever accepted or mitigated.
 
 \paragraph{Enrollment.} Open to anyone who completes a fresh login and
 bank-ownership verification. There are no invitations. The one-person-one-account
-rules are the only gate: one cs-mail login per identity subject, one account per
-verified bank token, and one member per bank-attested person. The service is run
+rules are the only gate: a cs-mail login belongs to one account, and an enrollment
+whose evidence (legal name, date of birth, bank account, address, phone) shares its
+bank account, or any two fields, with another is held until a CSQD operator approves
+or denies it. Accounts approved this way may share a bank account. The service is run
 by CSQD, the only provider, in one region on one PostgreSQL deployment. The
 intended recipients are people who receive substantial unsolicited contact;
 senders are people trying to reach them, including guests once the request page
@@ -330,7 +332,9 @@ The identity-model enrollment service runs beside \texttt{cs-maild}, with a
 development OIDC provider (the Keycloak realm in \texttt{identity-model/ci}) and
 simulated bank-ownership evidence from development support code. Enrollment is
 open: a fresh login and bank-ownership verification are the only requirements,
-and the one-person-one-account rules are the only gate. The payment
+and the one-person-one-account rules are the only gate. The identity service screens
+each applicant's evidence under cs-mail's policy and holds overlaps for operator
+review (\href{DOMAIN_MODEL.md}{\texttt{DOMAIN\_MODEL.md}}). The payment
 simulator persists operation identities and supports delayed, duplicate,
 out-of-order, and failed results; its scenario changes are audited and separate
 from canonical financial writes.
@@ -339,8 +343,8 @@ from canonical financial writes.
 \claim{PostgreSQL}{Repeating bootstrap cannot install a second provider signing key or replace the key registry.}
     {Two bootstrap runs, including one interrupted midway, leave two keys accepted as CSQD's or a changed registry.}
     {Two keys could then sign quotes and receipts as the provider.}
-\claim{PostgreSQL}{Concurrent enrollments by the same person, through different logins or bank accounts, cannot create two accounts.}
-    {Two enrollment operations for one bank-attested person both activate.}
+\claim{PostgreSQL}{An enrollment whose evidence shares a bank account, or any two of name, date of birth, bank account, address and phone, with another enrollment cannot activate until a CSQD operator approves it, including when both enroll concurrently; a denial is final.}
+    {Two overlapping enrollments both become eligible without review, or a held or denied enrollment activates.}
     {One account per person is an anti-abuse objective and a member-share rule.}
 \claim{PostgreSQL}{A restart cannot duplicate a simulated payment operation.}
     {A killed and restarted service shows two operations for one operation identity.}
@@ -349,6 +353,41 @@ from canonical financial writes.
 
 \textbf{Exit:} a clean-start transcript, restart demonstration, and redacted
 diagnostics.
+
+\textbf{Status: implemented (25 September 2026)}; the Keycloak enrollment run
+remains. \texttt{cs-maild} migrates, bootstraps (\texttt{migrate},
+\texttt{bootstrap}) and serves a loopback HTTP API with process health
+(\texttt{/health}) separate from database and bootstrap readiness
+(\texttt{/ready}). Operator commands (service offers, request pricing, and, in
+development builds, simulator scenarios) are signed with an operator key named in
+the bootstrap record and replay their recorded outcome when repeated;
+\texttt{cs-mail-admin} generates keys, signs, and sends them. Open enrollment is
+served at \texttt{/v1/enrollments}. An enrollment whose evidence overlaps another's is
+held until an operator approves or denies it with \texttt{cs-mail-admin review};
+accounts approved this way may share a bank account. The payment simulator is a durable \texttt{PaymentProcessor} with its own
+schema and audited scenario commands. \texttt{scripts/m1-demo.sh} produces the
+clean-start, restart, and redaction transcript from an empty database; each claim
+above has a PostgreSQL test.
+
+Decisions and deviations, for confirmation:
+\begin{itemize}[nosep]
+\item TLS terminates at the deployment proxy; \texttt{cs-maild} listens on loopback
+  only and does not embed Rustls.
+\item A lost database connection is not reopened in place: the service exits with a
+  failure status for its supervisor to restart it. Connection pooling is Milestone~5
+  work.
+\item Enrollment identifiers derive from the client's operation identity, so a
+  retried request replays rather than reserving a second account.
+\end{itemize}
+
+Not yet covered: enrollment against the Keycloak realm (it was exercised with a
+development token verifier in its place); rotating identity trust and configuring
+the financial program remain outside the operator API; account changes (device
+recovery, bank rebinding) do not screen evidence, and rebinding to a bank account
+another account enrolled with is refused; phones are not yet verified by a code;
+normalization does not equate address abbreviations (``Street'' and ``St''); the
+bootstrap provider key does not yet seed relationship key registries, and the initial
+enrollment key is registered for the sender role (both Milestone~2).
 
 \section{Milestone 1b: Request Pricing}
 
@@ -380,8 +419,8 @@ menu types are removed without aliases.
 class stops being quotable until republished, from a clean database.
 
 \textbf{Status: implemented (25 September 2026)}, with the deployment-scoped storage
-handle; the three claims are challenged against PostgreSQL. Publishing the operator
-policy moves behind the authenticated administration API in Milestone~1.
+handle; the three claims are challenged against PostgreSQL. The operator policy is
+published through the authenticated administration API (Milestone~1).
 
 \section{Milestone 2: The Core Loop From the Command Line}
 
@@ -618,8 +657,9 @@ Backups and retained obligation records respect separate keys and access roles.
 
 Open enrollment to the public, aiming first at recipients who receive substantial
 unsolicited contact and senders who want to reach them, including guests if
-Milestones~3b and~3c have shipped. Before live payments, establish that the
-bank-attested person reference is stable across a person's bank accounts.
+Milestones~3b and~3c have shipped. Before live payments, confirm that the chosen
+bank integration reports each account owner's name, address and phone, and decide
+whether phones are also verified by a text-message code.
 Configure the deployment domain's MX, SPF, DKIM, and DMARC records and monitor
 outbound deliverability. Nondeveloper
 testers use clean machines and the user guide without direct database repair.

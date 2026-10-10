@@ -93,8 +93,8 @@ impl BillingStore for InMemoryStore {
         let sources = staged
             .funding_sources
             .iter()
-            .filter(|(_, (owner, _))| *owner == scope.account)
-            .map(|(token, (_, source))| (*token, source.clone()))
+            .filter(|((owner, _), _)| *owner == scope.account)
+            .map(|((_, token), source)| (*token, source.clone()))
             .collect();
         let ledger = staged
             .billing_ledgers
@@ -117,14 +117,10 @@ impl BillingStore for InMemoryStore {
         .into_parts();
         if let Some(writes) = writes {
             for (token, source) in writes.sources {
-                let (owner, stored) = staged
+                *staged
                     .funding_sources
-                    .get_mut(&token)
-                    .ok_or(BillingError::MissingRecord)?;
-                if *owner != scope.account {
-                    return Err(EngineError::VersionConflict);
-                }
-                *stored = source;
+                    .get_mut(&(scope.account, token))
+                    .ok_or(EngineError::VersionConflict)? = source;
             }
             staged
                 .billing_accounts

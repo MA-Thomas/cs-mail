@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/cs-mail-simulation",
+    "crates/cs-mail-operations",
     "crates/cs-mail-consent",
     "crates/cs-mail-key-custody",
     "crates/cs-mail-correspondence",
@@ -37,7 +39,11 @@ rust-version = "1.88"
 publish = false
 
 [workspace.dependencies]
+axum = "0.8"
 clap = { version = "4.6", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
 identity-contract = { version = "0.1.0", path = "../identity-model/identity-contract" }
 postgres = { version = "0.19.10", features = ["with-serde_json-1"] }
 serde = { version = "1.0.219", features = ["derive"] }

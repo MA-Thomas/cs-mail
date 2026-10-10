@@ -18,7 +18,6 @@ fn bank(id: u128) -> VerifiedBankAccount {
         scope: scope(),
         account: BillingAccountId(id),
         member: MemberId(id),
-        person: [u8::try_from(id).unwrap(); 32],
         bank_token: [9; 32],
         unit: SettlementUnit(1),
         version: 1,

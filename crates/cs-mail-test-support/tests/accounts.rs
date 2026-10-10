@@ -22,7 +22,6 @@ fn input(id: u8) -> EnrollmentInput {
             scope: scope(),
             account: BillingAccountId(u128::from(id)),
             member: MemberId(u128::from(id)),
-            person: [id; 32],
             bank_token: [id; 32],
             unit: SettlementUnit(1),
             version: 1,

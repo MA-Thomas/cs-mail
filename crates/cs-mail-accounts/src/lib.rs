@@ -29,11 +29,12 @@ pub struct EnrollmentInput {
     pub maximum_unresolved: u32,
 }
 impl EnrollmentInput {
-    /// Ownership reserved by one operation cannot be claimed by another.
+    /// Identifiers reserved by one operation cannot be claimed by another. Whether one
+    /// person may hold a second account is the identity service's decision under the
+    /// product's evidence policy, not a rule over these identifiers.
     pub fn conflicts_with(&self, other: &Self) -> bool {
         self.bank.account == other.bank.account
             || self.bank.member == other.bank.member
-            || self.bank.bank_token == other.bank.bank_token
             || self.persona == other.persona
             || self.key_ref == other.key_ref
     }

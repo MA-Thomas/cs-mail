@@ -86,9 +86,7 @@ impl Fixture {
             [9; 32],
             ProtocolVersion(2),
         );
-        host.deployment()
-            .configure_payment_arrangement(scope, SettlementUnit(1), key(7), key(77))
-            .unwrap();
+        cs_mail_test_support::bootstrap(host.deployment(), scope, SettlementUnit(1)).unwrap();
         host.deployment()
             .configure_financial_program(scope, SettlementUnit(1), key(42), key(7))
             .unwrap();
@@ -105,7 +103,6 @@ impl Fixture {
                             scope,
                             account: BillingAccountId(id),
                             member: MemberId(id),
-                            person: [n; 32],
                             bank_token: [n + 8; 32],
                             unit: SettlementUnit(1),
                             version: 1,

@@ -3,10 +3,11 @@ pub mod enrollment;
 pub(crate) mod memory;
 pub mod operations;
 mod pending;
+pub mod review;
 use contract::{DecisionVerifier, Error};
 use cs_mail_accounts::{Account, AccountIdentityBinding, EnrollmentInput};
 use cs_mail_primitives::{AccountId, CanonicalTime};
-pub use enrollment::AccountEnrollment;
+pub use enrollment::{AccountEnrollment, EnrollmentIdentifiers};
 use identity_contract::{
     self as contract, IdentityClient, Request, Response, SignedBankOwnership, SignedDecision,
     SignedRequest,
@@ -120,14 +121,23 @@ pub trait EnrollmentRepository {
 pub enum EnrollmentOutcome {
     AwaitingEvidence,
     Enrolled(AccountId),
+    /// The bank integration could not confirm ownership and requires its own review.
     ReviewRequired,
+    /// The applicant's evidence overlaps another enrollment's; an operator must approve.
+    UnderReview,
+    /// An operator approved; the applicant completes the enrollment again, with fresh
+    /// evidence, after renewing it.
+    ReviewApproved,
     Denied,
 }
+/// Evidence for one enrollment attempt. It is forwarded to the identity service and
+/// never stored by cs-mail.
 #[derive(Clone)]
 pub struct EnrollmentEvidence {
     pub oidc_token: String,
     pub bank: SignedBankOwnership,
     pub device_proof: Vec<u8>,
+    pub applicant: contract::evidence::ApplicantClaims,
 }
 #[derive(Debug)]
 pub enum EnrollmentError<E> {
@@ -178,6 +188,7 @@ pub fn enroll_with_identity<R: EnrollmentRepository>(
             oidc_token: evidence.oidc_token,
             bank: evidence.bank,
             device_proof: evidence.device_proof,
+            applicant: evidence.applicant,
         },
         product_secret,
     )?;
@@ -188,6 +199,7 @@ pub fn enroll_with_identity<R: EnrollmentRepository>(
                 .map_err(EnrollmentError::Storage)?,
         )),
         Response::ReviewRequired => Ok(EnrollmentOutcome::ReviewRequired),
+        Response::UnderReview => Ok(EnrollmentOutcome::UnderReview),
         Response::Denied => Ok(EnrollmentOutcome::Denied),
         Response::Rejected(error) => Err(error.into()),
         _ => Err(contract::Error::Context.into()),
@@ -219,11 +231,15 @@ pub fn reconcile_account_enrollment<R: EnrollmentRepository>(
             .map_err(EnrollmentError::Storage),
         Response::Rejected(error) => Err(error.into()),
         Response::ReviewRequired => Ok(EnrollmentOutcome::ReviewRequired),
+        Response::UnderReview => Ok(EnrollmentOutcome::UnderReview),
+        Response::ReviewApproved => Ok(EnrollmentOutcome::ReviewApproved),
         Response::Denied => Ok(EnrollmentOutcome::Denied),
         Response::Missing => Ok(EnrollmentOutcome::AwaitingEvidence),
-        Response::Confirmed | Response::IdentityChanged(_) | Response::SecurityEvents(_) => {
-            Err(contract::Error::Context.into())
-        }
+        Response::Confirmed
+        | Response::IdentityChanged(_)
+        | Response::SecurityEvents(_)
+        | Response::Reviews(_)
+        | Response::ReviewResolved(_) => Err(contract::Error::Context.into()),
     }
 }
 /// A durable delivery claim. The increasing generation fences expired workers.

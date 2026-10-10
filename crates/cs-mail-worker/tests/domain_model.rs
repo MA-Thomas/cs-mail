@@ -54,10 +54,7 @@ fn setup() -> (String, PostgresEngine) {
         .unwrap()
         .relationship("domain", &state, SettlementUnit(1))
         .unwrap();
-    engine
-        .deployment()
-        .configure_payment_arrangement(scope(), SettlementUnit(1), key(7), key(77))
-        .unwrap();
+    cs_mail_test_support::bootstrap(engine.deployment(), scope(), SettlementUnit(1)).unwrap();
     engine
         .deployment()
         .configure_financial_program(scope(), SettlementUnit(1), key(42), key(7))
@@ -87,7 +84,6 @@ fn bank(account: u128, version: u64) -> BankVerification {
         scope: scope(),
         account: BillingAccountId(account),
         member: MemberId(account),
-        person: [u8::try_from(account).unwrap(); 32],
         bank_token: [u8::try_from(account + 8).unwrap(); 32],
         unit: SettlementUnit(1),
         version,
@@ -161,7 +157,12 @@ fn collection_is_advance_fixed_and_rechecks_a_queued_source() {
     let (_url, engine) = setup();
     let deployment = engine.deployment();
     for (v, y) in [(1, 2026), (2, 2027)] {
-        deployment.publish_service_offer(&offer(v, y)).unwrap();
+        cs_mail_test_support::operator(
+            deployment,
+            cs_mail_operations::OperatorCommand::PublishServiceOffer(offer(v, y)),
+            at(2025, 1, 1),
+        )
+        .unwrap();
     }
     let first = account_command(
         &engine,
@@ -251,11 +252,18 @@ fn bank_identity_and_account_authority_cannot_be_substituted() {
         )
         .is_err()
     );
+    let mut other = cs_mail_test_support::fixture_deployment(scope(), SettlementUnit(1))
+        .unwrap()
+        .record()
+        .clone();
+    other.payment.processor_key = key(8);
     assert!(
-        engine
-            .deployment()
-            .configure_payment_arrangement(scope(), SettlementUnit(1), key(8), key(77))
-            .is_err()
+        cs_mail_application::operations::bootstrap(
+            engine.deployment(),
+            &cs_mail_operations::DeploymentBootstrap::new(other).unwrap(),
+            || at(2025, 1, 1),
+        )
+        .is_err()
     );
     let repository = engine.deployment().accounts(|| at(2025, 2, 1));
     let product = repository.persona_account(ProtocolIdentity(10)).unwrap();
@@ -418,10 +426,12 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
         start,
     );
     seed_pool(&url, &engine);
-    engine
-        .deployment()
-        .publish_service_offer(&offer(1, 2026))
-        .unwrap();
+    cs_mail_test_support::operator(
+        engine.deployment(),
+        cs_mail_operations::OperatorCommand::PublishServiceOffer(offer(1, 2026)),
+        at(2025, 1, 1),
+    )
+    .unwrap();
     account_command(
         &engine,
         BillingCommand::PurchaseService {

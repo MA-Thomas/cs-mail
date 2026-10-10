@@ -23,16 +23,91 @@ pub fn fixture_pricing(
         Money::from_minor_units(1000),
     )
 }
-pub fn arrangement(
-    engine: &PostgresEngine,
-    policy: &cs_mail_protocol::PolicySnapshot,
+/// Secret of the fixtures' single operator key, `OperatorKeyRef(1)`.
+pub const FIXTURE_OPERATOR_SECRET: [u8; 32] = [90; 32];
+fn public(secret: u8) -> [u8; 32] {
+    SigningKey::from_bytes(&[secret; 32])
+        .verifying_key()
+        .to_bytes()
+}
+/// The regression fixtures' deployment: provider key 3, operator key 1, payment processor
+/// `[7; 32]`, bank authority `[77; 32]` and the test identity issuer with decision key
+/// `[80; 32]`, for the given scope and settlement unit.
+/// # Errors
+/// Rejects an inconsistent scope.
+pub fn fixture_deployment(
+    scope: cs_mail_finance::FinancialScope,
+    unit: SettlementUnit,
+) -> Result<cs_mail_operations::DeploymentBootstrap, StorageError> {
+    Ok(cs_mail_operations::DeploymentBootstrap::new(
+        cs_mail_operations::BootstrapRecord {
+            provider: scope.operator,
+            deployment_domain: scope.deployment_domain,
+            financial_scope: scope,
+            unit,
+            provider_key: cs_mail_operations::ProviderKey {
+                reference: OperationalKeyRef(3),
+                verifying_key: public(3),
+            },
+            operators: cs_mail_operations::OperatorKeys::new(
+                [(
+                    cs_mail_operations::OperatorKeyRef(1),
+                    public(FIXTURE_OPERATOR_SECRET[0]),
+                )]
+                .into(),
+            )?,
+            payment: cs_mail_operations::PaymentTrust {
+                processor_key: SimulatedProcessor::new([7; 32]).verifying_key(),
+                bank_authority: public(77),
+            },
+            identity: cs_mail_operations::IdentityTrust {
+                issuer: "https://identity.example.test".into(),
+                product: "cs-mail/test".into(),
+                decision_key: public(80),
+            },
+        },
+    )?)
+}
+/// Bootstraps the fixture deployment, or confirms it (an identical repeat changes nothing).
+/// # Errors
+/// Refuses a differently bootstrapped deployment; persistence failures.
+pub fn bootstrap(
+    deployment: &cs_mail_storage_postgres::PostgresDeployment,
+    scope: cs_mail_finance::FinancialScope,
+    unit: SettlementUnit,
 ) -> Result<(), StorageError> {
-    engine.deployment().configure_payment_arrangement(
-        policy.financial.scope,
-        policy.unit,
-        SimulatedProcessor::new([7; 32]).verifying_key(),
-        SigningKey::from_bytes(&[77; 32]).verifying_key().to_bytes(),
-    )
+    cs_mail_application::operations::bootstrap(
+        deployment,
+        &fixture_deployment(scope, unit)?,
+        || CanonicalTime(0),
+    )?;
+    Ok(())
+}
+/// Executes one operator command signed by the fixture operator. The command identity is
+/// derived from the command, so repeating a command is an exact replay.
+/// # Errors
+/// The operator service's refusals and persistence failures.
+pub fn operator(
+    deployment: &cs_mail_storage_postgres::PostgresDeployment,
+    command: cs_mail_operations::OperatorCommand,
+    at: CanonicalTime,
+) -> Result<cs_mail_operations::OperatorOutcome, StorageError> {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(serde_json::to_vec(&command)?);
+    let identity = u128::from_be_bytes(digest[..16].try_into().unwrap_or([0; 16]));
+    let domain = deployment
+        .deployment_record()?
+        .ok_or(cs_mail_operations::OperationsError::NotBootstrapped)?
+        .record()
+        .deployment_domain;
+    let signed = cs_mail_operations::SignedOperatorCommand::sign(
+        domain,
+        cs_mail_operations::OperatorKeyRef(1),
+        IdempotencyKey(identity),
+        command,
+        &FIXTURE_OPERATOR_SECRET,
+    )?;
+    cs_mail_application::operations::OperatorService::new(deployment).execute(&signed, || at)
 }
 pub fn provision(
     engine: &PostgresEngine,
@@ -41,7 +116,7 @@ pub fn provision(
     sender: ProtocolIdentity,
     at: CanonicalTime,
 ) -> Result<(), StorageError> {
-    arrangement(engine, policy)?;
+    bootstrap(engine.deployment(), policy.financial.scope, policy.unit)?;
     let recipient = engine.snapshot()?.state.relationship.key.recipient;
     if !all_keys
         .records()
@@ -87,7 +162,13 @@ pub fn provision(
     let pricing =
         cs_mail_application::request_pricing::RequestPricingService::new(engine.deployment());
     if engine.deployment().request_pricing_policy()?.is_none() {
-        pricing.publish_policy(&fixture_pricing(policy.unit)?, || at)?;
+        operator(
+            engine.deployment(),
+            cs_mail_operations::OperatorCommand::PublishRequestPricing(fixture_pricing(
+                policy.unit,
+            )?),
+            at,
+        )?;
     }
     if engine.deployment().request_classes(recipient)?.is_none() {
         let record = all_keys
@@ -129,7 +210,6 @@ fn enroll_persona(
         scope: policy.financial.scope,
         account: BillingAccountId(number),
         member: MemberId(number),
-        person: [u8::try_from(number).unwrap(); 32],
         bank_token: [u8::try_from(number + 8).unwrap(); 32],
         unit: policy.unit,
         version: 1,
@@ -172,7 +252,11 @@ fn purchase_service(
         Money::from_minor_units(12000),
         policy.unit,
     )?;
-    engine.deployment().publish_service_offer(&offer)?;
+    operator(
+        engine.deployment(),
+        cs_mail_operations::OperatorCommand::PublishServiceOffer(offer.clone()),
+        at,
+    )?;
     let signed = SignedBillingCommand::sign(
         id,
         reference,

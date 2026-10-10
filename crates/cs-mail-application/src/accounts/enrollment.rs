@@ -151,3 +151,36 @@ impl<'a, R: EnrollmentRepository> AccountEnrollment<'a, R> {
         })
     }
 }
+
+/// The backend's allocations for one enrollment operation: billing account, member,
+/// public communication identity and initial key reference. They are derived from the
+/// operation identity, so a retried begin carries identical input without a separate
+/// allocation record. Ownership of each remains unique through the reservation; a
+/// collision is refused there, never merged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnrollmentIdentifiers {
+    pub billing: cs_mail_primitives::BillingAccountId,
+    pub member: cs_mail_primitives::MemberId,
+    pub persona: cs_mail_primitives::ProtocolIdentity,
+    pub key: cs_mail_primitives::OperationalKeyRef,
+}
+impl EnrollmentIdentifiers {
+    pub fn for_operation(operation: &str) -> Self {
+        let derive = |role: &str| {
+            use sha2::Digest as _;
+            let digest = sha2::Sha256::digest(format!(
+                "cs-mail/enrollment-allocation/v1/{role}/{operation}"
+            ));
+            let mut bytes = [0; 16];
+            bytes.copy_from_slice(&digest[..16]);
+            // Zero identifiers are invalid everywhere; the top bit keeps them non-zero.
+            u128::from_be_bytes(bytes) | (1 << 127)
+        };
+        Self {
+            billing: cs_mail_primitives::BillingAccountId(derive("billing")),
+            member: cs_mail_primitives::MemberId(derive("member")),
+            persona: cs_mail_primitives::ProtocolIdentity(derive("persona")),
+            key: cs_mail_primitives::OperationalKeyRef(derive("key")),
+        }
+    }
+}

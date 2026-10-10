@@ -3,7 +3,6 @@
 use cs_mail_accounts::EnrollmentInput;
 use cs_mail_primitives::{AccountId, CanonicalTime};
 use cs_mail_storage_postgres::{PostgresEngine, StorageError};
-use ed25519_dalek::SigningKey;
 use identity_contract::*;
 
 pub fn enroll(
@@ -11,14 +10,7 @@ pub fn enroll(
     input: EnrollmentInput,
     at: CanonicalTime,
 ) -> Result<AccountId, StorageError> {
-    engine
-        .deployment()
-        .accounts(move || at)
-        .configure_identity_service(
-            "https://identity.example.test",
-            "cs-mail/test",
-            SigningKey::from_bytes(&[80; 32]).verifying_key().to_bytes(),
-        )?;
+    crate::bootstrap(engine.deployment(), input.bank.scope, input.bank.unit)?;
     let operation = format!("fixture-account-{}", input.bank.account.0);
     let p = cs_mail_application::accounts::AccountEnrollment::new(
         &engine.deployment().accounts(move || at),

@@ -29,8 +29,12 @@ another product's enrollment policy.
 
 ## Enrollment
 
-The implemented enrollment service accepts only the cs-mail bank-ownership policy.
-It resolves a verified login within the configured product. If that product login
+Each product has its own enrollment evidence policy: the person evidence it requires
+and the overlaps with its other enrollments that need review. The implemented service
+accepts only cs-mail's person-evidence policy (name, date of birth, bank account,
+address and phone; see the [shared identity contract](../../identity-model/docs/shared-identity-contract.md#enrollment-evidence-and-review)).
+Evidence is never compared across products. The service resolves a verified login
+within the configured product. If that product login
 does not exist, it creates a subject, product reference and durable login binding
 atomically with its enrollment reservation. It never discovers a shared subject
 merely by matching a login in another product, an email address or a bank account.

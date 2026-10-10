@@ -9,7 +9,8 @@ pub struct BankVerification {
     pub scope: FinancialScope,
     pub account: BillingAccountId,
     pub member: MemberId,
-    pub person: [u8; 32],
+    /// The bank integration's stable reference to the account. Several product accounts
+    /// may share one bank account when enrollment review approved it.
     pub bank_token: [u8; 32],
     pub unit: SettlementUnit,
     pub version: u64,
@@ -22,7 +23,6 @@ impl BankVerification {
             self.scope,
             self.account,
             self.member,
-            self.person,
             self.bank_token,
             self.unit,
             self.version,
@@ -43,7 +43,6 @@ impl BankVerification {
     pub fn verify(&self, authority: &[u8; 32]) -> Result<VerifiedBankAccount, PaymentError> {
         if self.account.0 == 0
             || self.member.0 == 0
-            || self.person == [0; 32]
             || self.bank_token == [0; 32]
             || self.version == 0
         {

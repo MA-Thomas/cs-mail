@@ -1,4 +1,5 @@
 //! CSQD's request pricing policy and each address's request-class publication.
+//! Operator policy versions are published only through authenticated operator commands.
 //!
 //! Both are deployment-level facts, authorized and validated against protected current
 //! context; neither depends on any relationship. Quote resolution itself is the pure
@@ -64,17 +65,58 @@ impl ClassesPublicationDecision {
     }
 }
 
-/// Atomic persistence of pricing publications. Each method invokes its callback once,
-/// after loading all protected context, and commits its effects or nothing.
+/// Decides publishing an operator policy version against protected current context. Only
+/// the authenticated operator command path invokes it (`operations::OperatorService`).
+/// An exact replay of the current version changes nothing.
+/// # Errors
+/// `DuplicateConflict` for a stored version with different content, `VersionConflict`
+/// for a version not newer than the current one, and `PolicyInvalid` for a change of
+/// settlement unit.
+pub fn decide_policy(
+    policy: &RequestPricingPolicy,
+    context: &PolicyPublicationContext,
+    at: CanonicalTime,
+) -> Result<PolicyPublicationDecision, ProtocolError> {
+    if context.same_version.as_ref().is_some_and(|p| p != policy) {
+        return Err(ProtocolError::DuplicateConflict);
+    }
+    let affected = context
+        .publications
+        .iter()
+        .filter(|p| !policy.permits(p))
+        .count();
+    if let Some(current) = &context.current {
+        if current == policy {
+            return Ok(PolicyPublicationDecision {
+                next: None,
+                report: PolicyPublicationReport {
+                    version: policy.version(),
+                    changed: false,
+                    addresses_with_unquotable_classes: affected,
+                },
+            });
+        }
+        if policy.version() <= current.version() {
+            return Err(ProtocolError::VersionConflict);
+        }
+        if policy.unit() != current.unit() {
+            return Err(ProtocolError::PolicyInvalid);
+        }
+    }
+    Ok(PolicyPublicationDecision {
+        next: Some((policy.clone(), at)),
+        report: PolicyPublicationReport {
+            version: policy.version(),
+            changed: true,
+            addresses_with_unquotable_classes: affected,
+        },
+    })
+}
+
+/// Atomic persistence of an address's class publication. The callback runs once, after
+/// all protected context is loaded, and its effects commit together or not at all.
 pub trait RequestPricingStore {
     type Error: From<ProtocolError> + From<SecurityError>;
-    /// # Errors
-    /// Rolls back on a refused decision or a persistence failure.
-    fn transact_pricing_policy(
-        &self,
-        policy: &RequestPricingPolicy,
-        decide: impl FnOnce(PolicyPublicationContext) -> Result<PolicyPublicationDecision, Self::Error>,
-    ) -> Result<PolicyPublicationReport, Self::Error>;
     /// # Errors
     /// Rolls back on a refused decision or a persistence failure.
     fn transact_request_classes(
@@ -92,55 +134,6 @@ pub struct RequestPricingService<'a, R> {
 impl<'a, R: RequestPricingStore> RequestPricingService<'a, R> {
     pub const fn new(repository: &'a R) -> Self {
         Self { repository }
-    }
-    /// Publishes a new operator policy version and makes it current. An exact replay of the
-    /// current version succeeds without change.
-    /// # Errors
-    /// `DuplicateConflict` for a stored version with different content, `VersionConflict`
-    /// for a version not newer than the current one, and `PolicyInvalid` for a change of
-    /// settlement unit.
-    pub fn publish_policy(
-        &self,
-        policy: &RequestPricingPolicy,
-        clock: impl FnOnce() -> CanonicalTime,
-    ) -> Result<PolicyPublicationReport, R::Error> {
-        self.repository.transact_pricing_policy(policy, |context| {
-            let at = clock();
-            if context.same_version.as_ref().is_some_and(|p| p != policy) {
-                return Err(ProtocolError::DuplicateConflict.into());
-            }
-            let affected = context
-                .publications
-                .iter()
-                .filter(|p| !policy.permits(p))
-                .count();
-            if let Some(current) = &context.current {
-                if current == policy {
-                    return Ok(PolicyPublicationDecision {
-                        next: None,
-                        report: PolicyPublicationReport {
-                            version: policy.version(),
-                            changed: false,
-                            addresses_with_unquotable_classes: affected,
-                        },
-                    });
-                }
-                if policy.version() <= current.version() {
-                    return Err(ProtocolError::VersionConflict.into());
-                }
-                if policy.unit() != current.unit() {
-                    return Err(ProtocolError::PolicyInvalid.into());
-                }
-            }
-            Ok(PolicyPublicationDecision {
-                next: Some((policy.clone(), at)),
-                report: PolicyPublicationReport {
-                    version: policy.version(),
-                    changed: true,
-                    addresses_with_unquotable_classes: affected,
-                },
-            })
-        })
     }
     /// Publishes one address's classes. The signature must come from an active key of that
     /// address, and every class must lie within the current policy's bounds. Versions

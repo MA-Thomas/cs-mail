@@ -348,7 +348,6 @@ impl BillingAccount {
         let new = bank.evidence();
         if old.account != new.account
             || old.member != new.member
-            || old.person != new.person
             || old.scope != new.scope
             || old.unit != new.unit
             || new.version <= old.version

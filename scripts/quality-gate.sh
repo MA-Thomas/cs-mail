@@ -112,7 +112,7 @@ check_binaries() {
 run_check "identity source manifest" check_identity_sources
 run_check "dependency direction" check_dependency_direction
 run_check "rustfmt" cargo fmt --all -- --check
-run_check "clippy" cargo clippy --workspace --all-targets -- -D warnings
+run_check "clippy" cargo clippy --workspace --all-targets --all-features -- -D warnings
 run_check "workspace tests" cargo test --workspace
 if [ $skip_postgres -eq 1 ]; then
     record SKIPPED "PostgreSQL suites (not evidence)"

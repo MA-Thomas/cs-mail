@@ -2,7 +2,7 @@ use cs_mail_primitives::{
     AllocationId, FinancialEventId, Money, PaymentOperationId, RelationshipRef, RequestId,
     SettlementUnit,
 };
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -100,7 +100,7 @@ pub struct PaymentEvidence {
     pub outcome: PaymentOutcome,
 }
 impl PaymentEvidence {
-    fn signing_bytes(&self) -> Vec<u8> {
+    pub(crate) fn signing_bytes(&self) -> Vec<u8> {
         let mut b = b"cs-mail/payment-evidence/v1".to_vec();
         b.extend_from_slice(&self.event_id.0.to_be_bytes());
         b.extend_from_slice(&self.operation_id.0.to_be_bytes());
@@ -178,35 +178,32 @@ pub trait PaymentProcessor {
         request: &CaptureCancellation,
     ) -> Result<SignedPaymentEvidence, PaymentError>;
 }
-/// Nonredeemable simulator. No bank, card network, or real money is involved.
+/// In-memory nonredeemable simulator for tests. Its rules are `crate::simulation`, shared
+/// with the durable development simulator. No bank, card network, or real money is involved.
 pub struct SimulatedProcessor {
     key: SigningKey,
-    operations: BTreeMap<PaymentOperationId, (PaymentOperation, SignedPaymentEvidence)>,
-    fail_before: bool,
-    lose_response: bool,
-    pending_next: bool,
+    operations: BTreeMap<PaymentOperationId, crate::simulation::SimulationRecord>,
+    next: crate::simulation::SimulationDirective,
 }
 impl SimulatedProcessor {
     pub fn new(secret: [u8; 32]) -> Self {
         Self {
             key: SigningKey::from_bytes(&secret),
             operations: BTreeMap::new(),
-            fail_before: false,
-            lose_response: false,
-            pending_next: false,
+            next: crate::simulation::SimulationDirective::default(),
         }
     }
     pub fn verifying_key(&self) -> [u8; 32] {
         self.key.verifying_key().to_bytes()
     }
     pub fn fail_next_submission(&mut self) {
-        self.fail_before = true;
+        self.next.unavailable = true;
     }
     pub fn lose_next_response(&mut self) {
-        self.lose_response = true;
+        self.next.lose_response = true;
     }
     pub fn pend_next_submission(&mut self) {
-        self.pending_next = true;
+        self.next.outcome = crate::simulation::DirectedOutcome::Pending;
     }
     /// Advances a simulated asynchronous operation with a distinct signed event.
     /// # Errors
@@ -217,27 +214,13 @@ impl SimulatedProcessor {
         event_id: FinancialEventId,
         outcome: PaymentOutcome,
     ) -> Result<SignedPaymentEvidence, PaymentError> {
-        let (operation, previous) = self
+        let record = self
             .operations
             .get(&id)
             .ok_or(PaymentError::InvalidOperation)?;
-        if previous.evidence.outcome != PaymentOutcome::Pending
-            || !matches!(
-                outcome,
-                PaymentOutcome::Settled | PaymentOutcome::Failed | PaymentOutcome::Voided
-            )
-        {
-            return Err(PaymentError::InvalidOperation);
-        }
-        let operation = operation.clone();
-        let receipt = self.sign(PaymentEvidence {
-            event_id,
-            operation_id: id,
-            operation_digest: operation.digest(),
-            outcome,
-        });
-        receipt.verify(&self.verifying_key(), &operation)?;
-        self.operations.insert(id, (operation, receipt.clone()));
+        let next = crate::simulation::resolve(&self.key, record, event_id, outcome)?;
+        let receipt = next.receipt.clone();
+        self.operations.insert(id, next);
         Ok(receipt)
     }
     pub fn operation_count(&self) -> usize {
@@ -251,28 +234,23 @@ impl SimulatedProcessor {
         id: PaymentOperationId,
         event_id: FinancialEventId,
     ) -> Result<SignedPaymentEvidence, PaymentError> {
-        let (operation, receipt) = self
+        let record = self
             .operations
             .get(&id)
             .ok_or(PaymentError::InvalidOperation)?;
-        if receipt.evidence.outcome != PaymentOutcome::Settled
-            || matches!(operation.kind, PaymentKind::Refund { .. })
-        {
-            return Err(PaymentError::InvalidOperation);
-        }
-        Ok(self.sign(PaymentEvidence {
-            event_id,
-            operation_id: id,
-            operation_digest: operation.digest(),
-            outcome: PaymentOutcome::Reversed,
-        }))
+        crate::simulation::reversal(&self.key, record, event_id)
     }
-    fn sign(&self, evidence: PaymentEvidence) -> SignedPaymentEvidence {
-        let signature = self.key.sign(&evidence.signing_bytes()).to_bytes().to_vec();
-        SignedPaymentEvidence {
-            evidence,
-            signature,
+    fn apply(
+        &mut self,
+        decision: crate::simulation::SimulationDecision,
+    ) -> Result<SignedPaymentEvidence, PaymentError> {
+        if decision.consumed_directive {
+            self.next = crate::simulation::SimulationDirective::default();
         }
+        if let Some(record) = decision.record {
+            self.operations.insert(record.operation.id, record);
+        }
+        decision.response
     }
 }
 impl PaymentProcessor for SimulatedProcessor {
@@ -280,112 +258,46 @@ impl PaymentProcessor for SimulatedProcessor {
         &mut self,
         id: PaymentOperationId,
     ) -> Result<Option<SignedPaymentEvidence>, PaymentError> {
-        Ok(self.operations.get(&id).map(|(_, r)| r.clone()))
+        Ok(self.operations.get(&id).map(|r| r.receipt.clone()))
     }
     fn submit(
         &mut self,
         operation: &PaymentOperation,
     ) -> Result<SignedPaymentEvidence, PaymentError> {
-        if let Some((original, receipt)) = self.operations.get(&operation.id) {
-            return if original == operation {
-                Ok(receipt.clone())
-            } else {
-                Err(PaymentError::DuplicateConflict)
-            };
-        }
-        if std::mem::take(&mut self.fail_before) {
-            return Err(PaymentError::Unavailable);
-        }
-        operation.validate()?;
-        if let PaymentKind::Refund { capture } = operation.kind {
-            let (original, receipt) = self
-                .operations
-                .get(&capture)
-                .ok_or(PaymentError::InvalidOperation)?;
-            if original.scope != operation.scope
-                || original.kind != PaymentKind::Capture
-                || receipt.evidence.outcome != PaymentOutcome::Settled
-                || original.unit != operation.unit
-                || original.destination != operation.destination
-                || operation.amount > original.amount
-            {
-                return Err(PaymentError::InvalidOperation);
-            }
-            let refunded = self
-                .operations
-                .values()
-                .filter(|(o, r)| {
-                    o.kind == PaymentKind::Refund { capture }
-                        && !matches!(
-                            r.evidence.outcome,
-                            PaymentOutcome::Failed
-                                | PaymentOutcome::Voided
-                                | PaymentOutcome::Reversed
-                        )
-                })
-                .try_fold(Money::ZERO, |sum, (o, _)| sum.checked_add(o.amount))
-                .ok_or(PaymentError::InvalidOperation)?;
-            if refunded
-                .checked_add(operation.amount)
-                .is_none_or(|total| total > original.amount)
-            {
-                return Err(PaymentError::InvalidOperation);
-            }
-        }
-        let pending = std::mem::take(&mut self.pending_next);
-        let receipt = self.sign(PaymentEvidence {
-            event_id: FinancialEventId(operation.id.0),
-            operation_id: operation.id,
-            operation_digest: operation.digest(),
-            outcome: if pending {
-                PaymentOutcome::Pending
-            } else {
-                PaymentOutcome::Settled
-            },
-        });
-        self.operations
-            .insert(operation.id, (operation.clone(), receipt.clone()));
-        if std::mem::take(&mut self.lose_response) {
-            Err(PaymentError::Unavailable)
-        } else {
-            Ok(receipt)
-        }
+        let (capture, refunded) = match operation.kind {
+            PaymentKind::Refund { capture } => (
+                self.operations.get(&capture),
+                self.operations
+                    .values()
+                    .filter(|r| {
+                        r.operation.kind == PaymentKind::Refund { capture }
+                            && crate::simulation::refund_counts(r)
+                    })
+                    .try_fold(Money::ZERO, |sum, r| sum.checked_add(r.operation.amount))
+                    .ok_or(PaymentError::InvalidOperation)?,
+            ),
+            _ => (None, Money::ZERO),
+        };
+        let decision = crate::simulation::submit(
+            &self.key,
+            self.operations.get(&operation.id),
+            &crate::simulation::RefundContext { capture, refunded },
+            operation,
+            self.next,
+        );
+        self.apply(decision)
     }
     fn cancel_capture(
         &mut self,
         request: &CaptureCancellation,
     ) -> Result<SignedPaymentEvidence, PaymentError> {
-        let operation = request.operation();
-        if let Some((original, receipt)) = self.operations.get(&operation.id) {
-            if original != operation {
-                return Err(PaymentError::DuplicateConflict);
-            }
-            if receipt.evidence.outcome != PaymentOutcome::Pending {
-                return Ok(receipt.clone());
-            }
-        }
-        if std::mem::take(&mut self.fail_before) {
-            return Err(PaymentError::Unavailable);
-        }
-        let mut h = Sha256::new();
-        h.update(b"cs-mail/capture-cancellation/v1");
-        h.update(operation.digest());
-        let digest = h.finalize();
-        let mut id = [0; 16];
-        id.copy_from_slice(&digest[..16]);
-        let receipt = self.sign(PaymentEvidence {
-            event_id: FinancialEventId(u128::from_be_bytes(id)),
-            operation_id: operation.id,
-            operation_digest: operation.digest(),
-            outcome: PaymentOutcome::Voided,
-        });
-        self.operations
-            .insert(operation.id, (operation.clone(), receipt.clone()));
-        if std::mem::take(&mut self.lose_response) {
-            Err(PaymentError::Unavailable)
-        } else {
-            Ok(receipt)
-        }
+        let decision = crate::simulation::cancel_capture(
+            &self.key,
+            self.operations.get(&request.operation().id),
+            request,
+            self.next,
+        );
+        self.apply(decision)
     }
 }
 

@@ -34,3 +34,49 @@ them makes domain decisions.
 
 Shared metadata (version, edition, minimum Rust version, `publish = false`), lints,
 and dependency versions come from the workspace `Cargo.toml`.
+
+## Running the service (Milestone 1)
+
+`scripts/m1-demo.sh` runs the whole sequence below against an empty database and
+prints the transcript:
+
+```sh
+CS_MAIL_DEMO_DATABASE_URL=postgresql://localhost/cs_mail_demo scripts/m1-demo.sh
+```
+
+1. `cs-mail-admin keygen --out <file>` writes an Ed25519 secret (a JSON array of 32
+   bytes, mode 0600) and prints only its public key. The provider, operator,
+   processor and bank keys are made this way.
+2. `cs-maild migrate --config maild.json` applies the schema.
+   `cs-maild bootstrap --config maild.json --deployment bootstrap.json` creates the
+   deployment from a record of public keys and trust roots; repeating it with the
+   same record changes nothing, and a different record is refused.
+3. `cs-maild serve --config maild.json` listens on loopback only; terminate TLS at the
+   deployment proxy. `/health` is process health, `/ready` is database and bootstrap
+   readiness. If its database connection is lost, the service exits with a failure
+   status so its supervisor restarts it.
+4. `cs-mail-admin configure --config admin.json --command <file>` signs and sends an
+   operator command (`PublishServiceOffer`, `PublishRequestPricing`). A repeat of the
+   same command returns the recorded outcome. Development builds
+   (`--features simulation`) add `cs-mail-admin simulate` for simulator scenarios.
+
+Enrollment is served at `POST /v1/enrollments` (begin), `POST
+/v1/enrollments/{operation}/renew`, `POST /v1/enrollments/{operation}/complete` and
+`GET /v1/enrollments/{operation}` (reconcile). It needs the `identity` section of the
+configuration, pointing at the identity-model enrollment service's `/v1/enrollment`
+endpoint, and a bank-evidence source: the simulated bank in development builds.
+Completing an enrollment sends the applicant's name, date of birth, address and phone
+(`applicant`) and the bank-integration request again (`bank`); cs-maild forwards them
+to the identity service and never stores or logs them. The outcome is `enrolled`,
+`under-review` (the evidence overlaps another enrollment's), `review-approved`,
+`review-required` (by the bank) or `denied`.
+
+`cs-mail-admin reviews --config admin.json` lists enrollments held for review, with the
+accounts they overlap and the matching fields.
+`cs-mail-admin review --config admin.json --case <id> --resolution approve|deny`
+decides one; the identity service records the operator and the signed command. After
+approval the applicant renews the enrollment and completes it again with a fresh
+login.
+
+Logs carry typed error codes only (SQLSTATE for database errors); no secrets, keys,
+request bodies or database URLs.

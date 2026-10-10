@@ -33,20 +33,27 @@ are generated with system randomness and are independent of bank identifiers.
 
 ## Enrollment API
 
-1. The backend configures its immutable identity issuer, `cs-mail/<environment>`
-   audience and pinned decision public key with `configure_identity_service`.
-   The financial bank-signing authority is configured separately.
+1. The deployment bootstrap record (`cs-maild bootstrap`) pins the immutable
+   identity issuer, `cs-mail/<environment>` audience and decision public key,
+   together with the financial bank-signing authority.
 2. `AccountEnrollment::begin` persists an operation, fresh account/principal IDs,
-   immutable local input, and random challenge, reserving local persona/key/billing/member/funding ownership before remote authorization. Local persona/key identifiers in
+   immutable local input, and random challenge, reserving local persona/key/billing/member ownership before remote authorization. Local persona/key identifiers in
    EnrollmentInput are backend allocations, not claims to arbitrary existing email
-   addresses. The method is a trusted backend API, not a public JSON endpoint.
+   addresses. `cs-maild` serves it at `POST /v1/enrollments`, deriving these
+   identifiers from the client's operation identity; clients never supply them.
 3. The client authenticates to OIDC using that challenge as nonce and requests
    fresh authentication. The ID token must contain issuer, audience, issuance and
    expiry timestamps, nonce and auth_time. The proposed device signs the intent.
 4. The authenticated bank integration signs a short-lived SignedBankOwnership
    assertion tied to the same login, challenge, operation and exact financial
-   BankVerification digest. No raw bank credentials or medical facts cross the
-   service boundary. The adapter must establish ownership before signing.
+   BankVerification digest. It carries the integration's stable reference to the
+   bank account and the owners the bank reports (names, addresses, phones). No raw
+   bank credentials or medical facts cross the service boundary. The adapter must
+   establish ownership before signing. The applicant's own statement of name, date
+   of birth, address and phone travels with the enrollment request; cs-mail forwards
+   it and never stores it. The identity service screens it under cs-mail's evidence
+   policy (see [identity-model's contract](../../identity-model/docs/shared-identity-contract.md#enrollment-evidence-and-review)):
+   an overlap with another enrollment holds the attempt for operator review.
 5. `enroll_with_identity` calls `/v1/enrollment` using a product-signed request and
    commits an eligible decision using the current backend clock. No local lock is
    held during remote I/O. Decisions cannot select local IDs or replace bank input.
@@ -72,8 +79,10 @@ Pending enrollment is a separate state. There is no unbound account mode or bill
 provisioning API. `cs_persona_owners` is the canonical persona ownership table, and
 financial membership digests derive from the independent principal.
 
-The pre-existing rule restricting a funding token to one account is retained as
-an anti-abuse rule. Supporting shared/joint funding sources needs a separate rule.
+A bank account may back several accounts when enrollment review approved it. Each
+billing account keeps its own funding source for it, and each capture names the
+funding source it was reserved on. Rebinding an account to a bank account another
+account enrolled with is refused: review applies only at enrollment.
 
 User personas resolve only to account registries. Missing ownership and missing or
 revoked keys reject authorization. Relationship registries accept provider/scheduler
@@ -121,7 +130,7 @@ This implements bank-backed cs-mail enrollment, device-key recovery, bank rebind
 and their service boundary.
 It does not launch a hosted service, configure a live bank provider or OIDC tenant,
 provide an account UI, or enable Phoros enrollment or cross-product subject adoption. The identity
-service accepts only the cs-mail bank-ownership policy. Historical assurance and
+service accepts only cs-mail's person-evidence policy. Historical assurance and
 fixture recovery outcomes cannot upgrade that policy. Its signed eligibility is a
 bounded-time capability, not instantaneous global revocation. Product security events
 have an ordered reconciliation path; cross-product broadcasts and additional recovery

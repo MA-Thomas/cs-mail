@@ -688,7 +688,7 @@ fn published_annual_period_is_finalized_by_durable_work() {
     let engine = engine(&url, "annual");
     let secret = [42; 32];
     let provider = SimulatedProcessor::new([7; 32]);
-    support::arrangement(&engine, &policy()).unwrap();
+    support::bootstrap(engine.deployment(), policy().financial.scope, policy().unit).unwrap();
     engine
         .deployment()
         .configure_financial_program(

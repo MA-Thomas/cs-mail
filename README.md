@@ -233,7 +233,8 @@ an application.
 - `cs-mail-admin` is the operator administration client.
 - `cs-mail-cli` is the developer member client.
 
-At Milestone 0 these binaries report their version and help only.
+`cs-maild` and `cs-mail-admin` run the Milestone 1 service and operator workflow
+(see [apps/README.md](apps/README.md)); `cs-mail-cli` reports its version and help only.
 
 The implemented command set covers terms, request creation, capture evidence,
 submission to the recipient, follow-ups, cancellation, acceptance, rejection, blocking, unblocking,

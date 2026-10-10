@@ -31,10 +31,22 @@ not establish biological identity or satisfy Phoros's separate enrollment policy
   multiple email addresses. Identity is tied to a verified bank account.
 - Enrollment is open to anyone who completes a fresh login and bank-ownership
   verification. There are no invitations. The one-person-one-account rules are
-  the only gate: one cs-mail login per identity subject, one account per verified
-  bank token, and one member per bank-attested person. Before live payments, it
-  must be established that the bank-attested person reference is stable across
-  a person's bank accounts; otherwise two banks could yield two accounts.
+  the only gate:
+  - A cs-mail login belongs to one account; reusing it is refused.
+  - A person is identified by their evidence: legal name, date of birth, bank
+    account, address and phone. The applicant states all five. The name, address
+    and phone must be ones the bank reports for an owner of the verified account;
+    the date of birth is the applicant's statement.
+  - Evidence is compared exactly, after normalizing case, spacing, punctuation and
+    phone format, against every other cs-mail enrollment. An enrollment that shares
+    its bank account, or any two fields, with another is held for review. It cannot
+    activate until a CSQD operator approves it; a denial is final for that enrollment.
+    An approved enrollment may share a bank account with another account.
+  - The identity service owns this evidence and the review, and keeps the evidence
+    only as keyed fingerprints. cs-mail never stores it.
+  - Each product sets its own evidence policy. Phoros will require different
+    evidence, and enrollments are never compared across products.
+  - Verifying the phone by text-message code is deferred.
 - Account, member, private principal, and public communication identity are
   distinct roles and scoped identifiers for that person, not permission to create
   multiple accounts or member shares. Keep bank and identity evidence out of
@@ -200,7 +212,8 @@ The full design is in [guest senders](docs/guest-sender-design.md).
 Rust types and validated transitions distinguish immutable service terms,
 verified evidence, member preferences, operator policy, and payment states.
 Durable transactions must still check current funding restrictions at dispatch,
-enforce person/account uniqueness, and prevent concurrent duplicate payments.
+serialize enrollment screening so overlapping applicants cannot miss each other,
+and prevent concurrent duplicate payments.
 A previously constructed Rust value cannot establish that external state has
 remained unchanged.
 

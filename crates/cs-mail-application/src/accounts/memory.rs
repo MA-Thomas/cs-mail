@@ -237,8 +237,8 @@ impl EnrollmentRepository for MemoryAccountRepository {
                 .billing_ledgers
                 .insert(records.billing.id(), records.ledger);
             world.funding_sources.insert(
-                *records.source.bank_token(),
-                (records.billing.id(), records.source),
+                (records.billing.id(), *records.source.bank_token()),
+                records.source,
             );
             world
                 .billing_accounts
@@ -537,6 +537,8 @@ fn apply_effects(
     }
     if let Some((financial, source)) = bank {
         let token = *source.bank_token();
+        // A bank account another product account enrolled with is shared only through
+        // enrollment review; rebinding cannot reach it.
         if world
             .enrollment
             .operations
@@ -545,17 +547,10 @@ fn apply_effects(
         {
             return Err(Error::Conflict.into());
         }
-        if world
-            .funding_sources
-            .get(&token)
-            .is_some_and(|(owner, _)| *owner != financial.id())
-        {
-            return Err(Error::Conflict.into());
-        }
         world
             .funding_sources
-            .entry(token)
-            .or_insert((financial.id(), source));
+            .entry((financial.id(), token))
+            .or_insert(source);
         world.billing_accounts.insert(financial.id(), financial);
     }
     world

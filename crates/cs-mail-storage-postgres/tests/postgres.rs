@@ -1016,9 +1016,9 @@ fn forfeiture_and_allocation_survive_reconnect() {
         .unwrap()
         .relationship(&key, &state(90), UNIT)
         .unwrap();
-    support::arrangement(&engine, &policy()).unwrap();
+    support::bootstrap(engine.deployment(), policy().financial.scope, policy().unit).unwrap();
     let provider = SimulatedProcessor::new([7; 32]);
-    support::arrangement(&engine, &policy()).unwrap();
+    support::bootstrap(engine.deployment(), policy().financial.scope, policy().unit).unwrap();
     engine
         .deployment()
         .configure_financial_program(
@@ -1059,7 +1059,6 @@ fn forfeiture_and_allocation_survive_reconnect() {
             scope: policy().financial.scope,
             account: cs_mail_primitives::BillingAccountId(member),
             member: MemberId(member),
-            person: [u8::try_from(member).unwrap(); 32],
             bank_token: [u8::try_from(member + 8).unwrap(); 32],
             unit: UNIT,
             version: 1,
@@ -1217,7 +1216,7 @@ fn forfeiture_and_allocation_survive_reconnect() {
         .unwrap()
         .relationship(&key, &state(90), UNIT)
         .unwrap();
-    support::arrangement(&engine, &policy()).unwrap();
+    support::bootstrap(engine.deployment(), policy().financial.scope, policy().unit).unwrap();
     assert_eq!(
         engine
             .deployment()
@@ -1246,7 +1245,7 @@ fn concurrent_distribution_finalization_records_one_allocation() {
         .unwrap()
         .relationship(&key, &state(100), UNIT)
         .unwrap();
-    support::arrangement(&first, &policy()).unwrap();
+    support::bootstrap(first.deployment(), policy().financial.scope, policy().unit).unwrap();
     first
         .deployment()
         .configure_financial_program(
@@ -1420,7 +1419,7 @@ fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
         .unwrap()
         .relationship(&key, &state(90), UNIT)
         .unwrap();
-    support::arrangement(&engine, &policy()).unwrap();
+    support::bootstrap(engine.deployment(), policy().financial.scope, policy().unit).unwrap();
     submit_initial_request(&engine);
     let scheduler = command_signer(ActorRef::Scheduler(PROVIDER), OperationalKeyRef(4), 4);
     engine
@@ -2309,6 +2308,7 @@ mod request_pricing {
     //! Claims of `docs/request-pricing-design.md`, challenged against `PostgreSQL`.
     use super::*;
     use cs_mail_application::request_pricing::RequestPricingService;
+    use cs_mail_operations::{OperatorCommand, OperatorOutcome};
     use cs_mail_protocol::RequestTerms;
     use cs_mail_protocol::pricing::{RecipientRequestClasses, RequestClass, RequestPricingPolicy};
     use cs_mail_security::RecipientSigningScope;
@@ -2324,6 +2324,17 @@ mod request_pricing {
             Money::from_minor_units(max),
         )
         .unwrap()
+    }
+    fn publish_policy(
+        engine: &PostgresEngine,
+        policy: RequestPricingPolicy,
+        at: u64,
+    ) -> Result<OperatorOutcome, StorageError> {
+        support::operator(
+            engine.deployment(),
+            OperatorCommand::PublishRequestPricing(policy),
+            test_time(at),
+        )
     }
     fn scope() -> RecipientSigningScope {
         RecipientSigningScope {
@@ -2430,29 +2441,17 @@ mod request_pricing {
                 Money::from_minor_units(500)
             )
         );
-        let pricing = RequestPricingService::new(engine.deployment());
-        let report = pricing
-            .publish_policy(&operator_policy(2, 3, 1, 100), || test_time(3))
-            .unwrap();
-        assert!(report.changed);
-        assert_eq!(report.addresses_with_unquotable_classes, 1);
-        // Stale and conflicting operator versions are refused; an exact replay is not.
-        assert!(
-            pricing
-                .publish_policy(&operator_policy(1, 9, 1, 100), || test_time(3))
-                .is_err()
+        assert_eq!(
+            publish_policy(&engine, operator_policy(2, 3, 1, 100), 3).unwrap(),
+            OperatorOutcome::RequestPricingPublished {
+                version: PolicyVersion(2),
+                changed: true,
+                addresses_with_unquotable_classes: 1,
+            }
         );
-        assert!(
-            pricing
-                .publish_policy(&operator_policy(2, 4, 1, 100), || test_time(3))
-                .is_err()
-        );
-        assert!(
-            !pricing
-                .publish_policy(&operator_policy(2, 3, 1, 100), || test_time(3))
-                .unwrap()
-                .changed
-        );
+        // Stale and conflicting operator versions are refused.
+        assert!(publish_policy(&engine, operator_policy(1, 9, 1, 100), 3).is_err());
+        assert!(publish_policy(&engine, operator_policy(2, 4, 1, 100), 3).is_err());
 
         assert!(matches!(
             quote(&engine, 1, 11, 4),
@@ -2716,7 +2715,6 @@ mod request_pricing {
                     .unwrap()
                     .relationship(key, &state(904), UNIT)
                     .unwrap();
-                let pricing = RequestPricingService::new(engine.deployment());
                 for n in 2..=ROUNDS {
                     publish(
                         &engine,
@@ -2728,9 +2726,7 @@ mod request_pricing {
                     )
                     .unwrap();
                     if n % 3 == 0 {
-                        pricing
-                            .publish_policy(&operator_policy(n, 100 + n, 1, 1000), || test_time(n))
-                            .unwrap();
+                        publish_policy(&engine, operator_policy(n, 100 + n, 1, 1000), n).unwrap();
                     }
                 }
             })

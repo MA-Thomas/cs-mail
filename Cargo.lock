@@ -515,6 +515,16 @@ name = "cs-mail-admin"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "cs-mail-operations",
+ "cs-mail-primitives",
+ "cs-mail-simulation",
+ "ed25519-dalek 3.0.0",
+ "getrandom 0.2.17",
+ "identity-contract",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -529,6 +539,7 @@ dependencies = [
  "cs-mail-correspondence",
  "cs-mail-finance",
  "cs-mail-ledger",
+ "cs-mail-operations",
  "cs-mail-primitives",
  "cs-mail-protocol",
  "cs-mail-security",
@@ -668,8 +679,22 @@ name = "cs-mail-ledger"
 version = "0.1.0"
 dependencies = [
  "cs-mail-primitives",
- "cs-maild",
  "serde",
+]
+
+[[package]]
+name = "cs-mail-operations"
+version = "0.1.0"
+dependencies = [
+ "cs-mail-billing",
+ "cs-mail-finance",
+ "cs-mail-primitives",
+ "cs-mail-protocol",
+ "ed25519-dalek 3.0.0",
+ "identity-contract",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -733,6 +758,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cs-mail-simulation"
+version = "0.1.0"
+dependencies = [
+ "cs-mail-accounts",
+ "cs-mail-application",
+ "cs-mail-billing",
+ "cs-mail-finance",
+ "cs-mail-operations",
+ "cs-mail-primitives",
+ "cs-mail-protocol",
+ "cs-mail-storage-postgres",
+ "cs-mail-test-support",
+ "cs-mail-worker",
+ "ed25519-dalek 3.0.0",
+ "identity-contract",
+ "postgres",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "cs-mail-smtp-gateway"
 version = "0.1.0"
 dependencies = [
@@ -759,6 +806,7 @@ dependencies = [
  "cs-mail-identity-client",
  "cs-mail-key-custody",
  "cs-mail-ledger",
+ "cs-mail-operations",
  "cs-mail-primitives",
  "cs-mail-privacy",
  "cs-mail-protocol",
@@ -787,12 +835,15 @@ dependencies = [
  "cs-mail-application",
  "cs-mail-billing",
  "cs-mail-finance",
+ "cs-mail-operations",
  "cs-mail-primitives",
  "cs-mail-protocol",
  "cs-mail-security",
  "cs-mail-storage-postgres",
  "ed25519-dalek 3.0.0",
  "identity-contract",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -815,6 +866,7 @@ dependencies = [
  "cs-mail-content",
  "cs-mail-finance",
  "cs-mail-ledger",
+ "cs-mail-operations",
  "cs-mail-primitives",
  "cs-mail-protocol",
  "cs-mail-security",
@@ -830,7 +882,25 @@ dependencies = [
 name = "cs-maild"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "clap",
+ "cs-mail-accounts",
+ "cs-mail-application",
+ "cs-mail-billing",
+ "cs-mail-finance",
+ "cs-mail-identity-client",
+ "cs-mail-operations",
+ "cs-mail-primitives",
+ "cs-mail-protocol",
+ "cs-mail-simulation",
+ "cs-mail-storage-postgres",
+ "cs-mail-worker",
+ "identity-contract",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1657,9 +1727,12 @@ name = "identity-application"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek 3.0.0",
+ "hmac 0.13.0",
  "identity-contract",
  "identity-model",
+ "sha2 0.11.0",
  "tokio",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -1864,6 +1937,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2056,6 +2135,15 @@ name = "ndk-context"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
+
+[[package]]
+name = "nu-ansi-term"
+version = "0.50.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+dependencies = [
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "num-bigint"
@@ -2784,6 +2872,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sharded-slab"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3137,6 +3234,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread_local"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "time"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3355,6 +3461,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
+dependencies = [
+ "nu-ansi-term",
+ "sharded-slab",
+ "thread_local",
+ "tracing-core",
 ]
 
 [[package]]

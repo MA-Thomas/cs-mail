@@ -22,9 +22,16 @@ fn save(tx: &mut Transaction<'_>, account: &BillingAccount) -> Result<(), Storag
     )?;
     Ok(())
 }
-pub(super) fn source_key(scope: cs_mail_finance::FinancialScope, token: &[u8; 32]) -> String {
+/// One billing account's funding source for one bank account. Accounts approved to share
+/// a bank account each have their own.
+pub(super) fn source_key(
+    scope: cs_mail_finance::FinancialScope,
+    account: BillingAccountId,
+    token: &[u8; 32],
+) -> String {
     let mut h = Sha256::new();
     h.update(scope.canonical_bytes());
+    h.update(account.0.to_be_bytes());
     h.update(token);
     h.finalize()
         .iter()
@@ -57,55 +64,48 @@ pub(super) fn arrangement(
             .map_err(|_| BillingError::Conflict)?,
     ))
 }
+/// Installs the single payment-processing arrangement inside the bootstrap transaction.
+/// An existing different arrangement is a conflict.
+pub(super) fn install_arrangement(
+    tx: &mut Transaction<'_>,
+    scope: cs_mail_finance::FinancialScope,
+    unit: SettlementUnit,
+    processor_key: [u8; 32],
+    bank_authority: [u8; 32],
+) -> Result<(), StorageError> {
+    if processor_key == [0; 32] || bank_authority == [0; 32] {
+        return Err(BillingError::Conflict.into());
+    }
+    tx.execute("INSERT INTO cs_payment_arrangement(singleton,scope,settlement_unit,processor_key,bank_authority) VALUES(TRUE,$1,$2,$3,$4) ON CONFLICT DO NOTHING",&[&Json(scope),&i64::from(unit.0),&processor_key.as_slice(),&bank_authority.as_slice()])?;
+    if arrangement(tx, scope, unit)? != (processor_key, bank_authority) {
+        return Err(BillingError::Conflict.into());
+    }
+    Ok(())
+}
+/// A stored service offer with this version, if any.
+pub(super) fn offer_version(
+    tx: &mut Transaction<'_>,
+    version: cs_mail_primitives::PolicyVersion,
+) -> Result<Option<ServiceOffer>, StorageError> {
+    Ok(tx
+        .query_opt(
+            "SELECT record FROM cs_service_offers WHERE version=$1 FOR UPDATE",
+            &[&version.0.to_string()],
+        )?
+        .map(|row| row.get::<_, Json<ServiceOffer>>(0).0))
+}
+/// Publishes an immutable offer version decided by an operator command.
+pub(super) fn insert_offer(
+    tx: &mut Transaction<'_>,
+    offer: &ServiceOffer,
+) -> Result<(), StorageError> {
+    tx.execute(
+        "INSERT INTO cs_service_offers(version,record) VALUES($1,$2)",
+        &[&offer.version().0.to_string(), &Json(offer)],
+    )?;
+    Ok(())
+}
 impl PostgresDeployment {
-    /// Trusted deployment configuration: exactly one payment-processing arrangement.
-    /// # Errors
-    /// Rejects missing keys, incompatible existing configuration, or database failures.
-    pub fn configure_payment_arrangement(
-        &self,
-        scope: cs_mail_finance::FinancialScope,
-        unit: SettlementUnit,
-        processor_key: [u8; 32],
-        bank_authority: [u8; 32],
-    ) -> Result<(), StorageError> {
-        if processor_key == [0; 32] || bank_authority == [0; 32] {
-            return Err(BillingError::Conflict.into());
-        }
-        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let mut tx = client.transaction()?;
-        ingress::require_drained(&mut tx)?;
-        tx.execute("INSERT INTO cs_payment_arrangement(singleton,scope,settlement_unit,processor_key,bank_authority) VALUES(TRUE,$1,$2,$3,$4) ON CONFLICT DO NOTHING",&[&Json(scope),&i64::from(unit.0),&processor_key.as_slice(),&bank_authority.as_slice()])?;
-        if arrangement(&mut tx, scope, unit)? != (processor_key, bank_authority) {
-            return Err(BillingError::Conflict.into());
-        }
-        tx.commit()?;
-        Ok(())
-    }
-    /// Operator-only startup/configuration API; ordinary account commands cannot publish prices or periods.
-    /// # Errors
-    /// Rejects changes to an existing policy version or database failures.
-    pub fn publish_service_offer(&self, offer: &ServiceOffer) -> Result<(), StorageError> {
-        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let mut tx = client.transaction()?;
-        ingress::require_drained(&mut tx)?;
-        tx.execute(
-            "INSERT INTO cs_service_offers(version,record) VALUES($1,$2) ON CONFLICT DO NOTHING",
-            &[&offer.version().0.to_string(), &Json(offer)],
-        )?;
-        if tx
-            .query_one(
-                "SELECT record FROM cs_service_offers WHERE version=$1",
-                &[&offer.version().0.to_string()],
-            )?
-            .get::<_, Json<ServiceOffer>>(0)
-            .0
-            != *offer
-        {
-            return Err(BillingError::Conflict.into());
-        }
-        tx.commit()?;
-        Ok(())
-    }
     /// # Errors
     /// Rejects missing or invalid stored accounts and database failures.
     pub fn billing_account(&self, id: BillingAccountId) -> Result<BillingAccount, StorageError> {
@@ -134,7 +134,7 @@ pub(super) fn reserve_source(
     account: BillingAccountId,
     operation: &PaymentOperation,
 ) -> Result<(), StorageError> {
-    let key = source_key(operation.scope, &operation.destination);
+    let key = source_key(operation.scope, account, &operation.destination);
     let row = tx
         .query_opt(
             "SELECT account,record FROM cs_funding_sources WHERE source_key=$1 FOR UPDATE",
@@ -152,7 +152,28 @@ pub(super) fn reserve_source(
         "UPDATE cs_funding_sources SET record=$2 WHERE source_key=$1",
         &[&key, &Json(source)],
     )?;
+    // The reservation replays for the same operation, which names this source only.
+    tx.execute(
+        "INSERT INTO cs_funding_source_operations(operation,source_key) VALUES($1,$2) ON CONFLICT (operation) DO NOTHING",
+        &[&operation.id.0.to_string(), &key],
+    )?;
+    if operation_source(tx, operation)? != key {
+        return Err(BillingError::Conflict.into());
+    }
     Ok(())
+}
+/// The funding source a capture was reserved on.
+fn operation_source(
+    tx: &mut Transaction<'_>,
+    operation: &PaymentOperation,
+) -> Result<String, StorageError> {
+    Ok(tx
+        .query_opt(
+            "SELECT source_key FROM cs_funding_source_operations WHERE operation=$1",
+            &[&operation.id.0.to_string()],
+        )?
+        .ok_or(BillingError::MissingRecord)?
+        .get(0))
 }
 pub(super) fn authorize_source(
     tx: &mut Transaction<'_>,
@@ -161,7 +182,7 @@ pub(super) fn authorize_source(
     if operation.kind != PaymentKind::Capture {
         return Ok(());
     }
-    let key = source_key(operation.scope, &operation.destination);
+    let key = operation_source(tx, operation)?;
     let mut source = tx
         .query_one(
             "SELECT record FROM cs_funding_sources WHERE source_key=$1 FOR UPDATE",
@@ -187,7 +208,7 @@ pub(super) fn record_source(
     if operation.kind != PaymentKind::Capture {
         return Ok(());
     }
-    let source_id = source_key(operation.scope, &operation.destination);
+    let source_id = operation_source(tx, operation)?;
     let mut source = tx
         .query_one(
             "SELECT record FROM cs_funding_sources WHERE source_key=$1 FOR UPDATE",
@@ -241,10 +262,9 @@ pub(super) fn insert_enrollment(
     let evidence = account.bank().evidence();
     let ledger = records.ledger;
     tx.execute(
-        "INSERT INTO cs_billing_accounts(id,person,member,record,ledger) VALUES($1,$2,$3,$4,$5)",
+        "INSERT INTO cs_billing_accounts(id,member,record,ledger) VALUES($1,$2,$3,$4)",
         &[
             &account.id().0.to_string(),
-            &evidence.person.as_slice(),
             &account.member().0.to_string(),
             &Json(account),
             &Json(ledger),
@@ -258,7 +278,7 @@ pub(super) fn insert_enrollment(
             &product.id().0.to_string(),
         ],
     )?;
-    let source_id = source_key(account.scope(), &evidence.bank_token);
+    let source_id = source_key(account.scope(), account.id(), &evidence.bank_token);
     tx.execute(
         "INSERT INTO cs_funding_sources(source_key,account,record) VALUES($1,$2,$3)",
         &[
@@ -345,7 +365,7 @@ impl BillingStore for PostgresDeployment {
         if let Some(writes) = writes {
             save(&mut tx, &writes.account)?;
             for (token, source) in writes.sources {
-                let key = source_key(writes.account.scope(), &token);
+                let key = source_key(writes.account.scope(), writes.account.id(), &token);
                 if tx.execute(
                     "UPDATE cs_funding_sources SET record=$3 WHERE source_key=$1 AND account=$2",
                     &[&key, &id, &Json(source)],

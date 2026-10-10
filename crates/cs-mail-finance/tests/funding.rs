@@ -6,7 +6,6 @@ fn bank(version: u64) -> VerifiedBankAccount {
         scope: operation(1).scope,
         account: BillingAccountId(1),
         member: MemberId(1),
-        person: [8; 32],
         bank_token: [9; 32],
         unit: SettlementUnit(1),
         version,

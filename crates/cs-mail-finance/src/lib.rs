@@ -1,6 +1,7 @@
 //! Request-specific payment evidence and the separate company-owned member program.
 mod funding;
 mod payments;
+pub mod simulation;
 pub use funding::FundingSource;
 mod program;
 pub use payments::*;

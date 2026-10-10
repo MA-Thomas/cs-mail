@@ -204,7 +204,7 @@ A minimal implementation requires a small set of persistent protocol objects.
 
 \subsection{Identity}
 
-The initial C-SQD deployment should distinguish a privately verified principal from the public protocol identities through which that principal communicates. For an individual, C-SQD may establish the principal using full legal name, date of birth, and a verified bank account. For a corporation or institution, C-SQD may use legal name, jurisdiction, EIN or another legal-entity registry identifier, a verified institutional bank account, and evidence that the enrolling representative is authorized to act for the entity.
+The initial C-SQD deployment should distinguish a privately verified principal from the public protocol identities through which that principal communicates. For an individual, C-SQD may establish the principal using full legal name, date of birth, a verified bank account, address, and phone; the name, address, and phone must match what the bank reports for the account's owner. An enrollment whose evidence shares the bank account, or any two of these fields, with another person's is held until C-SQD reviews it. For a corporation or institution, C-SQD may use legal name, jurisdiction, EIN or another legal-entity registry identifier, a verified institutional bank account, and evidence that the enrolling representative is authorized to act for the entity.
 
 After verification, C-SQD assigns an immutable internal principal identifier, denoted $P_i$. The identity evidence and $P_i$ remain private to C-SQD. They are not displayed to users or included in ordinary messages.
 

@@ -335,8 +335,7 @@ impl<'a, R: BillingStore, C: AccountClock + ?Sized> BillingService<'a, R, C> {
                     .verify(&context.bank_authority)
                     .map_err(BillingError::Payment)?;
                 let old = context.account.bank().evidence();
-                if old.person != evidence.person
-                    || old.bank_token != evidence.bank_token
+                if old.bank_token != evidence.bank_token
                     || old.member != evidence.member
                     || context.account.scope() != evidence.scope
                     || context.account.unit() != evidence.unit

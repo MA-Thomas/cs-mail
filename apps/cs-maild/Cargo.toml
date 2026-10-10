@@ -6,8 +6,30 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Development only: the durable payment simulator stands in for a payment provider.
+simulation = ["dep:cs-mail-simulation"]
+
 [dependencies]
+axum.workspace = true
 clap.workspace = true
+identity-contract.workspace = true
+cs-mail-application = { path = "../../crates/cs-mail-application" }
+cs-mail-billing = { path = "../../crates/cs-mail-billing" }
+cs-mail-accounts = { path = "../../crates/cs-mail-accounts" }
+cs-mail-finance = { path = "../../crates/cs-mail-finance" }
+cs-mail-identity-client = { path = "../../crates/cs-mail-identity-client" }
+cs-mail-operations = { path = "../../crates/cs-mail-operations" }
+cs-mail-primitives = { path = "../../crates/cs-mail-primitives" }
+cs-mail-protocol = { path = "../../crates/cs-mail-protocol" }
+cs-mail-simulation = { path = "../../crates/cs-mail-simulation", optional = true }
+cs-mail-storage-postgres = { path = "../../crates/cs-mail-storage-postgres" }
+cs-mail-worker = { path = "../../crates/cs-mail-worker" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
