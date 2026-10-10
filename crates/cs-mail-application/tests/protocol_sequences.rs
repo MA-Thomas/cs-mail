@@ -1278,3 +1278,100 @@ fn correctly_signed_financial_command_cannot_replay_in_a_different_program() {
         );
     }
 }
+/// Claim (Milestone 2), in memory: an altered retry under an existing operation identity is
+/// rejected. Falsified if a retry with changed terms or content under a used identity is
+/// accepted, or changes anything; retry identities would stop protecting request terms.
+#[test]
+fn altered_retries_under_an_existing_operation_identity_are_rejected() {
+    let mut f = Fixture::new();
+    let sender = ActorRef::Sender(ProtocolIdentity(10));
+    let recipient = ActorRef::Recipient(ProtocolIdentity(20));
+    let run = |f: &mut Fixture, actor, key, command, at| {
+        f.engine.execute(
+            KernelCommand::new(command, actor, OperationalKeyRef(1), IdempotencyKey(key)),
+            CanonicalTime(at),
+            f.policy.clone(),
+        )
+    };
+    let issued = run(
+        &mut f,
+        sender,
+        500,
+        ProtocolCommand::IssueRequestTerms {
+            class_id: RequestClassId(1),
+            quote_id: QuoteId(1),
+            declaration_digest: None,
+        },
+        1,
+    )
+    .unwrap();
+    let Some(TermsOutcome::ChargeRequired(terms)) = issued.transition.terms_outcome else {
+        panic!("expected new request terms")
+    };
+    let create = |method: u8, terms: Box<RequestTerms>| ProtocolCommand::CreateRequest {
+        request_id: RequestId(1),
+        message_id: MessageId(1),
+        payment_method: [method; 32],
+        terms,
+    };
+    run(&mut f, sender, 501, create(9, terms.clone()), 1).unwrap();
+    let before = f.engine.snapshot().unwrap();
+    let mut altered = terms.clone();
+    altered.collateral = Money::from_minor_units(altered.collateral.minor_units() + 1);
+    for command in [create(8, terms.clone()), create(9, altered)] {
+        assert!(matches!(
+            run(&mut f, sender, 501, command, 2),
+            Err(EngineError::DuplicateConflict)
+        ));
+    }
+    assert_eq!(f.engine.snapshot().unwrap(), before);
+    assert!(
+        run(&mut f, sender, 501, create(9, terms), 2)
+            .unwrap()
+            .replayed
+    );
+
+    f.payment(1, false, 2);
+    let submit = |content: u128, version: Version| ProtocolCommand::SubmitRequestToRecipient {
+        request_id: RequestId(1),
+        expected_request_version: version,
+        content_ref: ContentRef(content),
+        delivery_intent_ref: DeliveryIntentRef(1),
+        declaration_digest: MessageDeclarationDigest([0; 32]),
+        message_valid_until: MessageValidityUntil(CanonicalTime(1000)),
+    };
+    let version = f.engine.snapshot().unwrap().state.requests[&RequestId(1)].version;
+    run(&mut f, sender, 502, submit(1, version.into()), 3).unwrap();
+    let before = f.engine.snapshot().unwrap();
+    assert!(matches!(
+        run(&mut f, sender, 502, submit(2, version.into()), 4),
+        Err(EngineError::DuplicateConflict)
+    ));
+    assert_eq!(f.engine.snapshot().unwrap(), before);
+
+    let expected = before.state.relationship.version.into();
+    run(
+        &mut f,
+        recipient,
+        503,
+        ProtocolCommand::AcceptRelationship {
+            expected_version: expected,
+        },
+        5,
+    )
+    .unwrap();
+    let before = f.engine.snapshot().unwrap();
+    assert!(matches!(
+        run(
+            &mut f,
+            recipient,
+            503,
+            ProtocolCommand::RejectRelationship {
+                expected_version: expected,
+            },
+            6,
+        ),
+        Err(EngineError::DuplicateConflict)
+    ));
+    assert_eq!(f.engine.snapshot().unwrap(), before);
+}

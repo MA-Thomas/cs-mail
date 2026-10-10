@@ -116,13 +116,14 @@ impl CorrespondenceStore for PostgresAccountRepository {
                 let key: String = tx
                     .query_one(
                         "SELECT aggregate_key FROM cs_capability_lanes WHERE lane_id=$1",
-                        &[&lane.grant.id.0.to_string()],
+                        &[&lane.grant().id.0.to_string()],
                     )?
                     .get(0);
                 super::upsert_lane(&mut tx, &key, lane, effects.receipt.authorized_at)?;
                 super::persist_schedules(&mut tx, &key, &[lane.schedule_change()])?;
             }
             if let Some(conversation) = effects.conversation {
+                tx.execute("INSERT INTO cs_conversation_routes(id,route) VALUES($1,'native') ON CONFLICT(id) DO NOTHING", &[&conversation.id().value().to_string()])?;
                 tx.execute("INSERT INTO cs_conversations(id,record) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record", &[&conversation.id().value().to_string(), &Json(conversation)])?;
             }
             if let Some((record, package)) = effects.delivery {

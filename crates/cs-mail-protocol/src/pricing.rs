@@ -323,7 +323,7 @@ impl QuotePricing {
 }
 
 /// The classes a sender can currently choose, with the processing component they add.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SenderOffer {
     pub policy_version: PolicyVersion,
     pub processing_charge: Money,

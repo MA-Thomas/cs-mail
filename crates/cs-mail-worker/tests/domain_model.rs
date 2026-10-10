@@ -11,6 +11,8 @@ use cs_mail_worker::{
 };
 use ed25519_dalek::SigningKey;
 use postgres::{Client, NoTls, types::Json};
+use std::sync::atomic::{AtomicU64, Ordering};
+static SCHEMA_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 fn scope() -> FinancialScope {
     FinancialScope::new(
         [7; 32],
@@ -31,12 +33,13 @@ fn key(secret: u8) -> [u8; 32] {
 fn setup() -> (String, PostgresEngine) {
     let base = std::env::var("CS_MAIL_TEST_DATABASE_URL").unwrap();
     let schema = format!(
-        "domain_{}_{}",
+        "domain_{}_{}_{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        SCHEMA_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
     Client::connect(&base, NoTls)
         .unwrap()
@@ -64,7 +67,7 @@ fn setup() -> (String, PostgresEngine) {
         .unwrap();
     for (id, persona) in [(1, 10), (2, 20)] {
         enrollment::enroll(
-            &engine,
+            engine.deployment(),
             cs_mail_accounts::EnrollmentInput {
                 bank: bank(id, 1),
                 persona: ProtocolIdentity(persona),
@@ -239,7 +242,7 @@ fn bank_identity_and_account_authority_cannot_be_substituted() {
     // A distinct enrollment cannot claim an existing persona, even with valid bank evidence.
     assert!(
         enrollment::enroll(
-            &engine,
+            engine.deployment(),
             cs_mail_accounts::EnrollmentInput {
                 bank: bank(3, 1),
                 persona: ProtocolIdentity(10),

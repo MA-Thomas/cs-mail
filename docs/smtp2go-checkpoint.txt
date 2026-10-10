@@ -1,0 +1,536 @@
+APPLE CLIENT DECISION — 8 OCTOBER 2026
+The member application will use SwiftUI, replacing the planned Tauri shell.
+Ship macOS first; establish iOS targets and shared Apple presentation code from
+the first slice. Business rules and portable client workflows remain in Rust.
+Move the narrow client facade, Swift bindings and Apple library packaging into
+Milestone 4. The web request page keeps its own components. Android and Windows
+later reuse Rust through separate interfaces and platform adapters; their UI
+frameworks are not yet selected. No Apple app is implemented by this decision.
+See docs/apple-client-architecture.md and cs_mail_build_plan.tex, Draft 0.12.
+The hosting deferral below remains in force. Historical validation records below
+do not establish SwiftUI or iOS readiness.
+
+CURRENT PRIORITY / HOSTING DEFERRED — 8 OCTOBER 2026
+The user decided to build the macOS member application before provisioning or
+paying for a rented Linux host, such as AWS Lightsail. Next: implement and validate
+onboarding, inbox, request decisions, conversations, disclosure controls and
+quit/reopen/failure recovery locally against the Rust service, simulated payments
+and controlled email transports. Public MX, HTTPS and real SMTP2GO callback
+validation wait until the application is ready for a hosted external-email pilot.
+The rented-Linux direction and prepared deployment package remain; Lightsail is
+a candidate, not a purchase commitment. Earlier instructions below to provision
+hosting as the next step are superseded. No host was provisioned or purchased.
+See cs_mail_build_plan.tex (Milestone Map and Current Next Assignment).
+
+EXTERNAL-EMAIL JOURNEY / RESUME HERE — 8 OCTOBER 2026
+Both entry paths are implemented locally for the supported plain-text/alternative
+MIME profile. General member-address mail uses existing standing/lane permission
+or queues a bounded request-page prompt. Paid acceptance commits one reply route
+with its notice attempt. Inbound conversations start without outbound disclosure
+consent; the signed grant-disclosure command authorizes/restores it without reviving
+cancelled mail. Relationship views expose linked external conversations.
+
+Transactional verification/outcome/refund/prompt mail now explicitly selects SMTP2GO
+or a development adapter. Attempts commit before I/O, unknown outcomes never resend,
+and authenticated callbacks reconcile them. Shared provider reference/event identities
+cannot cross between notices and authored messages. Historical SMTP prompt receipts
+remain prompts after acceptance; a retry cannot cross into inbox admission. One typed
+arrival identity and protected storage checks exclude both outcomes for the same mail.
+Routing preparation now carries actual relationship facts, not placeholder messages.
+
+Schema 30 requires a fresh development database. Old post-send notice storage/API,
+guest-level outbox/DKIM configuration and first-message routing fallback are removed.
+The existing databases, historical live profiles and keys were not restarted/reset.
+No identity-model sources changed; all 101 pinned files still match. Changes are
+uncommitted atop substantial earlier staged/unstaged/untracked work; do not reset,
+clean or indiscriminately commit the checkout.
+
+VALIDATION
+User approved focused local PostgreSQL and simulated SMTP/provider experiments for
+forgery, blocks, consent, duplicates and interrupted notice sending. Four new scenarios
+and adapted existing suites pass. All eight final quality-gate checks passed:
+109 ordinary tests/doctests and 90 PostgreSQL tests; no suite skipped.
+Final log: /tmp/cs-mail-email-journey-gate.log
+Existing clean CLI/HTTP demonstration passed with the new guest configuration and
+consent restoration: /tmp/cs-mail-email-demo.log. Its two fresh databases were removed.
+Schema-30 production-binary backup/recovery drill passed, including isolation, process
+restart, idle database-loss exit, restored audit/schema facts, rollback/refusal and log
+redaction: /tmp/cs-mail-email-recovery.log. Its temporary databases were removed.
+The later arrival-retry refinement was verified by the final gate, not another recovery
+drill; it does not alter the schema or process recovery protocol. Shell/Python syntax,
+demonstration JSON and git diff --check passed.
+
+BOUNDARIES AND NEXT WORK
+No live email, payments, provider-account changes or public infrastructure actions in
+this pass. Funding remains simulated. Public host/MX/HTTPS and actual callbacks still
+need deployment validation. HTML-only mail, attachments, weak-authentication held-mail
+confirmation, human-readable aliases, native source exports, operator reconciliation UI
+and broad abuse/load testing remain outside this bounded journey. Current automatic
+checks require an aligned DMARC pass (including p=none); failed/missing authentication
+is refused, not held. The Linux package remains a callback-only deployment profile.
+Full operating/configuration/experiment record: docs/external-email-journey.md.
+
+HISTORICAL CHECKPOINTS FOLLOW
+
+LINUX DEPLOYMENT PACKAGE / RESUME HERE — 7 OCTOBER 2026
+The callback-only deployment preparation is implemented in deploy/linux/README.md:
+Linux production-build script, service unit, protected configuration and HTTPS
+proxy templates, database backup/restore tool, and host acceptance/recovery steps.
+Sending stays disabled. Schema 29 requires a fresh database; preserve old profiles.
+No server, DNS record, TLS certificate or SMTP2GO webhook has been created.
+
+Local recovery drill scripts/deployment-smoke.py uses two new randomly named
+databases and synthetic keys, never existing deployment data or provider services.
+It exposed an idle-connection recovery bug: the synchronous PostgreSQL client's
+is_closed flag did not drive network I/O, so a closed backend could leave the
+service running. connection_lost now makes a small SELECT 1 round trip; no domain
+rules or migration changed and no compatibility path was retained.
+
+VALIDATION FOR THIS PASS
+All eight quality-gate checks passed with the final Rust change: 109 ordinary
+tests/doctests and 86 PostgreSQL tests. Identity source pin matches all 101 files.
+Log: /tmp/cs-mail-deployment-gate-final.log
+Final production-binary recovery drill passed: independent callback authentication
+and route isolation, crash/restart, idle database disconnect causing process exit,
+graceful shutdown, database backup, incomplete-archive rollback, refusal to replace
+an existing archive or restore into a populated database, restored startup and
+unchanged deployment/operator audit/schema facts, and checked log redaction.
+Log: /tmp/cs-mail-deployment-smoke.log
+Temporary databases were removed. Shell/Python syntax and JSON parsed successfully;
+the build script refuses macOS before creating output. No Linux release was built
+on this Mac. systemd/nginx, public HTTPS/firewalls, certificate renewal, real provider
+callbacks, large restores and every financial/content recovery lifecycle remain
+unverified by this deployment drill. The full gate and drill are separate commands.
+
+NEXT HOST WORK
+Provision the chosen Linux host, review actual deployment/trust configuration and
+key custody, run the Linux build and systemd/nginx/HTTPS acceptance checks, then
+connect real SMTP2GO callbacks. The bootstrap's bank/identity/operator authorities
+must be chosen deliberately; local synthetic keys are not production trust roots.
+A fresh database has none of the historical sends needed to correlate old live
+callbacks. Any new live-send experiment needs its own explicit authorization.
+Public incoming SMTP/MX follows callback validation. Keep restored snapshots from
+sending until any external effects after the snapshot have been reconciled.
+
+HOSTING CHOICE — 7 OCTOBER 2026
+User has Squarespace and SMTP2GO, with no existing application host. User chose
+a rented Linux server, such as Amazon Lightsail, for the first hosted pilot and
+asked that this choice and its motivation survive into the next conversation.
+
+RATIONALE AND TRADEOFF
+An always-on server lets cs-mail receive delivery callbacks when the Mac is asleep.
+It gives us control to run the Rust application, PostgreSQL privately on the same
+host, HTTPS callbacks now, and the custom incoming SMTP receiver later. This fits
+the existing implementation and avoids a managed web platform's potential limits
+on direct incoming SMTP. The tradeoff is responsibility for OS/software updates,
+database backups and recovery; renting a server does not outsource those duties.
+This is the initial pilot deployment direction, not a production-readiness claim.
+
+CONCRETE PROPOSAL (not provisioned or purchased)
+Amazon Lightsail Linux with public IPv4, 4 GB RAM and 80 GB storage: advertised
+base price $24/month when reviewed on 7 October 2026; backups/taxes additional.
+The confirmed choice is the rented-server approach; Lightsail and this size are
+the recommended starting configuration, not an already purchased subscription.
+Recheck pricing and availability when provisioning.
+https://aws.amazon.com/lightsail/pricing/
+https://docs.aws.amazon.com/lightsail/latest/userguide/amazon-lightsail-firewall-rules-reference.html
+
+SERVICE ROLES / NEXT
+Keep Squarespace for c-sqd.com registration/DNS and SMTP2GO for outgoing email
+and delivery reports. No new domain purchase or domain transfer is needed.
+Next: guide AWS account/server setup, prepare the deployment and private database,
+then configure a public HTTPS address under c-sqd.com for the isolated callback
+listener and connect SMTP2GO events. Verify live callbacks before adding public
+incoming SMTP/MX. No AWS account, server, DNS change or provider webhook was created
+in this hosting discussion. The implementation evidence and live-check limits
+below remain current; do not restart old send helpers or infer new delivery facts.
+Continue to follow docs/rust-domain-principles.md and agree consequential testing
+scope before new implementation experiments.
+
+INDEPENDENT CALLBACK LISTENER PASS — 7 OCTOBER 2026
+Current implementation handoff; prior live RSA evidence below remains valid.
+User requested the next pass with docs/rust-domain-principles.md binding. Reread
+principles, model and build plan. Agreed testing scope via explicit user reply:
+receiving works with sending disabled; callback listener isolates other APIs and
+rejects unauthenticated/mismatched events; HTTP success follows commit and retries
+retain one event. No subagents, commits, identity changes or schema changes.
+
+IMPLEMENTED
+- External configuration has independent required delivery and feedback enums.
+  feedback = disabled OR smtp2go {listen,secret_file}. Removed the old
+  delivery.webhook_secret_file and the callback route from the main HTTP API.
+  No compatibility reader, route alias or implicit fallback.
+- apps/cs-maild/src/callbacks.rs is a thin adapter: one POST route on a dedicated
+  loopback listener, mandatory bearer authentication, duplicate-header refusal,
+  64 KiB body limit, its own bounded blocking pool, stable error responses.
+  Existing application decisions and atomic PostgreSQL event/receipt handling are
+  reused unchanged. Provider facts never grant permission, alter consent or resend.
+- Both loopback listeners bind before workers start; distinct configured addresses
+  required. Shared graceful shutdown drains both. Sending disabled means no external
+  worker, API credential or DKIM key needed to receive provider evidence.
+- Updated existing guide, model, app README, demo config and build plan/PDF. No new
+  guide/checkpoint files. The new callback host module and test module are code.
+  One synthetic fixture builder added to test-support; no app dependency from a library.
+
+VALIDATION
+All seven quality-gate checks PASS, including all PostgreSQL suites:
+/private/tmp/cs-mail-callback-gate.log
+An initial unnecessary-semicolon lint was fixed and the full gate rerun.
+One new ignored-by-default HTTP/PostgreSQL experiment is included in the gate:
+callbacks_are_isolated_and_acknowledge_only_durable_evidence_without_sending.
+It configures receiving with no sender, checks other routes absent and wrong/missing/
+duplicate bearer headers refused, bounds bodies, rejects malformed/mismatched events,
+forces INSERT failure (503, no partial acceptance), observes an actual database-lock
+wait before HTTP success, and discards success before retrying (one stored event).
+Altered retries conflict; late processed leaves delivered evidence; untouched mail
+stays Waiting; provider auth/subject fields are not retained. Existing ten external
+flow experiments also pass. Focused log: /private/tmp/cs-mail-callback-http.log.
+
+Real default-feature application smoke passed with sending disabled:
+- main /ready = 200; callback POST without authorization = 401;
+- operator route and /ready absent on callback listener;
+- callback route absent on main listener;
+- SIGINT exited 0 and both listener ports closed.
+Private profile (prepared, currently STOPPED):
+/Users/thomm15/Library/Application Support/cs-mail/development/live-rsa-test.8nsse6/maild-feedback.json
+Private main API: 127.0.0.1:8580; callbacks: 127.0.0.1:8582.
+Uses existing dedicated webhook secret, same live-test database, and existing member/
+content secrets. No sending API/DKIM configuration, simulation, guests or identity
+worker. Smoke log: feedback-smoke.log in the same directory. Only unauthenticated
+probes were sent; no fake event entered the live database. No email sent this pass.
+Historical maild-live.json files use the replaced config format and must be migrated
+explicitly before future use. Do not rerun earlier one-shot send helpers blindly.
+
+PDF compiled with native compiler and Tectonic; all 16 pages visually inspected.
+No full-gate repeat needed for later prose/PDF-only updates.
+
+NEXT / LIMITS
+No public HTTPS callback host/proxy, callback DNS or SMTP2GO webhook exists yet.
+Hosting direction is now chosen: rented server, with Lightsail proposed; see the
+current hosting handoff above. Provisioning remains pending. Expose only the callback listener,
+keep Authorization/body data out of proxy logs, and configure SMTP2GO JSON events
+for the sending API key with the dedicated bearer secret. Then validate actual
+provider event identity/field shape, API email-reference correlation, duplicate
+callbacks and a delivered event against a fresh explicitly authorized test.
+Do not substitute an Exim Received ID for the API reference or weaken bindings on
+assumption. Actual provider callbacks, public HTTPS/retries/proxy logging, all crash
+locations, load and provider outage behavior remain unverified. Local fixtures and
+Gmail original source are not authenticated callbacks.
+
+RSA LIVE TEST COMPLETE — 7 OCTOBER 2026
+Current status supersedes the pending-Gmail sections below.
+User supplied Gmail original source:
+/Users/thomm15/.codex/attachments/52faddf0-c6d1-41de-bfd9-347b645f9477/Pasted text.txt
+Parsed and matched Message-ID, sender persona, recipient and test body against the
+fresh live-test.8nsse6 receipt. Message-ID:
+<cs-706cd9d8113967295067c4d36e95cb99@mail.c-sqd.com>
+Gmail Authentication-Results explicitly reports dkim=pass for mail.c-sqd.com,
+selector cs2. That signature uses rsa-sha256. SPF, both SMTP2GO DKIM signatures and
+DMARC also pass. Gmail received the email at 2026-10-07 17:38:18 UTC using TLS 1.3.
+
+Both fixes passed the fresh live test: Gmail accepts cs-mail's own RSA signature,
+and cs-mail durably recorded SMTP2GO API acceptance. This is evidence for this
+single message, not all providers or delivery conditions. Gmail source is external
+recipient evidence; it is not an authenticated provider callback and was not
+inserted as a provider event or used to modify database delivery state.
+Original first attempt remains unchanged; no resend or additional email occurred.
+Local sender remains stopped. Next implementation/deployment stage is authenticated
+SMTP2GO delivery callbacks. No public callback endpoint/provider webhook is set up.
+No source code or tests changed in this header-verification turn.
+
+RSA LIVE TEST / RECEIPT CONFIRMED — 7 OCTOBER 2026
+Current status supersedes the pending-DNS/pending-API sections below.
+User added cs2._domainkey.mail in Squarespace. Exact TXT match against the generated
+public record verified on all four ns-cloud-a[1-4].googledomains.com authorities,
+Google 8.8.8.8 and Cloudflare 1.1.1.1. TXT's two quoted strings concatenate correctly.
+
+Prepared a fresh isolated local deployment and exactly one new test to the already
+designated mtallis314@gmail.com address. Original first attempt remains untouched;
+no retry, changed receipt or duplicate send was performed. Development identity,
+bank and purchase remain simulated. Actual outbound uses real cs-mail and SMTP2GO.
+Fresh configuration selected domain mail.c-sqd.com, RSA-2048 PEM and selector cs2.
+Sending was disabled during preparation; preflight verified exactly one Waiting
+message, the exact recipient and the new conversation before enabling one attempt.
+
+LIVE RESULT: cs-mail durably recorded Accepted at 2026-10-07T17:38:12.727000+00:00.
+Provider reference: smtp2go:1xEVam-7tiG0Lhs7a5-ecGm
+Message: 149438721990130075747225559598812744601
+RFC Message-ID: <cs-706cd9d8113967295067c4d36e95cb99@mail.c-sqd.com>
+Conversation: 2026100702
+Subject: cs-mail conversation
+Body begins: cs-mail RSA-2048 follow-up test
+This confirms the corrected receipt handling against the live API. Accepted means
+provider handoff, not recipient delivery. Gmail receipt and Gmail's own cs2 DKIM
+verdict are still awaiting user evidence. No callback work started.
+
+Both setup services and the live sender were stopped. No new live email queued.
+Runtime evidence: /Users/thomm15/Library/Application Support/cs-mail/development/live-rsa-test.8nsse6
+  maild.json (disabled), maild-live.json (stopped, explicit SMTP2GO profile)
+  queued.json, live-result.json, live-serve.log, live-attempt-started
+Database: cs_mail_smtp2go_rsa_3703aa79
+Identity database: cs_mail_smtp2go_rsa_identity_3703aa79
+Ephemeral runners: /private/tmp/cs-mail-smtp2go-rsa-setup.sh and
+/private/tmp/cs-mail-smtp2go-rsa-send.py. The send runner has a create-new attempt
+marker and checks Waiting; never remove the marker or rerun to send again.
+Setup log: /private/tmp/cs-mail-smtp2go-rsa-setup.log
+No repository code changed in this operational pass; prior full gate remains PASS.
+
+NEXT: user opens the fresh email's Show original and provides headers. Check that
+its Message-ID matches and Gmail specifically reports cs2 rsa-sha256 DKIM pass;
+SMTP2GO's separate passing signatures alone do not establish cs2 interoperability.
+Only after that evidence continue delivery callbacks, per the user's ordering.
+
+RSA / ACCEPTANCE FOLLOW-UP — 7 OCTOBER 2026
+This section is the current handoff; earlier live-attempt evidence below is retained.
+User authorized RSA-2048 deployment signing and resolving the two live-test issues
+before continuing with delivery callbacks. User explicitly agreed the test scope:
+RSA verifies and detects tampering; acceptance is recorded without implying delivery
+or resending uncertainty. No new test functions; existing experiments adapted.
+
+IMPLEMENTED
+- DkimIdentity owns a checked RSA-2048 PKCS#8 PEM signer and validated domain/selector.
+  Replaced outbound Ed25519 seed API and loaders; no old-key fallback. External
+  Ed25519 verification remains supported and exercised. Operator/identity keys unchanged.
+- SMTP2GO fastaccept receipt handling accepts HTTP 200 with a valid email_id and no
+  error, without requiring processing counts. Optional accounting must be complete
+  and consistent. Error/ID contradictions, partial counts, missing IDs, server
+  errors and malformed responses remain unknown. Definite failures with empty IDs
+  are understood. No retry, no invented delivery evidence, no historical DB repair.
+- Updated the development script's generated DKIM key and private-key redaction check.
+  ring and rustls-pki-types are now direct gateway dependencies (already in lockfile);
+  removed gateway's direct Ed25519 dependency. No schema or identity-model changes.
+- Updated existing operating guide, model status, app/receiver notes and build plan.
+  No new docs guide or checkpoint was created. Public test RSA key is a new fixture;
+  it must never be deployed.
+
+EVIDENCE
+Full quality gate PASS (all seven checks, including PostgreSQL):
+/private/tmp/cs-mail-rsa-gate.log
+All ten external-flow experiments pass. The adjusted HTTP experiment verifies
+RSA through controlled DNS, detects signed header/body tampering, distinguishes
+compact/full receipt acceptance from contradictions and missing evidence, and keeps
+lost responses and failed local receipt commits from causing a second submission.
+Initial gate attempt had a test-only missing import/dependency; corrected, then full
+gate passed. No unrun suite is presented as evidence.
+Updated PEM host configuration passed scripts/m3c-demo.sh on fresh databases:
+/private/tmp/cs-mail-rsa-demo.log
+Artifacts: /var/folders/bt/4tg9jnps297gxn13kdvt41mng8l9x6/T/tmp.ZwZU6pImzX
+This demo uses simulated identity/payments and local file delivery, no live email.
+Services stopped afterward. PDF compiled and all 16 pages visually inspected.
+
+DEPLOYMENT CUTOVER PREPARED, LIVE VERIFICATION PENDING
+New private RSA-2048 key generated, OpenSSL-validated, permissions 0600:
+/Users/thomm15/Library/Application Support/cs-mail/development/domain-dkim-cs2-rsa2048.pem
+Public Squarespace instructions (safe to show):
+/Users/thomm15/Library/Application Support/cs-mail/development/domain-dkim-cs2-public.txt
+Add TXT at NAME cs2._domainkey.mail under c-sqd.com; DATA is in that public file.
+Do not replace cs1 or the provider CNAMEs. New record has not been published here.
+Stopped live-test.7T5O4D/maild-live.json now selects cs2 and the new PEM path.
+No server restarted and no new live email sent. Original maild.json remains disabled
+and historical; its guest DKIM JSON path is obsolete under the new code.
+Old private seed remains historical; no production loader supports it.
+The first delivered email remains DispatchBegun in the database, unchanged.
+
+NEXT
+1. User publishes the public cs2 TXT in Squarespace; verify exact key through DNS.
+2. Use a fresh message/attempt identity for one authorized test to the designated
+   Gmail address. Never reuse the old attempt or delete its create-new marker.
+   Check cs-mail records Accepted with a provider reference, then inspect Gmail's
+   original source for rsa-sha256 / cs2 DKIM pass. If receipt remains unknown, capture
+   only sanitized response status/field shape for diagnosis; do not resend.
+3. Only then continue public authenticated delivery callbacks, as the user requested.
+
+The original HTTP response was not captured, so a compact fastaccept response is a
+well-supported explanation, not proven retrospective diagnosis. Live acceptance and
+Gmail's handling of the replacement key remain unverified. Local fixtures cannot
+prove provider queue durability, public callback retries, placement or public inbound
+behavior. SMTP2GO confirms early processing semantics in its MIME API docs; an
+independent client bug report includes the compact observed email_id response:
+https://developers.smtp2go.com/reference/send-mime-email
+https://github.com/onetimesecret/onetimesecret/issues/4190
+
+LIVE ACCOUNT SETUP / FIRST ATTEMPT — 7 OCTOBER 2026
+This section supersedes the previous pass's no-account/no-live-attempt status below.
+
+Domain mail.c-sqd.com is verified in SMTP2GO. Entri initially installed the CNAMEs
+at the parent domain; user added em1038436.mail, s1038436._domainkey.mail, link.mail
+manually in Squarespace with targets return/dkim/track.smtp2go.net respectively.
+cs1._domainkey.mail.c-sqd.com TXT public key was generated from a new private key
+using cs-mail-admin and verified through all four authoritative servers, Google
+and Cloudflare resolvers. API key was saved privately by the user. Secret files:
+/Users/thomm15/Library/Application Support/cs-mail/development/
+  smtp2go-api-key.txt (owner-only, never print)
+  domain-dkim.json (owner-only, never print)
+  domain-dkim-public.txt (public DNS record)
+  smtp2go-webhook.json (owner-only, callback not exposed/configured at provider)
+
+User explicitly requested one test email to an owned Gmail inbox. Existing scripts
+were adapted outside the repository to bootstrap fresh isolated local databases,
+enroll a synthetic development member and queue exactly one signed/encrypted test.
+No application source change or new repository test was made. Local enrollment,
+bank ownership and service purchase use development simulation; provider sending
+uses the real Rust SMTP2GO adapter and user's account/key.
+Local setup: /Users/thomm15/Library/Application Support/cs-mail/development/live-test.7T5O4D
+Database: cs_mail_smtp2go_live_10ee81a6
+Identity database: cs_mail_smtp2go_identity_10ee81a6
+Ports 8580/8581. Both local services stopped. PostgreSQL remains running on 55432.
+Original maild.json remains delivery.kind=disabled; maild-live.json is a separate
+configuration only used for the single attempt. Do not start it or resend blindly.
+
+One actual dispatch attempt began at 2026-10-07 16:58:36 UTC. The earlier preflight
+stopped before enabling sending because its Waiting enum shape check was wrong;
+that was corrected before this sole dispatch. Exactly one queued recipient and
+conversation were checked before enabling the sender.
+Conversation: 2026100701
+RFC Message-ID: <cs-aaf4d8ad150af76d1ec76c963f81a173@mail.c-sqd.com>
+Subject: cs-mail conversation
+Body clearly identifies the requested delivery test and says incoming replies are
+not enabled; recipient should confirm receipt in this Codex conversation.
+Outcome: DispatchBegun / acceptance unconfirmed. Adapter did NOT record Accepted
+or Failed. No automatic retry. Sender stopped after the observation window.
+This does not establish whether SMTP2GO accepted or Gmail received the message.
+An unauthenticated HTTPS HEAD connectivity check later reached the official API
+and returned 405 Allow: POST; no second email was submitted.
+
+USER CONFIRMED: the email arrived in the designated Gmail inbox. Real outbound
+delivery is established by recipient confirmation. API acceptance is still not
+recorded by cs-mail; no database state was fabricated and no resend occurred.
+GMAIL HEADERS RECEIVED: supplied attachment at
+/Users/thomm15/.codex/attachments/30626483-a20e-478c-b2c5-d4f62c9c4f34/Pasted text.txt.
+Message-ID matches the sole attempt. Gmail reports SPF pass, provider DKIM pass
+(smtpservice.net/a1-4 and mail.c-sqd.com/s1038436), DMARC pass, and cs-mail's own
+mail.c-sqd.com/cs1 Ed25519 signature neutral (no key). SMTP2GO-to-Gmail used TLS 1.3.
+Public cs1 TXT still matches the generated key via Google/Cloudflare DNS.
+Independent local verification with mail-auth 0.12.1 and public DNS passed ALL THREE
+signatures in the supplied message (line endings normalized to CRLF). Diagnostic
+source is outside the repository at /private/tmp/cs-mail-dkim-inspect; no email or
+message content was sent by the diagnostic, only public DNS queries. This points
+to a Gmail/Ed25519 compatibility issue, not evidence of an invalid cs-mail signature.
+Consider RSA-2048 for cs-mail's deployment DKIM interoperability in the next pass;
+no signing/configuration/DNS change has yet been made on that basis.
+NEXT: investigate why the actual API outcome was uncertain. Message headers do
+not contain the HTTP API response; no definitive receipt-parsing cause established. Do not invent a provider receipt or
+change database delivery state on the basis of assumed success.
+Local evidence: live-result.json, live-serve.log, queued.json and live-attempt-started
+inside the setup directory. Setup log: /private/tmp/cs-mail-smtp2go-live-setup.log.
+Ephemeral runners in /private/tmp/cs-mail-smtp2go-live-setup.sh and
+/private/tmp/cs-mail-smtp2go-live-send.py; the latter has a create-new attempt marker.
+No public receiver/MX/MTA-STS, HTTPS callback endpoint or provider webhook exists yet.
+The last full code quality gate remains /private/tmp/cs-mail-mime-gate.log (PASS);
+only local operational setup and this checkpoint changed in this send attempt.
+
+PREVIOUS IMPLEMENTATION HANDOFF (historical account/setup status follows)
+
+CS-MAIL ROLLING IMPLEMENTATION CHECKPOINT — 7 OCTOBER 2026
+Latest pass: supported incoming MIME and local outbound/reply round trip.
+This existing checkpoint is reused; no new docs file was created this pass.
+
+READ FIRST
+AGENTS.md, docs/rust-domain-principles.md, DOMAIN_MODEL.md and
+cs_mail_build_plan.tex remain authoritative. Distinct meanings/invariants have
+explicit owners; decisions and atomic admission remain outside the SMTP adapter.
+Do not reset, clean or indiscriminately commit this checkout: substantial older
+staged/unstaged and untracked work remains. No commit was requested or made.
+No identity-model changes, new dependencies or schema changes in this pass.
+Current schema remains 26; replay identity/digest semantics are unchanged.
+
+CONFIRMED PRODUCT RULES
+Member-selected external invitations require no interactive mailbox-control test.
+Automatic email authentication and exact From-mailbox matching still apply.
+Pending conversations permit unlimited uncharged replies. Acceptance or express
+lanes establish broader access. Rejection closes the unpaid invitation; block
+prevents further approaches. Withdrawal cancels waiting outbound disclosure;
+once dispatch begins, cancellation may be too late. Unknown sends do not retry
+automatically. Provider acceptance, delivery evidence and permissions are separate.
+
+IMPLEMENTED THIS PASS
+- cs-mail-smtp-gateway/src/incoming/mime.rs owns the deterministic MIME profile:
+  a single plain-text part (including MIME default) or a flat alternative with
+  exactly one text/plain and one text/html part, either order. It selects actual
+  plain text, never generated HTML conversion. Existing single-part-only selection
+  was replaced, with no parallel compatibility path.
+- Authentication still receives all original bytes, including the HTML part.
+  Every attempt must pass MIME checks and authentication; existing transaction
+  rules recheck permission and commit message/evidence/lane effects atomically.
+- Explicit refusal for attachments/named inline files, HTML-only, mixed/nested/
+  additional parts, ambiguous part headers/parameters, unsupported encodings,
+  parser decoding errors, and missing/malformed boundaries. Framing validation
+  checks the pinned parser's child offsets and prevents permissive truncation
+  recovery. Preamble/epilogue remain MIME framing, not delivered content.
+- Recognized charset decoding is supported, but decoded U+FFFD is conservatively
+  refused because it may be a replacement for corrupt bytes (also refuses an
+  intentional U+FFFD). No claim that HTML and text convey equivalent meaning.
+- Stable retries bind the selected decoded subject/text, not representation
+  ordering, transfer encoding or unused HTML. Full original hash is retained as
+  evidence; plaintext/raw mail/HTML are not stored. Historical receipt semantics
+  remain unchanged, with no extra delivery or lane consumption.
+
+AGREED CLAIMS AND EVIDENCE
+User proceeded on the scope: MIME complexity must not bypass sender/current
+permission checks, silently drop unsupported content, or duplicate on retries.
+- Extended the existing authentication/permission and atomic-commit/lost-ACK
+  scenarios to real signed multipart messages over loopback SMTP/STARTTLS, with
+  actual DKIM through controlled DNS and real PostgreSQL admission.
+- Added a signed malformed-MIME matrix: mixed, HTML-only, unknown text subtype,
+  attachment/inline file, duplicate Content-Type, unknown charset/encoding,
+  missing/malformed close, invalid base64, extra sibling and nested related.
+  Refusal cannot partially deliver or reserve the RFC Message-ID.
+- Added full local transport round trip: outgoing email captured by SMTP2GO HTTP
+  fixture, its actual Reply-To used for Carol's signed MIME reply, member decrypts
+  exact Unicode text. Tampered unused HTML fails authentication. Repeated/reordered
+  alternatives and re-encoded text do not duplicate the message.
+- All four receiver scenarios passed. Full quality gate passed all seven checks:
+  identity manifest, dependency direction, rustfmt, clippy, workspace tests,
+  PostgreSQL suites, application binaries. Ten external-flow scenarios pass in
+  the gate (four original, four incoming/round-trip, two outbound/feedback).
+- Existing non-simulation application unused-import/dead-code warnings remain;
+  this is not a warning-free baseline claim.
+- Updated existing README, domain/build plan, app and receiver/provider guides.
+  Built-in LaTeX compiler succeeded; exported build-plan PDF was regenerated and
+  visually inspected across all pages and the changed pages before replacement.
+
+LIMITATIONS / NEXT
+No SMTP2GO account, live sends, public DNS/MX/TLS/MTA-STS, HTTPS webhook proxy or
+real email-client/provider round trip was configured or verified. Local fixture
+success does not prove provider behavior or Internet delivery.
+User owns c-sqd.com; mail.c-sqd.com is a possible pilot subdomain, requiring DNS
+setup rather than a separate purchase. No domain configuration was performed.
+When ready, connect a designated SMTP2GO account/domain/test recipient; verify
+actual MIME/webhook behavior and delivery, then return a real external reply.
+HTML-only, attachments/nested related mail, new mail to general member addresses,
+paid-guest conversation creation and native quotation/export remain future work.
+Guest request-page notices still use development files. Operational reconciliation
+UI, abuse/suppression policy and sender aliases are not part of this pass.
+No comprehensive charset/client compatibility, fuzz/load campaign or exhaustive
+crash matrix. Provider-policy suitability remains open before public enrollment.
+
+LATEST LOGS
+/private/tmp/cs-mail-mime-tests.log
+/private/tmp/cs-mail-mime-clippy.log
+/private/tmp/cs-mail-mime-gate.log (final full quality gate)
+/private/tmp/cs-mail-mime-pdf.log
+
+LOCAL ENVIRONMENT / LOGS
+PostgreSQL 17.6: /private/tmp/cs-mail-pg/bin, cluster
+/private/tmp/cs-mail-external-pgdata, loopback 55432, trust auth, owner thomm15.
+Test DB: postgresql://thomm15@127.0.0.1:55432/cs_mail_external_test
+New throwaway CLI DBs: cs_mail_external_demo5 and cs_mail_external_identity5.
+CLI artifacts: /var/folders/bt/4tg9jnps297gxn13kdvt41mng8l9x6/T/tmp.MalTA1jN2W
+Both demo services and normal-build smoke service stopped; PostgreSQL remains up.
+/private/tmp/cs-mail-smtp2go-tests.log (initial targeted provider experiments)
+/private/tmp/cs-mail-smtp2go-clippy.log
+/private/tmp/cs-mail-smtp2go-demo.log
+/private/tmp/cs-mail-smtp2go-host-smoke.log
+/private/tmp/cs-mail-smtp2go-gate.log (final code, including receipt-failure case)
+
+
+GATE
+CARGO_NET_OFFLINE=true \
+CS_MAIL_TEST_DATABASE_URL=postgresql://thomm15@127.0.0.1:55432/cs_mail_external_test \
+  scripts/quality-gate.sh
+Loopback tests require scoped sandbox escalation; these requests were approved.
+Do not run demos concurrently with gate binary rebuilds.
+
+RUNBOOKS
+docs/smtp-receiver.md — exact MIME profile, receiver config and validation limits.
+docs/smtp2go-outbound.md — provider config and later account-connection sequence.

@@ -189,7 +189,11 @@ impl TestExecute for PostgresEngine {
         policy: PolicySnapshot,
     ) -> Result<DurableExecutionOutcome, StorageError> {
         support::provision(self, &policy, registry(), SENDER, test_time(0))?;
-        self.configure_ingress(DEPLOYMENT_DOMAIN, &policy)?;
+        self.configure_ingress(
+            DEPLOYMENT_DOMAIN,
+            &policy,
+            &cs_mail_protocol::admission::AdmissionPolicy::default(),
+        )?;
         let handle = self.receive_signed(&command, DEPLOYMENT_DOMAIN, || now, policy)?;
         let outcome = self.process_received(&handle)?;
         self.sign_artifacts_batch(&provider_signer(), test_time(0), Duration(30_000), 100)?;
@@ -555,15 +559,7 @@ fn database_row_lock_serializes_conflicting_decisions() {
     );
 }
 
-#[test]
-#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
-#[allow(clippy::too_many_lines)]
-fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
-    let url = database_url();
-    let engine = PostgresDeployment::connect(&url)
-        .unwrap()
-        .relationship(aggregate_key("lane"), &state(4), UNIT)
-        .unwrap();
+fn signed_lane_grant() -> SignedLaneGrant {
     let recipient_signing = SigningKey::from_bytes(&[2; 32]);
     let grant = LaneGrant {
         id: LaneId(90),
@@ -588,16 +584,32 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
         not_after: test_time(10_000),
         version: Version(1),
     };
-    let signed = SignedLaneGrant {
+    SignedLaneGrant {
         signature: recipient_signing
             .sign(&grant.signing_bytes().unwrap())
             .to_bytes(),
         grant,
-    };
+    }
+}
+
+#[test]
+#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+#[allow(clippy::too_many_lines)]
+fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
+    let url = database_url();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(aggregate_key("lane"), &state(4), UNIT)
+        .unwrap();
+    let signed = signed_lane_grant();
     exercise_lane_settlement(&signed);
     support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
     engine
-        .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
+        .configure_ingress(
+            DEPLOYMENT_DOMAIN,
+            &policy(),
+            &cs_mail_protocol::admission::AdmissionPolicy::default(),
+        )
         .unwrap();
     let handle = engine
         .receive_grant(
@@ -670,7 +682,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
             .unwrap()
             .replayed
     );
-    assert_eq!(engine.lane().unwrap().unwrap().messages_in_rate_window, 1);
+    assert_eq!(engine.lane().unwrap().unwrap().messages_in_rate_window(), 1);
 
     engine
         .execute(
@@ -748,7 +760,7 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
             policy(),
         )
         .unwrap();
-    assert_eq!(engine.lane().unwrap().unwrap().state, LaneState::Revoked);
+    assert_eq!(engine.lane().unwrap().unwrap().state(), LaneState::Revoked);
     let mut blocked = admission;
     blocked.idempotency_key = IdempotencyKey(93);
     assert!(matches!(
@@ -1068,7 +1080,7 @@ fn forfeiture_and_allocation_survive_reconnect() {
         .unwrap();
         let persona = if member == 1 { SENDER } else { RECIPIENT };
         let account_id = support::enrollment::enroll(
-            &engine,
+            engine.deployment(),
             cs_mail_accounts::EnrollmentInput {
                 bank: evidence,
                 persona,
@@ -1538,7 +1550,11 @@ fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_recei
         .unwrap();
     support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
     engine
-        .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
+        .configure_ingress(
+            DEPLOYMENT_DOMAIN,
+            &policy(),
+            &cs_mail_protocol::admission::AdmissionPolicy::default(),
+        )
         .unwrap();
     let command = recipient(
         ProtocolCommand::AcceptRelationship {
@@ -2765,4 +2781,98 @@ mod request_pricing {
 fn test_time(value: u64) -> CanonicalTime {
     const START: u64 = 31_536_000_000;
     CanonicalTime(if value < START { START + value } else { value })
+}
+
+// Conjecture: restored activation requires the original signature and receipt-time
+// authority. Corruption must halt processing without a lane or fabricated refusal;
+// later revocation must not erase a previously authenticated command.
+#[test]
+#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+fn restored_grant_rechecks_signed_evidence_using_frozen_authority() {
+    use postgres::types::Json;
+    let url = database_url();
+    let engine = PostgresDeployment::connect(&url)
+        .unwrap()
+        .relationship(aggregate_key("grant-proof"), &state(311), UNIT)
+        .unwrap();
+    support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
+    engine
+        .configure_ingress(
+            DEPLOYMENT_DOMAIN,
+            &policy(),
+            &cs_mail_protocol::admission::AdmissionPolicy::default(),
+        )
+        .unwrap();
+    let signed = signed_lane_grant();
+    let handle = engine
+        .receive_grant(
+            &signed,
+            IdempotencyKey(311),
+            DEPLOYMENT_DOMAIN,
+            || test_time(1),
+            policy(),
+        )
+        .unwrap();
+    let position = i64::try_from(handle.position().0).unwrap();
+    let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+    let original = db
+        .query_one(
+            "SELECT operation FROM cs_received_commands WHERE position=$1",
+            &[&position],
+        )
+        .unwrap()
+        .get::<_, Json<serde_json::Value>>(0);
+    let mut altered = original.0.clone();
+    altered["Grant"]["grant"]["lifetime"] = serde_json::json!(9999);
+    db.execute(
+        "UPDATE cs_received_commands SET operation=$2 WHERE position=$1",
+        &[&position, &Json(altered)],
+    )
+    .unwrap();
+    assert!(matches!(
+        engine.process_received(&handle),
+        Err(StorageError::Capability(_))
+    ));
+    assert!(engine.lane().unwrap().is_none());
+    let row = db.query_one("SELECT outcome IS NULL,processing_failure IS NOT NULL FROM cs_received_commands WHERE position=$1", &[&position]).unwrap();
+    assert!(row.get::<_, bool>(0));
+    assert!(row.get::<_, bool>(1));
+    // Repair only the deliberately corrupted fixture; production has no edit endpoint.
+    db.execute(
+        "UPDATE cs_received_commands SET operation=$2 WHERE position=$1",
+        &[&position, &original],
+    )
+    .unwrap();
+    let accounts = engine.deployment().accounts(|| test_time(2));
+    accounts
+        .revoke_account_key(
+            accounts.persona_account(RECIPIENT).unwrap(),
+            OperationalKeyRef(2),
+            Version(0),
+            test_time(2),
+        )
+        .unwrap();
+    assert!(matches!(
+        engine.receive_grant(
+            &signed,
+            IdempotencyKey(312),
+            DEPLOYMENT_DOMAIN,
+            || test_time(3),
+            policy()
+        ),
+        Err(StorageError::Security(_))
+    ));
+    assert!(matches!(
+        engine.process_received(&handle).unwrap(),
+        cs_mail_storage_postgres::ReceivedOutcome::Lane(_)
+    ));
+    assert_eq!(engine.lane().unwrap().unwrap().grant(), &signed.grant);
+    assert!(
+        db.query_one(
+            "SELECT processing_failure IS NULL FROM cs_received_commands WHERE position=$1",
+            &[&position]
+        )
+        .unwrap()
+        .get::<_, bool>(0)
+    );
 }

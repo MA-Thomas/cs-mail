@@ -39,6 +39,20 @@ The matching `.tex` files are the editable sources. `intro_doc.tex` is retained
 only as a superseded design-history document and must not be used as a current
 protocol reference.
 
+**Current priority (agreed 8 October 2026):** build and validate the SwiftUI member
+application locally, shipping macOS first and designing for iPhone/iPad from the
+outset. Business rules and portable client workflows remain in Rust behind a narrow
+Swift binding interface. This replaces the planned Tauri shell; see the
+[Apple client architecture](docs/apple-client-architecture.md). Validate against
+the local Rust service and simulated payments. Provisioning
+and payment for a rented Linux host, such as AWS Lightsail, wait until the application
+is ready for a hosted external-email pilot. Public MX, HTTPS and SMTP2GO callback
+validation follow that local application work.
+
+For that later hosted pilot, use the [Linux deployment package](deploy/linux/README.md):
+callback-only service setup, private PostgreSQL, HTTPS isolation, and backup/recovery
+instructions. Local validation does not replace the listed Linux host acceptance checks.
+
 ## The model in brief
 
 C-SQD collects the full annual utility price well before a specified year-long
@@ -143,13 +157,27 @@ transition kernel, conserved ledger, authenticated wire format, durable
 PostgreSQL shell, endpoint content encryption, retry-safe workers, native client
 and ingress APIs, privacy/retention types, and bounded adapter state machines. Annual allocation, per-account billing, funded
 coverage, automatic lump-sum distributions, and authorized scheduled payment work are
-implemented; the running server and desktop application remain product work.
+implemented. The local server, administrator and member CLIs, and guest request
+page are runnable; the desktop member application remains product work.
 The protocol and architecture remain drafts dated September 2026.
 Recipient-defined request classes (up to eight), signed class-specific quotes,
 and lane acceptance with atomic refund settlement are implemented. Native
 correspondence also admits lane-authorized messages. See the
 [implementation notes](docs/request-classes-implementation.md) for the API and
 coordinated storage/signing-format cutover.
+
+The member-initiated external conversation slice now supports signed composition,
+conversation-scoped disclosure consent, unlimited uncharged pending replies,
+rejection, existing relationship/lane acceptance, and cancellation before dispatch.
+The CLI demonstration is `scripts/m3c-demo.sh`; see [application interfaces](apps/README.md).
+Its scripted inbound evidence is synthetic and its outbound relay writes local files.
+The separate `cs-mail-mx` receiver now admits authenticated plain-text and paired plain-text/HTML conversation
+replies over SMTP with STARTTLS and durable retry handling; see the
+[receiver runbook](docs/smtp-receiver.md). The SMTP2GO HTTPS submission adapter and
+authenticated delivery feedback are now implemented and locally validated; see the
+[outbound guide](docs/smtp2go-outbound.md). No SMTP2GO account or live sending was used.
+Public deployment, account-connected delivery, HTML-only mail/attachments, general member-address
+mail and native quotation exports remain work.
 
 This is not yet a production service. Network transports, TLS connection
 pooling, durable administrative key custody, KMS/HSM integration, external
@@ -160,6 +188,11 @@ deployment work. Express lanes are now a launch-feature implementation slice.
 Inbound legacy authentication is integrated with Stalwart Labs' pinned
 `mail-auth` 0.12.1 implementation using its minimal Ring/Hickory feature set;
 production still needs resolver operations, SMTP reply policy, and monitoring.
+
+The [audit hardening record](docs/audit-hardening.md) describes the October retry,
+key-history, command-recovery, policy and guest-verification fixes, their validation scope, and remaining
+work. This cutover requires a fresh development database; preserve existing databases
+for inspection rather than restarting them with the new build.
 
 ## Rust reference implementation
 
@@ -233,8 +266,8 @@ an application.
 - `cs-mail-admin` is the operator administration client.
 - `cs-mail-cli` is the developer member client.
 
-`cs-maild` and `cs-mail-admin` run the Milestone 1 service and operator workflow
-(see [apps/README.md](apps/README.md)); `cs-mail-cli` reports its version and help only.
+`cs-maild`, `cs-mail-admin` and `cs-mail-cli` run the service, operator workflow and
+member request loop of Milestones 1 and 2 (see [apps/README.md](apps/README.md)).
 
 The implemented command set covers terms, request creation, capture evidence,
 submission to the recipient, follow-ups, cancellation, acceptance, rejection, blocking, unblocking,
@@ -251,7 +284,8 @@ RFC 9180 HPKE construction. These choices are versioned protocol inputs, not an
 invitation to silently substitute another suite.
 
 To verify the workspace, run the local quality gate. It checks the identity source
-manifest, dependency direction, formatting, Clippy, workspace tests, the PostgreSQL
+manifest, dependency direction, formatting, Clippy with all features and without
+default features, workspace tests, the PostgreSQL
 suites, and the application binaries, and reports each check separately:
 
 ```sh
@@ -262,18 +296,19 @@ CS_MAIL_TEST_DATABASE_URL='postgresql://postgres@localhost:5432/cs_mail_test' \
 The PostgreSQL suites need an isolated test database. `scripts/quality-gate.sh
 --skip-postgres` skips them explicitly and reports them as skipped, not passed.
 
-The nineteen schema migrations are embedded in the storage crate and applied under
+The twenty-nine schema migrations are embedded in the storage crate and applied under
 a database advisory lock. They cover protocol/ledger durability, encrypted
 content, retention, capabilities, financial programs, independent domain owners,
 authenticated receipt ordering, unified external work, annual allocation, utility
-billing, owner-specific lifecycle rules, and request pricing. Current protocol storage format is 8,
+billing, owner-specific lifecycle rules, request pricing, the deployment record, and the
+member request loop. Current protocol storage format is 8,
 financial storage format is 6, and command wire format is 6. This clean domain
 update requires a freshly initialized schema. Unsupported stored formats are
 rejected; the migrations do not convert populated older records.
 
-**Schema migration policy.** Until the first user data is created (the first open
-enrollment), a schema change may replace or renumber existing migrations and requires a
-fresh database; there is no upgrade path. From the creation of the first user data, migrations in cs-mail and
+**Schema migration policy.** Until the project owner declares migrations forward-only,
+a schema change may replace or renumber existing migrations and requires a fresh
+database; there is no upgrade path. From that declaration, migrations in cs-mail and
 identity-model are forward-only: a merged migration is never edited, removed or
 renumbered, and every schema change is a new migration.
 There are no compatibility aliases or fallback readers for deprecated labels. The current connector deliberately uses `NoTls`; it is

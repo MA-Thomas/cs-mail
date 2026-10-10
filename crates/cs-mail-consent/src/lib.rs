@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, fmt};
 
 pub const MAX_SCOPE_MESSAGES: usize = 100;
+pub mod disclosure;
 pub const MAX_GRANT_LIFETIME_MS: u64 = 86_400_000;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ConsentError {

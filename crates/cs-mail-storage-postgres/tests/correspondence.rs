@@ -97,7 +97,7 @@ impl Fixture {
             let id = u128::from(n);
             accounts.push(
                 cs_mail_test_support::enrollment::enroll(
-                    host,
+                    host.deployment(),
                     cs_mail_accounts::EnrollmentInput {
                         bank: BankVerification {
                             scope,
@@ -861,7 +861,10 @@ fn exercise_native_lane(h: &Fixture) {
             .to_bytes(),
         grant,
     };
-    let lane = Lane::from_verified_grant(&signed, &key(1)).unwrap();
+    let lane = cs_mail_capabilities::VerifiedLaneGrant::verify(&signed, &key(1))
+        .unwrap()
+        .activate()
+        .unwrap();
     let mut db = Client::connect(&h.url, NoTls).unwrap();
     db.execute("INSERT INTO cs_capability_lanes(aggregate_key,lane_id,lane,updated_at) VALUES('pair-1-0','800',$1,1000)", &[&postgres::types::Json(&lane)]).unwrap();
     db.execute("UPDATE cs_relationship_aggregates SET relationship_state=jsonb_set(relationship_state,'{relationship,state}',$1) WHERE aggregate_key='pair-1-0'", &[&postgres::types::Json(RelationshipState::ExpressLane(LaneId(800)))]).unwrap();
@@ -898,7 +901,7 @@ fn exercise_native_lane(h: &Fixture) {
         .unwrap()
         .get::<_, postgres::types::Json<Lane>>(0)
         .0;
-    assert_eq!(used.messages_in_rate_window, 1);
+    assert_eq!(used.messages_in_rate_window(), 1);
     assert!(matches!(
         h.view(0, 802).record.admission,
         cs_mail_protocol::AdmissionBasis::ExpressLane {

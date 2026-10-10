@@ -11,5 +11,8 @@ cs-mail-privacy = { path = "../cs-mail-privacy" }
 ed25519-dalek.workspace = true
 serde.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

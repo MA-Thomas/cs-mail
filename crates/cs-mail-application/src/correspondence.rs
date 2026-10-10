@@ -14,6 +14,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+pub mod external;
 
 pub const MAX_SOURCE_GRAPH: usize = 1024;
 
@@ -315,10 +316,10 @@ fn contact(
                 && r.state != RelationshipState::Blocked
                 && (r.state == RelationshipState::Accepted
                     || context.lane.as_ref().is_some_and(|l| {
-                        l.grant.sender == actor
-                            && l.grant.recipient == other
+                        l.grant().sender == actor
+                            && l.grant().recipient == other
                             && matches!(
-                                l.grant.subject,
+                                l.grant().subject,
                                 cs_mail_capabilities::LaneSubject::Native(_)
                             )
                             && l.is_current(now)
@@ -536,7 +537,7 @@ fn admit_message(
             .lane
             .clone()
             .ok_or(CorrespondenceError::Unauthorized)?;
-        let cs_mail_capabilities::LaneSubject::Native(subject) = lane.grant.subject else {
+        let cs_mail_capabilities::LaneSubject::Native(subject) = lane.grant().subject else {
             return Err(CorrespondenceError::Unauthorized);
         };
         // The authenticated persona must equal the grant's native sender; the
@@ -565,8 +566,8 @@ fn admit_message(
             return Err(CorrespondenceError::Conflict);
         }
         let basis = cs_mail_protocol::AdmissionBasis::ExpressLane {
-            lane: lane.grant.id,
-            version: lane.version,
+            lane: lane.grant().id,
+            version: lane.version(),
         };
         next_lane = Some(lane);
         basis

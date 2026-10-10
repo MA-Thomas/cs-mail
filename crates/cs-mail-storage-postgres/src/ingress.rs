@@ -4,10 +4,10 @@ use cs_mail_capabilities::{AdmissionAuthentication, SignedBondFreeAdmission, Sig
 use cs_mail_security::{CommandDigest, OutcomeDigest, ReceiptKind, ReceiptPayload};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-enum Operation {
+pub(super) enum Operation {
     Protocol(KernelCommand<ProtocolCommand>),
     Message(Box<BondFreeAdmission>),
-    Grant(cs_mail_capabilities::ValidatedLaneGrant),
+    Grant(SignedLaneGrant),
     Control(LaneControl),
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -32,6 +32,23 @@ pub enum Refusal {
     NotAuthorized,
     QuoteMissing,
     InvalidQuote,
+}
+
+/// Redacted operational diagnosis, separate from a durable business refusal.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ProcessingFailure {
+    AwaitingQuoteSignature,
+    Persistence,
+    RequiresIntervention,
+}
+impl ProcessingFailure {
+    fn observed(error: &StorageError) -> Self {
+        match error {
+            StorageError::QuoteNotSigned => Self::AwaitingQuoteSignature,
+            StorageError::Database(_) => Self::Persistence,
+            _ => Self::RequiresIntervention,
+        }
+    }
 }
 impl Refusal {
     pub fn into_error(self) -> StorageError {
@@ -237,7 +254,10 @@ impl PostgresEngine {
             };
             if matches!(
                 a.evidence,
-                Some(cs_mail_capabilities::LaneEvidence::Legacy(_))
+                Some(
+                    cs_mail_capabilities::LaneEvidence::Legacy(_)
+                        | cs_mail_capabilities::LaneEvidence::GuestMailbox(_)
+                )
             ) {
                 return Err(StorageError::BondFreeNotAuthorized);
             }
@@ -280,7 +300,7 @@ impl PostgresEngine {
                 policy,
             )?;
             let registry = registry_locked(tx, key)?;
-            let lane = cs_mail_capabilities::ValidatedLaneGrant::verify(
+            cs_mail_capabilities::VerifiedLaneGrant::verify(
                 signed,
                 &registry.active_verifying_key(
                     g.recipient_operational_key,
@@ -288,11 +308,25 @@ impl PostgresEngine {
                     now,
                 )?,
             )?;
+            // A legacy domain's synthetic identity belongs to that domain alone.
+            if let cs_mail_capabilities::LaneSubject::LegacyDomain(domain) = &g.subject {
+                super::guests::register_subject(
+                    tx,
+                    g.sender,
+                    &cs_mail_guests::SenderSubject::LegacyDomain(domain.clone()),
+                    now,
+                )?;
+            }
+            if let cs_mail_capabilities::LaneSubject::GuestMailbox(identity) = g.subject {
+                if identity != g.sender || !super::guests::is_guest(tx, identity)? {
+                    return Err(StorageError::BondFreeNotAuthorized);
+                }
+            }
             let bytes = signed.grant.signing_bytes()?;
             Ok((
                 idempotency,
                 Sha256::digest(bytes).into(),
-                Operation::Grant(lane),
+                Operation::Grant(signed.clone()),
             ))
         })
     }
@@ -332,7 +366,7 @@ impl PostgresEngine {
             ))
         })
     }
-    fn receive(
+    pub(super) fn receive(
         &self,
         deployment: [u8; 32],
         clock: impl FnOnce() -> CanonicalTime,
@@ -354,8 +388,11 @@ impl PostgresEngine {
             let position=row.get(0); tx.commit()?;
             return Ok(ReceivedCommand {position:JournalPosition(to_u64(position)?),aggregate:self.aggregate_key.clone(),replayed:true});
         }
-        let now = clock();
         let authority = registry_locked(&mut tx, &self.aggregate_key)?;
+        // Receipt authority and relationship protection precede the trusted timestamp.
+        // Verification below may read this aggregate again, but cannot wait for its lock.
+        load_locked_aggregate(&mut tx, &self.aggregate_key)?;
+        let now = clock();
         let (id, digest, operation) = verify(&mut tx, &self.aggregate_key, now, &policy)?;
         let content_ref = match &operation {
             Operation::Message(a) => Some(a.content_ref),
@@ -399,88 +436,16 @@ impl PostgresEngine {
         lock_receipt_order(&mut tx)?;
         let Some(row)=tx.query_opt("SELECT * FROM cs_received_commands WHERE outcome IS NULL ORDER BY position LIMIT 1 FOR UPDATE",&[])? else { return Ok(false); };
         let position: i64 = row.get("position");
-        let received_position = JournalPosition(to_u64(position)?);
-        let content_available: bool = row.get("content_available");
-        let key: String = row.get("aggregate_key");
-        let now = CanonicalTime(to_u64(row.get("received_at"))?);
-        let operation = row.get::<_, Json<Operation>>("operation").0;
-        let policy = row.get::<_, Json<PolicySnapshot>>("policy").0;
-        tx.batch_execute("SAVEPOINT apply_command")?;
-        let result = match &operation {
-            Operation::Protocol(c) => apply_protocol(
-                &mut tx,
-                &key,
-                c,
-                now,
-                policy.clone(),
-                received_position,
-                content_available,
-            )
-            .map(Box::new)
-            .map(ReceivedOutcome::Protocol),
-            Operation::Message(a) => {
-                apply_free(&mut tx, &key, a, now, received_position, content_available)
-                    .map(ReceivedOutcome::Message)
-            }
-            Operation::Grant(l) => apply_grant(
-                &mut tx,
-                &key,
-                l.clone(),
-                now,
-                received_position,
-                policy.clone(),
-            )
-            .map(Box::new)
-            .map(ReceivedOutcome::Lane),
-            Operation::Control(c) => apply_control(&mut tx, &key, c, now, received_position)
-                .map(Box::new)
-                .map(ReceivedOutcome::Lane),
-        };
-        let outcome = match result {
-            Ok(o) => o,
-            Err(error) => {
-                let refusal = classify_refusal(error)?;
-                tx.batch_execute("ROLLBACK TO SAVEPOINT apply_command")?;
-                ReceivedOutcome::Refused(refusal)
-            }
-        };
-        let aggregate = load_locked_aggregate(&mut tx, &key)?;
-        let digest: Vec<u8> = row.get("digest");
-        let command_digest =
-            CommandDigest(digest.try_into().map_err(|_| StorageError::NumericRange)?);
-        let outcome_digest = OutcomeDigest(Sha256::digest(serde_json::to_vec(&outcome)?).into());
-        let receipt = ReceiptPayload {
-            deployment_domain: row
-                .get::<_, Vec<u8>>("deployment")
-                .try_into()
-                .map_err(|_| StorageError::NumericRange)?,
-            receipt_id: cs_mail_primitives::ReceiptRef(u128::from(to_u64(position)?)),
-            kind: receipt_kind(&operation, &outcome),
-            relationship: aggregate.state.relationship.key.reference,
-            command_digest,
-            journal_position: JournalPosition(to_u64(position)?),
-            received_at: now,
-            outcome_digest,
-            provider: policy.recipient_provider,
-            protocol_version: policy.protocol_version,
-        };
-        tx.execute(
-            "UPDATE cs_received_commands SET outcome=$2,receipt=$3 WHERE position=$1",
-            &[&position, &Json(outcome), &Json(receipt)],
-        )?;
-        work::enqueue(
-            &mut tx,
-            &key,
-            work::WorkSource::Receipt {
-                position: received_position,
-                ordinal: 0,
-            },
-            &WorkPayload::Artifacts {
-                position: received_position,
-            },
-            now,
-        )?;
-        retention::register_records(&mut tx, &key)?;
+        tx.batch_execute("SAVEPOINT process_command")?;
+        if let Err(error) = process_received_row(&mut tx, &row, position) {
+            tx.batch_execute("ROLLBACK TO SAVEPOINT process_command")?;
+            // No attempted effect survives a processing fault. The command remains
+            // pending under its original identity and frozen receipt authority.
+            let failure = ProcessingFailure::observed(&error);
+            tx.execute("UPDATE cs_received_commands SET processing_failure=$2,failed_attempts=failed_attempts+1 WHERE position=$1", &[&position, &Json(failure)])?;
+            tx.commit()?;
+            return Err(error);
+        }
         tx.commit()?;
         Ok(true)
     }
@@ -724,6 +689,7 @@ fn apply_protocol(
             authorized,
             now,
             policy.protocol_version,
+            policy.recipient_provider,
         )?
     } else {
         Err(cs_mail_protocol::admission::AdmissionFailure::ContentMissing)
@@ -753,13 +719,19 @@ fn apply_protocol(
     }
     match authorized.command() {
         ProtocolCommand::CreateRequest { request_id, .. } => {
-            let account =
-                billing::identity_account(transaction, snapshot.state.relationship.key.sender)?;
+            let sender = snapshot.state.relationship.key.sender;
             let financials = manifest
                 .next_payments
                 .get(request_id)
                 .ok_or(ProtocolError::MissingRecord)?;
-            billing::reserve_source(transaction, account.id(), financials.capture())?;
+            // A guest pays with the instrument registered for this guest; a member with
+            // the member's own verified bank account.
+            if super::guests::is_guest(transaction, sender)? {
+                super::guests::reserve_guest_source(transaction, sender, financials.capture())?;
+            } else {
+                let account = billing::identity_account(transaction, sender)?;
+                billing::reserve_source(transaction, account.id(), financials.capture())?;
+            }
         }
         ProtocolCommand::RecordPayment {
             request_id,
@@ -812,11 +784,18 @@ fn assess_protocol_admission(
     command: &KernelCommand<ProtocolCommand>,
     now: CanonicalTime,
     protocol: ProtocolVersion,
+    provider: ProviderRef,
 ) -> Result<Result<(), cs_mail_protocol::admission::AdmissionFailure>, StorageError> {
     let Some(message) =
         cs_mail_protocol::admission::proposed_message(state, command.command(), now)
     else {
         return Ok(Ok(()));
+    };
+    // A guest's content was received and declared at the provider's guest edge.
+    let authority = if super::guests::is_guest(transaction, state.relationship.key.sender)? {
+        cs_mail_primitives::DeclarationAuthority::GuestGateway(provider)
+    } else {
+        cs_mail_primitives::DeclarationAuthority::NativeSender(command.operational_key())
     };
     match validate_delivery(
         transaction,
@@ -826,9 +805,7 @@ fn assess_protocol_admission(
             relationship: state.relationship.key,
             now,
             protocol,
-            authority: cs_mail_primitives::DeclarationAuthority::NativeSender(
-                command.operational_key(),
-            ),
+            authority,
             capability: None,
         },
     ) {
@@ -841,7 +818,7 @@ fn assess_protocol_admission(
 fn apply_grant(
     transaction: &mut Transaction<'_>,
     aggregate_key: &str,
-    grant: cs_mail_capabilities::ValidatedLaneGrant,
+    grant: cs_mail_capabilities::VerifiedLaneGrant,
     now: CanonicalTime,
     received_position: JournalPosition,
     policy: PolicySnapshot,
@@ -868,7 +845,6 @@ fn apply_grant(
         policy,
         pricing: cs_mail_protocol::pricing::QuotePricing::NotRequested,
     };
-    let lane = grant.clone().activate()?;
     let decision =
         cs_mail_application::relationships::LaneAcceptance::decide(&snapshot, grant, &context)
             .map_err(|e| match e {
@@ -881,7 +857,7 @@ fn apply_grant(
             })?;
     let Some(decision) = decision else {
         return Ok(LaneOperationOutcome {
-            lane,
+            lane: snapshot.lane.ok_or(StorageError::VersionConflict)?,
             changed: false,
             replayed: false,
         });
@@ -913,7 +889,7 @@ fn apply_grant(
         transaction,
         aggregate_key,
         received_position,
-        &CapabilityEvent::LaneGranted(lane.grant.id),
+        &CapabilityEvent::LaneGranted(lane.grant().id),
     )?;
     Ok(LaneOperationOutcome {
         lane,
@@ -928,7 +904,8 @@ fn load_current_lane(tx: &mut Transaction<'_>, key: &str) -> Result<Option<Lane>
             "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1 FOR UPDATE",
             &[&key],
         )?
-        .map(|r| r.get::<_, Json<Lane>>(0).0))
+        .map(|r| r.try_get::<_, Json<Lane>>(0).map(|j| j.0))
+        .transpose()?)
 }
 
 fn apply_control(
@@ -949,8 +926,8 @@ fn apply_control(
             &[&aggregate_key],
         )?
         .ok_or(StorageError::Capability(CapabilityError::MissingLane))?;
-    let mut lane = row.get::<_, Json<Lane>>("lane").0;
-    if lane.grant.id != control.lane_id || lane.version != control.expected_version {
+    let mut lane = row.try_get::<_, Json<Lane>>("lane")?.0;
+    if lane.grant().id != control.lane_id || lane.version() != control.expected_version {
         return Err(StorageError::VersionConflict);
     }
     let event = match control.action {
@@ -959,11 +936,11 @@ fn apply_control(
                 return Err(StorageError::Protocol(ProtocolError::ContactBlocked));
             }
             lane.reconfirm(now)?;
-            CapabilityEvent::LaneReconfirmed(lane.grant.id)
+            CapabilityEvent::LaneReconfirmed(lane.grant().id)
         }
         LaneControlAction::Revoke => {
             lane.revoke()?;
-            CapabilityEvent::LaneRevoked(lane.grant.id)
+            CapabilityEvent::LaneRevoked(lane.grant().id)
         }
     };
     let position = advance_aggregate_revision(
@@ -981,7 +958,7 @@ fn apply_control(
         LaneControlAction::Revoke => delete_schedule(
             transaction,
             aggregate_key,
-            ScheduleTask::LaneHorizon(lane.grant.id),
+            ScheduleTask::LaneHorizon(lane.grant().id),
         )?,
     }
     insert_capability_event(transaction, aggregate_key, position, &event)?;
@@ -1023,7 +1000,8 @@ fn apply_free(
             "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1 FOR UPDATE",
             &[&aggregate_key],
         )?
-        .map(|r| r.get::<_, Json<Lane>>(0).0);
+        .map(|r| r.try_get::<_, Json<Lane>>(0).map(|j| j.0))
+        .transpose()?;
     let plan = cs_mail_protocol::admission::plan_free_admission(
         &aggregate.state,
         request,
@@ -1055,8 +1033,8 @@ fn apply_free(
         upsert_lane(transaction, aggregate_key, &lane, now)?;
         persist_schedules(transaction, aggregate_key, &[lane.schedule_change()])?;
         (
-            BondFreeAuthority::ExpressLane(lane.grant.id),
-            CapabilityEvent::LaneMessageAdmitted(lane.grant.id, request.message_id),
+            BondFreeAuthority::ExpressLane(lane.grant().id),
+            CapabilityEvent::LaneMessageAdmitted(lane.grant().id, request.message_id),
         )
     } else {
         (
@@ -1092,15 +1070,12 @@ fn admission_policy(
     key: &str,
 ) -> Result<cs_mail_protocol::admission::AdmissionPolicy, StorageError> {
     Ok(tx
-        .query_opt(
+        .query_one(
             "SELECT policy FROM cs_admission_policies WHERE aggregate_key=$1",
             &[&key],
         )?
-        .map(|r| {
-            r.get::<_, Json<cs_mail_protocol::admission::AdmissionPolicy>>(0)
-                .0
-        })
-        .unwrap_or_default())
+        .get::<_, Json<cs_mail_protocol::admission::AdmissionPolicy>>(0)
+        .0)
 }
 fn validate_delivery(
     tx: &mut Transaction<'_>,
@@ -1312,7 +1287,7 @@ impl PostgresEngine {
 /// A fingerprint includes the authentication evidence, so replay cannot turn an unsigned
 /// copy of a command into a read capability after its signer has been revoked.
 #[derive(Clone, Copy)]
-struct ReplayIdentity {
+pub(super) struct ReplayIdentity {
     id: IdempotencyKey,
     fingerprint: [u8; 32],
 }
@@ -1327,7 +1302,7 @@ impl ReplayIdentity {
             fingerprint: h.finalize().into(),
         }
     }
-    fn trusted(id: IdempotencyKey, bytes: &[u8]) -> Self {
+    pub(super) fn trusted(id: IdempotencyKey, bytes: &[u8]) -> Self {
         let mut h = Sha256::new();
         h.update(b"cs-mail/trusted-replay/v1");
         h.update(bytes);
@@ -1337,7 +1312,7 @@ impl ReplayIdentity {
         }
     }
 }
-fn validate_ingress_scope(
+pub(super) fn validate_ingress_scope(
     tx: &mut Transaction<'_>,
     key: &str,
     deployment: [u8; 32],
@@ -1365,12 +1340,14 @@ impl PostgresEngine {
         &self,
         deployment: [u8; 32],
         policy: &PolicySnapshot,
+        initial_admission: &cs_mail_protocol::admission::AdmissionPolicy,
     ) -> Result<(), StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
         lock_receipt_order(&mut tx)?;
         tx.execute("INSERT INTO cs_ingress_scopes(aggregate_key,deployment,provider,protocol,financial_scope) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",&[&self.aggregate_key,&deployment.as_slice(),&policy.recipient_provider.0.to_string(),&i32::from(policy.protocol_version.0),&Json(policy.financial.scope)])?;
         validate_ingress_scope(&mut tx, &self.aggregate_key, deployment, policy)?;
+        tx.execute("INSERT INTO cs_admission_policies(aggregate_key,policy) VALUES($1,$2) ON CONFLICT DO NOTHING", &[&self.aggregate_key, &Json(initial_admission)])?;
         tx.commit()?;
         Ok(())
     }
@@ -1419,12 +1396,16 @@ impl PostgresEngine {
         {
             return Err(StorageError::ContentScopeMismatch);
         }
+        admission_policy(&mut tx, &self.aggregate_key)?
+            .evaluate(&record.binding.declarations)
+            .map_err(StorageError::AdmissionRefused)?;
         persist_content(
             &mut tx,
             &self.aggregate_key,
             record,
             policy.retention_policy_version,
         )?;
+        super::members::record_certificate(&mut tx, &digest.0, certificate)?;
         tx.commit()?;
         Ok(())
     }
@@ -1444,4 +1425,127 @@ fn classify_refusal(error: StorageError) -> Result<Refusal, StorageError> {
         StorageError::Security(SecurityError::InvalidSignature) => Refusal::InvalidQuote,
         error => return Err(error),
     })
+}
+
+fn restore_grant_proof(
+    row: &postgres::Row,
+    operation: &Operation,
+    policy: &PolicySnapshot,
+    now: CanonicalTime,
+) -> Result<Option<cs_mail_capabilities::VerifiedLaneGrant>, StorageError> {
+    // Restore the original signature against receipt-time authority, before any
+    // transition. A malformed stored grant is a processing fault, never a refusal.
+    Ok(if let Operation::Grant(signed) = operation {
+        let deployment: Vec<u8> = row.try_get("deployment")?;
+        let deployment = deployment
+            .try_into()
+            .map_err(|_| StorageError::NumericRange)?;
+        check_scope(
+            signed.grant.deployment_domain,
+            signed.grant.intended_provider,
+            signed.grant.protocol_version,
+            deployment,
+            policy,
+        )?;
+        let authority = row
+            .try_get::<_, Json<cs_mail_security::AuthoritySnapshot>>("authority")?
+            .0;
+        Some(cs_mail_capabilities::VerifiedLaneGrant::verify(
+            signed,
+            &authority.active_verifying_key(
+                signed.grant.recipient_operational_key,
+                ActorRef::Recipient(signed.grant.recipient),
+                now,
+            )?,
+        )?)
+    } else {
+        None
+    })
+}
+
+fn process_received_row(
+    tx: &mut Transaction<'_>,
+    row: &postgres::Row,
+    position: i64,
+) -> Result<(), StorageError> {
+    let received_position = JournalPosition(to_u64(position)?);
+    let content_available: bool = row.get("content_available");
+    let key: String = row.get("aggregate_key");
+    let now = CanonicalTime(to_u64(row.get("received_at"))?);
+    let operation = row.try_get::<_, Json<Operation>>("operation")?.0;
+    let policy = row.try_get::<_, Json<PolicySnapshot>>("policy")?.0;
+    let verified_grant = restore_grant_proof(row, &operation, &policy, now)?;
+    tx.batch_execute("SAVEPOINT apply_command")?;
+    let result = match &operation {
+        Operation::Protocol(c) => apply_protocol(
+            tx,
+            &key,
+            c,
+            now,
+            policy.clone(),
+            received_position,
+            content_available,
+        )
+        .map(Box::new)
+        .map(ReceivedOutcome::Protocol),
+        Operation::Message(a) => apply_free(tx, &key, a, now, received_position, content_available)
+            .map(ReceivedOutcome::Message),
+        Operation::Grant(_) => apply_grant(
+            tx,
+            &key,
+            verified_grant.ok_or(StorageError::VersionConflict)?,
+            now,
+            received_position,
+            policy.clone(),
+        )
+        .map(Box::new)
+        .map(ReceivedOutcome::Lane),
+        Operation::Control(c) => apply_control(tx, &key, c, now, received_position)
+            .map(Box::new)
+            .map(ReceivedOutcome::Lane),
+    };
+    let outcome = match result {
+        Ok(o) => o,
+        Err(error) => {
+            tx.batch_execute("ROLLBACK TO SAVEPOINT apply_command")?;
+            ReceivedOutcome::Refused(classify_refusal(error)?)
+        }
+    };
+    let aggregate = load_locked_aggregate(tx, &key)?;
+    let digest: Vec<u8> = row.get("digest");
+    let command_digest = CommandDigest(digest.try_into().map_err(|_| StorageError::NumericRange)?);
+    let outcome_digest = OutcomeDigest(Sha256::digest(serde_json::to_vec(&outcome)?).into());
+    let receipt = ReceiptPayload {
+        deployment_domain: row
+            .get::<_, Vec<u8>>("deployment")
+            .try_into()
+            .map_err(|_| StorageError::NumericRange)?,
+        receipt_id: cs_mail_primitives::ReceiptRef(u128::from(to_u64(position)?)),
+        kind: receipt_kind(&operation, &outcome),
+        relationship: aggregate.state.relationship.key.reference,
+        command_digest,
+        journal_position: JournalPosition(to_u64(position)?),
+        received_at: now,
+        outcome_digest,
+        provider: policy.recipient_provider,
+        protocol_version: policy.protocol_version,
+    };
+    tx.execute(
+            "UPDATE cs_received_commands SET outcome=$2,receipt=$3,processing_failure=NULL WHERE position=$1",
+            &[&position, &Json(outcome), &Json(receipt)],
+        )?;
+    work::enqueue(
+        tx,
+        &key,
+        work::WorkSource::Receipt {
+            position: received_position,
+            ordinal: 0,
+        },
+        &WorkPayload::Artifacts {
+            position: received_position,
+        },
+        now,
+    )?;
+    retention::register_records(tx, &key)?;
+    Ok(())
 }

@@ -30,6 +30,7 @@ pub use work::{
 mod accounts;
 mod consent;
 mod correspondence;
+pub mod external;
 mod key_claims;
 pub use accounts::{PostgresAccountRepository, ProductAccountSnapshot, ProductIdentitySnapshot};
 mod billing;
@@ -38,9 +39,14 @@ mod finance;
 mod ingress;
 mod operations;
 pub use operations::Readiness;
+mod guests;
+mod notices;
+pub use guests::GuestRelationship;
+mod members;
+pub use members::StoredRelationship;
 mod pricing;
 use domain::{load_domain_records, persist_domain_records, persist_message};
-pub use ingress::{ReceivedCommand, ReceivedOutcome, Refusal};
+pub use ingress::{ProcessingFailure, ReceivedCommand, ReceivedOutcome, Refusal};
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -82,6 +88,15 @@ const MIGRATION_18: &str = include_str!("../migrations/0018_request_classes.sql"
 const MIGRATION_19: &str = include_str!("../migrations/0019_request_pricing.sql");
 const MIGRATION_20: &str = include_str!("../migrations/0020_shared_bank_accounts.sql");
 const MIGRATION_21: &str = include_str!("../migrations/0021_deployment.sql");
+const MIGRATION_22: &str = include_str!("../migrations/0022_member_loop.sql");
+const MIGRATION_23: &str = include_str!("../migrations/0023_guest_senders.sql");
+const MIGRATION_26: &str = include_str!("../migrations/0026_provider_events.sql");
+const MIGRATION_29: &str = include_str!("../migrations/0029_inbound_lane_authority.sql");
+const MIGRATION_30: &str = include_str!("../migrations/0030_transactional_email.sql");
+const MIGRATION_28: &str = include_str!("../migrations/0028_guest_verification.sql");
+const MIGRATION_27: &str = include_str!("../migrations/0027_request_hardening.sql");
+const MIGRATION_25: &str = include_str!("../migrations/0025_incoming_evidence.sql");
+const MIGRATION_24: &str = include_str!("../migrations/0024_external_correspondence.sql");
 const MIGRATION_17: &str = include_str!("../migrations/0017_content_consent.sql");
 const MIGRATION_16: &str = include_str!("../migrations/0016_correspondence.sql");
 const MIGRATION_14: &str = include_str!("../migrations/0014_utility_billing.sql");
@@ -95,6 +110,7 @@ const MIGRATION_7: &str = include_str!("../migrations/0007_relationship_requests
 
 #[derive(Debug)]
 pub enum StorageError {
+    SchemaNotReady,
     Consent(cs_mail_consent::ConsentError),
     Correspondence(cs_mail_correspondence::CorrespondenceError),
     Identity(identity_contract::Error),
@@ -122,11 +138,16 @@ pub enum StorageError {
     InvalidScheduleClaim,
     UnsupportedStoredProtocolFormat(i16),
     UnsupportedStoredFinancialFormat(i16),
+    Guest(cs_mail_guests::GuestError),
+    /// The protocol identity already belongs to another sender subject.
+    SenderSubjectConflict,
 }
 
 impl fmt::Display for StorageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SchemaNotReady => formatter
+                .write_str("schema is not ready; run migrations through the administration host"),
             Self::Correspondence(error) => error.fmt(formatter),
             Self::Consent(error) => error.fmt(formatter),
             Self::Identity(error) => write!(formatter, "identity error: {error}"),
@@ -177,6 +198,10 @@ impl fmt::Display for StorageError {
                 formatter,
                 "stored protocol format version {version} requires an explicit migration"
             ),
+            Self::Guest(error) => write!(formatter, "guest error: {error}"),
+            Self::SenderSubjectConflict => {
+                formatter.write_str("the identity belongs to another sender subject")
+            }
         }
     }
 }
@@ -192,6 +217,21 @@ impl std::error::Error for StorageError {
             Self::Security(e) => Some(e),
             Self::Billing(e) => Some(e),
             _ => None,
+        }
+    }
+}
+impl From<cs_mail_guests::GuestError> for StorageError {
+    fn from(value: cs_mail_guests::GuestError) -> Self {
+        Self::Guest(value)
+    }
+}
+impl From<cs_mail_application::guests::GuestAccessError> for StorageError {
+    fn from(value: cs_mail_application::guests::GuestAccessError) -> Self {
+        match value {
+            cs_mail_application::guests::GuestAccessError::IdentityTaken => {
+                Self::SenderSubjectConflict
+            }
+            cs_mail_application::guests::GuestAccessError::Guest(error) => Self::Guest(error),
         }
     }
 }
@@ -240,6 +280,14 @@ impl From<serde_json::Error> for StorageError {
     }
 }
 
+impl From<cs_mail_application::members::EndpointKeyError> for StorageError {
+    fn from(error: cs_mail_application::members::EndpointKeyError) -> Self {
+        match error {
+            cs_mail_application::members::EndpointKeyError::Security(e) => Self::Security(e),
+            cs_mail_application::members::EndpointKeyError::Protocol(e) => Self::Protocol(e),
+        }
+    }
+}
 impl From<SecurityError> for StorageError {
     fn from(value: SecurityError) -> Self {
         Self::Security(value)
@@ -331,6 +379,34 @@ impl PostgresDeployment {
     /// Returns an error for connection or migration failures.
     pub fn connect(database_url: &str) -> Result<Self, StorageError> {
         Self::from_client(Client::connect(database_url, NoTls)?)
+    }
+
+    /// Opens an already migrated deployment without DDL or initialization authority.
+    /// # Errors
+    /// Database failure or a schema incompatible with this binary.
+    pub fn connect_existing(database_url: &str) -> Result<Self, StorageError> {
+        let deployment = Self {
+            client: Arc::new(Mutex::new(Client::connect(database_url, NoTls)?)),
+        };
+        let applied = deployment
+            .client
+            .lock()
+            .map_err(|_| StorageError::LockPoisoned)?
+            .query(
+                "SELECT version FROM cs_schema_migrations ORDER BY version",
+                &[],
+            )?
+            .into_iter()
+            .map(|row| row.get::<_, i64>(0))
+            .collect::<Vec<_>>();
+        let expected = MIGRATIONS
+            .iter()
+            .map(|(version, _)| *version)
+            .collect::<Vec<_>>();
+        if applied != expected {
+            return Err(StorageError::SchemaNotReady);
+        }
+        Ok(deployment)
     }
 
     /// Uses a caller-configured client, including a TLS client created outside this
@@ -436,7 +512,6 @@ impl PostgresEngine {
         {
             return Ok(());
         }
-        ingress::require_drained(&mut tx)?;
         tx.execute("INSERT INTO cs_key_registries(aggregate_key,registry_version,registry,updated_at) VALUES($1,$2,$3,$4)", &[&self.aggregate_key,&to_i64(registry.version().0)?,&Json(registry),&to_i64(now.0)?])?;
         tx.commit()?;
         Ok(())
@@ -472,7 +547,7 @@ impl PostgresEngine {
     ) -> Result<(), StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::lock_receipt_order(&mut tx)?;
         key_claims::provider(&mut tx, reference, actor, verifying_key)?;
         let row = tx.query_one(
             "SELECT registry FROM cs_key_registries WHERE aggregate_key=$1 FOR UPDATE",
@@ -511,7 +586,9 @@ impl PostgresEngine {
     {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut transaction = client.transaction()?;
-        ingress::require_drained(&mut transaction)?;
+        // Pending receipts already own their frozen authority. Revocation must not
+        // wait for a command whose recovery might require this key operation.
+        ingress::lock_receipt_order(&mut transaction)?;
         let row = transaction
             .query_opt(
                 "SELECT registry FROM cs_key_registries \
@@ -558,8 +635,8 @@ impl PostgresEngine {
             transaction.commit()?;
             return Ok(false);
         };
-        let mut lane = row.get::<_, Json<Lane>>("lane").0;
-        if lane.grant.id != lane_id || lane.state == LaneState::Revoked {
+        let mut lane = row.try_get::<_, Json<Lane>>("lane")?.0;
+        if lane.grant().id != lane_id || lane.state() == LaneState::Revoked {
             delete_schedule(
                 &mut transaction,
                 &self.aggregate_key,
@@ -633,7 +710,8 @@ impl PostgresEngine {
                 "SELECT lane FROM cs_capability_lanes WHERE aggregate_key = $1",
                 &[&self.aggregate_key],
             )?
-            .map(|row| row.get::<_, Json<Lane>>("lane").0))
+            .map(|row| row.try_get::<_, Json<Lane>>("lane").map(|j| j.0))
+            .transpose()?)
     }
 
     /// Stores ciphertext supplied by the trusted host or SMTP gateway. This is not an
@@ -719,7 +797,8 @@ impl PostgresEngine {
                 "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1",
                 &[&self.aggregate_key],
             )?
-            .map(|r| r.get::<_, Json<Lane>>(0).0);
+            .map(|r| r.try_get::<_, Json<Lane>>(0).map(|j| j.0))
+            .transpose()?;
         transaction.commit()?;
         let mut snapshot = SettlementSnapshot::complete(
             aggregate.revision,
@@ -915,6 +994,39 @@ struct Aggregate {
     state: ProtocolState,
 }
 
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1_i64, MIGRATION_1),
+    (2_i64, MIGRATION_2),
+    (3_i64, MIGRATION_3),
+    (4_i64, MIGRATION_4),
+    (5_i64, MIGRATION_5),
+    (6_i64, MIGRATION_6),
+    (7_i64, MIGRATION_7),
+    (8_i64, MIGRATION_8),
+    (9_i64, MIGRATION_9),
+    (10_i64, MIGRATION_10),
+    (11_i64, MIGRATION_11),
+    (12_i64, MIGRATION_12),
+    (13_i64, MIGRATION_13),
+    (14_i64, MIGRATION_14),
+    (15_i64, MIGRATION_15),
+    (16_i64, MIGRATION_16),
+    (17_i64, MIGRATION_17),
+    (18_i64, MIGRATION_18),
+    (19_i64, MIGRATION_19),
+    (20_i64, MIGRATION_20),
+    (21_i64, MIGRATION_21),
+    (22_i64, MIGRATION_22),
+    (23_i64, MIGRATION_23),
+    (24_i64, MIGRATION_24),
+    (25_i64, MIGRATION_25),
+    (26_i64, MIGRATION_26),
+    (27_i64, MIGRATION_27),
+    (28_i64, MIGRATION_28),
+    (29_i64, MIGRATION_29),
+    (30_i64, MIGRATION_30),
+];
+
 fn migrate(client: &mut Client) -> Result<(), StorageError> {
     let mut transaction = client.transaction()?;
     transaction.query_one(
@@ -927,29 +1039,7 @@ fn migrate(client: &mut Client) -> Result<(), StorageError> {
              applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()\
          )",
     )?;
-    for (version, migration) in [
-        (1_i64, MIGRATION_1),
-        (2_i64, MIGRATION_2),
-        (3_i64, MIGRATION_3),
-        (4_i64, MIGRATION_4),
-        (5_i64, MIGRATION_5),
-        (6_i64, MIGRATION_6),
-        (7_i64, MIGRATION_7),
-        (8_i64, MIGRATION_8),
-        (9_i64, MIGRATION_9),
-        (10_i64, MIGRATION_10),
-        (11_i64, MIGRATION_11),
-        (12_i64, MIGRATION_12),
-        (13_i64, MIGRATION_13),
-        (14_i64, MIGRATION_14),
-        (15_i64, MIGRATION_15),
-        (16_i64, MIGRATION_16),
-        (17_i64, MIGRATION_17),
-        (18_i64, MIGRATION_18),
-        (19_i64, MIGRATION_19),
-        (20_i64, MIGRATION_20),
-        (21_i64, MIGRATION_21),
-    ] {
+    for &(version, migration) in MIGRATIONS {
         if transaction
             .query_opt(
                 "SELECT version FROM cs_schema_migrations WHERE version = $1",
@@ -1083,7 +1173,7 @@ fn upsert_lane(
          lane_id = EXCLUDED.lane_id, lane = EXCLUDED.lane, updated_at = EXCLUDED.updated_at",
         &[
             &aggregate_key,
-            &lane.grant.id.0.to_string(),
+            &lane.grant().id.0.to_string(),
             &Json(lane),
             &to_i64(now.0)?,
         ],
@@ -1149,8 +1239,8 @@ fn revoke_lane_locked(
     else {
         return Ok(());
     };
-    let mut lane = row.get::<_, Json<Lane>>("lane").0;
-    if lane.state == LaneState::Revoked {
+    let mut lane = row.try_get::<_, Json<Lane>>("lane")?.0;
+    if lane.state() == LaneState::Revoked {
         return Ok(());
     }
     lane.revoke()?;
@@ -1158,13 +1248,13 @@ fn revoke_lane_locked(
     delete_schedule(
         transaction,
         aggregate_key,
-        ScheduleTask::LaneHorizon(lane.grant.id),
+        ScheduleTask::LaneHorizon(lane.grant().id),
     )?;
     insert_capability_event(
         transaction,
         aggregate_key,
         position,
-        &CapabilityEvent::LaneRevoked(lane.grant.id),
+        &CapabilityEvent::LaneRevoked(lane.grant().id),
     )?;
     Ok(())
 }
@@ -1175,10 +1265,22 @@ fn bootstrap(
     state: &ProtocolState,
     unit: SettlementUnit,
 ) -> Result<(), StorageError> {
+    let mut transaction = client.transaction()?;
+    bootstrap_in(&mut transaction, aggregate_key, state, unit)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Creates the aggregate and its request history, if absent, inside `transaction`.
+fn bootstrap_in(
+    transaction: &mut Transaction<'_>,
+    aggregate_key: &str,
+    state: &ProtocolState,
+    unit: SettlementUnit,
+) -> Result<(), StorageError> {
     if !state.requests.is_empty() || !state.quotes.is_empty() || !state.used_quotes.is_empty() {
         return Err(StorageError::Protocol(ProtocolError::InvalidState));
     }
-    let mut transaction = client.transaction()?;
     transaction.execute(
         "INSERT INTO cs_relationship_aggregates \
          (aggregate_key, revision, ledger_revision, settlement_unit, relationship_state, updated_at, \
@@ -1221,7 +1323,6 @@ fn bootstrap(
         ));
     }
     transaction.execute("INSERT INTO cs_request_relationship_keys (relationship_ref, aggregate_key) VALUES ($1,$2) ON CONFLICT (aggregate_key) DO NOTHING", &[&scoped_key(state.relationship.key.reference.derivation_version(),state.relationship.key.reference.as_bytes()),&aggregate_key])?;
-    transaction.commit()?;
     Ok(())
 }
 

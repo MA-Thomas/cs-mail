@@ -4,10 +4,14 @@
 //! makes no domain decisions and obtains trusted time only inside application decisions.
 
 mod blocking;
+mod callbacks;
 mod config;
 mod diagnostics;
 mod enrollment;
+mod external;
+mod guests;
 mod http;
+mod members;
 mod review;
 #[cfg(feature = "simulation")]
 mod simulation;
@@ -203,8 +207,89 @@ fn identity_service(
     Ok(Some(service))
 }
 
+/// The member gateway on its own database connection, when configured and bootstrapped.
+fn member_gateway(
+    config: &config::Config,
+    record: Option<&DeploymentBootstrap>,
+) -> Result<Option<members::Gateway>, String> {
+    let Some(members) = &config.members else {
+        tracing::warn!("no member configuration; the member API is unavailable");
+        return Ok(None);
+    };
+    let Some(record) = record else {
+        tracing::warn!("deployment not bootstrapped; the member API is unavailable until restart");
+        return Ok(None);
+    };
+    let secret = |path| config::secret(path).map_err(|e| e.to_string());
+    let gateway = cs_mail_service::members::MemberGateway::new(
+        connect(config)?,
+        record.clone(),
+        cs_mail_service::members::GatewaySecrets {
+            provider_seed: secret(&members.provider_secret_file)?,
+            relationship_secret: secret(&members.relationship_secret_file)?,
+            principal_secret: secret(&members.principal_secret_file)?,
+        },
+        cs_mail_service::UnixMillisecondClock,
+    )
+    .map_err(|_| "the provider secret is not the bootstrapped provider key")?;
+    Ok(Some(std::sync::Arc::new(gateway)))
+}
+/// The guest request page's service, when configured. Development builds tokenize guest
+/// cards with the simulator; a build without a payment provider has no guest page.
+fn guest_gateway(
+    config: &config::Config,
+    members: Option<&members::Gateway>,
+) -> Result<Option<guests::Guests>, String> {
+    let Some(guests) = &config.guests else {
+        tracing::warn!("no guest configuration; the request page is unavailable");
+        return Ok(None);
+    };
+    let Some(members) = members else {
+        return Err("the guest page needs the member configuration".into());
+    };
+    #[cfg(feature = "simulation")]
+    {
+        let secret = |path| config::secret(path).map_err(|e| e.to_string());
+        let simulation = config
+            .simulation
+            .as_ref()
+            .ok_or("the guest page needs a payment provider: the simulation in development")?;
+        let outbox = guests::outbox(guests)?;
+        Ok(Some(std::sync::Arc::new(
+            cs_mail_service::guests::GuestGateway::new(
+                members.clone(),
+                secret(&guests.content_secret_file)?,
+                outbox,
+                std::sync::Arc::new(simulation::Cards(cs_mail_simulation::SimulatedCards::new(
+                    secret(&simulation.processor_secret_file)?,
+                ))),
+                cs_mail_smtp_gateway::outbound::RequestSite::new(&guests.public_url)
+                    .map_err(|_| "invalid public request-page origin")?,
+            ),
+        )))
+    }
+    #[cfg(not(feature = "simulation"))]
+    {
+        let _ = (guests, members);
+        Err("this build has no payment provider for guests".into())
+    }
+}
+
+#[cfg(feature = "simulation")]
+fn gateway_record(gateway: &members::Gateway) -> cs_mail_operations::BootstrapRecord {
+    gateway.record().record().clone()
+}
+
 fn serve(path: &std::path::Path) -> Result<(), String> {
     let config = config::Config::load(path).map_err(|e| e.to_string())?;
+    // Reserve both ports before any worker can begin external work.
+    let listener = bind(config.listen)?;
+    let feedback_listener = config
+        .external
+        .as_ref()
+        .and_then(|e| e.feedback.listen())
+        .map(bind)
+        .transpose()?;
     let deployment = connect(&config)?;
     let mut workers = Workers::new();
     let record = deployment
@@ -226,23 +311,77 @@ fn serve(path: &std::path::Path) -> Result<(), String> {
     if bank.is_none() {
         tracing::warn!("no bank integration; enrollment is unavailable");
     }
+    let members = member_gateway(&config, record.as_ref())?;
+    #[cfg(feature = "simulation")]
+    if let (Some(gateway), Some(simulation)) = (&members, &config.simulation) {
+        let processor =
+            config::secret(&simulation.processor_secret_file).map_err(|e| e.to_string())?;
+        let trusted = gateway_record(gateway).payment.processor_key;
+        workers.start(
+            "relationships",
+            config.workers,
+            members::worker(
+                gateway.clone(),
+                simulation::connect(&config.database_url, processor, trusted)?,
+            ),
+        );
+    }
+    #[cfg(not(feature = "simulation"))]
+    if members.is_some() {
+        tracing::warn!("no payment provider in this build; relationship workers are not running");
+    }
+    let guests = guest_gateway(&config, members.as_ref())?;
+    if let Some(guests) = &guests {
+        workers.start(
+            "guest-notices",
+            config.workers,
+            guests::notices(guests.clone()),
+        );
+    }
+    let (external, feedback) = if let Some(external_config) = &config.external {
+        let gateway = members
+            .clone()
+            .ok_or("external correspondence needs member configuration")?;
+        let (external, webhook) =
+            external::configure(external_config, gateway, &mut workers, config.workers)?;
+        (Some(external), webhook)
+    } else {
+        (None, None)
+    };
     let state = http::AppState {
+        browser_login: config.browser_login.clone(),
         deployment,
         blocking: blocking::Blocking::new(config.blocking_permits),
         bank,
         identity: identity_service(&config, &mut workers)?,
         maximum_unresolved: config.enrollment.maximum_unresolved,
+        members,
+        guests,
+        external,
         #[cfg(feature = "simulation")]
         simulator,
     };
-    let served = run_http(config.listen, state);
+    let feedback = feedback_listener.zip(feedback);
+    let served = run_http(listener, state, feedback);
     workers.stop();
     served
 }
 
-fn run_http(listen: std::net::SocketAddr, state: http::AppState) -> Result<(), String> {
-    // Synchronous database clients must be dropped outside the async runtime: this clone
-    // keeps the last references alive until the runtime has stopped.
+fn bind(listen: std::net::SocketAddr) -> Result<std::net::TcpListener, String> {
+    let listener =
+        std::net::TcpListener::bind(listen).map_err(|e| format!("cannot listen: {e}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("listener: {e}"))?;
+    Ok(listener)
+}
+
+fn run_http(
+    listener: std::net::TcpListener,
+    state: http::AppState,
+    feedback: Option<(std::net::TcpListener, callbacks::Receiver)>,
+) -> Result<(), String> {
+    // Keep synchronous PostgreSQL clients alive until the async runtime is dropped.
     let outlives_runtime = state.clone();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -251,25 +390,52 @@ fn run_http(listen: std::net::SocketAddr, state: http::AppState) -> Result<(), S
     let lost = Arc::new(AtomicBool::new(false));
     let watched = (state.clone(), lost.clone());
     let served = runtime.block_on(async move {
-        let listener = tokio::net::TcpListener::bind(listen)
-            .await
-            .map_err(|e| format!("cannot listen: {e}"))?;
-        tracing::info!(listen = %listen, "serving");
-        axum::serve(listener, http::router(state))
-            .with_graceful_shutdown(async move {
-                tokio::select! {
-                    signal = tokio::signal::ctrl_c() => if signal.is_err() {
-                        tracing::error!("shutdown signal unavailable");
-                    },
-                    () = connection_lost(watched.0) => {
-                        tracing::error!("database connection lost; exiting so the supervisor restarts the service");
-                        watched.1.store(true, Ordering::SeqCst);
-                    }
-                }
-                tracing::info!("shutting down");
-            })
-            .await
-            .map_err(|e| format!("server: {e}"))
+        let (stop, stopping) = tokio::sync::watch::channel(false);
+        let api_stop = stopping.clone();
+        let callback_stop = stopping.clone();
+        let listener =
+            tokio::net::TcpListener::from_std(listener).map_err(|e| format!("listener: {e}"))?;
+        let api = axum::serve(listener, http::router(state))
+            .with_graceful_shutdown(shutdown_requested(api_stop));
+        let callback = async move {
+            if let Some((listener, receiver)) = feedback {
+                let listener = tokio::net::TcpListener::from_std(listener)?;
+                axum::serve(listener, receiver.router())
+                    .with_graceful_shutdown(shutdown_requested(callback_stop))
+                    .await
+            } else {
+                shutdown_requested(callback_stop).await;
+                Ok(())
+            }
+        };
+        let api = std::future::IntoFuture::into_future(api);
+        tokio::pin!(api, callback);
+        tracing::info!("serving configured listeners");
+        let result = tokio::select! {
+            result = &mut api => {
+                let _ = stop.send(true);
+                let other = callback.await;
+                result.and(other)
+            },
+            result = &mut callback => {
+                let _ = stop.send(true);
+                let other = api.await;
+                result.and(other)
+            },
+            signal = tokio::signal::ctrl_c() => {
+                if signal.is_err() { tracing::error!("shutdown signal unavailable"); }
+                let _ = stop.send(true);
+                let (a, b) = tokio::join!(api, callback);
+                a.and(b)
+            },
+            () = connection_lost(watched.0) => {
+                watched.1.store(true, Ordering::SeqCst);
+                let _ = stop.send(true);
+                let (a, b) = tokio::join!(api, callback);
+                a.and(b)
+            }
+        };
+        result.map_err(|e| format!("server: {e}"))
     });
     drop(runtime);
     drop(outlives_runtime);
@@ -277,6 +443,14 @@ fn run_http(listen: std::net::SocketAddr, state: http::AppState) -> Result<(), S
         return Err("database connection lost".into());
     }
     served
+}
+
+async fn shutdown_requested(mut receiver: tokio::sync::watch::Receiver<bool>) {
+    while !*receiver.borrow_and_update() {
+        if receiver.changed().await.is_err() {
+            break;
+        }
+    }
 }
 
 /// Resolves once the service's database connection has ended. Connections are not

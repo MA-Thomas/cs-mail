@@ -1,4 +1,5 @@
 pub mod enrollment;
+pub mod smtp;
 // Explicit paid-service setup for protocol regression fixtures, separate from domain acceptance tests.
 use cs_mail_billing::*;
 use cs_mail_finance::{BankVerification, PaymentProcessor, SimulatedProcessor};
@@ -30,9 +31,9 @@ fn public(secret: u8) -> [u8; 32] {
         .verifying_key()
         .to_bytes()
 }
-/// The regression fixtures' deployment: provider key 3, operator key 1, payment processor
-/// `[7; 32]`, bank authority `[77; 32]` and the test identity issuer with decision key
-/// `[80; 32]`, for the given scope and settlement unit.
+/// The regression fixtures' deployment: provider key 3, scheduler key 4, operator key 1,
+/// payment processor `[7; 32]`, bank authority `[77; 32]` and the test identity issuer
+/// with decision key `[80; 32]`, for the given scope and settlement unit.
 /// # Errors
 /// Rejects an inconsistent scope.
 pub fn fixture_deployment(
@@ -48,6 +49,10 @@ pub fn fixture_deployment(
             provider_key: cs_mail_operations::ProviderKey {
                 reference: OperationalKeyRef(3),
                 verifying_key: public(3),
+            },
+            scheduler_key: cs_mail_operations::ProviderKey {
+                reference: OperationalKeyRef(4),
+                verifying_key: public(4),
             },
             operators: cs_mail_operations::OperatorKeys::new(
                 [(
@@ -155,10 +160,21 @@ pub fn provision(
             .accounts(move || at)
             .product_account(account)?
             .billing;
-        purchase_service(engine, policy, billing, record.reference, at)?;
+        purchase_service(
+            engine.deployment(),
+            policy.financial.scope,
+            policy.unit,
+            billing,
+            record.reference,
+            at,
+        )?;
     }
     engine.initialize_key_registry(&provider_keys, at)?;
-    engine.configure_ingress(policy.financial.scope.deployment_domain, policy)?;
+    engine.configure_ingress(
+        policy.financial.scope.deployment_domain,
+        policy,
+        &cs_mail_protocol::admission::AdmissionPolicy::default(),
+    )?;
     let pricing =
         cs_mail_application::request_pricing::RequestPricingService::new(engine.deployment());
     if engine.deployment().request_pricing_policy()?.is_none() {
@@ -218,7 +234,7 @@ fn enroll_persona(
     .sign(&[77; 32])
     .unwrap();
     enrollment::enroll(
-        engine,
+        engine.deployment(),
         cs_mail_accounts::EnrollmentInput {
             bank,
             persona,
@@ -230,19 +246,19 @@ fn enroll_persona(
         at,
     )
 }
-fn purchase_service(
-    engine: &PostgresEngine,
-    policy: &cs_mail_protocol::PolicySnapshot,
+/// Purchases the fixtures' 1971 service year for a billing account whose key secret is
+/// its reference repeated, and confirms its collection through the simulator.
+/// # Errors
+/// Billing refusals and persistence failures.
+pub fn purchase_service(
+    deployment: &cs_mail_storage_postgres::PostgresDeployment,
+    scope: cs_mail_finance::FinancialScope,
+    unit: SettlementUnit,
     id: BillingAccountId,
     reference: OperationalKeyRef,
     at: CanonicalTime,
 ) -> Result<(), StorageError> {
-    if !engine
-        .deployment()
-        .billing_account(id)?
-        .contracts()
-        .is_empty()
-    {
+    if !deployment.billing_account(id)?.contracts().is_empty() {
         return Ok(());
     }
     let offer = ServiceOffer::new(
@@ -250,17 +266,17 @@ fn purchase_service(
         ServicePeriod::annual(1971, 1, 1, LeapDayRule::February28)?,
         calendar_date(1970, 10, 1).unwrap(),
         Money::from_minor_units(12000),
-        policy.unit,
+        unit,
     )?;
     operator(
-        engine.deployment(),
+        deployment,
         cs_mail_operations::OperatorCommand::PublishServiceOffer(offer.clone()),
         at,
     )?;
     let signed = SignedBillingCommand::sign(
         id,
         reference,
-        policy.financial.scope,
+        scope,
         0,
         IdempotencyKey(1),
         BillingCommand::PurchaseService {
@@ -268,15 +284,18 @@ fn purchase_service(
         },
         &[u8::try_from(reference.0).unwrap(); 32],
     )?;
-    let op =
-        cs_mail_application::billing::operations::BillingService::new(engine.deployment(), &|| at)
-            .execute_command(&signed)?
-            .remove(0);
-    cs_mail_application::billing::operations::BillingService::new(engine.deployment(), &|| at)
+    let op = cs_mail_application::billing::operations::BillingService::new(deployment, &|| at)
+        .execute_command(&signed)?
+        .remove(0);
+    cs_mail_application::billing::operations::BillingService::new(deployment, &|| at)
         .authorize_dispatch(id, ServiceContractId(op.id.0), op.id)?;
     let mut processor = SimulatedProcessor::new([7; 32]);
     let receipt = processor.submit(&op).unwrap();
-    cs_mail_application::billing::operations::BillingService::new(engine.deployment(), &|| at)
+    cs_mail_application::billing::operations::BillingService::new(deployment, &|| at)
         .confirm_payment(id, ServiceContractId(op.id.0), &receipt)?;
     Ok(())
 }
+
+pub mod external;
+
+pub mod smtp2go;

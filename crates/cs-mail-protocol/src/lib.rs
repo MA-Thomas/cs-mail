@@ -1662,4 +1662,5 @@ mod tests {
 }
 
 pub mod admission;
+pub mod policy;
 pub mod pricing;

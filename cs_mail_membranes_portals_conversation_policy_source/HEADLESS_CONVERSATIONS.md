@@ -20,6 +20,37 @@ Express lanes concern the relationship, usually not one conversation. Admission
 checks the lane scope, current validity and allowance; allowance and delivery
 commit together. Request classes do not grant permission or change reuse policy.
 
+## External correspondence extension
+
+The member-initiated external path follows the [agreed domain rules](../DOMAIN_MODEL.md#member-initiated-external-conversations)
+(updated 2026-10-06). A member-selected mailbox does not become an enrolled native
+participant or a verified guest session. Automatic incoming authentication remains
+required; there is no separate inbox-control challenge for this path. Unlimited
+uncharged replies are confined to the pending conversation. Acceptance, lanes,
+blocking and revocation retain their existing relationship owner. Rejecting an
+invitation closes only that unpaid opportunity.
+
+The external module of the correspondence domain and application exposes a distinct
+route and signed command scope. It retains an encrypted member copy and an encrypted
+relay copy, without inventing a native mailbox for the external recipient. Its
+initial interface accepts newly authored text only; native source references,
+quotations and exports are refused, not stripped of provenance. Existing native
+policy and custody APIs are unchanged.
+
+Conversation creation, content, consent and delivery work commit atomically.
+Disclosure withdrawal and beginning dispatch share receipt-order protection with
+relationship changes. Waiting work is cancelled on withdrawal. Dispatch already
+begun may be too late to cancel; uncertain handoffs are reconciled rather than
+redispatched. Neither an old receipt nor an earlier consent value supplies current
+disclosure authority.
+
+The development transport captures a relay handoff locally. The receiver application
+boundary is exercised with controlled evidence in test support; actual SMTP reception
+and SMTP2GO integration remain subsequent work. External content is not end-to-end
+confidential from the provider or relay.
+
+## Native conversation policy
+
 A conversation owns one current reuse policy: across relationships by default,
 or originating relationship only. Either participant can restrict it. Relaxation
 requires a proposal by one participant and approval by the other at the exact

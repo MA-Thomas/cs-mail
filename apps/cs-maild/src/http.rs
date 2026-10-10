@@ -16,6 +16,8 @@ use serde_json::json;
 
 /// Largest accepted request body.
 const BODY_LIMIT: usize = 64 * 1024;
+/// Largest accepted encrypted content upload.
+const CONTENT_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +26,10 @@ pub struct AppState {
     pub bank: Option<std::sync::Arc<dyn crate::enrollment::BankEvidence>>,
     pub identity: Option<std::sync::Arc<crate::enrollment::IdentityService>>,
     pub maximum_unresolved: u32,
+    pub browser_login: Option<crate::config::BrowserLoginConfig>,
+    pub members: Option<crate::members::Gateway>,
+    pub guests: Option<crate::guests::Guests>,
+    pub external: Option<crate::external::Gateway>,
     #[cfg(feature = "simulation")]
     pub simulator: Option<Simulator>,
 }
@@ -34,11 +40,21 @@ pub type Simulator = std::sync::Arc<std::sync::Mutex<cs_mail_simulation::Postgre
 
 pub struct ApiError {
     status: StatusCode,
-    code: &'static str,
+    code: std::borrow::Cow<'static, str>,
 }
 impl ApiError {
     const fn new(status: StatusCode, code: &'static str) -> Self {
-        Self { status, code }
+        Self {
+            status,
+            code: std::borrow::Cow::Borrowed(code),
+        }
+    }
+    /// A refusal whose stable code names the domain error variant.
+    pub const fn refusal(status: StatusCode, code: String) -> Self {
+        Self {
+            status,
+            code: std::borrow::Cow::Owned(code),
+        }
     }
     pub fn unavailable() -> Self {
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable")
@@ -108,7 +124,60 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/enrollments/{operation}/renew",
             post(crate::enrollment::renew),
-        );
+        )
+        .route("/v1/deployment", get(crate::members::deployment))
+        .route(
+            "/v1/accounts/commands",
+            post(crate::members::account_command),
+        )
+        .route(
+            "/v1/billing/commands",
+            post(crate::members::billing_command),
+        )
+        .route("/v1/request-classes", post(crate::members::request_classes))
+        .route(
+            "/v1/endpoint-keys",
+            post(crate::members::publish_endpoint_key),
+        )
+        .route("/v1/addresses/{persona}/offer", get(crate::members::offer))
+        .route(
+            "/v1/addresses/{persona}/endpoint-key",
+            get(crate::members::endpoint_key),
+        )
+        .route(
+            "/v1/relationships/{sender}/{recipient}/commands",
+            post(crate::members::relationship_command),
+        )
+        .route(
+            "/v1/relationships/{sender}/{recipient}/content",
+            post(crate::members::content).layer(DefaultBodyLimit::max(CONTENT_LIMIT)),
+        )
+        .route("/v1/lanes", post(crate::members::lane))
+        .route("/v1/members/reads", post(crate::members::read))
+        .route("/v1/external/prepare", post(crate::external::prepare))
+        .route(
+            "/v1/external/commands",
+            post(crate::external::command).layer(DefaultBodyLimit::max(CONTENT_LIMIT)),
+        )
+        .route("/r/{persona}", get(crate::guests::page))
+        .route("/r/assets/app.js", get(crate::guests::script))
+        .route("/r/assets/style.css", get(crate::guests::style))
+        .route(
+            "/v1/guest/verifications",
+            post(crate::guests::begin_verification),
+        )
+        .route(
+            "/v1/guest/verifications/{id}/confirm",
+            post(crate::guests::confirm_verification),
+        )
+        .route(
+            "/v1/guest/recipients/{persona}/offer",
+            get(crate::guests::offer),
+        )
+        .route("/v1/guest/requests", post(crate::guests::request))
+        .route("/v1/guest/requests/submit", post(crate::guests::submit))
+        .route("/v1/guest/requests/cancel", post(crate::guests::cancel))
+        .route("/v1/guest/status", post(crate::guests::status));
     #[cfg(feature = "simulation")]
     let router = router.route("/v1/operator/simulation", post(crate::simulation::command));
     router
@@ -125,12 +194,15 @@ async fn health() -> Json<serde_json::Value> {
 async fn ready(State(state): State<AppState>) -> Response {
     let deployment = state.deployment.clone();
     match state.blocking.run(move || deployment.readiness()).await {
-        Ok(Ok(readiness)) if readiness.bootstrapped => {
+        Ok(Ok(readiness)) if readiness.bootstrapped && readiness.command_failure.is_none() => {
             Json(json!({ "database": "ok", "bootstrapped": true })).into_response()
         }
-        Ok(Ok(_)) => (
+        Ok(Ok(readiness)) => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "database": "ok", "bootstrapped": false })),
+            Json(
+                json!({ "database": "ok", "bootstrapped": readiness.bootstrapped,
+                "command_failure": readiness.command_failure }),
+            ),
         )
             .into_response(),
         Ok(Err(error)) => {

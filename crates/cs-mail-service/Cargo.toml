@@ -5,17 +5,39 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+hmac.workspace = true
+tokio.workspace = true
+cs-mail-correspondence = { path = "../cs-mail-correspondence" }
 cs-mail-application = { path = "../cs-mail-application" }
 cs-mail-billing = { path = "../cs-mail-billing" }
 cs-mail-finance = { path = "../cs-mail-finance" }
+cs-mail-guests = { path = "../cs-mail-guests" }
 cs-mail-adapters = { path = "../cs-mail-adapters" }
 cs-mail-capabilities = { path = "../cs-mail-capabilities" }
 cs-mail-content = { path = "../cs-mail-content" }
+identity-contract.workspace = true
+cs-mail-operations = { path = "../cs-mail-operations" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
+cs-mail-privacy = { path = "../cs-mail-privacy" }
 cs-mail-protocol = { path = "../cs-mail-protocol" }
 cs-mail-security = { path = "../cs-mail-security" }
+cs-mail-smtp-gateway = { path = "../cs-mail-smtp-gateway" }
 cs-mail-storage-postgres = { path = "../cs-mail-storage-postgres" }
+getrandom = "0.2"
+sha2.workspace = true
+cs-mail-worker = { path = "../cs-mail-worker" }
+serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+mail-parser = "=0.11.8"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+cs-mail-accounts = { path = "../cs-mail-accounts" }
+cs-mail-ledger = { path = "../cs-mail-ledger" }
+cs-mail-test-support = { path = "../cs-mail-test-support" }
+ed25519-dalek.workspace = true
+postgres.workspace = true
+cs-mail-simulation = { path = "../cs-mail-simulation" }
 
 [lints]
 workspace = true

@@ -1,7 +1,7 @@
 //! Deployment bootstrap and the operator command log.
 use super::{
-    Json, PostgresDeployment, StorageError, Transaction, accounts, billing, ingress, pricing,
-    to_i64,
+    Json, PostgresDeployment, StorageError, Transaction, accounts, billing, ingress, members,
+    pricing, to_i64,
 };
 use cs_mail_application::operations::{
     BootstrapDecision, BootstrapStore, OperatorContext, OperatorDecision, OperatorEffect,
@@ -32,6 +32,8 @@ fn stored_deployment(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Readiness {
     pub bootstrapped: bool,
+    /// A blocked ordered command prevents admitting subsequent work normally.
+    pub command_failure: Option<ingress::ProcessingFailure>,
 }
 
 impl PostgresDeployment {
@@ -45,12 +47,19 @@ impl PostgresDeployment {
             bootstrapped: client
                 .query_opt("SELECT 1 FROM cs_deployment WHERE singleton", &[])?
                 .is_some(),
+            command_failure: client.query_opt("SELECT processing_failure FROM cs_received_commands WHERE outcome IS NULL ORDER BY position LIMIT 1", &[])?
+                .map(|row| row.try_get::<_, Option<Json<ingress::ProcessingFailure>>>(0))
+                .transpose()?.flatten().map(|value| value.0),
         })
     }
-    /// Whether this handle's database connection has ended. A lost connection is not
-    /// reopened: the process restarts under its supervisor with fresh connections.
+    /// Whether this handle can no longer complete a database round trip. The sync
+    /// client drives its connection only during I/O; `is_closed` alone can miss a
+    /// server disconnect while idle. A failed connection is not reopened: the process
+    /// restarts under its supervisor with fresh connections.
     pub fn connection_lost(&self) -> bool {
-        self.client.lock().map_or(true, |client| client.is_closed())
+        self.client.lock().map_or(true, |mut client| {
+            client.is_closed() || client.simple_query("SELECT 1").is_err()
+        })
     }
     /// The bootstrapped deployment, if any.
     /// # Errors
@@ -138,6 +147,10 @@ impl OperatorStore for PostgresDeployment {
             OperatorCommand::PublishRequestPricing(policy) => {
                 OperatorTarget::RequestPricing(pricing::policy_context(&mut tx, policy)?)
             }
+            OperatorCommand::PublishProtocolPolicy(policy) => OperatorTarget::ProtocolPolicy {
+                current: members::current_protocol_policy(&mut tx, true)?,
+                same_version: members::protocol_policy_version(&mut tx, policy.version())?,
+            },
         };
         let (record, effect, outcome) = decide(OperatorContext {
             authority,
@@ -151,6 +164,9 @@ impl OperatorStore for PostgresDeployment {
             }
             Some(OperatorEffect::PublishRequestPricing(policy, at)) => {
                 pricing::publish_policy(&mut tx, &policy, at)?;
+            }
+            Some(OperatorEffect::PublishProtocolPolicy(policy, at)) => {
+                members::publish_protocol_policy(&mut tx, &policy, at)?;
             }
             None => {}
         }

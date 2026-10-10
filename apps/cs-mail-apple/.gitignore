@@ -1,0 +1,5 @@
+.build/
+Generated/CsMailRust/*.swift
+Generated/CsMailFFI/*.h
+Generated/CsMailFFI/module.modulemap
+.DS_Store

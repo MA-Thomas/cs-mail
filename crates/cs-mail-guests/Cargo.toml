@@ -1,0 +1,18 @@
+[package]
+name = "cs-mail-guests"
+description = "Guest senders: verified mailboxes, sender subjects and request-history linking"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs-mail-adapters = { path = "../cs-mail-adapters" }
+cs-mail-finance = { path = "../cs-mail-finance" }
+cs-mail-primitives = { path = "../cs-mail-primitives" }
+cs-mail-protocol = { path = "../cs-mail-protocol" }
+serde.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+
+[lints]
+workspace = true

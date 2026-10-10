@@ -70,6 +70,21 @@ pub fn connect(
     Ok(simulator)
 }
 
+/// The simulated processor's tokenization of guest cards.
+pub struct Cards(pub cs_mail_simulation::SimulatedCards);
+impl cs_mail_service::guests::InstrumentTokens for Cards {
+    fn tokenize(
+        &self,
+        instrument: &str,
+        holder: &cs_mail_guests::GuestMailbox,
+    ) -> Result<([u8; 32], cs_mail_guests::InstrumentFingerprint), String> {
+        self.0
+            .tokenize(instrument, &holder.address())
+            .map(|(token, fingerprint)| (token, cs_mail_guests::InstrumentFingerprint(fingerprint)))
+            .map_err(|_| "declined".to_owned())
+    }
+}
+
 /// The simulated bank as the enrollment bank-evidence source. The request names a
 /// simulated account and its owner:
 /// `{"account": "...", "owner": {"name": "...", "address": "...", "phone": "..."}}`.

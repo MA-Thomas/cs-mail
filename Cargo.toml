@@ -1,8 +1,10 @@
 [workspace]
 members = [
+    "crates/cs-mail-client-ffi",
     "crates/cs-mail-simulation",
     "crates/cs-mail-operations",
     "crates/cs-mail-consent",
+    "crates/cs-mail-guests",
     "crates/cs-mail-key-custody",
     "crates/cs-mail-correspondence",
     "crates/cs-mail-test-support",
@@ -27,6 +29,7 @@ members = [
     "crates/cs-mail-smtp-gateway",
     "crates/cs-mail-conformance",
     "apps/cs-maild",
+    "apps/cs-mail-mx",
     "apps/cs-mail-admin",
     "apps/cs-mail-cli",
 ]

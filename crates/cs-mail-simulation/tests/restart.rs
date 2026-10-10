@@ -68,7 +68,7 @@ fn open(url: &str) -> PostgresEngine {
 fn purchase(engine: &PostgresEngine) {
     cs_mail_test_support::bootstrap(engine.deployment(), scope(), UNIT).unwrap();
     cs_mail_test_support::enrollment::enroll(
-        engine,
+        engine.deployment(),
         cs_mail_accounts::EnrollmentInput {
             bank: BankVerification {
                 scope: scope(),

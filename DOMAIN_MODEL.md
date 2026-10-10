@@ -2,7 +2,7 @@
 
 > **Design principles.** Before changing code or this design, read the [Rust-domain design principles](docs/rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
 
-Confirmed product rules, updated September 25, 2026. Start here when changing
+Confirmed product rules, updated September 29, 2026. Start here when changing
 the code or documentation. These rules record the user's confirmed clarifications.
 The [deployment profile](cs_mail_deployment_profile.tex) gives the detailed
 financial-program requirements; the [protocol specification](cs_mail_protocol_spec.tex)
@@ -53,9 +53,10 @@ not establish biological identity or satisfy Phoros's separate enrollment policy
   messages, relationship records, and telemetry.
 - Organizational legacy senders and possible future protocol participants do not
   establish organizational C-SQD accounts as part of this product.
-- Guests (people without an account who approach a member through the request
-  page or by email) are senders, not accounts. They do not enroll in the identity
-  service or receive a subject. See [Guest senders](#guest-senders).
+- Guests (people using external mailboxes without a cs-mail account) may approach
+  a member or be contacted first by a member. They are not accounts and do not
+  enroll in the identity service or receive a subject. See
+  [Guest senders](#guest-senders).
 - Account actions require explicit account authority. Permission to send messages
   is not permission to change financial policy. Separate signing contexts do not
   require a second user-managed billing credential.
@@ -153,6 +154,11 @@ it may be scoped, for example by purpose, time, or volume, but is usually not
 scoped to a particular conversation. A request class does not itself grant
 permission. Lane expiry or revocation does not reopen the settled request.
 
+The request windows (submission and decision), the quote lifetime, cooldowns after
+expiry and rejection, the retry backoff, and the member program's corporate share and
+maturity are one versioned protocol policy that CSQD's operators publish. Issued request
+terms keep the windows they were issued under.
+
 Each request has one conditional charge. Expiry refunds `S`; rejection retains `C` and moves `S` into
 pending forfeiture for the pool. Cancellation before submission returns the full
 charge. These are real capture-linked refund obligations, unlike the reporting
@@ -174,12 +180,15 @@ policy, per-address publication and quote pricing follow the
 
 ## Guest senders
 
-A guest is a person without a cs-mail account who approaches a member by paying a
-request bond. Individuals use this path; organizations use the legacy-domain path.
+A guest is a person using an external mailbox without a cs-mail account. A guest
+may approach a member through a paid request, or a member may initiate an email
+conversation with that mailbox. Individuals use the mailbox path; organizational
+legacy senders use the legacy-domain path.
 The full design is in [guest senders](docs/guest-sender-design.md).
 
-- A guest is identified by one verified mailbox and mapped at the edge to a
-  synthetic protocol identity, following the legacy-sender precedent. The request
+- A guest mailbox maps at the edge to one synthetic protocol identity, following
+  the legacy-sender precedent. Guest-initiated requests require mailbox
+  verification; a member-selected destination alone is not verified. The request
   kernel is unchanged. Lanes can name a guest mailbox as their subject.
 - Mailbox verification establishes control of the mailbox, not personhood. The
   payment processor's instrument fingerprint is an anti-abuse signal, not an
@@ -191,8 +200,9 @@ The full design is in [guest senders](docs/guest-sender-design.md).
 - A guest request has the same single conditional charge and settlement as any
   request. Refunds return to the funding payment method. Forfeitures enter the
   member pool; guests receive no distributions.
-- After acceptance, a guest communicates free and indefinitely, subject to the
-  recipient's block and revocation, by ordinary email in both directions. The
+- Standing acceptance permits free ongoing communication; an express lane permits
+  free communication within its scope and validity, subject to the recipient's
+  block and revocation, by ordinary email in both directions. The
   member's replies come from the member's protocol identity address. The guest's
   inbound mail is admitted only with DMARC passing and an exact match to the
   verified mailbox; a reply token alone is never sufficient.
@@ -206,6 +216,63 @@ The full design is in [guest senders](docs/guest-sender-design.md).
   an email delivery service, signed with the deployment domain's key; the member's
   downgrade consent discloses that the service sees reply plaintext.
 - Converting a guest into a member while keeping relationships is deferred.
+
+### Member-initiated external conversations
+
+Agreed 2026-10-06. A member may select an external email address and send first.
+The member is responsible for choosing the destination; this does not create a
+verified guest session, identity-service subject, or proof of mailbox control.
+There is no separate inbox-control challenge for replies to this invitation.
+Incoming email still requires automatic authentication, exact author-mailbox
+matching, and the addressed conversation. A reply token alone is insufficient.
+
+The guest may send unlimited replies within that pending conversation, without
+an account, payment instrument, or request charge. There is no fixed reply count
+or paid-request decision deadline. Ordinary transport resource limits still apply.
+The member may read the replies and choose Accept, Reject, an express lane, or
+Block. Pending access grants no permission outside that conversation. Acceptance
+and lanes use the existing directional relationship rules, including lane scope,
+validity and allowance. Later revocation or lane expiry cannot reactivate an old
+pending invitation.
+
+Reject closes that unpaid invitation without changing paid-request history,
+settling money, or creating a block. Subsequent contact through the ordinary paid
+request route remains possible under its existing rules unless blocked. Only the
+member can explicitly open a new unpaid invitation; a new subject line, retry,
+or guest-selected conversation identifier cannot reopen the rejected one.
+
+The first send and subsequent outbound emails require explicit conversation-scoped
+consent to disclose plaintext to the external relay and mailbox. Withdrawing that
+consent cancels messages still waiting inside cs-mail. Consent withdrawal and
+beginning dispatch are serialized: withdrawal that commits first prevents dispatch;
+after dispatch begins, cancellation may be too late. A crash or uncertain handoff
+remains an unknown outcome, never an automatic second disclosure. Restoring consent
+must not silently revive cancelled messages. An inbound permission change is not
+itself withdrawal of outbound disclosure consent; blocks prevent new dispatch.
+
+The initial implementation is authored text through signed member commands and a
+development relay. The receive-only SMTP adapter now admits plain-text replies and
+selects plain text from paired plain-text/HTML alternatives for known conversations
+with automatic authentication, STARTTLS and durable deduplication.
+Email provenance does not assert human involvement or a declared purpose.
+The SMTP2GO adapter submits signed plain-text MIME after committed dispatch and records
+authenticated provider events independently from handoff. Lost responses remain uncertain;
+provider acceptance does not establish delivery. One live SMTP2GO email reached the
+recipient. A fresh live follow-up confirmed RSA-2048 deployment signing and correct
+fast-accept receipt handling. Provider callbacks have a separate loopback listener
+and can run while outgoing delivery is disabled; public callback verification is pending.
+The 2026-10-08 continuation adds general member-address reception, a request-page
+prompt for unknown authenticated senders, acceptance-to-email routes for paid guests,
+transactional SMTP2GO notices and explicit consent restoration. New inbound
+conversations begin without outbound disclosure consent. A route, its first admitted
+message and any lane consumption commit together; paid acceptance routes commit with
+their notice attempt. Existing blocks, service coverage and lane constraints still
+apply. Request-page prompts do not retain the original email body or grant permission.
+They are bounded to one per mailbox/member per 24 hours and suppressed for automatic
+or unauthenticated mail. Weak-authentication confirmation is not part of this pass.
+See [the implementation and experiment record](docs/external-email-journey.md).
+Native quotation/export, public MX deployment and public provider callbacks remain
+outside the locally validated journey. Guest funding still uses the simulator.
 
 ## Enforcement boundaries
 

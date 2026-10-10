@@ -1,17 +1,21 @@
 //! A small authenticated ingress facade around the durable protocol engine.
 
+pub mod external;
+pub mod guests;
+pub mod incoming;
+pub mod members;
+
 use core::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cs_mail_adapters::{DmarcError, DmarcVerifier, SmtpAuthenticationRequest};
 use cs_mail_capabilities::{
-    AdmissionAuthentication, LaneSubject, LegacyBondFreeAdmission, SignedBondFreeAdmission,
-    SignedLaneControl, SignedLaneGrant,
+    LaneSubject, LegacyBondFreeAdmission, SignedBondFreeAdmission, SignedLaneControl,
+    SignedLaneGrant,
 };
 use cs_mail_content::EncryptedContentRecord;
 use cs_mail_primitives::{
-    CanonicalTime, DeclarationAuthority, Duration, IdempotencyKey, MessageDeclarations,
-    MessageValidityUntil, OperationalKeyRef, ProtocolVersion, Version,
+    CanonicalTime, Duration, IdempotencyKey, OperationalKeyRef, ProtocolVersion, Version,
 };
 use cs_mail_protocol::{ActorRef, PolicySnapshot, SettlementSnapshot, TermsOutcome};
 use cs_mail_security::{
@@ -55,7 +59,18 @@ pub enum ServiceError {
     ReceiptUnavailable,
     Dmarc(DmarcError),
     MessageValidityClosed,
-    AdmissionPolicyRefused(AdmissionFailure),
+    /// No protocol policy has been published yet.
+    NoProtocolPolicy,
+    /// The recipient has not published a content key, so guest content cannot reach them.
+    RecipientNotReady,
+    /// The request's charge is not yet funded.
+    NotFunded,
+    /// There is no request of this guest for this recipient.
+    NoRequest,
+    /// The payment method could not be tokenized.
+    PaymentMethod,
+    /// A notice could not be delivered to the outbox.
+    Outbox,
 }
 
 impl fmt::Display for ServiceError {
@@ -71,12 +86,15 @@ impl fmt::Display for ServiceError {
             Self::MessageValidityClosed => {
                 formatter.write_str("message validity closed before admission")
             }
-            Self::AdmissionPolicyRefused(reason) => {
-                write!(
-                    formatter,
-                    "admission policy refused the envelope: {reason:?}"
-                )
+
+            Self::NoProtocolPolicy => formatter.write_str("no protocol policy is published"),
+            Self::RecipientNotReady => {
+                formatter.write_str("the recipient cannot receive guests yet")
             }
+            Self::NotFunded => formatter.write_str("the request's charge is not yet funded"),
+            Self::NoRequest => formatter.write_str("no such guest request"),
+            Self::PaymentMethod => formatter.write_str("the payment method was declined"),
+            Self::Outbox => formatter.write_str("the notice could not be delivered"),
             Self::ReceiptUnavailable => {
                 formatter.write_str("committed operation has no journal evidence")
             }
@@ -106,7 +124,7 @@ impl From<StorageError> for ServiceError {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ServiceOutcome {
     pub outcome: cs_mail_storage_postgres::ReceivedOutcome,
     pub signed_terms: Option<SignedContactTerms>,
@@ -124,7 +142,6 @@ pub struct IngressService<C> {
     provider_signer: ProviderSigner,
     clock: C,
     policy: ServicePolicy,
-    admission_policy: AdmissionPolicy,
 }
 
 impl<C: CanonicalClock> IngressService<C> {
@@ -230,11 +247,11 @@ impl<C: CanonicalClock> IngressService<C> {
             provider_signer,
             clock,
             policy,
-            AdmissionPolicy::default(),
+            &AdmissionPolicy::default(),
         )
     }
 
-    /// Creates ingress with an explicitly injected provider admission policy.
+    /// Creates ingress with an initial admission policy. Reopening preserves the durable policy.
     ///
     /// # Errors
     ///
@@ -245,7 +262,7 @@ impl<C: CanonicalClock> IngressService<C> {
         provider_signer: ProviderSigner,
         clock: C,
         policy: ServicePolicy,
-        admission_policy: AdmissionPolicy,
+        admission_policy: &AdmissionPolicy,
     ) -> Result<Self, ServiceError> {
         if provider_signer.provider() != policy.protocol.recipient_provider {
             return Err(ServiceError::SigningScopeMismatch);
@@ -283,31 +300,13 @@ impl<C: CanonicalClock> IngressService<C> {
             )?,
             Err(error) => return Err(ServiceError::Security(error)),
         }
-        engine.configure_ingress(policy.deployment_domain, &policy.protocol)?;
-        engine.configure_admission_policy(&admission_policy)?;
+        engine.configure_ingress(policy.deployment_domain, &policy.protocol, admission_policy)?;
         Ok(Self {
             engine,
             provider_signer,
             clock,
             policy,
-            admission_policy,
         })
-    }
-
-    fn evaluate_admission_policy(
-        &self,
-        declarations: &MessageDeclarations,
-        message_valid_until: MessageValidityUntil,
-        _capability: Option<cs_mail_primitives::LaneId>,
-        _authentication: AdmissionAuthentication,
-        now: CanonicalTime,
-    ) -> Result<(), ServiceError> {
-        if message_valid_until.0 < now {
-            return Err(ServiceError::MessageValidityClosed);
-        }
-        self.admission_policy
-            .evaluate(declarations)
-            .map_err(ServiceError::AdmissionPolicyRefused)
     }
 
     pub const fn protocol_version(&self) -> ProtocolVersion {
@@ -327,6 +326,58 @@ impl<C: CanonicalClock> IngressService<C> {
             self.policy.protocol.clone(),
         )?;
         self.complete_receipt(&handle)
+    }
+
+    /// Receives a guest's command, authorized at the provider's edge by the guest's
+    /// verified mailbox session, and executes it like any other.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a relationship the guest does not send in, conflicting
+    /// replay, or storage failure.
+    pub fn submit_guest(
+        &self,
+        command: &cs_mail_guests::GuestCommand,
+    ) -> Result<cs_mail_storage_postgres::ReceivedOutcome, ServiceError> {
+        let handle = self.engine.receive_guest(
+            command,
+            self.provider_signer.reference(),
+            self.policy.deployment_domain,
+            || self.clock.now(),
+            self.policy.protocol.clone(),
+        )?;
+        // A guest holds no key to verify a provider receipt, so the outcome is enough; the
+        // receipt is signed by artifact work, here or by the worker, and kept.
+        let outcome = self.engine.process_received(&handle);
+        self.engine.sign_artifacts_batch(
+            &self.provider_signer,
+            self.clock.now(),
+            cs_mail_primitives::Duration(30_000),
+            100,
+        )?;
+        Ok(outcome?)
+    }
+
+    /// Stores content the provider encrypted on a guest's behalf.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a certificate or binding not matching this relationship.
+    pub fn store_guest_content(
+        &self,
+        session: &cs_mail_guests::GuestSession,
+        record: &EncryptedContentRecord,
+        certificate: &SignedContentKeyCertificate,
+    ) -> Result<(), ServiceError> {
+        self.engine.store_guest_content(
+            session,
+            record,
+            certificate,
+            || self.clock.now(),
+            &self.policy.protocol,
+            self.policy.deployment_domain,
+        )?;
+        Ok(())
     }
 
     fn complete_receipt(
@@ -480,16 +531,9 @@ impl<C: CanonicalClock> IngressService<C> {
         if record.created_at > now || record.expires_at <= now || record.expires_at > latest {
             return Err(ServiceError::ContentTimeInvalid);
         }
-        self.evaluate_admission_policy(
-            &record.binding.declarations,
-            record.binding.message_valid_until,
-            record.binding.capability,
-            match record.binding.declarations.origin.authority {
-                DeclarationAuthority::NativeSender(key) => AdmissionAuthentication::NativeKey(key),
-                DeclarationAuthority::LegacyGateway(_) => AdmissionAuthentication::LegacyDmarc,
-            },
-            now,
-        )?;
+        if record.binding.message_valid_until.0 < now {
+            return Err(ServiceError::MessageValidityClosed);
+        }
         self.engine.store_authenticated_content(
             record,
             certificate,
@@ -550,6 +594,7 @@ impl<C: CanonicalClock> IngressService<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cs_mail_primitives::{DeclarationAuthority, MessageDeclarations};
     use cs_mail_primitives::{
         DeclaredPurpose, ExtensionCriticality, KnownPurpose, NamespacedIdentifier,
         OriginDeclaration, OriginMode, PayloadSchema,

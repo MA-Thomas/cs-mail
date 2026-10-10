@@ -71,12 +71,27 @@ check_identity_sources() {
 
 # Dependencies point inward: no workspace package may depend on an application.
 check_dependency_direction() {
-    local status=0 manifest package dependents
+    local status=0 manifest package dependents tree
     for manifest in apps/*/Cargo.toml; do
         [ -f "$manifest" ] || continue
         package="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
-        dependents="$(cargo tree --workspace --invert "$package" --edges normal,build,dev \
-            --prefix none --depth 1 2>/dev/null | sed '1d' | sed '/^$/d')"
+        if [ -z "$package" ]; then
+            echo "cannot identify application package in $manifest" >&2
+            status=1
+            continue
+        fi
+        if ! tree="$(cargo tree --workspace --all-features --invert "$package" --edges normal,build,dev \
+            --prefix none --depth 1)"; then
+            echo "dependency inspection failed for $package" >&2
+            status=1
+            continue
+        fi
+        if [ -z "$tree" ]; then
+            echo "dependency inspection returned no package for $package" >&2
+            status=1
+            continue
+        fi
+        dependents="$(printf '%s\n' "$tree" | sed '1d' | sed '/^$/d')"
         if [ -n "$dependents" ]; then
             echo "$package is depended on by:"
             printf '%s\n' "$dependents" | sed 's/^/    /'
@@ -113,6 +128,7 @@ run_check "identity source manifest" check_identity_sources
 run_check "dependency direction" check_dependency_direction
 run_check "rustfmt" cargo fmt --all -- --check
 run_check "clippy" cargo clippy --workspace --all-targets --all-features -- -D warnings
+run_check "production clippy" cargo clippy --workspace --all-targets --no-default-features -- -D warnings
 run_check "workspace tests" cargo test --workspace
 if [ $skip_postgres -eq 1 ]; then
     record SKIPPED "PostgreSQL suites (not evidence)"

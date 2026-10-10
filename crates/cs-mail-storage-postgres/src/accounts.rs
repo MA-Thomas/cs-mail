@@ -501,6 +501,14 @@ fn persist_effects(
             "INSERT INTO cs_persona_owners(identity,account) VALUES($1,$2)",
             &[&persona.0.to_string(), &account],
         )?;
+        super::guests::register_subject(
+            tx,
+            persona,
+            &cs_mail_guests::SenderSubject::Member(cs_mail_primitives::AccountId(
+                account.parse().map_err(|_| StorageError::NumericRange)?,
+            )),
+            at,
+        )?;
     }
     if let Some((financial, source)) = bank {
         let bank = financial.bank().evidence();

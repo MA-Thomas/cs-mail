@@ -234,6 +234,10 @@ pub(super) fn check_local_sender_coverage(
     sender: ProtocolIdentity,
     at: CanonicalTime,
 ) -> Result<(), StorageError> {
+    // Guests pay per request and hold no service contract.
+    if super::guests::is_guest(tx, sender)? {
+        return Ok(());
+    }
     // Explicitly registered remote identities have their own service authority.
     if tx
         .query_opt(
@@ -277,6 +281,16 @@ pub(super) fn insert_enrollment(
             &pending.input().persona.0.to_string(),
             &product.id().0.to_string(),
         ],
+    )?;
+    super::guests::register_subject(
+        tx,
+        pending.input().persona,
+        &cs_mail_guests::SenderSubject::Member(product.id()),
+        CanonicalTime(
+            u64::try_from(pending.intent().created_at)
+                .map_err(|_| StorageError::NumericRange)?
+                .saturating_mul(1000),
+        ),
     )?;
     let source_id = source_key(account.scope(), account.id(), &evidence.bank_token);
     tx.execute(

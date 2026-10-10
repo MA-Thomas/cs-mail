@@ -1,0 +1,34 @@
+[Unit]
+Description=cs-mail callback pilot
+After=network.target postgresql.service
+Wants=postgresql.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=cs_mail
+Group=cs_mail
+ExecStart=/opt/cs-mail/current/bin/cs-maild serve --config /etc/cs-mail/maild.json
+# cs-maild drains both HTTP listeners on Ctrl-C.
+KillSignal=SIGINT
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+UMask=0077
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

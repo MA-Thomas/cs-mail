@@ -29,7 +29,7 @@ admin="$bin/cs-mail-admin"
 echo "work directory: $work"
 
 step "keys (secrets are written 0600 and never printed)"
-for name in provider operator processor bank-authority bank-ownership identity-decision rogue; do
+for name in provider scheduler operator processor bank-authority bank-ownership identity-decision rogue; do
   "$admin" keygen --out "$work/$name.key" > "$work/$name.pub"
 done
 ls -l "$work"/*.key | awk '{print $1, $NF}'
@@ -44,6 +44,7 @@ record() { # $1: provider key file stem
                      "payment_account": $account, "protocol_version": 2},
  "unit": 1,
  "provider_key": {"reference": 3, "verifying_key": $(public "$1")},
+ "scheduler_key": {"reference": 4, "verifying_key": $(public scheduler)},
  "operators": {"1": $(public operator)},
  "payment": {"processor_key": $(public processor), "bank_authority": $(public bank-authority)},
  "identity": {"issuer": "https://identity.localhost", "product": "cs-mail/dev",
@@ -122,7 +123,7 @@ cat "$work/serve.log"
 
 step "redaction: no secret, key or database URL appears in the log"
 leaks=0
-for name in provider operator processor bank-authority bank-ownership identity-decision rogue; do
+for name in provider scheduler operator processor bank-authority bank-ownership identity-decision rogue; do
   secret="$(tr -d ' \n' < "$work/$name.key")"
   if tr -d ' \n' < "$work/serve.log" | grep -qF "$secret"; then echo "LEAK: $name secret"; leaks=1; fi
 done

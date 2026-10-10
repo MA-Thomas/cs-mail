@@ -146,8 +146,8 @@ pub fn plan_free_admission(
         ))?;
         (
             AdmissionBasis::ExpressLane {
-                lane: lane.grant.id,
-                version: lane.version,
+                lane: lane.grant().id,
+                version: lane.version(),
             },
             Some(lane),
         )
@@ -187,8 +187,8 @@ pub fn plan_free_admission(
     let next_lane = if let Some(lane) = candidate_lane {
         let lane = consume_lane(lane, request, now)?;
         message.basis = AdmissionBasis::ExpressLane {
-            lane: lane.grant.id,
-            version: lane.version,
+            lane: lane.grant().id,
+            version: lane.version(),
         };
         Some(lane)
     } else {

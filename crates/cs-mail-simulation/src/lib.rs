@@ -482,3 +482,54 @@ impl SimulatedBank {
 fn token(account: &SimulatedBankAccount) -> [u8; 32] {
     label_digest("cs-mail/simulated-bank-account/v1", &[&account.account])
 }
+
+/// Development only: the processor's tokenization of guest cards. A card number yields a
+/// token per holder, and one fingerprint for the card whoever holds it, as live
+/// processors report. Numbers of 12 to 19 digits are accepted; `4000000000000002` is
+/// declined.
+pub struct SimulatedCards {
+    secret: [u8; 32],
+}
+/// A card the simulator declined.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CardDeclined;
+impl SimulatedCards {
+    pub const fn new(secret: [u8; 32]) -> Self {
+        Self { secret }
+    }
+    /// The token for `holder`'s use of the card and the card's fingerprint.
+    /// # Errors
+    /// `CardDeclined` for a malformed or declined number.
+    pub fn tokenize(
+        &self,
+        number: &str,
+        holder: &str,
+    ) -> Result<([u8; 32], [u8; 32]), CardDeclined> {
+        use sha2::Digest as _;
+        let digits: String = number
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace() && *c != '-')
+            .collect();
+        if !(12..=19).contains(&digits.len())
+            || !digits.bytes().all(|b| b.is_ascii_digit())
+            || digits == "4000000000000002"
+        {
+            return Err(CardDeclined);
+        }
+        let token = sha2::Sha256::new()
+            .chain_update(b"cs-mail/simulated-card-token/v1")
+            .chain_update(self.secret)
+            .chain_update(digits.as_bytes())
+            .chain_update([0])
+            .chain_update(holder.as_bytes())
+            .finalize()
+            .into();
+        let fingerprint = sha2::Sha256::new()
+            .chain_update(b"cs-mail/simulated-card-fingerprint/v1")
+            .chain_update(self.secret)
+            .chain_update(digits.as_bytes())
+            .finalize()
+            .into();
+        Ok((token, fingerprint))
+    }
+}

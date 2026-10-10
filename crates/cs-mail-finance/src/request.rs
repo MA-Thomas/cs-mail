@@ -107,6 +107,67 @@ impl RequestFinancials {
     }
 }
 
+/// What a request's parties see of its money: the charge, where the capture stands with
+/// the processor, and the obligations its settlement recorded.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RequestFinancialView {
+    /// `C + S`, authorized once for this request.
+    pub charge: Money,
+    pub processing_charge: Money,
+    pub collateral: Money,
+    pub capture: CaptureStatus,
+    pub settlement: Option<RequestSettlement>,
+    pub refund: RefundView,
+    /// Retained by CSQD as processing revenue.
+    pub processing_retained: Money,
+    /// Sent to the member program as pending forfeiture.
+    pub collateral_forfeited: Money,
+    /// True while the processor has not yet confirmed a pending capture, cancellation or
+    /// refund: the final outcome of that operation is not yet known.
+    pub awaiting_processor: bool,
+}
+/// A refund obligation as its parties see it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum RefundView {
+    None,
+    /// Owed and not yet confirmed by the processor.
+    Owed(Money),
+    Confirmed(Money),
+}
+impl RequestFinancials {
+    /// The parties' view of this request's money, derived from its recorded settlement.
+    pub fn view(&self) -> RequestFinancialView {
+        let (processing_retained, collateral_forfeited) = match self.settlement {
+            Some(RequestSettlement::Rejected) => {
+                (self.contract.processing_charge, self.contract.collateral)
+            }
+            Some(RequestSettlement::Expired) => (self.contract.processing_charge, Money::ZERO),
+            Some(RequestSettlement::Accepted | RequestSettlement::Cancelled) | None => {
+                (Money::ZERO, Money::ZERO)
+            }
+        };
+        let refund = match &self.refund {
+            RefundStatus::None => RefundView::None,
+            RefundStatus::Pending(operation) => RefundView::Owed(operation.amount),
+            RefundStatus::Confirmed(operation) => RefundView::Confirmed(operation.amount),
+        };
+        RequestFinancialView {
+            charge: self.capture.amount,
+            processing_charge: self.contract.processing_charge,
+            collateral: self.contract.collateral,
+            capture: self.capture_status,
+            settlement: self.settlement,
+            refund,
+            processing_retained,
+            collateral_forfeited,
+            awaiting_processor: matches!(
+                self.capture_status,
+                CaptureStatus::Pending | CaptureStatus::CancellationRequested
+            ) || matches!(refund, RefundView::Owed(_)),
+        }
+    }
+}
+
 /// Immutable financial evidence; no message, principal or request lifecycle is needed
 /// to reconcile an obligation after formation records have been deleted.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

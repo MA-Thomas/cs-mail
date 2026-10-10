@@ -14,6 +14,14 @@ impl From<&ProtocolState> for RelationshipRecord {
     }
 }
 impl RelationshipRecord {
+    /// The same relationship under another request history, after a guest-history merge.
+    pub(super) fn with_history(mut self, history: cs_mail_primitives::RequestHistoryRef) -> Self {
+        self.relationship.history = history;
+        self
+    }
+    pub(super) const fn history(&self) -> cs_mail_primitives::RequestHistoryRef {
+        self.relationship.history
+    }
     pub(super) fn into_state(self) -> ProtocolState {
         ProtocolState {
             relationship: self.relationship,

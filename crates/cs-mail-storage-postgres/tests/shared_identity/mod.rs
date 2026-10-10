@@ -63,8 +63,12 @@ fn engine(url: &str, label: &str, sender: ProtocolIdentity) -> PostgresEngine {
     host.initialize_key_registry(&providers, test_time(0))
         .unwrap();
     support::bootstrap(host.deployment(), policy().financial.scope, policy().unit).unwrap();
-    host.configure_ingress(DEPLOYMENT_DOMAIN, &policy())
-        .unwrap();
+    host.configure_ingress(
+        DEPLOYMENT_DOMAIN,
+        &policy(),
+        &cs_mail_protocol::admission::AdmissionPolicy::default(),
+    )
+    .unwrap();
     host
 }
 /// Account storage of the host's deployment, with its trusted clock fixed at `at`.

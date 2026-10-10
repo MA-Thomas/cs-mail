@@ -154,6 +154,18 @@ impl AuthoritySnapshot {
         self.registry(ActorRef::Sender(signed.certificate.owner))?
             .verify_content_key_certificate(signed, at, version, scope)
     }
+    /// # Errors
+    /// Rejects a guest content certificate not signed by an active provider key.
+    pub fn verify_guest_content_certificate(
+        &self,
+        signed: &SignedContentKeyCertificate,
+        at: CanonicalTime,
+        version: ProtocolVersion,
+        scope: SigningScope,
+    ) -> Result<cs_mail_content::ContentCertificateDigest, SecurityError> {
+        self.relationship
+            .verify_guest_content_certificate(signed, at, version, scope)
+    }
 }
 
 #[cfg(test)]

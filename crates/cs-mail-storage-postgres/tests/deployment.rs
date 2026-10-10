@@ -164,3 +164,48 @@ fn a_bootstrap_failing_after_its_first_writes_leaves_nothing() {
     }
     assert_eq!(store.deployment_record().unwrap(), None);
 }
+
+// Claim: a populated pre-hardening database cannot silently acquire invented retry
+// bindings or repaired key history. Accepting that upgrade would leave old operations
+// outside the new guarantees. Existing records must remain intact when it is refused.
+#[test]
+#[ignore = "requires isolated PostgreSQL"]
+fn hardening_cutover_refuses_populated_old_state_without_modifying_it() {
+    for (version, undo) in [
+        (30_i64, "SELECT 1"),
+        (29_i64, "SELECT 1"),
+        (
+            27_i64,
+            "DROP TABLE cs_guest_request_inputs; ALTER TABLE cs_received_commands DROP COLUMN processing_failure, DROP COLUMN failed_attempts",
+        ),
+        (
+            28_i64,
+            "ALTER TABLE cs_guest_sessions DROP COLUMN verification_id; ALTER TABLE cs_guest_sessions ADD COLUMN session JSONB NOT NULL",
+        ),
+    ] {
+        let url = database_url();
+        let store = PostgresDeployment::connect(&url).unwrap();
+        assert!(PostgresDeployment::connect_existing(&url).is_ok());
+        bootstrap(&store, &deployment(false), || CanonicalTime(1)).unwrap();
+        let before = store.deployment_record().unwrap();
+        let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+        db.batch_execute(undo).unwrap();
+        db.execute(
+            "DELETE FROM cs_schema_migrations WHERE version=$1",
+            &[&version],
+        )
+        .unwrap();
+        assert!(PostgresDeployment::connect_existing(&url).is_err());
+        assert!(PostgresDeployment::connect(&url).is_err());
+        assert_eq!(store.deployment_record().unwrap(), before);
+        assert_eq!(
+            db.query_one(
+                "SELECT count(*) FROM cs_schema_migrations WHERE version=$1",
+                &[&version]
+            )
+            .unwrap()
+            .get::<_, i64>(0),
+            0
+        );
+    }
+}

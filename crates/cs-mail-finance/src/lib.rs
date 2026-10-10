@@ -2,7 +2,7 @@
 mod funding;
 mod payments;
 pub mod simulation;
-pub use funding::FundingSource;
+pub use funding::{FundingSource, SourceEvidence};
 mod program;
 pub use payments::*;
 pub use program::*;

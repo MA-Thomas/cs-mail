@@ -1,17 +1,19 @@
-# Guest senders: design (Milestone 3a)
+# Guest senders and external conversations: design (Milestones 3a–3c)
 
 > **Design principles.** Before changing code or this design, read the [Rust-domain design principles](rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
 
-Status: agreed design, 2026-09-25. All decisions are recorded below. This note belongs with the
+Status: agreed design, implementation record updated 2026-10-08; implementation and validation limits are listed below.
+Both entry paths now join through the [local external-email journey](external-email-journey.md): general member-address reception, paid acceptance reply routes, explicit outbound consent and SMTP2GO transactional notices. Public deployment and provider callback validation remain Milestone 3c work. The older held-mail confirmation design below is not implemented in this bounded pass. This note belongs with the
 [C-SQD domain model](../DOMAIN_MODEL.md) and the
 [product build plan](../cs_mail_build_plan.tex) (Milestones 3a–3c).
 
 ## Purpose
 
-A **guest** is a person without a cs-mail account who approaches a member by
-paying a request bond, through the member's public request page or by replying to
-email. After acceptance, communication should feel like ordinary email to the
-guest: they write from their own mailbox, the member's replies arrive in that
+A **guest** is a person using an external mailbox without a cs-mail account.
+There are two entry paths: a guest approaches a member through a paid request,
+or a member emails an external address first and reviews the initial reply
+without charging for it. After acceptance, communication should feel like ordinary
+email to the guest: they write from their own mailbox, the member's replies arrive in that
 mailbox from the member's cs-mail address, and no account or app is required.
 
 Guests extend the product without changing the request kernel. They follow the
@@ -30,7 +32,7 @@ for the kernel.
 |---|---|---|---|
 | Member (native) | Enrolled account and protocol identity | Yes | Yes |
 | Organizational legacy sender | DMARC-authenticated domain | No | No |
-| Guest | Verified mailbox (one exact address) | No | No |
+| Guest | Exact mailbox; control evidence is separate from a member-selected destination | No | No |
 
 The legacy-domain mapping is wrong for individuals: mapping `gmail.com` to one
 identity would merge every Gmail user. Individuals use the guest path;
@@ -57,12 +59,38 @@ decides what it establishes.
 - **Payment evidence.** Funding finality for the request charge, plus the payment
   processor's fingerprint of the card or account used. The fingerprint is an
   anti-abuse signal, not an identity claim.
-- **Inbound email authentication** (after acceptance; see below). DMARC results
-  for the sender's domain, the exact From address, and the conversation reply
-  token.
+- **Inbound email authentication** (initial replies and ongoing mail; see below).
+  DMARC results for the sender's domain, the exact From address, and the conversation reply
+  token. These are automatic checks on received messages, not a requirement for
+  the guest to complete a new interactive verification for every reply.
+- **Member-selected destination.** An address entered by a member names where
+  to send; it is not evidence of mailbox control or continuing contact permission.
+  The mailbox uses the same identity if it later verifies or makes a paid request.
 
 Guests never enroll in identity-model and receive no `SubjectId`. The one account
 per person objective is unaffected because a guest is not an account.
+
+### Verification and session persistence
+
+The guest domain owns the verification lifecycle. A successful code check produces
+one complete consequence: the consumed verification and its session. PostgreSQL
+locks the challenge, samples trusted time after that wait, and commits consumption
+and the unique session reference together. Wrong attempts are committed too. A
+verification can create at most one session; its token digest is bound into the
+consumed evidence. The code digest is discarded on consumption.
+
+Session restoration loads that consumed verification through the stored token
+reference and checks its token binding and lifetime. There is no standalone session
+JSON, public session constructor, or session deserializer. Verification records use
+checked deserialization for their attempt counts and time relationships. These checks
+do not authenticate an arbitrary record supplied by a caller: the repository remains
+the trusted source of durable evidence. Session lookup samples time after its database
+read. Existing inclusive expiry boundaries remain unchanged.
+
+Migration 0028 requires a fresh development database and rejects populated older
+databases. Old sessions lack the required provenance; no fallback reader or guessed
+backfill exists. The [audit hardening record](audit-hardening.md) records the experiments
+and remaining boundaries.
 
 ## Request history and anti-abuse
 
@@ -90,11 +118,13 @@ instrument fingerprint. The simulator supplies synthetic fingerprints.
 
 ## Acceptance and ongoing communication
 
-The recipient decides as for any request: accept with standing permission or an
-express lane, reject, block, or let it expire. Settlement is unchanged.
+For a guest-initiated paid request, the recipient decides as for any request:
+accept with standing permission or an express lane, reject, block, or let it
+expire. Settlement is unchanged.
 
-After acceptance, **the guest may communicate for free, indefinitely**, like any
-accepted sender. The recipient's block and revocation remain the controls.
+Standing acceptance permits free ongoing communication; an express lane permits
+free communication within its scope and validity. The recipient's block and
+revocation remain the controls.
 Admission of guest messages follows the same host-level service-coverage condition
 that applies to the member's other incoming communication.
 
@@ -109,9 +139,44 @@ Communication after acceptance is ordinary email in both directions:
   encrypts it to the member's content key on arrival, and admits it under the
   relationship's permission.
 
+### Member-initiated external conversations
+
+The 2026-10-06 decisions in [the domain model](../DOMAIN_MODEL.md#member-initiated-external-conversations)
+govern this path. Alice selects Carol's exact mailbox and explicitly consents to
+external plaintext disclosure. No inbox-control challenge is required: Alice is
+responsible for her destination choice. Automatic authentication of each incoming
+email remains separate from that choice and from contact permission.
+
+Carol can send unlimited replies inside the pending conversation. These are
+uncharged, create no request or financial obligation, and do not authorize another
+conversation. Alice may Accept, grant an express lane, Reject, or Block. Acceptance
+and lanes belong to the existing relationship owner. Every subsequent relationship
+decision invalidates the original pending opportunity, so revocation or lane expiry
+cannot reopen it. Rejection closes only the invitation: the ordinary paid-request
+route remains available under its existing restrictions unless Alice blocks Carol.
+An explicit new invitation from Alice can reopen unpaid contact. A new conversation
+under existing standing or lane permission uses that permission from the outset;
+it does not silently replace lane limits with unlimited pending access.
+
+Outbound content, its delivery instruction, the conversation and consent record,
+and the command receipt commit atomically. Pending delivery is not plaintext storage.
+Withdrawal cancels waiting deliveries in the same transaction as the consent change.
+Dispatch checks current account authority, coverage, block and consent under the
+same protection, and commits `DispatchBegun` before releasing content to transport.
+Once that boundary is crossed, withdrawal may be too late. Unknown handoffs remain
+unknown for reconciliation; they are not automatically sent again.
+
+The first Rust slice exposes signed member commands and encrypted authored-text
+copies, with a development relay handoff. The receive-only SMTP adapter now handles
+known-conversation plain-text replies and paired plain-text/HTML alternatives; see the [receiver runbook](smtp-receiver.md).
+General member-address mail, public MX deployment and live provider validation remain work. The trusted receiver API accepts no public client assertions
+of successful authentication; local experiments supply synthetic evidence through
+development support. Native quotation and forwarding are not exposed by this API.
+
 ### Authenticating a guest's inbound email
 
-An inbound message is admitted to an accepted guest relationship only when:
+For ongoing communication under standing permission or a lane, an inbound message
+is admitted only when:
 
 1. **DMARC passes** for the author domain, verified by `cs-mail-smtp-gateway` at
    the receiver with the full connection context (remote IP, EHLO, envelope
@@ -126,7 +191,12 @@ permissive, a pass is weaker evidence. Such messages are held, and the guest
 receives a link to confirm them on the request page. They are not admitted
 silently.
 
-Mail from a mailbox without permission is not delivered. An unknown sender
+Replies to a member-initiated pending conversation require automatic authentication,
+the exact selected author mailbox and that conversation route, without a separate
+mailbox-control challenge. The interactive verification rules above apply to the
+paid guest entry path, not to the member-selected invitation.
+
+Other mail from a mailbox without permission is not delivered. An unknown sender
 receives an automatic reply with the member's request link, but only when DMARC
 passes for the sender's domain. Otherwise the message is rejected during the SMTP
 transaction, so the deployment never sends backscatter to forged addresses.
@@ -144,10 +214,10 @@ the mail is neither delivered nor silently discarded.
   arrival, from the page or by email. It is encrypted to the recipient's key on
   arrival and never stored or logged as plaintext. The page says so before the
   guest writes, and the member's application labels guest conversations.
-- **The member's replies to a guest leave as plaintext email.** Each guest
-  conversation requires the member's explicit downgrade consent, using the
+- **The member's first message and later emails leave as plaintext email.** Each
+  external conversation requires the member's explicit downgrade consent, using the
   existing `DowngradeConsent` / `DeliveryRoute::SmtpDowngrade` model. Without
-  consent no reply is sent (`SmtpError::MissingDowngradeConsent`).
+  consent no member email is sent (`SmtpError::MissingDowngradeConsent`).
 - **Retention.** Mailbox and payment-fingerprint evidence, and the history links
   between them, are retained **indefinitely** by default, because request history
   and anti-abuse grouping depend on them. The request page tells the guest this
@@ -180,8 +250,9 @@ the mail is neither delivered nor silently discarded.
     deployment domain.
   - Connection, message-size, and time limits bound resource use. The process
     runs with minimal privileges.
-- **Outbound.** Member replies and transactional notices (verification codes,
-  outcomes, refunds) are DKIM-signed with the deployment domain's own key, with
+- **Outbound.** Member-initiated messages, subsequent correspondence, and
+  transactional notices (verification codes, outcomes, refunds) are DKIM-signed
+  with the deployment domain's own key, with
   SPF and a DMARC policy published, so reputation accrues to the deployment
   domain. Outbound mail is **sent through an email delivery service at first**,
   for deliverability from a new sending IP; moving to our own sending
@@ -196,8 +267,8 @@ the mail is neither delivered nor silently discarded.
 - **Guest-to-member conversion.** Moving an existing relationship from a guest
   identity to a new member's identity is a separate cutover with provenance
   questions. A guest who joins starts fresh.
-- **General email hosting.** Members do not send email to arbitrary external
-  addresses. Outbound email exists only for guest conversations and notices.
+- **General mailbox hosting**, such as IMAP access or hosting external accounts.
+  Member-initiated external conversations and transactional notices are in scope.
 - **Independent-provider federation.**
 
 ## Conjectures to challenge
@@ -225,4 +296,39 @@ Decided 2026-09-25:
    domain's key.
 4. Mailbox and payment-fingerprint evidence is retained indefinitely by default.
 
-No guest-sender decisions remain open.
+Decided 2026-09-29:
+
+5. Members may initiate external conversations. Their initial send opens a reply
+   opportunity, not standing permission. The authenticated initial reply is
+   readable while the invitation is pending. The October decision below permits
+   continued replies until the member decides; broader permission still requires
+   Accept or an express lane.
+6. This initial reply is uncharged and does not require a paid-request ceremony.
+7. Email authentication is automatic per message and separate from interactive
+   mailbox verification and the member's permission decision.
+
+Decided 2026-10-06:
+
+8. No separate mailbox-control challenge for member-initiated invitations; retain
+   automatic incoming authentication and exact mailbox/conversation matching.
+9. Unlimited uncharged replies in the pending conversation; broader permission
+   remains a relationship or lane decision.
+10. Rejection closes the unpaid invitation without blocking or changing paid history.
+11. Disclosure withdrawal cancels waiting outbound messages; dispatch already begun
+    may be too late to cancel. Unknown handoffs require reconciliation.
+
+### Validation scope for this Rust slice
+
+- Pending access cannot escape its conversation or survive rejection/block. A
+  different mailbox or conversation being admitted, or a reply admitted after
+  rejection/block, would falsify the claim and permit unwanted contact.
+- Existing acceptance/lane rules govern continuing permission. Admission after
+  revocation/expiry, or exceeding a lane allowance, would falsify the claim.
+- Withdrawal and dispatch have one serialized boundary. Dispatch from a delivery
+  cancelled by a prior withdrawal would falsify the disclosure promise.
+- Start and retry effects are atomic and idempotent. An injected receipt failure
+  leaving a conversation or delivery, or repeated delivery consuming another lane
+  allowance, would falsify the storage contract.
+
+These are PostgreSQL experiments in the member gateway suite. They do not establish
+real SMTP authentication, deliverability, SMTP2GO behavior, or downstream recall.

@@ -2,6 +2,8 @@
 
 pub mod billing;
 pub mod correspondence;
+#[cfg(feature = "member-runtime")]
+pub mod member;
 
 use cs_mail_content::{
     ContentBinding, ContentError, ContentKeyCertificate, EncryptedContentRecord, EndpointPublicKey,

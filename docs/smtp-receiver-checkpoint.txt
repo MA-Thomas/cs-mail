@@ -1,0 +1,167 @@
+APPLE CLIENT DECISION — 8 OCTOBER 2026
+The member application will use SwiftUI, replacing the planned Tauri shell.
+Ship macOS first; establish iOS targets and shared Apple presentation code from
+the first slice. Business rules and portable client workflows remain in Rust.
+Move the narrow client facade, Swift bindings and Apple library packaging into
+Milestone 4. The web request page keeps its own components. Android and Windows
+later reuse Rust through separate interfaces and platform adapters; their UI
+frameworks are not yet selected. No Apple app is implemented by this decision.
+See docs/apple-client-architecture.md and cs_mail_build_plan.tex, Draft 0.12.
+The hosting deferral below remains in force. Historical validation records below
+do not establish SwiftUI or iOS readiness.
+
+CURRENT PRIORITY / HOSTING DEFERRED — 8 OCTOBER 2026
+The user decided to build the macOS member application before provisioning or
+paying for a rented Linux host, such as AWS Lightsail. Next: implement and validate
+onboarding, inbox, request decisions, conversations, disclosure controls and
+quit/reopen/failure recovery locally against the Rust service, simulated payments
+and controlled email transports. Public MX, HTTPS and real SMTP2GO callback
+validation wait until the application is ready for a hosted external-email pilot.
+The rented-Linux direction and prepared deployment package remain; Lightsail is
+a candidate, not a purchase commitment. Earlier instructions below to provision
+hosting as the next step are superseded. No host was provisioned or purchased.
+See cs_mail_build_plan.tex (Milestone Map and Current Next Assignment).
+
+EXTERNAL-EMAIL JOURNEY / RESUME HERE — 8 OCTOBER 2026
+Both entry paths are implemented locally for the supported plain-text/alternative
+MIME profile. General member-address mail uses existing standing/lane permission
+or queues a bounded request-page prompt. Paid acceptance commits one reply route
+with its notice attempt. Inbound conversations start without outbound disclosure
+consent; the signed grant-disclosure command authorizes/restores it without reviving
+cancelled mail. Relationship views expose linked external conversations.
+
+Transactional verification/outcome/refund/prompt mail now explicitly selects SMTP2GO
+or a development adapter. Attempts commit before I/O, unknown outcomes never resend,
+and authenticated callbacks reconcile them. Shared provider reference/event identities
+cannot cross between notices and authored messages. Historical SMTP prompt receipts
+remain prompts after acceptance; a retry cannot cross into inbox admission. One typed
+arrival identity and protected storage checks exclude both outcomes for the same mail.
+Routing preparation now carries actual relationship facts, not placeholder messages.
+
+Schema 30 requires a fresh development database. Old post-send notice storage/API,
+guest-level outbox/DKIM configuration and first-message routing fallback are removed.
+The existing databases, historical live profiles and keys were not restarted/reset.
+No identity-model sources changed; all 101 pinned files still match. Changes are
+uncommitted atop substantial earlier staged/unstaged/untracked work; do not reset,
+clean or indiscriminately commit the checkout.
+
+VALIDATION
+User approved focused local PostgreSQL and simulated SMTP/provider experiments for
+forgery, blocks, consent, duplicates and interrupted notice sending. Four new scenarios
+and adapted existing suites pass. All eight final quality-gate checks passed:
+109 ordinary tests/doctests and 90 PostgreSQL tests; no suite skipped.
+Final log: /tmp/cs-mail-email-journey-gate.log
+Existing clean CLI/HTTP demonstration passed with the new guest configuration and
+consent restoration: /tmp/cs-mail-email-demo.log. Its two fresh databases were removed.
+Schema-30 production-binary backup/recovery drill passed, including isolation, process
+restart, idle database-loss exit, restored audit/schema facts, rollback/refusal and log
+redaction: /tmp/cs-mail-email-recovery.log. Its temporary databases were removed.
+The later arrival-retry refinement was verified by the final gate, not another recovery
+drill; it does not alter the schema or process recovery protocol. Shell/Python syntax,
+demonstration JSON and git diff --check passed.
+
+BOUNDARIES AND NEXT WORK
+No live email, payments, provider-account changes or public infrastructure actions in
+this pass. Funding remains simulated. Public host/MX/HTTPS and actual callbacks still
+need deployment validation. HTML-only mail, attachments, weak-authentication held-mail
+confirmation, human-readable aliases, native source exports, operator reconciliation UI
+and broad abuse/load testing remain outside this bounded journey. Current automatic
+checks require an aligned DMARC pass (including p=none); failed/missing authentication
+is refused, not held. The Linux package remains a callback-only deployment profile.
+Full operating/configuration/experiment record: docs/external-email-journey.md.
+
+HISTORICAL CHECKPOINTS FOLLOW
+
+SMTP RECEIVER IMPLEMENTATION CHECKPOINT — 2026-10-07
+
+FOLLOW-UP: the local SMTP2GO outbound adapter pass is now complete. See
+docs/smtp2go-checkpoint.txt and docs/smtp2go-outbound.md. Schema is now 26;
+the receiver's exact schema check was advanced with the provider-event migration.
+The historical implementation notes below describe the preceding receiver pass.
+
+STATUS
+The authorized next Rust pass is implemented: actual TCP/STARTTLS receiving for
+plain-text replies to known external conversations. It uses the existing automatic
+SPF/DKIM/DMARC verifier, exact mailbox matching and current permission checks.
+The full quality gate PASSED, including all PostgreSQL suites and application
+binaries. Evidence: /private/tmp/cs-mail-smtp-gate.log. The complete gate passed
+again after final startup cleanup: /private/tmp/cs-mail-smtp-gate-final.log.
+Work is saved, uncommitted. There is substantial pre-existing staged/unstaged and
+untracked work. Do not reset, clean, or indiscriminately commit it.
+No identity-model source changes were made; its pinned manifest passes.
+
+USER-AGREED TESTING SCOPE
+The user explicitly approved four conjectures: forged/mismatched senders cannot
+enter a conversation; blocks/revocation stop new delivery; SMTP success follows
+database commit; a lost success response cannot duplicate a message.
+
+IMPLEMENTATION
+- apps/cs-mail-mx: receive-only executable, configured TLS certificate/key and
+  dedicated stable replay secret. Opens schema 25 without running migrations.
+  Does not receive member signing, relationship derivation or relay content keys.
+- cs-mail-smtp-gateway incoming/receiver: bounded SMTP state machine, STARTTLS
+  reset, exact conversation routing, single-author/single-part plain-text parsing,
+  real verification using actual peer/envelope and no trusted supplied headers.
+- cs-mail-service/incoming: authentication outside locks, randomized encryption to
+  member, stable keyed identities independent of transport retry/encryption, bounded
+  blocking commits, retryable storage failures. No raw email spool/content logging.
+- Application owns deterministic admission; storage rechecks protected current
+  authority/key and commits encrypted content, lane effects, and authentication
+  provenance together. The final DATA 250 follows that commit.
+- GuestSmtp is distinct from request-page GuestGateway evidence. Ordinary SMTP
+  does not assert a human origin or known purpose. Native upload refuses it.
+- Migration 0025 records incoming authentication evidence. Old synthetic replay
+  digest semantics are replaced; use a fresh development DB for this cutover.
+- Development relay artifacts include the conversation reply_to address.
+- Updated README, apps notes, domain/design docs, runbook and build-plan source/PDF.
+
+VALIDATION
+Six external-flow PostgreSQL scenarios passed: the four prior scenarios and two
+new TCP/STARTTLS scenarios with real Ed25519 DKIM and controlled local DNS.
+They challenge tampered signatures, forged Authentication-Results, duplicate From,
+wrong mailbox, unknown conversation, transient DNS failure, revoke/block, encrypted
+storage, injected database rollback, blocked commit, lost acknowledgment, changing
+Received headers and altered-content retries. TLS greeting state is reset.
+Final two SMTP scenarios were rerun after the test CA/leaf chain was finalized:
+/private/tmp/cs-mail-smtp-final-tests.log.
+The actual executable also passed local startup, test-CA-verified STARTTLS, relay
+refusal, forged-authentication rejection and clean SIGINT shutdown.
+Built-in LaTeX compiler validated the updated build-plan source.
+The exported build-plan PDF was regenerated and visually checked (16 pages,
+including detailed inspection of the updated receiver milestone on page 12).
+
+LIMITS / NEXT WORK
+- Plain text only, one recipient per transaction, existing conversation addresses.
+  General member addresses, HTML, multipart/attachments, held-mail request-page
+  confirmation and paid-request-to-email conversation creation remain deferred.
+- Public MX/DNS/MTA-STS deployment and Internet deliverability have not been tested.
+- Real outbound provider integration, threading headers, bounces/complaints and
+  unknown-handoff reconciliation UI remain subsequent work.
+- No load/fuzz campaign, exhaustive crash matrix, automated TLS renewal, remote
+  PostgreSQL TLS or hardened deployment SQL-role configuration in this pass.
+- Replay secret must remain stable across restarts and database backups. Rotation
+  needs its own coordinated migration design.
+- No baseline claim that the full repository was warning-free; application binary
+  smoke reports existing non-simulation dead-code/unused-import warnings.
+
+LOCAL ENVIRONMENT
+PostgreSQL 17.6 remains running on loopback port 55432, trust auth, owner thomm15.
+Binaries: /private/tmp/cs-mail-pg/bin
+Cluster: /private/tmp/cs-mail-external-pgdata
+Test URL: postgresql://thomm15@127.0.0.1:55432/cs_mail_external_test
+Demo DB suffix 4 was upgraded to schema 25 for executable startup only; no claim
+that historical synthetic reply retries survive the changed digest semantics.
+Receiver smoke process is stopped. Its temporary config is under
+/private/tmp/cs-mail-mx-smoke. Test certificate private material in the repository
+is public fixture material, not deployment credentials.
+
+GATE
+CARGO_NET_OFFLINE=true \
+CS_MAIL_TEST_DATABASE_URL=postgresql://thomm15@127.0.0.1:55432/cs_mail_external_test \
+  scripts/quality-gate.sh
+Localhost testing requires scoped sandbox escalation; requests were automatically
+approved. Do not run demos concurrently with the gate's binary rebuilds.
+
+REFERENCE
+docs/smtp-receiver.md has the supported profile, config, conjectures and limitations.
+docs/external-flow-checkpoint.txt preserves the preceding pass and agreed policies.

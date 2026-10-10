@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Request to write</title>
+<link rel="stylesheet" href="/r/assets/style.css">
+<script src="/r/assets/app.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>Request to write</h1>
+  <p class="lede">This member accepts messages from people outside cs-mail for a refundable
+    charge. You pay once, then send; the recipient decides whether to accept.</p>
+
+  <p id="error" class="error" role="alert" hidden></p>
+
+  <section id="step-mailbox" hidden>
+    <h2>Your email address</h2>
+    <form id="form-mailbox">
+      <label for="mailbox">Email address</label>
+      <input id="mailbox" name="mailbox" type="email" autocomplete="email" required>
+      <button type="submit">Send me a code</button>
+    </form>
+  </section>
+
+  <section id="step-code" hidden>
+    <h2>Check your email</h2>
+    <p>We sent a six-digit code to <strong id="code-mailbox"></strong>. It is valid for 15 minutes.</p>
+    <form id="form-code">
+      <label for="code">Code</label>
+      <input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+             autocomplete="one-time-code" required>
+      <button type="submit">Verify</button>
+    </form>
+  </section>
+
+  <section id="step-compose" hidden>
+    <h2>Your request</h2>
+    <p class="who">Writing as <strong id="compose-mailbox"></strong></p>
+    <p id="not-ready" class="note" hidden>This member cannot receive requests yet.</p>
+    <form id="form-request">
+      <fieldset id="classes">
+        <legend>What is it about?</legend>
+      </fieldset>
+      <label for="message">Message</label>
+      <textarea id="message" name="message" rows="7" maxlength="16000" required></textarea>
+      <label for="card">Card number <span class="hint">(development: any 12–19 digits;
+        4000000000000002 is declined)</span></label>
+      <input id="card" name="card" inputmode="numeric" autocomplete="cc-number" required>
+      <div class="disclosures" id="disclosures">
+        <h3>Before you send</h3>
+        <ul>
+          <li>The recipient sees your email address.</li>
+          <li>Your message is encrypted for the recipient when it arrives here. It is not
+            end-to-end encrypted: this service handles it before encrypting it.</li>
+          <li>Your email address and a fingerprint of your card are kept, with no end date,
+            to tie your requests to this recipient together. A new address with the same
+            card, or a new card with the same address, continues that history.</li>
+          <li id="terms-summary"></li>
+        </ul>
+        <label class="check"><input id="agree" type="checkbox" required>
+          I understand and agree.</label>
+      </div>
+      <button type="submit" id="send">Authorize charge</button>
+    </form>
+  </section>
+
+  <section id="step-status" hidden>
+    <h2>Your request</h2>
+    <p id="status-line" aria-live="polite"></p>
+    <dl id="money"></dl>
+    <button type="button" id="submit" hidden>Send request</button>
+    <button type="button" id="cancel" class="secondary" hidden>Cancel and refund</button>
+    <button type="button" id="again" hidden>Write another request</button>
+  </section>
+
+  <footer>
+    <button type="button" id="signout" class="link" hidden>Use a different email address</button>
+  </footer>
+</main>
+</body>
+</html>

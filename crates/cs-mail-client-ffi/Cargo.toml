@@ -1,0 +1,24 @@
+[package]
+name = "cs-mail-client-ffi"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+cs-mail-primitives = { path = "../cs-mail-primitives" }
+cs-mail-client = { path = "../cs-mail-client", features = ["member-runtime"] }
+uniffi = "=0.31.0"
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[[bin]]
+name = "cs-mail-bindgen"
+path = "src/bin/bindgen.rs"
+required-features = ["bindgen"]
+
+[lints]
+workspace = true

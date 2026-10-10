@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-adapters = { path = "../cs-mail-adapters" }
 cs-mail-capabilities = { path = "../cs-mail-capabilities" }
 cs-mail-consent = { path = "../cs-mail-consent" }
 cs-mail-correspondence = { path = "../cs-mail-correspondence" }
@@ -15,9 +16,11 @@ cs-mail-security = { path = "../cs-mail-security" }
 cs-mail-accounts = { path = "../cs-mail-accounts" }
 cs-mail-billing = { path = "../cs-mail-billing" }
 cs-mail-finance = { path = "../cs-mail-finance" }
+cs-mail-guests = { path = "../cs-mail-guests" }
 cs-mail-ledger = { path = "../cs-mail-ledger" }
 cs-mail-operations = { path = "../cs-mail-operations" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
+cs-mail-privacy = { path = "../cs-mail-privacy" }
 cs-mail-protocol = { path = "../cs-mail-protocol" }
 
 serde.workspace = true

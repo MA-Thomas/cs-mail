@@ -1,5 +1,6 @@
 //! Deterministic native correspondence rules. No storage, clock, transport or keys.
 mod document;
+pub mod external;
 mod image;
 mod policy;
 mod selection;

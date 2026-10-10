@@ -1,0 +1,4 @@
+[bindings.swift]
+module_name = "CsMailRust"
+ffi_module_name = "CsMailFFI"
+generate_module_map = true

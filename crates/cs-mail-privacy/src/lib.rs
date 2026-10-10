@@ -98,6 +98,52 @@ impl PrivacyDeriver {
         )
     }
 
+    /// A guest's own request history with one recipient, before any evidence links it to
+    /// another history. `guest` is the guest's synthetic protocol identity.
+    pub fn guest_request_history_ref(
+        &self,
+        derivation_version: u16,
+        service_domain: &[u8],
+        guest: ProtocolIdentity,
+        recipient: ProtocolIdentity,
+    ) -> RequestHistoryRef {
+        RequestHistoryRef::new(
+            derivation_version,
+            derive(
+                &self.principal_secret,
+                b"cs-mail/guest-request-history/v1",
+                service_domain,
+                guest.0,
+                recipient.0,
+            ),
+        )
+    }
+
+    /// The history two linked histories merge into; independent of their order.
+    /// # Panics
+    /// Never: HMAC accepts a key of any length.
+    pub fn merged_request_history_ref(
+        &self,
+        derivation_version: u16,
+        service_domain: &[u8],
+        first: &RequestHistoryRef,
+        second: &RequestHistoryRef,
+    ) -> RequestHistoryRef {
+        let (low, high) = if first.as_bytes() <= second.as_bytes() {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.principal_secret)
+            .expect("HMAC accepts a 32-byte key");
+        mac.update(b"cs-mail/merged-request-history/v1");
+        mac.update(&(service_domain.len() as u64).to_be_bytes());
+        mac.update(service_domain);
+        mac.update(low.as_bytes());
+        mac.update(high.as_bytes());
+        RequestHistoryRef::new(derivation_version, mac.finalize().into_bytes().into())
+    }
+
     pub fn content_scope_ref(
         &self,
         derivation_version: u16,

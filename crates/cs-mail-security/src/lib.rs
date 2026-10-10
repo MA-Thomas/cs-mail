@@ -4,6 +4,8 @@ mod authority;
 pub use authority::AuthoritySnapshot;
 mod pricing;
 pub use pricing::{RecipientSigningScope, SignedRequestClasses};
+mod member;
+pub use member::{EndpointKeyPublication, MemberRead, SignedEndpointKey, SignedMemberRead};
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -37,23 +39,51 @@ pub struct SigningScope {
     pub relationship: RelationshipRef,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SignedCommandBytes {
     pub payload: Vec<u8>,
+    #[serde(with = "cs_mail_primitives::signature_bytes")]
     pub signature: [u8; 64],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SignedContentKeyCertificate {
     pub certificate: ContentKeyCertificate,
+    #[serde(with = "cs_mail_primitives::signature_bytes")]
     pub signature: [u8; 64],
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum KeyStatus {
     Active,
-    Retired { valid_until: CanonicalTime },
-    Revoked { revoked_at: CanonicalTime },
+    Retired {
+        valid_until: CanonicalTime,
+    },
+    Revoked {
+        revoked_at: CanonicalTime,
+    },
+    /// Revocation does not erase the earlier retirement boundary.
+    RetiredRevoked {
+        valid_until: CanonicalTime,
+        revoked_at: CanonicalTime,
+    },
+}
+
+impl KeyStatus {
+    fn valid_at_receipt(self, at: CanonicalTime) -> bool {
+        match self {
+            Self::Active => true,
+            Self::Retired { valid_until } => at <= valid_until,
+            Self::Revoked { revoked_at } => at < revoked_at,
+            Self::RetiredRevoked {
+                valid_until,
+                revoked_at,
+            } => at <= valid_until && at < revoked_at,
+        }
+    }
+    fn revoked(self) -> bool {
+        matches!(self, Self::Revoked { .. } | Self::RetiredRevoked { .. })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -408,12 +438,12 @@ impl KeyRegistry {
         if at < key.valid_from {
             return Err(SecurityError::KeyNotYetValid);
         }
-        match key.status {
-            KeyStatus::Active => Ok(key.verifying_key),
-            KeyStatus::Retired { valid_until } if at <= valid_until => Ok(key.verifying_key),
-            KeyStatus::Retired { .. } | KeyStatus::Revoked { .. } => {
-                Err(SecurityError::KeyNotValidAtReceipt)
-            }
+        // Current authority cannot be obtained from a revoked key even when the
+        // caller supplies a time at which a historical receipt would verify.
+        if key.status.revoked() || !key.status.valid_at_receipt(at) {
+            Err(SecurityError::KeyNotValidAtReceipt)
+        } else {
+            Ok(key.verifying_key)
         }
     }
 
@@ -481,10 +511,12 @@ impl KeyRegistry {
             return Err(SecurityError::KeyNotYetValid);
         }
         let actor = old.actor;
+        let old_version = next_version(old.version)?;
+        let registry_version = next_version(self.version)?;
         old.status = KeyStatus::Retired { valid_until: at };
-        old.version = next_version(old.version)?;
+        old.version = old_version;
         let retired = old.clone();
-        self.version = next_version(self.version)?;
+        self.version = registry_version;
         let replacement = OperationalKeyRecord {
             reference: new_reference,
             actor,
@@ -522,10 +554,31 @@ impl KeyRegistry {
         if at < key.valid_from {
             return Err(SecurityError::KeyNotYetValid);
         }
-        key.status = KeyStatus::Revoked { revoked_at: at };
-        key.version = next_version(key.version)?;
+        let status = match key.status {
+            KeyStatus::Active => KeyStatus::Revoked { revoked_at: at },
+            KeyStatus::Retired { valid_until } => {
+                if at < valid_until {
+                    return Err(SecurityError::KeyNotYetValid);
+                }
+                KeyStatus::RetiredRevoked {
+                    valid_until,
+                    revoked_at: at,
+                }
+            }
+            KeyStatus::Revoked { revoked_at } | KeyStatus::RetiredRevoked { revoked_at, .. } => {
+                return if at >= revoked_at {
+                    Ok(())
+                } else {
+                    Err(SecurityError::KeyNotYetValid)
+                };
+            }
+        };
+        let key_version = next_version(key.version)?;
+        let registry_version = next_version(self.version)?;
+        key.status = status;
+        key.version = key_version;
         let revoked = key.clone();
-        self.version = next_version(self.version)?;
+        self.version = registry_version;
         self.transparency
             .append(&revoked, TransparencyAction::Revoked, at);
         Ok(())
@@ -567,12 +620,7 @@ impl KeyRegistry {
         if receipt_time < key.valid_from {
             return Err(SecurityError::KeyNotYetValid);
         }
-        let valid = match key.status {
-            KeyStatus::Active => true,
-            KeyStatus::Retired { valid_until } => receipt_time <= valid_until,
-            KeyStatus::Revoked { revoked_at } => receipt_time < revoked_at,
-        };
-        if !valid {
+        if !key.status.valid_at_receipt(receipt_time) {
             return Err(SecurityError::KeyNotValidAtReceipt);
         }
         let verifying_key = VerifyingKey::from_bytes(&key.verifying_key)
@@ -607,6 +655,41 @@ impl KeyRegistry {
         expected_protocol_version: ProtocolVersion,
         expected_scope: SigningScope,
     ) -> Result<cs_mail_content::ContentCertificateDigest, SecurityError> {
+        self.verify_certificate(
+            signed,
+            ActorRef::Sender(signed.certificate.owner),
+            receipt_time,
+            expected_protocol_version,
+            expected_scope,
+        )
+    }
+    /// Verifies a content-key certificate the provider issued for a guest's content,
+    /// which the provider received in plaintext and encrypted on arrival.
+    /// # Errors
+    /// Rejects any certificate not signed by an active provider key of the expected scope.
+    pub fn verify_guest_content_certificate(
+        &self,
+        signed: &SignedContentKeyCertificate,
+        receipt_time: CanonicalTime,
+        expected_protocol_version: ProtocolVersion,
+        expected_scope: SigningScope,
+    ) -> Result<cs_mail_content::ContentCertificateDigest, SecurityError> {
+        self.verify_certificate(
+            signed,
+            ActorRef::Provider(expected_scope.intended_provider),
+            receipt_time,
+            expected_protocol_version,
+            expected_scope,
+        )
+    }
+    fn verify_certificate(
+        &self,
+        signed: &SignedContentKeyCertificate,
+        key_holder: ActorRef,
+        receipt_time: CanonicalTime,
+        expected_protocol_version: ProtocolVersion,
+        expected_scope: SigningScope,
+    ) -> Result<cs_mail_content::ContentCertificateDigest, SecurityError> {
         let certificate = &signed.certificate;
         if certificate.wire_version != WireVersion(1) {
             return Err(SecurityError::WireVersionMismatch);
@@ -622,11 +705,8 @@ impl KeyRegistry {
         {
             return Err(SecurityError::SigningScopeMismatch);
         }
-        let key = self.active_verifying_key(
-            certificate.operational_key,
-            ActorRef::Sender(certificate.owner),
-            receipt_time,
-        )?;
+        let key =
+            self.active_verifying_key(certificate.operational_key, key_holder, receipt_time)?;
         VerifyingKey::from_bytes(&key)
             .map_err(|_| SecurityError::InvalidPublicKey)?
             .verify_strict(
@@ -638,10 +718,11 @@ impl KeyRegistry {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SignedContactTerms {
     pub terms: RequestTerms,
     pub provider_operational_key: OperationalKeyRef,
+    #[serde(with = "cs_mail_primitives::signature_bytes")]
     pub signature: [u8; 64],
 }
 
@@ -670,10 +751,11 @@ pub struct ReceiptPayload {
     pub protocol_version: ProtocolVersion,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SignedReceipt {
     pub payload: ReceiptPayload,
     pub provider_operational_key: OperationalKeyRef,
+    #[serde(with = "cs_mail_primitives::signature_bytes")]
     pub signature: [u8; 64],
 }
 
@@ -725,6 +807,31 @@ impl ProviderSigner {
             terms,
             provider_operational_key: self.reference,
             signature: self.signing_key.sign(&bytes).to_bytes(),
+        })
+    }
+
+    /// Certifies the provider's own content key for content it encrypted on a guest's
+    /// behalf. The certificate names the guest as owner and this provider key as signer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for another provider, key or an empty validity interval.
+    pub fn sign_guest_content_certificate(
+        &self,
+        certificate: ContentKeyCertificate,
+    ) -> Result<SignedContentKeyCertificate, SecurityError> {
+        if certificate.operational_key != self.reference
+            || certificate.intended_provider != self.provider
+            || certificate.valid_until <= certificate.valid_from
+        {
+            return Err(SecurityError::SigningScopeMismatch);
+        }
+        Ok(SignedContentKeyCertificate {
+            signature: self
+                .signing_key
+                .sign(&content_key_certificate_bytes(&certificate))
+                .to_bytes(),
+            certificate,
         })
     }
 
@@ -1066,6 +1173,45 @@ mod tests {
         );
         assert!(registry.transparency().verify());
         assert_eq!(registry.transparency().entries().len(), 4);
+        // Claim: revocation and repeated recovery never expand historical validity.
+        // Accepting receipt 11 after retirement at 10 would falsify it and admit a
+        // signature that was already outside its authority window.
+        registry
+            .revoke(OperationalKeyRef(1), Version(1), CanonicalTime(30))
+            .unwrap();
+        let revoked = registry.clone();
+        registry
+            .revoke(OperationalKeyRef(1), Version(2), CanonicalTime(40))
+            .unwrap();
+        registry
+            .revoke(OperationalKeyRef(2), Version(1), CanonicalTime(40))
+            .unwrap();
+        assert_eq!(registry, revoked);
+        let registry: KeyRegistry =
+            serde_json::from_slice(&serde_json::to_vec(&registry).unwrap()).unwrap();
+        assert!(
+            registry
+                .verify(&old_command, CanonicalTime(10), ProtocolVersion(2), scope())
+                .is_ok()
+        );
+        assert_eq!(
+            registry.verify(&old_command, CanonicalTime(11), ProtocolVersion(2), scope()),
+            Err(SecurityError::KeyNotValidAtReceipt)
+        );
+        assert_eq!(
+            registry.verify(&new_command, CanonicalTime(20), ProtocolVersion(2), scope()),
+            Err(SecurityError::KeyNotValidAtReceipt)
+        );
+        assert!(
+            registry
+                .active_verifying_key(
+                    OperationalKeyRef(1),
+                    ActorRef::Recipient(ProtocolIdentity(2)),
+                    CanonicalTime(10)
+                )
+                .is_err()
+        );
+        assert!(registry.transparency().verify());
     }
 
     #[test]

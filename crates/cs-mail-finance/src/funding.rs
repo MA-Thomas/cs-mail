@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[serde(try_from = "StoredSource", into = "StoredSource")]
 pub struct FundingSource {
     token: [u8; 32],
-    verification: u64,
+    evidence: SourceEvidence,
     restricted: bool,
     maximum_unresolved: u32,
     attempts: BTreeMap<PaymentOperationId, PaymentExecution>,
@@ -19,12 +19,23 @@ pub struct FundingSource {
 #[derive(Deserialize, Serialize)]
 struct StoredSource {
     token: [u8; 32],
-    verification: u64,
+    evidence: SourceEvidence,
     restricted: bool,
     maximum_unresolved: u32,
     attempts: BTreeMap<PaymentOperationId, PaymentExecution>,
     dispatched: BTreeSet<PaymentOperationId>,
 }
+/// What establishes a funding source.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SourceEvidence {
+    /// A member's bank account, at this verification version (non-zero); a later
+    /// verification lifts a restriction.
+    BankVerification(u64),
+    /// A guest's payment instrument, tokenized by the processor. Nothing re-verifies it: a
+    /// restriction is permanent.
+    GuestInstrument,
+}
+
 impl FundingSource {
     pub const fn bank_token(&self) -> &[u8; 32] {
         &self.token
@@ -40,7 +51,27 @@ impl FundingSource {
         }
         Ok(Self {
             token: bank.evidence().bank_token,
-            verification: bank.evidence().version,
+            evidence: SourceEvidence::BankVerification(bank.evidence().version),
+            restricted: false,
+            maximum_unresolved,
+            attempts: BTreeMap::new(),
+            dispatched: BTreeSet::new(),
+        })
+    }
+    /// A guest's payment instrument, identified by the processor's token for it. Refunds
+    /// of captures reserved here return to the same token.
+    /// # Errors
+    /// Rejects a zero token or an empty unresolved-attempt limit.
+    pub fn guest_instrument(
+        token: [u8; 32],
+        maximum_unresolved: u32,
+    ) -> Result<Self, PaymentError> {
+        if maximum_unresolved == 0 || token == [0; 32] {
+            return Err(PaymentError::InvalidOperation);
+        }
+        Ok(Self {
+            token,
+            evidence: SourceEvidence::GuestInstrument,
             restricted: false,
             maximum_unresolved,
             attempts: BTreeMap::new(),
@@ -120,13 +151,16 @@ impl FundingSource {
         Ok(())
     }
     /// # Errors
-    /// Rejects a different bank association or a replayed verification version.
+    /// Rejects a guest instrument, a different bank association or a replayed verification
+    /// version.
     pub fn reverify(&mut self, bank: &VerifiedBankAccount) -> Result<(), PaymentError> {
-        if bank.evidence().bank_token != self.token || bank.evidence().version <= self.verification
-        {
+        let SourceEvidence::BankVerification(version) = self.evidence else {
+            return Err(PaymentError::InvalidOperation);
+        };
+        if bank.evidence().bank_token != self.token || bank.evidence().version <= version {
             return Err(PaymentError::InvalidOperation);
         }
-        self.verification = bank.evidence().version;
+        self.evidence = SourceEvidence::BankVerification(bank.evidence().version);
         self.restricted = false;
         Ok(())
     }
@@ -135,7 +169,7 @@ impl From<FundingSource> for StoredSource {
     fn from(v: FundingSource) -> Self {
         Self {
             token: v.token,
-            verification: v.verification,
+            evidence: v.evidence,
             restricted: v.restricted,
             maximum_unresolved: v.maximum_unresolved,
             attempts: v.attempts,
@@ -146,7 +180,10 @@ impl From<FundingSource> for StoredSource {
 impl TryFrom<StoredSource> for FundingSource {
     type Error = PaymentError;
     fn try_from(v: StoredSource) -> Result<Self, Self::Error> {
-        if v.token == [0; 32] || v.verification == 0 || v.maximum_unresolved == 0 {
+        if v.token == [0; 32]
+            || v.evidence == SourceEvidence::BankVerification(0)
+            || v.maximum_unresolved == 0
+        {
             return Err(PaymentError::InvalidOperation);
         }
         for (id, p) in &v.attempts {
@@ -163,7 +200,7 @@ impl TryFrom<StoredSource> for FundingSource {
         }
         Ok(Self {
             token: v.token,
-            verification: v.verification,
+            evidence: v.evidence,
             restricted: v.restricted,
             maximum_unresolved: v.maximum_unresolved,
             attempts: v.attempts,

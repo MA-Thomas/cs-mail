@@ -84,7 +84,8 @@ impl OperatorKeys {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "BootstrapRecord", into = "BootstrapRecord")]
 pub struct DeploymentBootstrap(BootstrapRecord);
-/// The provider key signs quotes and receipts for CSQD.
+/// One of the service's own keys: the provider key, which signs quotes and receipts for
+/// CSQD, or the scheduler key.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderKey {
     pub reference: OperationalKeyRef,
@@ -109,7 +110,11 @@ pub struct BootstrapRecord {
     pub deployment_domain: [u8; 32],
     pub financial_scope: FinancialScope,
     pub unit: SettlementUnit,
+    /// Signs quotes and receipts for CSQD.
     pub provider_key: ProviderKey,
+    /// Authorizes the service's own deadline commands: submission timeouts, request
+    /// expiry and lane horizons. It never signs anything a member sees.
+    pub scheduler_key: ProviderKey,
     pub operators: OperatorKeys,
     pub payment: PaymentTrust,
     pub identity: IdentityTrust,
@@ -124,6 +129,9 @@ impl TryFrom<BootstrapRecord> for DeploymentBootstrap {
             || record.financial_scope.operator != record.provider
             || record.provider_key.reference.0 == 0
             || !valid_key(&record.provider_key.verifying_key)
+            || record.scheduler_key.reference.0 == 0
+            || record.scheduler_key.reference == record.provider_key.reference
+            || !valid_key(&record.scheduler_key.verifying_key)
             || !valid_key(&record.payment.processor_key)
             || !valid_key(&record.payment.bank_authority)
             || !valid_key(&record.identity.decision_key)
@@ -166,6 +174,16 @@ impl DeploymentBootstrap {
             None => Ok(BootstrapOutcome::Created),
             Some(existing) if existing == self => Ok(BootstrapOutcome::AlreadyBootstrapped),
             Some(_) => Err(OperationsError::BootstrapConflict),
+        }
+    }
+    /// What every protocol policy version of this deployment shares.
+    pub const fn deployment_terms(&self) -> cs_mail_protocol::policy::DeploymentTerms {
+        cs_mail_protocol::policy::DeploymentTerms {
+            protocol_version: self.0.financial_scope.protocol_version,
+            provider: self.0.provider,
+            unit: self.0.unit,
+            financial_scope: self.0.financial_scope,
+            payment_provider_key: self.0.payment.processor_key,
         }
     }
     /// The authority that verifies this deployment's operator commands.

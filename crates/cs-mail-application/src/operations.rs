@@ -11,6 +11,7 @@ use cs_mail_operations::{
 };
 use cs_mail_primitives::CanonicalTime;
 use cs_mail_protocol::ProtocolError;
+use cs_mail_protocol::policy::ProtocolPolicy;
 use cs_mail_protocol::pricing::RequestPricingPolicy;
 
 /// The bootstrap decision and the trusted instant it was made.
@@ -58,6 +59,12 @@ pub enum OperatorTarget {
         same_version: Option<ServiceOffer>,
     },
     RequestPricing(PolicyPublicationContext),
+    ProtocolPolicy {
+        /// The current protocol policy, if any.
+        current: Option<ProtocolPolicy>,
+        /// A stored protocol policy with the same version, if any.
+        same_version: Option<ProtocolPolicy>,
+    },
 }
 pub struct OperatorContext {
     pub authority: OperatorAuthority,
@@ -69,6 +76,7 @@ pub struct OperatorContext {
 pub enum OperatorEffect {
     PublishServiceOffer(ServiceOffer),
     PublishRequestPricing(RequestPricingPolicy, CanonicalTime),
+    PublishProtocolPolicy(ProtocolPolicy, CanonicalTime),
 }
 /// The audit record committed with the effect.
 pub struct OperatorRecord {
@@ -172,6 +180,27 @@ impl<'a, R: OperatorStore> OperatorService<'a, R> {
                             },
                         )
                     }
+                    (
+                        OperatorCommand::PublishProtocolPolicy(policy),
+                        OperatorTarget::ProtocolPolicy {
+                            current,
+                            same_version,
+                        },
+                    ) => {
+                        let changed = decide_protocol_policy(
+                            policy,
+                            current.as_ref(),
+                            same_version.as_ref(),
+                        )?;
+                        (
+                            changed
+                                .then(|| OperatorEffect::PublishProtocolPolicy(policy.clone(), at)),
+                            OperatorOutcome::ProtocolPolicyPublished {
+                                version: policy.version(),
+                                changed,
+                            },
+                        )
+                    }
                     _ => return Err(OperationsError::Invalid.into()),
                 };
                 Ok(OperatorDecision {
@@ -184,5 +213,28 @@ impl<'a, R: OperatorStore> OperatorService<'a, R> {
                     outcome,
                 })
             })
+    }
+}
+
+/// Decides publishing a protocol policy version. Returns whether it changes the current
+/// policy; an exact replay of the current version changes nothing. Issued request terms
+/// keep the windows they were issued under.
+/// # Errors
+/// `DuplicateConflict` for a stored version with different content and `VersionConflict`
+/// for a version not newer than the current one.
+pub fn decide_protocol_policy(
+    policy: &ProtocolPolicy,
+    current: Option<&ProtocolPolicy>,
+    same_version: Option<&ProtocolPolicy>,
+) -> Result<bool, ProtocolError> {
+    if same_version.is_some_and(|stored| stored != policy) {
+        return Err(ProtocolError::DuplicateConflict);
+    }
+    match current {
+        Some(current) if current == policy => Ok(false),
+        Some(current) if policy.version() <= current.version() => {
+            Err(ProtocolError::VersionConflict)
+        }
+        _ => Ok(true),
     }
 }

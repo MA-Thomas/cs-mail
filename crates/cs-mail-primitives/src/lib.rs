@@ -424,6 +424,11 @@ impl OriginMode {
 pub enum DeclarationAuthority {
     NativeSender(OperationalKeyRef),
     LegacyGateway(ProviderRef),
+    /// The provider's guest request page, after it verified the guest's mailbox. The
+    /// provider vouches for the declarations of content it received in plaintext.
+    GuestGateway(ProviderRef),
+    /// Automatically authenticated email; no assertion of human involvement.
+    GuestSmtp(ProviderRef),
 }
 
 impl DeclarationAuthority {
@@ -435,6 +440,14 @@ impl DeclarationAuthority {
             }
             Self::LegacyGateway(provider) => {
                 bytes.push(1);
+                bytes.extend_from_slice(&provider.0.to_be_bytes());
+            }
+            Self::GuestGateway(provider) => {
+                bytes.push(2);
+                bytes.extend_from_slice(&provider.0.to_be_bytes());
+            }
+            Self::GuestSmtp(provider) => {
+                bytes.push(3);
                 bytes.extend_from_slice(&provider.0.to_be_bytes());
             }
         }
@@ -510,6 +523,17 @@ impl MessageDeclarations {
         {
             return Err(DeclarationError::UnsupportedLegacyOrigin);
         }
+        if matches!(self.origin.authority, DeclarationAuthority::GuestSmtp(_))
+            && self.origin.mode != OriginMode::LegacyOrUnspecified
+        {
+            return Err(DeclarationError::UnsupportedGuestOrigin);
+        }
+        // A guest writes on the request page in person.
+        if matches!(self.origin.authority, DeclarationAuthority::GuestGateway(_))
+            && self.origin.mode != OriginMode::HumanInitiated
+        {
+            return Err(DeclarationError::UnsupportedGuestOrigin);
+        }
         Ok(())
     }
 
@@ -546,6 +570,7 @@ pub struct MessageDeclarationDigest(pub [u8; 32]);
 pub enum DeclarationError {
     InvalidIdentifier,
     UnsupportedLegacyOrigin,
+    UnsupportedGuestOrigin,
 }
 
 impl fmt::Display for DeclarationError {
@@ -630,5 +655,28 @@ mod tests {
             legacy.validate(),
             Err(DeclarationError::UnsupportedLegacyOrigin)
         );
+    }
+}
+
+/// Serde representation of a 64-byte Ed25519 signature as a byte sequence, for
+/// `#[serde(with = "cs_mail_primitives::signature_bytes")]`.
+pub mod signature_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    /// # Errors
+    /// Propagates the serializer's errors.
+    pub fn serialize<S: Serializer>(
+        signature: &[u8; 64],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(signature.iter())
+    }
+    /// # Errors
+    /// Rejects anything but exactly 64 bytes.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 64], D::Error> {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("a signature is 64 bytes"))
     }
 }

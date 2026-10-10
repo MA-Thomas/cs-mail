@@ -17,7 +17,19 @@ use sha2::{Digest, Sha256};
 /// Unicode names must be converted to their IDNA ASCII form by the vetted
 /// DMARC verifier before this value is constructed.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct DomainIdentity(String);
+impl TryFrom<String> for DomainIdentity {
+    type Error = DomainIdentityError;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse_ascii(&value)
+    }
+}
+impl From<DomainIdentity> for String {
+    fn from(value: DomainIdentity) -> Self {
+        value.0
+    }
+}
 
 impl DomainIdentity {
     /// Normalizes a DNS name to lowercase without its optional root dot.

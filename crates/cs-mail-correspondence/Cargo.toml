@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-guests = { path = "../cs-mail-guests" }
+cs-mail-protocol = { path = "../cs-mail-protocol" }
+cs-mail-consent = { path = "../cs-mail-consent" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
 serde.workspace = true
 serde_json.workspace = true

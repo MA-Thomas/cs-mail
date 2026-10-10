@@ -43,16 +43,16 @@
 % A conjecture to challenge (Rust-domain principle 10): the claim, the
 % observation that would falsify it, and why falsification would matter.
 \newenvironment{claims}{\begin{description}[leftmargin=1em,style=nextline,itemsep=0.4em]}{\end{description}}
-\newcommand{\claim}[4]{\item[Claim (#1).] #2\\
+\newcommand{\claim}[4]{\Needspace{6\baselineskip}\item[Claim (#1).] #2\\
     \textit{Falsified by:} #3\\
     \textit{Matters because:} #4}
 
 \setlist[itemize]{itemsep=0.15em,topsep=0.3em}
 
 \title{\textit{cs-mail} Product Build Plan\\
-\large Server, Administration, Member Desktop, and Sender Request Page}
+\large Server, Administration, Apple Member Application, and Sender Request Page}
 \author{C-SQD}
-\date{Draft 0.7 --- 25 September 2026}
+\date{Draft 0.12 --- 8 October 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -64,7 +64,8 @@ This plan turns the implemented Rust domain into a runnable product. It builds
 the core relationship-request loop end to end first---operator service, identity
 enrollment, request, decision, and settlement, driven from a command-line
 client---and then adds depth: a public request page for senders without an
-account and their ordinary-email correspondence after acceptance, the macOS
+account, ordinary-email correspondence including member-initiated external
+conversations and review of their initial replies, the macOS
 member application, recovery across time and failure, the
 annual service and member-cycle experience, and open enrollment. cs-mail's core is
 also required by the future Phoros Account, so user testing informs design rather
@@ -73,6 +74,38 @@ redeemable value.
 \end{abstract}
 
 \medskip\noindent\fbox{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{\small\textbf{Design principles.} Before changing the implementation or this design, read the \href{docs/rust-domain-principles.md}{Rust-domain design principles} (\texttt{docs/rust-domain-principles.md}). They are binding for cs-mail and identity-model; new work must not regress them.}}\medskip
+
+\section{What Changed in Draft 0.12}
+
+The member application uses SwiftUI, with macOS shipping first and iPhone/iPad
+considered from the first slice. This replaces the planned Tauri shell. Business
+rules and portable client workflows remain in Rust. A narrow Rust-to-Swift
+interface and Apple library packaging move from Milestone~8 to Milestone~4.
+Apple targets share suitable views and presentation models; the guest request page
+keeps its own web components. Android and Windows later reuse the Rust client
+through separate interfaces and platform adapters. See
+\href{docs/apple-client-architecture.md}{the Apple client architecture}.
+Hosting remains deferred until the macOS application is locally validated.
+
+\section{What Changed in Draft 0.11}
+
+Member-selected external conversations need no separate mailbox-control challenge.
+Automatic email authentication and exact mailbox routing remain required. Pending
+conversations allow unlimited uncharged replies; acceptance or an express lane
+establishes broader permission. Rejection closes only the unpaid invitation.
+Withdrawal of disclosure consent cancels waiting mail atomically; dispatch already
+begun may be too late to cancel. The first local Rust slice and CLI demonstration
+implement these rules with a development relay. A separate receive-only SMTP
+process now authenticates plain-text and paired plain-text/HTML replies, offers
+STARTTLS, and acknowledges only after durable admission. Its wire experiments
+use real DKIM verification with controlled DNS; public deployment is still work.
+
+
+The outbound SMTP2GO adapter and authenticated feedback are locally validated.
+A fresh live email confirmed Gmail's acceptance of cs-mail's RSA-2048 signature
+and correct API receipt recording. Callbacks now have their own loopback listener
+and can run with sending disabled; public HTTPS/provider checks remain pending.
+API acceptance, delivery evidence and uncertain handoffs have separate meanings.
 
 \section{What Changed in Draft 0.7}
 
@@ -131,8 +164,9 @@ correspondence, consent-scoped decryption, request-specific payment operations
 and refunds, forfeiture maturity, annual allocation, fixed service contracts with
 advance collection, funded coverage, and automatic lump-sum distribution
 preparation. Signed service and client APIs, PostgreSQL transactions, and worker
-libraries exercise those rules with a simulated external provider. They are not
-yet a running server or a user-facing application.
+libraries exercise those rules with a simulated external provider. The local
+server, CLIs and guest request page are runnable; the Apple member application
+remains to be built.
 
 Product work reuses those owners and APIs. It does not recreate deprecated labels,
 aliases, fallback readers, or parallel implementations. When product work shows
@@ -143,7 +177,7 @@ reviewed cutover in the owning domain, not patched in an adapter.
 
 \paragraph{Clients and their roles.}
 \begin{itemize}
-    \item \textbf{Member application (macOS, Tauri).} Holds endpoint keys, the
+    \item \textbf{Member application (SwiftUI; macOS first).} Holds endpoint keys, the
     encrypted inbox, request decisions, request classes, lanes, blocks, and
     financial status. Native content is end-to-end encrypted.
     \item \textbf{Sender request page (web).} Lets a guest---a person without a
@@ -151,8 +185,10 @@ reviewed cutover in the owning domain, not patched in an adapter.
     one conditional charge, and write a message. The page is served by the
     provider, so it cannot carry the end-to-end promise; its messages are
     labeled as an explicit privacy downgrade.
-    \item \textbf{Email, for guests.} After acceptance, a guest corresponds from
-    their own mailbox. The member's replies arrive from the member's cs-mail
+    \item \textbf{External email conversations.} A guest may approach through a
+    paid request, or a member may send to an external mailbox first and review
+    authenticated replies without a charge within the pending conversation.
+    Broader access requires acceptance or an express lane. The member's emails arrive from the member's cs-mail
     address; the guest's replies return through the deployment's own mail
     receiver. The member consents to the downgrade per conversation.
     \item \textbf{Developer CLI.} Drives member journeys before the desktop
@@ -183,9 +219,9 @@ Users receive no spendable test-credit wallet; the operator configures simulator
 scenarios.
 
 \paragraph{Out of scope for this plan.} Independent-provider federation,
-general email hosting (members emailing arbitrary external addresses), live
-payments, mobile releases, and multi-region operation. Email is in
-scope only for guest conversations and transactional notices.
+general mailbox hosting (such as IMAP access or hosting external accounts), live
+payments, mobile releases, and multi-region operation. Member-initiated external
+conversations, guest-initiated conversations, and transactional notices are in scope.
 
 \section{Architecture of the Product Layer}
 
@@ -195,7 +231,7 @@ crates/
   cs-mail-client                # extended client core (ports for keys,
                                 #   local storage, transport, clock)
   cs-mail-api-types             # add when transport contracts need it
-  cs-mail-mobile-ffi            # Milestone 8
+  cs-mail-client-ffi            # narrow client facade; Swift in Milestone 4
 apps/
   cs-maild                      # HTTP API, workers, sender page hosting,
                                 #   outbound guest and notice email
@@ -203,10 +239,9 @@ apps/
                                 #   using cs-mail-smtp-gateway
   cs-mail-admin                 # authenticated operator CLI
   cs-mail-cli                   # developer member client
-  cs-mail-desktop               # Tauri shell and macOS adapters
+  cs-mail-apple                 # SwiftUI macOS/iOS targets, shared views,
+                                #   Apple adapters and Rust library package
   cs-mail-web                   # sender request page (static assets)
-ui/                             # interface components shared by
-                                #   desktop and web
 ../identity-model               # separate repository, sibling checkout
 \end{lstlisting}
 
@@ -215,8 +250,14 @@ layer, which use the domain; domain crates never depend on applications.
 \textbf{Applications are adapters.} They validate input, invoke application use
 cases, and render outcomes. They make no domain decisions, obtain trusted time
 only as the application-persistence boundary prescribes, and never translate a
-signed command into a different meaning. The client core compiles to WebAssembly;
-the member application nonetheless runs it natively through Tauri.
+signed command into a different meaning. The Apple application calls the native
+Rust client through a narrow binding interface. SwiftUI owns presentation; Rust
+owns business rules and portable client workflows. Apple platform adapters supply
+Keychain, local persistence and lifecycle integration through client ports. The
+Swift bindings and device/simulator packaging begin in Milestone~4; these planned
+paths are introduced with their first consumer. WebAssembly is not required for
+the Apple application. The guest page keeps its own web components, sharing
+terminology and API contracts rather than rendered UI with SwiftUI.
 
 identity-model remains a separate repository because it will also serve the
 Phoros Account. cs-mail pins the reviewed identity sources in
@@ -247,8 +288,8 @@ completion. A distribution never marks a service year unpaid. No screen suggests
 that rejecting a sender pays the recipient or that a payable can fund a request.
 
 \paragraph{Versions and data.} Protocol, wire, API, event, policy, and database
-versions are separate. Until the fresh-database policy ends (decided at
-Milestone~0), schema changes may replace earlier migrations; afterwards
+versions are separate. Until the project owner declares migrations
+forward-only, schema changes may replace earlier migrations; afterwards
 migrations are forward-only. Logs contain scoped references and typed errors, not
 plaintext, secrets, identity mappings, full signed commands, or complete financial
 snapshots. Retention policy is explicit before user data exists.
@@ -279,20 +320,32 @@ Stage & Result & Exit evidence \\
 2 & Core loop from the CLI & Every request outcome, from a clean database \\
 3a & Guest-sender domain design & Recorded design; open decisions settled \\
 3b & Sender request page & A guest completes a request; every outcome settles \\
-3c & Guest email correspondence & Accepted guest and member correspond by email \\
-4 & macOS member application & Milestone 2 journeys in the app, keys in keychain \\
+3c & External email correspondence & Both entry paths and initial-reply decisions \\
+4 & SwiftUI Apple application, macOS first & Milestone 2 journeys, Keychain, early iOS checks \\
 5 & Time and failure & Crash, race, and deadline claims challenged \\
 6 & Annual service and member cycle & A full simulated year, including nonrenewal \\
 7 & Open enrollment & Signed builds, recovery, restore, launch findings \\
-8 & Portability and Phoros & Windows, Swift/Kotlin parity, Phoros integration \\
+8 & Portability and Phoros & Android/Windows adapters, client parity, Phoros integration \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
 Each stage depends on the preceding one, except that Milestone~4 may proceed
-before 3b or 3c if the guest-sender work is not ready. A milestone is complete
+before the public-deployment portion of Milestone~3c. A milestone is complete
 when its demonstration runs from a clean checkout and its claims have been
 challenged, not merely when new code compiles.
+
+\paragraph{Current sequence, agreed 8 October 2026.}
+Build and validate the SwiftUI macOS member application locally before provisioning
+or paying for a rented Linux host. Milestone~4 is the next implementation priority,
+with macOS and iOS targets from the first slice and no committed iOS release date:
+onboarding, inbox, request decisions, conversations, disclosure controls, and
+quit/reopen and failure recovery against the local Rust service and simulated
+payments. The locally implemented email adapters and controlled transport fixtures
+support this work. Public MX, HTTPS and actual SMTP2GO callback validation wait
+until the application is ready for a hosted external-email pilot. A rented Linux
+server remains the hosting direction; Amazon Lightsail is a candidate, not a
+purchase commitment. Retain the prepared deployment package for that later step.
 
 \section{Milestone 0: Product Skeleton}
 
@@ -302,11 +355,11 @@ versions. Each reports its version and help. Add a local script that runs the
 full quality gate without hiding individual checks, and document the inward
 dependency rule.
 
-\textbf{Decided (25 September 2026):} the fresh-database policy ends when the
-first user data is created, at the first open enrollment. Until then a schema change may replace or renumber
-existing migrations and requires a fresh database. From then on, migrations in
-cs-mail and identity-model are forward-only: a merged migration is never edited,
-removed, or renumbered.
+\textbf{Migration policy:} until the project owner declares migrations
+forward-only, a schema change may replace or renumber existing migrations and
+requires a fresh database. From that declaration, migrations in cs-mail and
+identity-model are forward-only: a merged migration is never edited, removed, or
+renumbered.
 
 \textbf{Exit:} clean checkout, passing gate, running binaries. No listener,
 enrollment, or domain change belongs to this stage.
@@ -385,9 +438,7 @@ development token verifier in its place); rotating identity trust and configurin
 the financial program remain outside the operator API; account changes (device
 recovery, bank rebinding) do not screen evidence, and rebinding to a bank account
 another account enrolled with is refused; phones are not yet verified by a code;
-normalization does not equate address abbreviations (``Street'' and ``St''); the
-bootstrap provider key does not yet seed relationship key registries, and the initial
-enrollment key is registered for the sender role (both Milestone~2).
+normalization does not equate address abbreviations (``Street'' and ``St'').
 
 \section{Milestone 1b: Request Pricing}
 
@@ -453,6 +504,59 @@ forfeiture. Uncertain outcomes are shown as uncertain.
 database. \textbf{Learning:} does the decision flow read clearly, and which wording
 confuses?
 
+\textbf{Status: implemented (26 September 2026).} \texttt{scripts/m2-demo.sh} runs
+the loop from clean databases: members enroll through the identity-model enrollment
+service, buy annual service, publish request classes and content keys, and send
+requests that are accepted with standing permission (with a follow-up and a lost
+response retried on the way), accepted with an express lane, rejected, left to
+expire, cancelled before submission, and blocked then unblocked. Both sides see the
+charge, refunds owed and confirmed, processing revenue retained and collateral
+pending forfeiture; operations the processor has not confirmed are shown as
+uncertain. Bob reads and decrypts his messages from the CLI. The three claims above
+are challenged against PostgreSQL through the member gateway, and the third also in
+memory.
+
+The loop consists of:
+\begin{itemize}[nosep]
+\item a signed operator command, \texttt{PublishProtocolPolicy}, for the request
+  windows, cooldowns, backoff and member-program terms; the bootstrap record fixes
+  the rest of the policy and names a scheduler key for the service's own deadline
+  commands;
+\item relationships opened by the service for each (sender, recipient) pair, with
+  references derived by the privacy deriver under host secrets (the request history
+  from the sender's private principal), and provider and scheduler keys installed
+  when a relationship is first opened;
+\item a member API in \texttt{cs-maild}: signed relationship commands, account and
+  billing commands, request classes, endpoint content-key publications, encrypted
+  content with its sender certificate, express-lane grants, and signed, fresh member
+  reads that return only the reader's own account and relationships;
+\item a relationship worker for received commands, artifact signing, deadlines,
+  request payments and delivery to the stored mailbox;
+\item \texttt{cs-mail-cli}, which journals every signed request before sending it and
+  resends the same bytes after a lost response.
+\end{itemize}
+
+Decisions and deviations, for confirmation:
+\begin{itemize}[nosep]
+\item Enrollment in the demonstration uses a development login
+  (\texttt{cs-mail-test-support} example \texttt{dev-identity}): the real identity
+  application and API with an unsigned development token in place of an OIDC ID
+  token. The identity service cannot trust a local Keycloak's self-signed
+  certificate, so the Keycloak run remains open (Milestone~1).
+\item A member adds its recipient role by registering a second key through the
+  existing \texttt{RegisterKey} account command; keys stay bound to one role.
+\item An express lane's native subject is the relationship's own reference.
+\item Delivery within the deployment completes when the ciphertext is stored;
+  members read it through authenticated reads.
+\end{itemize}
+
+Not yet covered: relationships are created for any two enrolled addresses before
+the command is authenticated (the relationship holds no state until an
+authenticated command succeeds); member reads are fresh and signed but not
+recorded as used, so a captured read can be replayed within its five-minute window;
+the relationship worker runs only with the payment simulator; and accepted members
+cannot yet send ordinary messages outside a request from the CLI.
+
 \section{Milestone 3a: Guest-Sender Domain Design}
 
 The current domain recognized two senders: members, with an account, verified
@@ -517,19 +621,119 @@ refund notices are sent as DKIM-signed email from the deployment domain.
 \textbf{Learning:} do strangers understand the page, and what collateral feels
 reasonable?
 
-\section{Milestone 3c: Guest Email Correspondence}
+\textbf{Status: implemented (26 September 2026).} \texttt{scripts/m3b-demo.sh} runs
+from clean databases: Bob enrolls and publishes request classes, and guests use his
+request page in headless Chromium. Requests are accepted, rejected, cancelled after
+the charge and before sending, and left to expire; a declined card makes no request;
+a second address with the same card is held by the first address's history. Bob
+decides from the CLI and sees each guest by the verified address. Verification codes
+and outcome and refund notices are DKIM-signed and written to a development outbox.
+After a restart, a scan finds no guest message text, card number, verification code,
+secret or database URL in the database or the log. The four claims above are
+challenged against PostgreSQL through the guest gateway; the log half of the third is
+covered by the demonstration.
 
-Build and run \texttt{apps/cs-mail-mx}, the deployment's own receive-only SMTP
+The request page consists of:
+\begin{itemize}[nosep]
+\item \texttt{cs-mail-guests}: guest mailboxes and their synthetic protocol identities,
+  the sender-subject kinds, mailbox verification and sessions, the history rules over
+  mailbox and fingerprint evidence, the commands a guest may issue, and the notices
+  owed to guests;
+\item a sender-subject registry in storage: every protocol identity has exactly one
+  subject (member, legacy domain or guest), registered with enrollment, persona
+  addition, legacy grants and a guest's first request;
+\item opening a guest relationship as one transaction: the subject, the history
+  created or merged with the evidence that caused it, the evidence links, the card
+  token as a funding source, and the relationship;
+\item guest commands through the unchanged request kernel, as a trusted ingress
+  authenticated by the verified session; the message is encrypted to the recipient on
+  arrival under a provider guest content key, and declared human-initiated through
+  the guest gateway;
+\item \texttt{cs-mail-web}, a static page served by \texttt{cs-maild} at
+  \texttt{/r/\{persona\}} with a JSON guest API, and a notices worker.
+\end{itemize}
+
+Decisions and deviations, for confirmation:
+\begin{itemize}[nosep]
+\item ``Pending'' in the first claim is the history's reservation, as the guest-sender
+  design defines it. Once a request is submitted the reservation is released and the
+  history's backoff applies instead, so a second address with the same card may ask
+  again after the backoff, one level up, while the first request awaits its decision.
+  Members' aliases behave the same way. Holding the history until the decision would
+  be a request-kernel change.
+\item Evidence that would merge two histories each holding a reservation is refused
+  rather than merged.
+\item The guest authorizes the charge, then sends or cancels as a separate step, so
+  cancellation before sending is a real choice rather than a race.
+\item A recipient sees only submitted requests and admitted messages: a request
+  cancelled before sending, and its content, never reach the recipient. This applies
+  to members as well.
+\item A guest instrument is a funding source of its own kind; a restriction on it is
+  permanent, since nothing re-verifies it.
+\item A guest's answer carries the protocol outcome without a provider receipt: the
+  guest holds no key to verify one. The receipt is still signed and kept.
+\item Express lanes for guests are deferred to Milestone~3c.
+\end{itemize}
+
+Not yet covered: a real payment processor and email delivery service (the simulator
+tokenizes cards and the outbox is a directory); the page has no bot protection
+beyond per-mailbox code limits; opening a relationship commits before the protocol
+decides, so a refused guest still leaves a subject, evidence links and an empty
+relationship (not shown to the recipient); legacy-domain collisions are exercised
+only by construction, not by a test; and the member request path may report a
+missing receipt when the relationship worker is signing it at the same moment.
+
+\section{Milestone 3c: External Email Correspondence}
+
+Support both entry paths: a guest approaches through the request page, and a
+member starts a conversation by entering an external address. The member-selected
+path requires no mailbox-control challenge. Automatic incoming authentication and
+exact mailbox matching remain required. Unlimited uncharged replies are confined
+to the pending conversation until rejection or block. Accept and express lanes
+establish broader directional access using the existing relationship owner.
+Rejection closes the unpaid invitation without changing paid-request history or
+creating settlement; a later paid approach remains possible unless blocked.
+
+Outbound disclosure consent is conversation scoped. Withdrawing it cancels waiting
+messages atomically; after dispatch begins cancellation may be too late. Unknown
+handoffs require reconciliation and cannot be automatically redispatched.
+
+The first Rust slice provides signed member commands, encrypted authored-text
+copies, pending-reply admission at the trusted receiver boundary, and development
+relay handoff. The reproducible CLI/HTTP journey is \texttt{scripts/m3c-demo.sh}. PostgreSQL experiments challenge admission scope, permission changes,
+transaction failure, retries, and withdrawal versus dispatch. The receive-only
+\texttt{cs-mail-mx} adapter now adds real automatic authentication, STARTTLS,
+known-conversation routing and durable SMTP retries. It accepts plain text or a
+flat plain-text/HTML alternative, selecting text and authenticating the original
+email. Four wire experiments challenge forged senders, current permission, atomic
+commit, retries and unsupported MIME, and join an outgoing HTTP fixture to a
+readable incoming reply. They use local DNS and PostgreSQL. See
+\texttt{docs/smtp-receiver.md} for operating instructions and test limits.
+The SMTP2GO HTTPS MIME adapter now submits DKIM-signed threaded plain-text mail
+after committed dispatch. Authenticated provider events reconcile uncertain
+handoffs atomically and remain separate from acceptance; late events cannot erase
+earlier delivery evidence. Local HTTP/PostgreSQL experiments challenge cancellation,
+duplicate submission and feedback binding. External correspondence no longer
+requires the guest payment simulator. See \texttt{docs/smtp2go-outbound.md}.
+A fresh live test confirmed Gmail's acceptance of cs-mail's RSA-2048 signature and
+correct fast-accept receipt recording. Callbacks now use a dedicated loopback HTTP
+listener with sending independently disabled. An HTTP/PostgreSQL experiment challenges
+route isolation, authentication, acknowledgement after commit and lost-response retries.
+Public callback HTTPS/provider checks, MX/MTA-STS, HTML-only mail and attachments,
+general member-address mail and native-source exports remain subsequent work.
+
+Complete and deploy \texttt{apps/cs-mail-mx}, the deployment's own receive-only SMTP
 receiver and MX for the deployment domain. It is a separate, minimally privileged
 process that hands each message with its full connection context to
 \texttt{cs-mail-smtp-gateway}, answers \texttt{250} only after durable admission,
 uses permanent \texttt{5xx} for refusals and \texttt{4xx} for temporary failures,
-offers STARTTLS, and publishes MTA-STS. After
-acceptance, the member's replies are sent as threaded email from the member's
+offers STARTTLS, and publishes MTA-STS. The member's first message and subsequent
+emails are sent as threaded email from the member's
 protocol identity address, with a per-conversation reply address, under that
-conversation's downgrade consent. The guest's replies, and new mail from a
-guest that holds permission, are admitted only when DMARC passes and the From
-address exactly matches the verified mailbox; mail from domains with missing or
+conversation's downgrade consent. Every inbound message requires automatic
+email authentication and exact From-mailbox matching, including replies to a
+member-initiated pending conversation. DMARC must pass and align with the
+member-selected or verified mailbox; mail from domains with missing or
 permissive DMARC policy is held for confirmation on the request page. Unknown
 senders to a member's address receive an automatic reply with the request link
 only when DMARC passes; otherwise the message is rejected, avoiding backscatter.
@@ -557,24 +761,47 @@ bounces and complaints.
     {Senders would believe mail was delivered when it was not.}
 \end{claims}
 
-\textbf{Exit:} an accepted guest and a member exchange threaded email in both
-directions from a clean deployment. \textbf{Learning:} does the correspondence
-feel like ordinary email to guests?
+\textbf{Exit:} from a clean deployment, demonstrate both a paid guest request
+followed by threaded correspondence and a member-initiated email followed by an
+uncharged replies. Show the conversation pending review, each permission decision
+(standing acceptance, express lane, rejection), and subsequent access according
+to the decision and the recorded policies. Authentication alone and the first
+outbound send must not create broader standing permission. \textbf{Learning:} does
+correspondence feel like ordinary email to guests, and is the member's initial-reply
+decision clear?
 
-\section{Milestone 4: macOS Member Application}
+\section{Milestone 4: SwiftUI Apple Application, macOS First}
 
 Alice installs the application, enrolls or recovers through identity-model, and
 reopens the same account after quitting. Keys live in the macOS keychain behind
 the key-custody port; SQLite holds ciphertext, key references, cursors, minimized
 relationship metadata, and nonsecret preferences only. Portable client use cases
-coordinate enrollment and device management; the Tauri shell stays thin.
+coordinate enrollment and device management; the SwiftUI application stays thin.
+Introduce the Rust client facade, Swift bindings and Apple library packaging here.
+Define typed results, asynchronous calls, cancellation and ownership explicitly;
+UI cancellation does not cancel a command already accepted by the server.
+Start with macOS and iOS targets, share appropriate presentation models and views,
+and adapt navigation and lifecycle behavior to each platform. macOS ships first.
+The first slice begins with browser sign-in and first-device enrollment through
+the existing identity-model integration. It then reopens the account, synchronizes
+and reads one request, and accepts or rejects it through the existing service.
+Check this slice on iPhone early before expanding to the full milestone journeys. See
+\href{docs/apple-client-architecture.md}{the Apple client architecture}.
 
 Bob sees the chosen class, one request with its grouped messages, and a clear
 deadline, and decides with permission explained first and money second. He
 manages each address's request classes with collateral within the operator's bounds,
 follow-up preferences, lanes, and blocks. Financial status shows request charges
-and refunds separately from annual service and distributions. Interface
-components are shared with the request page.
+and refunds separately from annual service and distributions. Apple interface
+components are shared where appropriate across macOS and iOS. The guest request
+page shares terminology and design intent, with its own web implementation.
+
+The member can also compose to an external email address with explicit downgrade
+consent, read authenticated replies in a pending conversation, and choose
+Accept, Reject, or Grant an express lane. These uncharged replies are visually
+distinct from a paid guest request. This uses Milestone~3c's local email
+implementation and controlled transport fixtures; public hosting and live
+external-email validation follow the locally validated macOS application.
 
 \begin{claims}
 \claim{integration}{Secret key material never reaches SQLite, logs, or diagnostics.}
@@ -586,8 +813,10 @@ components are shared with the request page.
 \end{claims}
 
 \textbf{Exit:} Milestone~2's journeys in the application, including keychain
-denial and quit/reopen. \textbf{Learning:} do recipients publish classes, how
-many, and how long do decisions take?
+denial and quit/reopen. Record early iOS layout and lifecycle checks separately
+from macOS release evidence; an iOS build alone does not establish device behavior.
+Agree the experiment scope before adding client tests. \textbf{Learning:} do
+recipients publish classes, how many, and how long do decisions take?
 
 \section{Milestone 5: Recover Across Time and Failure}
 
@@ -678,12 +907,16 @@ usability findings, and a written summary of launch findings.
 
 \section{Milestone 8: Portability and Phoros}
 
-Deliver Windows adapters once the macOS path is stable. Expose a narrow FFI facade
-for identity, requests, decisions, encrypted inbox, billing and coverage,
-financial status, distributions, and devices, with bounded values, stable error
-codes, cancellation, and explicit ownership. Generate Swift and Kotlin bindings
-with mock platform adapters and run the same client-core stories through each.
-Add a live payment connector.
+Extend the client facade introduced for Swift in Milestone~4 to Android and
+Windows once the Apple path is stable. Reuse Rust use cases for identity, requests,
+decisions, encrypted inbox, billing and coverage, financial status, distributions
+and devices. Supply native interfaces and platform adapters, preserving bounded
+values, stable errors, cancellation and explicit ownership. Kotlin/Compose and
+C\#/WinUI are candidate interfaces; validate binding and packaging choices before
+selecting them. Run the same consequential client stories through each adapter,
+including device-specific secure storage and lifecycle behavior. iOS already
+shares the Apple application structure; its release readiness requires separate
+validation and scheduling. Add a live payment connector.
 
 For Phoros, its enrollment ceremony adopts an existing cs-mail subject through
 verified account control, as the product identity model prescribes. Version the
@@ -695,9 +928,10 @@ cross-product account linking on explicit, granular, revocable consent.
 \begin{itemize}
     \item Bank-account replacement, full account management, and detailed
     erasure policy.
-    \item Independent-provider federation and general email hosting.
+    \item Independent-provider federation and general mailbox hosting (such as IMAP).
     \item Converting a guest into a member while keeping existing relationships.
     \item A full web inbox for members.
+    \item External email: live transport integration and native-source exports.
 \end{itemize}
 
 \section{How an Implementation Agent Should Proceed}
@@ -720,11 +954,17 @@ specific obligation. If secrets leak, stop accumulating affected data until the
 boundary is repaired. If a policy parameter is unresolved, use an explicitly
 versioned simulation policy and keep the live deployment gate closed.
 
-\section{First Assignment}
+\section{Current Next Assignment}
 
-Milestone~0, followed by the smallest Milestone~1 path: start the service,
-establish authenticated administration, run identity enrollment against the
-development OIDC provider, and expose one durable simulated annual charge. Later
-milestones extend that path without reimplementing domain rules.
+As agreed on 8 October 2026, proceed with Milestone~4: build the SwiftUI member
+application, shipping macOS first and establishing iOS targets from the outset.
+Keep business logic and portable client workflows in Rust, introduce the narrow
+Swift binding boundary, and validate member journeys locally with simulated
+payments and controlled email transports. Follow the
+\href{docs/apple-client-architecture.md}{Apple client architecture}; the planned
+Tauri shell and desktop/web component-sharing approach are superseded.
+Do not provision or begin paying for the Linux host during this stage. Revisit
+hosting when the application is built and locally validated, ready for public
+HTTPS callbacks and incoming-email deployment checks.
 
 \end{document}

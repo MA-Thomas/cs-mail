@@ -2,6 +2,7 @@
 use crate::CommandFamily;
 use cs_mail_billing::ServiceOffer;
 use cs_mail_primitives::PolicyVersion;
+use cs_mail_protocol::policy::ProtocolPolicy;
 use cs_mail_protocol::pricing::RequestPricingPolicy;
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +13,9 @@ pub enum OperatorCommand {
     PublishServiceOffer(ServiceOffer),
     /// Publish a new request pricing policy version and make it current.
     PublishRequestPricing(RequestPricingPolicy),
+    /// Publish a new protocol policy version (request windows, cooldowns, backoff and
+    /// member-program terms) and make it current.
+    PublishProtocolPolicy(ProtocolPolicy),
 }
 impl CommandFamily for OperatorCommand {
     const SIGNING_DOMAIN: &'static str = "cs-mail/operator-command/v1";
@@ -29,5 +33,9 @@ pub enum OperatorOutcome {
         version: PolicyVersion,
         changed: bool,
         addresses_with_unquotable_classes: usize,
+    },
+    ProtocolPolicyPublished {
+        version: PolicyVersion,
+        changed: bool,
     },
 }

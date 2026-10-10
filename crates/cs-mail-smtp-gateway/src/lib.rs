@@ -4,6 +4,10 @@
 //! It converts SMTP session facts and an RFC5322 message into the small,
 //! versioned evidence model consumed by express-lane admission.
 
+pub mod incoming;
+pub mod outbound;
+pub mod receiver;
+
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -433,3 +437,5 @@ mod tests {
         assert_eq!(error.kind, DmarcErrorKind::Temporary);
     }
 }
+
+pub mod smtp2go;

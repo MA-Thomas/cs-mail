@@ -7,7 +7,26 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+cs-mail-correspondence = { path = "../../crates/cs-mail-correspondence" }
+cs-mail-guests = { path = "../../crates/cs-mail-guests" }
 clap.workspace = true
+cs-mail-accounts = { path = "../../crates/cs-mail-accounts" }
+cs-mail-application = { path = "../../crates/cs-mail-application" }
+cs-mail-billing = { path = "../../crates/cs-mail-billing" }
+cs-mail-capabilities = { path = "../../crates/cs-mail-capabilities" }
+cs-mail-content = { path = "../../crates/cs-mail-content" }
+cs-mail-finance = { path = "../../crates/cs-mail-finance" }
+cs-mail-primitives = { path = "../../crates/cs-mail-primitives" }
+cs-mail-privacy = { path = "../../crates/cs-mail-privacy" }
+cs-mail-protocol = { path = "../../crates/cs-mail-protocol" }
+cs-mail-security = { path = "../../crates/cs-mail-security" }
+ed25519-dalek.workspace = true
+getrandom = "0.2"
+identity-contract.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

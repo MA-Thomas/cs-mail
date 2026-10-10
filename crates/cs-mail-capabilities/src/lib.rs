@@ -21,6 +21,8 @@ const CONTROL_SIGNING_DOMAIN: &[u8] = b"cs-mail/lane-control/v1";
 pub enum LaneSubject {
     Native(ScopedHandle),
     LegacyDomain(DomainIdentity),
+    /// Exact mailbox identity, checked against the deployment sender-subject registry.
+    GuestMailbox(ProtocolIdentity),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,6 +35,7 @@ pub enum LaneMode {
 pub enum DeclarationAuthorityConstraint {
     NativeSender,
     LegacyGateway,
+    GuestGateway,
 }
 
 impl DeclarationAuthorityConstraint {
@@ -41,6 +44,10 @@ impl DeclarationAuthorityConstraint {
             (self, authority),
             (Self::NativeSender, DeclarationAuthority::NativeSender(_))
                 | (Self::LegacyGateway, DeclarationAuthority::LegacyGateway(_))
+                | (
+                    Self::GuestGateway,
+                    DeclarationAuthority::GuestGateway(_) | DeclarationAuthority::GuestSmtp(_)
+                )
         )
     }
 }
@@ -93,9 +100,18 @@ impl LaneGrant {
             ) | (
                 LaneSubject::LegacyDomain(_),
                 DeclarationAuthorityConstraint::LegacyGateway
+            ) | (
+                LaneSubject::GuestMailbox(_),
+                DeclarationAuthorityConstraint::GuestGateway
             )
         );
-        if self.lifetime.0 == 0
+        if self.id.0 == 0
+            || self.sender.0 == 0
+            || self.recipient.0 == 0
+            || self.intended_provider.0 == 0
+            || self.recipient_operational_key.0 == 0
+            || matches!(self.subject, LaneSubject::GuestMailbox(p) if p.0 == 0 || p != self.sender)
+            || self.lifetime.0 == 0
             || self.protocol_version.0 == 0
             || !self.rate_limit.valid()
             || self.not_before < self.issued_at
@@ -122,6 +138,10 @@ impl LaneGrant {
         bytes.extend_from_slice(SIGNING_DOMAIN);
         bytes.extend_from_slice(&self.id.0.to_be_bytes());
         match &self.subject {
+            LaneSubject::GuestMailbox(identity) => {
+                bytes.push(2);
+                bytes.extend_from_slice(&identity.0.to_be_bytes());
+            }
             LaneSubject::Native(handle) => {
                 bytes.push(0);
                 bytes.extend_from_slice(&handle.0);
@@ -150,6 +170,7 @@ impl LaneGrant {
         bytes.push(match self.declaration_authority {
             DeclarationAuthorityConstraint::NativeSender => 0,
             DeclarationAuthorityConstraint::LegacyGateway => 1,
+            DeclarationAuthorityConstraint::GuestGateway => 2,
         });
         bytes.extend_from_slice(&self.lifetime.0.to_be_bytes());
         bytes.extend_from_slice(&self.rate_limit.max_messages.to_be_bytes());
@@ -173,28 +194,15 @@ fn push_bytes(target: &mut Vec<u8>, bytes: &[u8]) -> Result<(), CapabilityError>
     Ok(())
 }
 
-/// Checked grant contents; signing authority is established separately at receipt.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(try_from = "LaneGrant", into = "LaneGrant")]
-pub struct ValidatedLaneGrant(LaneGrant);
-impl TryFrom<LaneGrant> for ValidatedLaneGrant {
-    type Error = String;
-    fn try_from(grant: LaneGrant) -> Result<Self, Self::Error> {
-        grant.validate().map_err(|e| format!("{e:?}"))?;
-        Ok(Self(grant))
-    }
-}
-impl From<ValidatedLaneGrant> for LaneGrant {
-    fn from(value: ValidatedLaneGrant) -> Self {
-        value.0
-    }
-}
-impl ValidatedLaneGrant {
+/// Signature-verified grant contents. The caller obtains the recipient key from
+/// protected authority; this proof cannot be deserialized or built from a raw grant.
+#[derive(Clone, Debug)]
+pub struct VerifiedLaneGrant(LaneGrant);
+impl VerifiedLaneGrant {
     /// # Errors
     /// Rejects invalid contents or recipient signatures.
     pub fn verify(signed: &SignedLaneGrant, key: &[u8; 32]) -> Result<Self, CapabilityError> {
         signed.verify(key)?;
-        signed.grant.validate()?;
         Ok(Self(signed.grant.clone()))
     }
     /// # Errors
@@ -204,9 +212,10 @@ impl ValidatedLaneGrant {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SignedLaneGrant {
     pub grant: LaneGrant,
+    #[serde(with = "cs_mail_primitives::signature_bytes")]
     pub signature: [u8; 64],
 }
 
@@ -298,15 +307,85 @@ pub enum LaneState {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "LaneRecord", into = "LaneRecord")]
 pub struct Lane {
-    pub grant: LaneGrant,
-    pub state: LaneState,
-    pub last_activity: CanonicalTime,
-    pub horizon_at: CanonicalTime,
-    pub rate_window_started_at: CanonicalTime,
-    pub messages_in_rate_window: u32,
-    pub version: Version,
+    grant: LaneGrant,
+    state: LaneState,
+    last_activity: CanonicalTime,
+    horizon_at: CanonicalTime,
+    rate_window_started_at: CanonicalTime,
+    messages_in_rate_window: u32,
+    version: Version,
     admitted_messages: BTreeSet<MessageId>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LaneRecord {
+    grant: LaneGrant,
+    state: LaneState,
+    last_activity: CanonicalTime,
+    horizon_at: CanonicalTime,
+    rate_window_started_at: CanonicalTime,
+    messages_in_rate_window: u32,
+    version: Version,
+    admitted_messages: BTreeSet<MessageId>,
+}
+impl TryFrom<LaneRecord> for Lane {
+    type Error = CapabilityError;
+    fn try_from(r: LaneRecord) -> Result<Self, Self::Error> {
+        r.grant.validate()?;
+        let activity_horizon = r
+            .last_activity
+            .checked_add(r.grant.lifetime)
+            .ok_or(CapabilityError::ArithmeticOverflow)?
+            .min(r.grant.not_after);
+        let admitted =
+            u64::try_from(r.admitted_messages.len()).map_err(|_| CapabilityError::InvalidGrant)?;
+        if r.last_activity < r.grant.issued_at
+            || r.last_activity >= r.grant.not_after
+            || r.rate_window_started_at < r.grant.issued_at
+            || r.rate_window_started_at > r.last_activity
+            || r.rate_window_started_at
+                .checked_add(r.grant.rate_limit.interval)
+                .is_none()
+            || r.horizon_at < activity_horizon
+            || r.horizon_at > r.grant.not_after
+            || (r.grant.mode == LaneMode::Expiring && r.horizon_at != activity_horizon)
+            || (r.state == LaneState::AwaitingReconfirmation && r.grant.mode != LaneMode::Expiring)
+            || (r.state != LaneState::Active && r.version.0 == 0)
+            || r.messages_in_rate_window > r.grant.rate_limit.max_messages
+            || u64::from(r.messages_in_rate_window) > admitted
+            || (admitted > 0 && r.messages_in_rate_window == 0)
+            || r.version.0 < admitted
+            || r.admitted_messages.iter().any(|m| m.0 == 0)
+        {
+            return Err(CapabilityError::InvalidGrant);
+        }
+        Ok(Self {
+            grant: r.grant,
+            state: r.state,
+            last_activity: r.last_activity,
+            horizon_at: r.horizon_at,
+            rate_window_started_at: r.rate_window_started_at,
+            messages_in_rate_window: r.messages_in_rate_window,
+            version: r.version,
+            admitted_messages: r.admitted_messages,
+        })
+    }
+}
+impl From<Lane> for LaneRecord {
+    fn from(l: Lane) -> Self {
+        Self {
+            grant: l.grant,
+            state: l.state,
+            last_activity: l.last_activity,
+            horizon_at: l.horizon_at,
+            rate_window_started_at: l.rate_window_started_at,
+            messages_in_rate_window: l.messages_in_rate_window,
+            version: l.version,
+            admitted_messages: l.admitted_messages,
+        }
+    }
 }
 
 impl Lane {
@@ -317,6 +396,10 @@ impl Lane {
             .checked_add(grant.lifetime)
             .ok_or(CapabilityError::ArithmeticOverflow)?
             .min(grant.not_after);
+        grant
+            .issued_at
+            .checked_add(grant.rate_limit.interval)
+            .ok_or(CapabilityError::ArithmeticOverflow)?;
         Ok(Self {
             rate_window_started_at: grant.issued_at,
             last_activity: grant.issued_at,
@@ -329,17 +412,20 @@ impl Lane {
         })
     }
 
-    /// Verifies the recipient signature and activates the resulting lane.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the signature or grant is invalid.
-    pub fn from_verified_grant(
-        signed: &SignedLaneGrant,
-        recipient_key: &[u8; 32],
-    ) -> Result<Self, CapabilityError> {
-        signed.verify(recipient_key)?;
-        Self::from_grant(signed.grant.clone())
+    pub const fn grant(&self) -> &LaneGrant {
+        &self.grant
+    }
+    pub const fn state(&self) -> LaneState {
+        self.state
+    }
+    pub const fn version(&self) -> Version {
+        self.version
+    }
+    pub const fn horizon_at(&self) -> CanonicalTime {
+        self.horizon_at
+    }
+    pub const fn messages_in_rate_window(&self) -> u32 {
+        self.messages_in_rate_window
     }
 
     pub fn schedule_change(&self) -> ScheduleChange {
@@ -352,6 +438,7 @@ impl Lane {
     /// Established access, including a scheduled start; admission checks `not_before`.
     pub fn provides_relationship_access(&self, now: CanonicalTime) -> bool {
         self.state == LaneState::Active
+            && now >= self.grant.issued_at
             && now < self.grant.not_after
             && (self.grant.mode != LaneMode::Expiring || now < self.horizon_at)
     }
@@ -435,27 +522,35 @@ impl Lane {
             .rate_window_started_at
             .checked_add(self.grant.rate_limit.interval)
             .ok_or(CapabilityError::ArithmeticOverflow)?;
-        if now >= rate_window_end {
-            self.rate_window_started_at = now;
-            self.messages_in_rate_window = 0;
+        if message.0 == 0 || now < self.last_activity {
+            return Err(CapabilityError::NotAuthorized);
         }
-        if self.messages_in_rate_window >= self.grant.rate_limit.max_messages {
+        let (window, count) = if now >= rate_window_end {
+            now.checked_add(self.grant.rate_limit.interval)
+                .ok_or(CapabilityError::ArithmeticOverflow)?;
+            (now, 0)
+        } else {
+            (self.rate_window_started_at, self.messages_in_rate_window)
+        };
+        if count >= self.grant.rate_limit.max_messages {
             return Err(CapabilityError::RateLimitExceeded);
         }
-        self.messages_in_rate_window = self
-            .messages_in_rate_window
+        let count = count
             .checked_add(1)
             .ok_or(CapabilityError::ArithmeticOverflow)?;
-        self.last_activity = self.last_activity.max(now);
-        self.horizon_at = self
-            .last_activity
+        let horizon = now
             .checked_add(self.grant.lifetime)
             .ok_or(CapabilityError::ArithmeticOverflow)?
             .min(self.grant.not_after);
-        self.version = self
+        let version = self
             .version
             .checked_next()
             .ok_or(CapabilityError::ArithmeticOverflow)?;
+        self.rate_window_started_at = window;
+        self.messages_in_rate_window = count;
+        self.last_activity = now;
+        self.horizon_at = horizon;
+        self.version = version;
         self.admitted_messages.insert(message);
         Ok(false)
     }
@@ -472,10 +567,18 @@ impl Lane {
         if now < self.horizon_at || self.state != LaneState::Active {
             return Ok(LaneHorizonEffect::None);
         }
-        self.version = self
+        let version = self
             .version
             .checked_next()
             .ok_or(CapabilityError::ArithmeticOverflow)?;
+        let horizon = if self.grant.mode == LaneMode::Persistent && now < self.grant.not_after {
+            now.checked_add(self.grant.lifetime)
+                .ok_or(CapabilityError::ArithmeticOverflow)?
+                .min(self.grant.not_after)
+        } else {
+            self.horizon_at
+        };
+        self.version = version;
         if now >= self.grant.not_after {
             self.state = LaneState::Expired;
             return Ok(LaneHorizonEffect::ReconfirmationRequired);
@@ -486,10 +589,7 @@ impl Lane {
                 Ok(LaneHorizonEffect::ReconfirmationRequired)
             }
             LaneMode::Persistent => {
-                self.horizon_at = now
-                    .checked_add(self.grant.lifetime)
-                    .ok_or(CapabilityError::ArithmeticOverflow)?
-                    .min(self.grant.not_after);
+                self.horizon_at = horizon;
                 Ok(LaneHorizonEffect::ReviewReminder)
             }
         }
@@ -501,11 +601,15 @@ impl Lane {
     ///
     /// Returns an error if the version cannot advance.
     pub fn revoke(&mut self) -> Result<(), CapabilityError> {
-        self.state = LaneState::Revoked;
-        self.version = self
+        if self.state == LaneState::Revoked {
+            return Ok(());
+        }
+        let version = self
             .version
             .checked_next()
             .ok_or(CapabilityError::ArithmeticOverflow)?;
+        self.state = LaneState::Revoked;
+        self.version = version;
         Ok(())
     }
 
@@ -515,19 +619,24 @@ impl Lane {
     ///
     /// Returns an error for invalid state, expired authority, or overflow.
     pub fn reconfirm(&mut self, now: CanonicalTime) -> Result<(), CapabilityError> {
-        if self.state != LaneState::AwaitingReconfirmation || now >= self.grant.not_after {
+        if self.state != LaneState::AwaitingReconfirmation
+            || now >= self.grant.not_after
+            || now < self.horizon_at
+        {
             return Err(CapabilityError::NotAuthorized);
         }
-        self.state = LaneState::Active;
-        self.last_activity = self.last_activity.max(now);
-        self.horizon_at = now
+        let horizon = now
             .checked_add(self.grant.lifetime)
             .ok_or(CapabilityError::ArithmeticOverflow)?
             .min(self.grant.not_after);
-        self.version = self
+        let version = self
             .version
             .checked_next()
             .ok_or(CapabilityError::ArithmeticOverflow)?;
+        self.state = LaneState::Active;
+        self.last_activity = now;
+        self.horizon_at = horizon;
+        self.version = version;
         Ok(())
     }
 }
@@ -536,11 +645,13 @@ impl Lane {
 pub enum LaneEvidence {
     Native(ScopedHandle),
     Legacy(LegacyDmarcEvidence),
+    GuestMailbox(ProtocolIdentity),
 }
 
 impl LaneEvidence {
     pub fn matches(&self, subject: &LaneSubject) -> bool {
         match (self, subject) {
+            (Self::GuestMailbox(actual), LaneSubject::GuestMailbox(expected)) => actual == expected,
             (Self::Native(actual), LaneSubject::Native(expected)) => actual == expected,
             (Self::Legacy(actual), LaneSubject::LegacyDomain(expected)) => {
                 actual.lane_identity() == expected
@@ -551,6 +662,10 @@ impl LaneEvidence {
 
     fn append_signing_bytes(&self, bytes: &mut Vec<u8>) -> Result<(), CapabilityError> {
         match self {
+            Self::GuestMailbox(identity) => {
+                bytes.push(2);
+                bytes.extend_from_slice(&identity.0.to_be_bytes());
+            }
             Self::Native(handle) => {
                 bytes.push(0);
                 bytes.extend_from_slice(&handle.0);
@@ -761,7 +876,7 @@ impl std::error::Error for CapabilityError {}
 pub struct LaneBook {
     max_records: usize,
     lanes: BTreeMap<LaneId, Lane>,
-    operations: BTreeMap<IdempotencyKey, LaneId>,
+    operations: BTreeMap<IdempotencyKey, LaneGrant>,
 }
 
 impl LaneBook {
@@ -784,11 +899,11 @@ impl LaneBook {
         recipient_key: &[u8; 32],
         idempotency: IdempotencyKey,
     ) -> Result<ScheduleChange, CapabilityError> {
-        signed.verify(recipient_key)?;
+        let verified = VerifiedLaneGrant::verify(&signed, recipient_key)?;
         if let Some(existing) = self.operations.get(&idempotency) {
-            return if *existing == signed.grant.id {
+            return if *existing == signed.grant {
                 self.lanes
-                    .get(existing)
+                    .get(&existing.id)
                     .map(Lane::schedule_change)
                     .ok_or(CapabilityError::MissingLane)
             } else {
@@ -798,7 +913,7 @@ impl LaneBook {
         if self.lanes.len() >= self.max_records && !self.lanes.contains_key(&signed.grant.id) {
             return Err(CapabilityError::CapacityExceeded);
         }
-        let lane = Lane::from_grant(signed.grant)?;
+        let lane = verified.activate()?;
         let id = lane.grant.id;
         match self.lanes.get(&id) {
             Some(existing) if existing == &lane => {}
@@ -807,7 +922,7 @@ impl LaneBook {
                 self.lanes.insert(id, lane);
             }
         }
-        self.operations.insert(idempotency, id);
+        self.operations.insert(idempotency, signed.grant);
         Ok(self.lanes[&id].schedule_change())
     }
 
@@ -948,6 +1063,120 @@ mod tests {
             },
             payload_schema: None,
         }
+    }
+
+    // Conjecture: restoration preserves used allowance and rejects inconsistent
+    // state. A reset counter or extended horizon would grant unauthorized delivery.
+    #[test]
+    fn restored_lane_preserves_allowance_and_rejects_inconsistent_records() {
+        let (signed, key) = signed_grant();
+        let mut lane = VerifiedLaneGrant::verify(&signed, &key)
+            .unwrap()
+            .activate()
+            .unwrap();
+        lane.consume(
+            MessageId(1),
+            Some(LaneId(1)),
+            &legacy_declarations(),
+            &evidence(),
+            CanonicalTime(20),
+        )
+        .unwrap();
+        let record = serde_json::to_value(&lane).unwrap();
+        let mut restored: Lane = serde_json::from_value(record.clone()).unwrap();
+        assert_eq!(
+            restored.consume(
+                MessageId(2),
+                Some(LaneId(1)),
+                &legacy_declarations(),
+                &evidence(),
+                CanonicalTime(21)
+            ),
+            Err(CapabilityError::RateLimitExceeded)
+        );
+        for (field, value) in [
+            ("messages_in_rate_window", serde_json::json!(0)),
+            ("horizon_at", serde_json::json!(9999)),
+            ("version", serde_json::json!(0)),
+            ("admitted_messages", serde_json::json!([])),
+            ("rate_window_started_at", serde_json::json!(22)),
+        ] {
+            let mut invalid = record.clone();
+            invalid[field] = value;
+            assert!(serde_json::from_value::<Lane>(invalid).is_err(), "{field}");
+        }
+        let mut invalid = record;
+        invalid["grant"]["subject"]["LegacyDomain"] = serde_json::json!("not a domain");
+        assert!(serde_json::from_value::<Lane>(invalid).is_err());
+        restored.revoke().unwrap();
+        let revoked: Lane =
+            serde_json::from_value(serde_json::to_value(restored).unwrap()).unwrap();
+        assert!(!revoked.is_current(CanonicalTime(21)));
+        // Valid lifecycle transitions must also survive restoration: rejecting
+        // them would strand an otherwise valid lane after a process restart.
+        for mode in [LaneMode::Expiring, LaneMode::Persistent] {
+            let (mut signed, key) = signed_grant();
+            signed.grant.mode = mode;
+            signed.signature = SigningKey::from_bytes(&[7; 32])
+                .sign(&signed.grant.signing_bytes().unwrap())
+                .to_bytes();
+            let mut lane = VerifiedLaneGrant::verify(&signed, &key)
+                .unwrap()
+                .activate()
+                .unwrap();
+            lane.reach_horizon(CanonicalTime(1010)).unwrap();
+            lane = serde_json::from_value(serde_json::to_value(&lane).unwrap()).unwrap();
+            if mode == LaneMode::Expiring {
+                assert!(!lane.is_current(CanonicalTime(1011)));
+                lane.reconfirm(CanonicalTime(1011)).unwrap();
+            }
+            let restored: Lane =
+                serde_json::from_value(serde_json::to_value(&lane).unwrap()).unwrap();
+            assert_eq!(restored, lane);
+            assert!(restored.is_current(CanonicalTime(1011)));
+            lane.reach_horizon(CanonicalTime(10_000)).unwrap();
+            let expired: Lane =
+                serde_json::from_value(serde_json::to_value(lane).unwrap()).unwrap();
+            assert!(!expired.is_current(CanonicalTime(10_000)));
+        }
+    }
+
+    // Conjecture: a failed transition changes nothing. Overflow after a counter or
+    // state mutation would leave callers with an uncommitted partial consequence.
+    #[test]
+    fn overflow_leaves_each_lane_transition_unchanged() {
+        let (signed, key) = signed_grant();
+        let mut lane = VerifiedLaneGrant::verify(&signed, &key)
+            .unwrap()
+            .activate()
+            .unwrap();
+        lane.version = Version(u64::MAX);
+        let before = lane.clone();
+        assert_eq!(
+            lane.consume(
+                MessageId(1),
+                Some(LaneId(1)),
+                &legacy_declarations(),
+                &evidence(),
+                CanonicalTime(110)
+            ),
+            Err(CapabilityError::ArithmeticOverflow)
+        );
+        assert_eq!(lane, before);
+        assert_eq!(lane.revoke(), Err(CapabilityError::ArithmeticOverflow));
+        assert_eq!(lane, before);
+        assert_eq!(
+            lane.reach_horizon(CanonicalTime(1010)),
+            Err(CapabilityError::ArithmeticOverflow)
+        );
+        assert_eq!(lane, before);
+        lane.state = LaneState::AwaitingReconfirmation;
+        let before = lane.clone();
+        assert_eq!(
+            lane.reconfirm(CanonicalTime(1010)),
+            Err(CapabilityError::ArithmeticOverflow)
+        );
+        assert_eq!(lane, before);
     }
 
     #[test]

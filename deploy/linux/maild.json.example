@@ -1,0 +1,19 @@
+{
+  "database_url": "host=/var/run/postgresql user=cs_mail dbname=cs_mail",
+  "listen": "127.0.0.1:8580",
+  "members": {
+    "provider_secret_file": "/etc/cs-mail/secrets/provider.json",
+    "relationship_secret_file": "/etc/cs-mail/secrets/relationship.json",
+    "principal_secret_file": "/etc/cs-mail/secrets/principal.json"
+  },
+  "external": {
+    "content_secret_file": "/etc/cs-mail/secrets/external-content.json",
+    "mail_domain": "mail.example.net",
+    "delivery": { "kind": "disabled" },
+    "feedback": {
+      "kind": "smtp2go",
+      "listen": "127.0.0.1:8582",
+      "secret_file": "/etc/cs-mail/secrets/webhook.json"
+    }
+  }
+}

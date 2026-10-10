@@ -4,6 +4,9 @@
 pub mod accounts;
 pub mod billing;
 pub mod correspondence;
+pub mod guests;
+pub mod members;
+pub mod notices;
 pub mod operations;
 pub mod relationships;
 pub mod request_pricing;

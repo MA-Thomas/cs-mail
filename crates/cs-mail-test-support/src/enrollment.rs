@@ -2,20 +2,18 @@
 //! the signed decision and commits through the production enrollment transaction.
 use cs_mail_accounts::EnrollmentInput;
 use cs_mail_primitives::{AccountId, CanonicalTime};
-use cs_mail_storage_postgres::{PostgresEngine, StorageError};
+use cs_mail_storage_postgres::{PostgresDeployment, StorageError};
 use identity_contract::*;
 
 pub fn enroll(
-    engine: &PostgresEngine,
+    deployment: &PostgresDeployment,
     input: EnrollmentInput,
     at: CanonicalTime,
 ) -> Result<AccountId, StorageError> {
-    crate::bootstrap(engine.deployment(), input.bank.scope, input.bank.unit)?;
+    crate::bootstrap(deployment, input.bank.scope, input.bank.unit)?;
     let operation = format!("fixture-account-{}", input.bank.account.0);
-    let p = cs_mail_application::accounts::AccountEnrollment::new(
-        &engine.deployment().accounts(move || at),
-    )
-    .begin(&operation, &input)?;
+    let p = cs_mail_application::accounts::AccountEnrollment::new(&deployment.accounts(move || at))
+        .begin(&operation, &input)?;
     let decision = SignedDecision::sign(
         DecisionClaims {
             issuer: "https://identity.example.test".into(),
@@ -30,7 +28,7 @@ pub fn enroll(
         },
         &[80; 32],
     )?;
-    cs_mail_application::accounts::AccountEnrollment::new(&engine.deployment().accounts(move || at))
+    cs_mail_application::accounts::AccountEnrollment::new(&deployment.accounts(move || at))
         .commit(&decision)
 }
 

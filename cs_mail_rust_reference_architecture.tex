@@ -61,7 +61,7 @@
 
 \title{\textit{cs-mail} Rust Reference Architecture}
 \author{C-SQD}
-\date{Draft 0.10 --- September 2026}
+\date{Draft 0.11 --- 8 October 2026}
 
 \usepackage{tabularx}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
@@ -86,10 +86,46 @@ explicitly bounded services.
 \paragraph{Status and reading order.}
 The \textit{Protocol Specification}, normative financial-program profile, and
 \href{DOMAIN_MODEL.md}{C-SQD domain model} control the rules. This document
-describes the Rust libraries and durable boundaries; a running product server,
-desktop application, and live payment adapter remain product work. Request
-classes and atomic lane acceptance are implemented, including native lane sends.
+describes the Rust libraries and durable boundaries. The local server and CLIs
+are runnable; the SwiftUI member application and live payment adapter remain
+product work. Request classes and atomic lane acceptance are implemented,
+including native lane sends.
 The implementation notes describe the coordinated format cutover.
+
+\section{Planned Apple Client Boundary}
+
+The 8 October 2026 client decision replaces the planned Tauri shell with SwiftUI.
+Ship macOS first, establishing iOS targets and shared Apple presentation code from
+the first slice. The application calls a narrow Rust client facade through Swift
+bindings. Introduce that facade and device/simulator library packaging during
+Milestone~4, alongside the first consumer; these are planned additions.
+
+Server Rust remains authoritative for account, permission, settlement, billing and
+distribution decisions. Client Rust owns portable signing, encryption/decryption,
+protocol handling, synchronization and command-recovery workflows. Swift owns
+views, navigation, presentation state and Apple integration. Platform adapters
+implement the client's key-custody, persistence, transport and lifecycle ports;
+no business rule is duplicated in the bindings or interface.
+
+The facade exposes bounded, checked values, distinct identifiers and typed error
+meanings, with explicit object lifetimes, asynchronous completion and cancellation.
+A cancelled UI task does not cancel an accepted server command; preserve its
+operation identity and reconcile uncertain outcomes. Calls must not block the UI,
+and Swift presentation updates return to the main actor.
+
+Keychain backs key custody. SQLite holds ciphertext, key references, cursors,
+minimized relationship metadata and nonsecret preferences, never secret keys or
+a plaintext message cache. Authentication, retained-copy entitlement and scoped
+consent remain separate authorities. Suspension, unavailable keys and offline use
+are explicit states; notifications trigger synchronization rather than establish
+canonical outcomes. The server remains authoritative after quit/reopen.
+
+Apple targets share suitable SwiftUI components and presentation models, adapting
+navigation and platform behavior. The guest request page keeps its own web
+components. Later Android and Windows clients reuse the Rust client through
+separate bindings, interfaces and adapters; their implementation choices require
+validation. See \href{docs/apple-client-architecture.md}{the Apple client
+architecture} and the product build plan for sequencing and validation scope.
 
 \section{One Request, Three Messages, One Decision}
 
@@ -213,9 +249,9 @@ basis-point arithmetic. Submission deadlines, decision deadlines, message
 validity, annual allocation cutoffs, service intervals, and payment dates answer
 different questions and remain explicit inputs.
 
-Quoted financial terms stay fixed for a request. The operator's single versioned
-\texttt{RequestPricingPolicy} sets the processing charge and the collateral
-bounds. \texttt{RecipientRequestClasses} belongs to one protocol identity and
+Quoted financial terms stay fixed for a request. Pricing is set by the operator's
+single versioned \texttt{RequestPricingPolicy}: processing charge and collateral bounds.
+\texttt{RecipientRequestClasses} belongs to one protocol identity and
 checks at most eight user-defined classes and unique IDs, including on
 deserialization. \texttt{RequestPricingService} authenticates a publication
 against a key of that address alone, under a \texttt{RecipientSigningScope} that

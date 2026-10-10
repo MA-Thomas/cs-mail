@@ -179,7 +179,11 @@ impl TestExecute for PostgresEngine {
         policy: PolicySnapshot,
     ) -> Result<DurableExecutionOutcome, StorageError> {
         support::provision(self, &policy, registry(), SENDER, test_time(0))?;
-        self.configure_ingress(DEPLOYMENT_DOMAIN, &policy)?;
+        self.configure_ingress(
+            DEPLOYMENT_DOMAIN,
+            &policy,
+            &cs_mail_protocol::admission::AdmissionPolicy::default(),
+        )?;
         let handle = self.receive_signed(&command, DEPLOYMENT_DOMAIN, || now, policy)?;
         let outcome = self.process_received(&handle)?;
         self.sign_artifacts_batch(&provider_signer(), test_time(0), Duration(30_000), 100)?;
@@ -605,6 +609,7 @@ fn request_expiry_recovers_an_old_refusal_without_rewriting_its_receipt() {
 
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+#[allow(clippy::too_many_lines)] // One failure/recovery sequence keeps its original receipt.
 fn blocked_inbox_still_signs_its_quote_and_recovers_across_relationship_workers() {
     use cs_mail_storage_postgres::ReceivedOutcome;
     use cs_mail_worker::{WorkerError, run_received_batch};
@@ -612,7 +617,11 @@ fn blocked_inbox_still_signs_its_quote_and_recovers_across_relationship_workers(
     let engine = engine(&url, "unsigned-quote");
     support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
     engine
-        .configure_ingress(DEPLOYMENT_DOMAIN, &policy())
+        .configure_ingress(
+            DEPLOYMENT_DOMAIN,
+            &policy(),
+            &cs_mail_protocol::admission::AdmissionPolicy::default(),
+        )
         .unwrap();
     let issue = sender(
         ProtocolCommand::IssueRequestTerms {
@@ -662,9 +671,54 @@ fn blocked_inbox_still_signs_its_quote_and_recovers_across_relationship_workers(
             run_received_batch(host, &provider_signer(), test_time(3), Duration(10), 100),
             Err(WorkerError::Storage(StorageError::QuoteNotSigned))
         ));
+        assert_eq!(
+            engine.deployment().readiness().unwrap().command_failure,
+            Some(cs_mail_storage_postgres::ProcessingFailure::AwaitingQuoteSignature)
+        );
     }
     // The owning worker reached signing despite the processing error.
     engine.signed_quote(QuoteId(9)).unwrap();
+    // Claim: a fault after domain effects but before the receipt rolls everything back,
+    // remains distinguishable from refusal, and cannot prevent key revocation. Lost
+    // money/state, a fabricated refusal, or a new retry identity falsifies recovery.
+    let before = engine.snapshot().unwrap();
+    let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+    db.batch_execute("CREATE FUNCTION fail_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.outcome IS NOT NULL THEN RAISE EXCEPTION 'injected receipt failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_receipt BEFORE UPDATE ON cs_received_commands FOR EACH ROW EXECUTE FUNCTION fail_receipt()").unwrap();
+    assert!(matches!(
+        engine.process_received(&pending),
+        Err(StorageError::Database(_))
+    ));
+    assert_eq!(engine.snapshot().unwrap(), before);
+    assert_eq!(
+        engine.deployment().readiness().unwrap().command_failure,
+        Some(cs_mail_storage_postgres::ProcessingFailure::Persistence)
+    );
+    engine
+        .revoke_operational_key(OperationalKeyRef(2), Version(0), test_time(3))
+        .unwrap();
+    engine
+        .register_operational_key(
+            OperationalKeyRef(222),
+            ActorRef::Scheduler(PROVIDER),
+            provider_signer().verifying_key_bytes(),
+            test_time(3),
+        )
+        .unwrap();
+    assert!(
+        engine
+            .key_registry()
+            .unwrap()
+            .active_verifying_key(
+                OperationalKeyRef(2),
+                ActorRef::Provider(PROVIDER),
+                test_time(4)
+            )
+            .is_err()
+    );
+    db.batch_execute(
+        "DROP TRIGGER fail_receipt ON cs_received_commands; DROP FUNCTION fail_receipt()",
+    )
+    .unwrap();
     run_received_batch(&other, &provider_signer(), test_time(4), Duration(10), 100).unwrap();
     run_received_batch(&engine, &provider_signer(), test_time(4), Duration(10), 100).unwrap();
     assert!(matches!(
@@ -672,6 +726,10 @@ fn blocked_inbox_still_signs_its_quote_and_recovers_across_relationship_workers(
         ReceivedOutcome::Protocol(_)
     ));
     assert!(engine.receipt(&pending).unwrap().is_some());
+    assert_eq!(
+        engine.deployment().readiness().unwrap().command_failure,
+        None
+    );
     let snapshot = engine.snapshot().unwrap();
     assert_eq!(snapshot.state.requests.len(), 1);
     assert_eq!(snapshot.payments.len(), 1);

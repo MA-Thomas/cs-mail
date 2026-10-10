@@ -11,18 +11,26 @@ publish.workspace = true
 simulation = ["dep:cs-mail-simulation"]
 
 [dependencies]
+cs-mail-adapters = { path = "../../crates/cs-mail-adapters" }
+cs-mail-correspondence = { path = "../../crates/cs-mail-correspondence" }
 axum.workspace = true
 clap.workspace = true
 identity-contract.workspace = true
 cs-mail-application = { path = "../../crates/cs-mail-application" }
+cs-mail-capabilities = { path = "../../crates/cs-mail-capabilities" }
+cs-mail-content = { path = "../../crates/cs-mail-content" }
 cs-mail-billing = { path = "../../crates/cs-mail-billing" }
 cs-mail-accounts = { path = "../../crates/cs-mail-accounts" }
 cs-mail-finance = { path = "../../crates/cs-mail-finance" }
+cs-mail-guests = { path = "../../crates/cs-mail-guests" }
 cs-mail-identity-client = { path = "../../crates/cs-mail-identity-client" }
 cs-mail-operations = { path = "../../crates/cs-mail-operations" }
 cs-mail-primitives = { path = "../../crates/cs-mail-primitives" }
 cs-mail-protocol = { path = "../../crates/cs-mail-protocol" }
+cs-mail-security = { path = "../../crates/cs-mail-security" }
+cs-mail-service = { path = "../../crates/cs-mail-service" }
 cs-mail-simulation = { path = "../../crates/cs-mail-simulation", optional = true }
+cs-mail-smtp-gateway = { path = "../../crates/cs-mail-smtp-gateway" }
 cs-mail-storage-postgres = { path = "../../crates/cs-mail-storage-postgres" }
 cs-mail-worker = { path = "../../crates/cs-mail-worker" }
 serde.workspace = true
@@ -30,6 +38,11 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+cs-mail-test-support = { path = "../../crates/cs-mail-test-support" }
+postgres.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [lints]
 workspace = true
