@@ -47,7 +47,7 @@ echo "work directory: $work"
 
 step "keys (secrets are written 0600 and never printed)"
 for name in provider scheduler operator processor bank-authority bank-ownership \
-            identity-decision identity-product evidence relationships principals guest-content; do
+            identity-decision identity-product evidence relationships principals custody guest-content; do
   "$admin" keygen --out "$work/$name.key" > "$work/$name.pub"
 done
 (umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work/dkim.pem" 2>/dev/null)
@@ -77,7 +77,7 @@ cat > "$work/maild.json" <<EOF
  "workers": {"interval_ms": 300, "lease_ms": 30000, "batch": 50},
  "identity": {"endpoint": "http://127.0.0.1:$identity_port/v1/enrollment",
               "product_secret_file": "$work/identity-product.key"},
- "members": {"provider_secret_file": "$work/provider.key",
+ "members": {"custody_key_ref":900,"custody_secret_file":"$work/custody.key","provider_secret_file": "$work/provider.key",
              "relationship_secret_file": "$work/relationships.key",
              "principal_secret_file": "$work/principals.key"},
  "simulation": {"processor_secret_file": "$work/processor.key",
@@ -131,7 +131,7 @@ EOF
 cat > "$work/protocol.json" <<'EOF'
 {"PublishProtocolPolicy":{"version":1,"privacy_profile_version":1,"retention_policy_version":1,
  "submission_window":120000,"decision_window":20000,"quote_lifetime":120000,
- "backoff":[0,1000],"expiry_cooldown":1000,"rejection_cooldown":1000,
+ "reply_lane":{"lifetime":604800000,"rate_limit":{"max_messages":20,"interval":86400000},"purpose":{"Known":"Personal"}},"backoff":[0,1000],"expiry_cooldown":1000,"rejection_cooldown":1000,
  "corporate_basis_points":300,"maturity_delay":1000}}
 EOF
 for command in offer pricing protocol; do
@@ -204,7 +204,7 @@ for marker in marker-ana-7f3c marker-ben-19ad marker-dan-5b21 marker-eve-c0de \
   done
 done
 for name in provider scheduler operator processor bank-authority bank-ownership \
-            identity-decision identity-product evidence relationships principals guest-content; do
+            identity-decision identity-product evidence relationships principals custody guest-content; do
   secret="$(tr -d ' \n' < "$work/$name.key")"
   if tr -d ' \n' < "$work/serve.log" | grep -qF "$secret"; then echo "LEAK: $name secret"; leaks=1; fi
 done

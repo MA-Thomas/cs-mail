@@ -148,7 +148,11 @@ fn expiry_across_command_content_and_status_waits_is_rechecked() {
             .existing_relationship(address.aggregate_key())
             .unwrap()
             .unwrap();
-        let (content, certificate) = engine.content_with_certificates().unwrap().pop().unwrap();
+        let (content, certificate) = engine
+            .guest_content_with_certificates()
+            .unwrap()
+            .pop()
+            .unwrap();
         let command = GuestCommand::authorize(
             &verified,
             &DOMAIN,
@@ -302,7 +306,7 @@ fn accepted_cancellation_and_refund_recover_after_session_expiry() {
     );
     assert!(!matches!(
         engine.process_received(&handle).unwrap(),
-        cs_mail_storage_postgres::ReceivedOutcome::Refused(_)
+        cs_mail_application::receipts::ReceivedOutcome::Refused(_)
     ));
     f.work();
     let renewed = f.login(mailbox);
@@ -325,7 +329,7 @@ fn accepted_cancellation_and_refund_recover_after_session_expiry() {
         .unwrap();
     assert!(!matches!(
         engine.process_received(&handle).unwrap(),
-        cs_mail_storage_postgres::ReceivedOutcome::Refused(_)
+        cs_mail_application::receipts::ReceivedOutcome::Refused(_)
     ));
     f.work();
     let refunds: Vec<_> = f

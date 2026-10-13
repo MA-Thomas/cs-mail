@@ -1,5 +1,98 @@
 # Audit hardening
 
+## Paired requests — first request-cutover slice, 12 October 2026
+
+`cs-mail-application::requests::RequestDecision` now coordinates both protected
+directions. The protocol decides cancellation through `supersede_preparation`;
+the application produces one opaque forward/opposite result. Persistence checks
+the affected relationship and revisions and commits the declared consequences.
+It does not choose an extra cancellation or rewrite the forward manifest.
+
+A submitted request supersedes opposite preparation, including finalized funding
+and an uncertain capture. The existing cancellation/refund lifecycle preserves
+the original capture operation and returns the full charge. An actionable opposite
+request refuses terms, creation and submission before new payment work. Its issued
+decision deadline is interpreted at the existing trusted canonical receipt time;
+an unrecorded expiry cannot indefinitely prevent an opposite request. Sender-side
+blocking and revocation produce distinct `SenderReplyRestriction` refusals at
+submission without restoring permission or delivering content. Guest requests
+retain their existing behavior.
+
+Both direction records share the initiating command's causal journal position.
+Migration 0033 changes the journal primary key to `(position, aggregate_key)`;
+allocating a separate opposite position could overtake a queued receipt and break
+cursor interpretation. The migration refuses populated older environments and
+requires a fresh database. The personal schema-32 databases, state directory,
+running application and Keychain credential were not reset or replaced.
+
+Five new PostgreSQL experiments challenge named consequential claims: complete
+paired rollback and exact replay; finalized/unknown funding reconciliation;
+refusal before payment and expiry without worker recording; sender block/revocation;
+two independently connected concurrent submissions producing one winner and one
+fully refunded loser; and populated-schema refusal without data loss. Related
+observations share experiments rather than duplicating type-system guarantees.
+The signed gateway and existing payment workers perform the effects; test-only
+failure injection challenges rollback after the forward writes.
+
+The final full gate passed all eight checks, 113 ordinary tests/doctests and 99
+PostgreSQL/local-integration cases (`/tmp/cs-mail-paired-final-gate.log`). The five
+targeted experiments also passed. Identity-model and its 101 pinned sources are
+unchanged. No live banking or email, native UI, iOS runtime, sustained-load or
+power-loss experiment is claimed. The in-memory kernel harness is not evidence
+for this protected paired persistence boundary.
+
+The full request/conversation cutover remains unfinished. Request documents,
+conversation-confined answers, automatic reverse lanes, custody publication and
+portable compose/reply workflows still need their coherent implementation and
+validation. The existing native request-content path remains current until that
+cutover; no second native reader or compatibility implementation was introduced.
+
+## Relationship revocation repair — 12 October 2026
+
+The source baseline before this pass is preserved in
+`target/audit-baselines/cs-mail-baseline-20261012-before-passes.tar.gz`, with a
+SHA-256 manifest alongside it. It includes tracked and nonignored source files,
+including the uncommitted Apple/directory work and the inactive `to_delete/`
+files; it excludes Git metadata, ignored runtime state, databases and Keychain.
+The baseline is local and ignored by Git. The sibling identity checkout is
+unchanged and all 101 pinned sources match.
+
+Revoking standing permission previously left a retained lane usable. Blocking
+cancelled that lane through a storage-owned decision omitted from the protocol
+manifest. Both controls now have an explicit `LaneRevocation` consequence owned
+by capabilities and selected by the protocol. This checked type binds the original
+lane revision to its revoked successor. The manifest includes its schedule
+cancellation. Persistence checks the protected revision and commits the declared
+lane record, capability event, relationship, schedules and outcome atomically;
+the former `revoke_lane_locked` business decision is removed. Relationship
+revocation also accepts lane-only relationships. No migration or wire-format
+change is needed for this repair; the source change does not repair records of
+earlier revocations retroactively.
+
+The existing PostgreSQL lane experiment was extended, with no new test cases.
+It challenges the claim that blocking or revocation ends current lane access
+without losing transaction atomicity or retry identity. Scenarios include standing
+permission with a retained lane, lane-only permission, an injected capability-event
+write failure, unchanged protocol/ledger/lane state after rollback, recovery of the
+original pending command, exact command replay, refusal under terminated authority,
+unblocking and replay of the old grant without lane reactivation. A counterexample
+would allow communication after termination or leave partial permission effects.
+
+The final full quality gate passed all eight checks, including 113 ordinary
+tests/doctests and 94 PostgreSQL/local-integration cases. Evidence is in
+`/tmp/cs-mail-revocation-final-gate.log`. These experiments do not establish every
+possible native send/revocation race, power-loss behavior or corrupted-history
+recovery. The in-memory kernel harness does not host lanes and is not evidence
+for lane persistence. SwiftUI interactions, iOS behavior and live providers were
+not exercised in this Rust repair.
+
+The next request/conversation cutover is specified in the domain model and
+application/persistence boundary document, and remains unimplemented. Its confirmed
+rules include answers after expiry, first-submitted precedence over opposite
+preparation, full funding cancellation/reconciliation, and preservation of existing
+custom reverse lanes without allowance refill. No personal database was reset,
+no credential was replaced, and no messaging support is claimed by this repair.
+
 This records the bounded implementation passes following the critical review of
 Claude's 7 October 2026 audit. The [Rust-domain principles](rust-domain-principles.md)
 remain binding. Architectural hazards, observable bugs, and public attack paths are

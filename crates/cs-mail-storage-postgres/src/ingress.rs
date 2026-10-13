@@ -1,6 +1,6 @@
 //! Authenticated durable receipt, ordered application, and recoverable outcome evidence.
 use super::*;
-use cs_mail_capabilities::{AdmissionAuthentication, SignedBondFreeAdmission, SignedLaneControl};
+use cs_mail_capabilities::SignedLaneControl;
 use cs_mail_security::{CommandDigest, OutcomeDigest, ReceiptKind, ReceiptPayload};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -10,30 +10,6 @@ pub(super) enum Operation {
     Grant(SignedLaneGrant),
     Control(LaneControl),
 }
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ReceivedOutcome {
-    Protocol(Box<DurableExecutionOutcome>),
-    Message(BondFreeAdmissionOutcome),
-    Lane(Box<LaneOperationOutcome>),
-    Refused(Refusal),
-    /// Detailed evidence expired; the original signed receipt and replay identity remain.
-    Retired {
-        outcome_digest: OutcomeDigest,
-    },
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum Refusal {
-    Billing(cs_mail_billing::BillingError),
-    Protocol(ProtocolError),
-    Admission(cs_mail_protocol::admission::AdmissionFailure),
-    Capability(CapabilityError),
-    DuplicateConflict,
-    VersionConflict,
-    NotAuthorized,
-    QuoteMissing,
-    InvalidQuote,
-}
-
 /// Redacted operational diagnosis, separate from a durable business refusal.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProcessingFailure {
@@ -47,21 +23,6 @@ impl ProcessingFailure {
             StorageError::QuoteNotSigned => Self::AwaitingQuoteSignature,
             StorageError::Database(_) => Self::Persistence,
             _ => Self::RequiresIntervention,
-        }
-    }
-}
-impl Refusal {
-    pub fn into_error(self) -> StorageError {
-        match self {
-            Self::Billing(e) => StorageError::Billing(e),
-            Self::Protocol(e) => StorageError::Protocol(e),
-            Self::Admission(e) => StorageError::AdmissionRefused(e),
-            Self::Capability(e) => StorageError::Capability(e),
-            Self::DuplicateConflict => StorageError::DuplicateConflict,
-            Self::VersionConflict => StorageError::VersionConflict,
-            Self::NotAuthorized => StorageError::BondFreeNotAuthorized,
-            Self::QuoteMissing => StorageError::QuoteMissing,
-            Self::InvalidQuote => StorageError::Security(SecurityError::InvalidSignature),
         }
     }
 }
@@ -225,55 +186,6 @@ impl PostgresEngine {
             ))
         })
     }
-    /// Receives native free admission against durable key authority.
-    /// # Errors
-    /// Rejects invalid signature, authority, scope, or conflicting replay.
-    pub fn receive_message(
-        &self,
-        signed: &SignedBondFreeAdmission,
-        deployment: [u8; 32],
-        clock: impl FnOnce() -> CanonicalTime,
-        policy: PolicySnapshot,
-    ) -> Result<ReceivedCommand, StorageError> {
-        let replay = ReplayIdentity::signed(
-            signed.admission.idempotency_key,
-            &signed.admission.signing_bytes()?,
-            &signed.signature,
-        );
-        self.receive(deployment, clock, policy, replay, |tx, key, now, policy| {
-            let a = &signed.admission;
-            check_scope(
-                a.deployment_domain,
-                a.intended_provider,
-                a.protocol_version,
-                deployment,
-                policy,
-            )?;
-            let AdmissionAuthentication::NativeKey(reference) = a.authentication else {
-                return Err(StorageError::BondFreeNotAuthorized);
-            };
-            if matches!(
-                a.evidence,
-                Some(
-                    cs_mail_capabilities::LaneEvidence::Legacy(_)
-                        | cs_mail_capabilities::LaneEvidence::GuestMailbox(_)
-                )
-            ) {
-                return Err(StorageError::BondFreeNotAuthorized);
-            }
-            let registry = registry_locked(tx, key)?;
-            signed.verify(&registry.active_verifying_key(
-                reference,
-                ActorRef::Sender(a.sender),
-                now,
-            )?)?;
-            Ok((
-                a.idempotency_key,
-                Sha256::digest(a.signing_bytes()?).into(),
-                Operation::Message(Box::new(a.clone())),
-            ))
-        })
-    }
     /// Receives a recipient grant using the stored recipient key.
     /// # Errors
     /// Rejects invalid scope, signature or authority.
@@ -405,21 +317,28 @@ impl PostgresEngine {
         };
         let content_available = if let Some(reference) = content_ref {
             tx.query_opt(
-                "SELECT 1 FROM cs_encrypted_content WHERE aggregate_key=$1 AND content_ref=$2",
+                "SELECT 1 FROM cs_encrypted_content WHERE aggregate_key=$1 AND content_ref=$2 UNION ALL SELECT 1 FROM cs_request_documents WHERE aggregate_key=$1 AND content_ref=$2",
                 &[&self.aggregate_key, &reference.0.to_string()],
             )?
             .is_some()
         } else {
             true
         };
-        let last: Option<i64> = tx
-            .query_one("SELECT max(received_at) FROM cs_received_commands", &[])?
-            .get(0);
-        let receipt_time = to_i64(now.0)?;
-        if last.is_some_and(|last| last > receipt_time) {
-            return Err(StorageError::VersionConflict);
-        }
-        let position=tx.query_one("INSERT INTO cs_received_commands (aggregate_key,idempotency_key,digest,deployment,received_at,operation,policy,replay_fingerprint,authority,content_available) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING position",&[&self.aggregate_key,&id.0.to_string(),&digest.as_slice(),&deployment.as_slice(),&receipt_time,&Json(operation),&Json(policy),&replay.fingerprint.as_slice(),&Json(authority),&content_available])?.get(0);
+        let position = record_received(
+            &mut tx,
+            &self.aggregate_key,
+            ReceivedFacts {
+                id,
+                digest,
+                deployment,
+                now,
+                operation,
+                policy,
+                replay,
+                authority,
+                content_available,
+            },
+        )?;
         tx.commit()?;
         Ok(ReceivedCommand {
             position: JournalPosition(to_u64(position)?),
@@ -536,12 +455,12 @@ impl PostgresEngine {
             outcome @ (ReceivedOutcome::Protocol(_) | ReceivedOutcome::Retired { .. }) => {
                 Ok(outcome)
             }
-            ReceivedOutcome::Refused(e) => Err(e.into_error()),
+            ReceivedOutcome::Refused(e) => Err(StorageError::from(e)),
             _ => unreachable!(),
         }
     }
 }
-fn check_scope(
+pub(super) fn check_scope(
     domain: [u8; 32],
     provider: ProviderRef,
     version: ProtocolVersion,
@@ -651,10 +570,6 @@ fn apply_protocol(
             target,
         )?;
     }
-    let blocks_relationship = matches!(
-        authorized.command(),
-        ProtocolCommand::BlockRelationship { .. }
-    );
     let balances = load_balances(transaction, aggregate_key)?;
     let ledger = LedgerView::from_balances(aggregate.ledger_revision, aggregate.unit, balances);
     let (history, payments, messages) =
@@ -668,6 +583,11 @@ fn apply_protocol(
         ledger,
     );
     snapshot.lane = load_current_lane(transaction, aggregate_key)?;
+    let (counterparty, opposite_key) = super::requests::load_counterparty(
+        transaction,
+        snapshot.state.relationship.key.sender,
+        snapshot.state.relationship.key.recipient,
+    )?;
     validate_issued_quote(transaction, aggregate_key, authorized.command())?;
     let next_revision = aggregate
         .revision
@@ -694,7 +614,10 @@ fn apply_protocol(
     } else {
         Err(cs_mail_protocol::admission::AdmissionFailure::ContentMissing)
     };
+    let document =
+        super::request_documents::submission(transaction, aggregate_key, authorized.command())?;
     let context = TransitionContext {
+        request_delivery: cs_mail_protocol::RequestDeliveryRoute::GuestRelay,
         admission,
         now,
         journal_position,
@@ -702,7 +625,14 @@ fn apply_protocol(
         policy,
         pricing,
     };
-    let manifest = transition(&snapshot, authorized, &context)?;
+    let (manifest, opposite, delivery) = cs_mail_application::requests::RequestDecision::decide(
+        &snapshot,
+        &counterparty,
+        authorized,
+        &context,
+        document.as_ref(),
+    )?
+    .into_effects();
     // Charged terms must name the configured payment arrangement's processor. Checked only
     // when the kernel requires a charge, as before the pricing cutover.
     if matches!(
@@ -762,13 +692,14 @@ fn apply_protocol(
         context.now,
         context.journal_position,
     )?;
-    if blocks_relationship {
-        revoke_lane_locked(
-            transaction,
-            aggregate_key,
-            context.now,
-            context.journal_position,
-        )?;
+    if let Some(delivery) = delivery {
+        super::request_documents::persist_delivery(transaction, aggregate_key, delivery)?;
+    }
+    if let Some(opposite) = &opposite {
+        let key = opposite_key
+            .as_deref()
+            .ok_or(StorageError::VersionConflict)?;
+        super::requests::persist_opposite(transaction, key, opposite, context.now)?;
     }
     Ok(DurableExecutionOutcome {
         admission_failure,
@@ -797,6 +728,29 @@ fn assess_protocol_admission(
     } else {
         cs_mail_primitives::DeclarationAuthority::NativeSender(command.operational_key())
     };
+    if matches!(
+        authority,
+        cs_mail_primitives::DeclarationAuthority::NativeSender(_)
+    ) {
+        let Some(signed) = super::request_documents::staged(transaction, key, message.content)?
+        else {
+            return Ok(Err(
+                cs_mail_protocol::admission::AdmissionFailure::ContentMissing,
+            ));
+        };
+        return Ok(cs_mail_protocol::admission::validate_message(
+            &signed.document.package().recipient_copy,
+            &message,
+            cs_mail_protocol::admission::AdmissionContext {
+                relationship: state.relationship.key,
+                now,
+                protocol,
+                authority,
+                capability: None,
+            },
+            &admission_policy(transaction, key)?,
+        ));
+    }
     match validate_delivery(
         transaction,
         key,
@@ -815,6 +769,7 @@ fn assess_protocol_admission(
     }
 }
 
+#[allow(clippy::too_many_lines)] // Keep the declared paired effect and its atomic persistence together.
 fn apply_grant(
     transaction: &mut Transaction<'_>,
     aggregate_key: &str,
@@ -838,6 +793,7 @@ fn apply_grant(
     );
     snapshot.lane = load_current_lane(transaction, aggregate_key)?;
     let context = TransitionContext {
+        request_delivery: cs_mail_protocol::RequestDeliveryRoute::GuestRelay,
         admission: Ok(()),
         now,
         journal_position: received_position,
@@ -862,7 +818,24 @@ fn apply_grant(
             replayed: false,
         });
     };
-    let (lane, manifest) = decision.into_effects();
+    let (lane, forward, schedules) = decision.into_effects();
+    let (counterparty, opposite_key) = super::requests::load_counterparty(
+        transaction,
+        snapshot.state.relationship.key.sender,
+        snapshot.state.relationship.key.recipient,
+    )?;
+    let (manifest, opposite, delivery) =
+        cs_mail_application::requests::RequestDecision::coordinate_acceptance(
+            &snapshot,
+            &counterparty,
+            forward,
+            None,
+            &context,
+        )?
+        .into_effects();
+    if delivery.is_some() {
+        return Err(StorageError::VersionConflict);
+    }
     record_journal_position(
         transaction,
         aggregate_key,
@@ -883,8 +856,18 @@ fn apply_grant(
         now,
         received_position,
     )?;
+    if let Some(opposite) = &opposite {
+        super::requests::persist_opposite(
+            transaction,
+            opposite_key
+                .as_deref()
+                .ok_or(StorageError::VersionConflict)?,
+            opposite,
+            now,
+        )?;
+    }
     upsert_lane(transaction, aggregate_key, &lane, now)?;
-    persist_schedules(transaction, aggregate_key, &[lane.schedule_change()])?;
+    persist_schedules(transaction, aggregate_key, &schedules)?;
     insert_capability_event(
         transaction,
         aggregate_key,
@@ -898,7 +881,10 @@ fn apply_grant(
     })
 }
 
-fn load_current_lane(tx: &mut Transaction<'_>, key: &str) -> Result<Option<Lane>, StorageError> {
+pub(super) fn load_current_lane(
+    tx: &mut Transaction<'_>,
+    key: &str,
+) -> Result<Option<Lane>, StorageError> {
     Ok(tx
         .query_opt(
             "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1 FOR UPDATE",
@@ -1065,7 +1051,7 @@ fn apply_free(
     Ok(outcome)
 }
 
-fn admission_policy(
+pub(super) fn admission_policy(
     tx: &mut Transaction<'_>,
     key: &str,
 ) -> Result<cs_mail_protocol::admission::AdmissionPolicy, StorageError> {
@@ -1289,10 +1275,10 @@ impl PostgresEngine {
 #[derive(Clone, Copy)]
 pub(super) struct ReplayIdentity {
     id: IdempotencyKey,
-    fingerprint: [u8; 32],
+    pub(super) fingerprint: [u8; 32],
 }
 impl ReplayIdentity {
-    fn signed(id: IdempotencyKey, bytes: &[u8], signature: &[u8; 64]) -> Self {
+    pub(super) fn signed(id: IdempotencyKey, bytes: &[u8], signature: &[u8; 64]) -> Self {
         let mut h = Sha256::new();
         h.update(b"cs-mail/signed-replay/v1");
         h.update(bytes);
@@ -1353,64 +1339,6 @@ impl PostgresEngine {
     }
 }
 
-impl PostgresEngine {
-    /// Verifies the native content certificate and persists its ciphertext under one authority lock.
-    /// # Errors
-    /// Rejects invalid certificates, forged declaration authority, or conflicting ciphertext.
-    pub fn store_authenticated_content(
-        &self,
-        record: &EncryptedContentRecord,
-        certificate: &cs_mail_security::SignedContentKeyCertificate,
-        clock: impl FnOnce() -> CanonicalTime,
-        policy: &PolicySnapshot,
-        deployment: [u8; 32],
-    ) -> Result<(), StorageError> {
-        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let mut tx = client.transaction()?;
-        lock_receipt_order(&mut tx)?;
-        validate_ingress_scope(&mut tx, &self.aggregate_key, deployment, policy)?;
-        let relationship = load_locked_aggregate(&mut tx, &self.aggregate_key)?
-            .state
-            .relationship
-            .key;
-        let digest = registry_locked(&mut tx, &self.aggregate_key)?
-            .verify_content_key_certificate(
-                certificate,
-                clock(),
-                policy.protocol_version,
-                SigningScope {
-                    deployment_domain: deployment,
-                    intended_provider: policy.recipient_provider,
-                    relationship: relationship.reference,
-                },
-            )?;
-        let c = &certificate.certificate;
-        if c.key.reference != record.envelope.sender_key
-            || c.owner != record.binding.sender
-            || record.binding.sender != relationship.sender
-            || record.binding.recipient != relationship.recipient
-            || record.binding.relationship != relationship.reference
-            || record.binding.sender_certificate != digest
-            || record.binding.declarations.origin.authority
-                != cs_mail_primitives::DeclarationAuthority::NativeSender(c.operational_key)
-        {
-            return Err(StorageError::ContentScopeMismatch);
-        }
-        admission_policy(&mut tx, &self.aggregate_key)?
-            .evaluate(&record.binding.declarations)
-            .map_err(StorageError::AdmissionRefused)?;
-        persist_content(
-            &mut tx,
-            &self.aggregate_key,
-            record,
-            policy.retention_policy_version,
-        )?;
-        super::members::record_certificate(&mut tx, &digest.0, certificate)?;
-        tx.commit()?;
-        Ok(())
-    }
-}
-
 fn classify_refusal(error: StorageError) -> Result<Refusal, StorageError> {
     Ok(match error {
         StorageError::Protocol(ProtocolError::AdmissionRefused(reason))
@@ -1463,7 +1391,7 @@ fn restore_grant_proof(
     })
 }
 
-fn process_received_row(
+pub(super) fn process_received_row(
     tx: &mut Transaction<'_>,
     row: &postgres::Row,
     position: i64,
@@ -1548,4 +1476,30 @@ fn process_received_row(
     )?;
     retention::register_records(tx, &key)?;
     Ok(())
+}
+
+pub(super) struct ReceivedFacts {
+    pub id: IdempotencyKey,
+    pub digest: [u8; 32],
+    pub deployment: [u8; 32],
+    pub now: CanonicalTime,
+    pub operation: Operation,
+    pub policy: PolicySnapshot,
+    pub replay: ReplayIdentity,
+    pub authority: cs_mail_security::AuthoritySnapshot,
+    pub content_available: bool,
+}
+pub(super) fn record_received(
+    tx: &mut Transaction<'_>,
+    key: &str,
+    facts: ReceivedFacts,
+) -> Result<i64, StorageError> {
+    let last: Option<i64> = tx
+        .query_one("SELECT max(received_at) FROM cs_received_commands", &[])?
+        .get(0);
+    let at = to_i64(facts.now.0)?;
+    if last.is_some_and(|last| last > at) {
+        return Err(StorageError::VersionConflict);
+    }
+    Ok(tx.query_one("INSERT INTO cs_received_commands (aggregate_key,idempotency_key,digest,deployment,received_at,operation,policy,replay_fingerprint,authority,content_available) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING position", &[&key,&facts.id.0.to_string(),&facts.digest.as_slice(),&facts.deployment.as_slice(),&at,&Json(facts.operation),&Json(facts.policy),&facts.replay.fingerprint.as_slice(),&Json(facts.authority),&facts.content_available])?.get(0))
 }

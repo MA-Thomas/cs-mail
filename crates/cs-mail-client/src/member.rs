@@ -1,7 +1,21 @@
 //! Portable member application slice. Server rules stay in their existing owners.
 //! All mutable device progress is serialized and committed before external effects.
+mod correspondence;
+mod directory;
+pub use correspondence::{ConversationSummary, ReplyRoute};
 mod enrollment;
 mod login;
+mod onboarding;
+mod relationships;
+mod requests;
+mod reuse;
+pub use cs_mail_correspondence::PolicyAction;
+pub use relationships::RelationshipControl;
+pub use requests::{RequestProgress, RequestQuote, RequestStatus};
+pub use reuse::{
+    ConversationPolicy, ReferenceContent, Relaxation, ReuseMode, SourceBlock, SourceDraft,
+    SourceMessage,
+};
 mod storage;
 mod transport;
 mod views;
@@ -9,11 +23,14 @@ pub use enrollment::{EnrollmentDetails, EnrollmentStatus, LoginStart};
 pub use login::Authorization;
 pub use storage::DeviceStore;
 pub use transport::{HttpTransport, Transport};
-pub use views::{Conversation, Inbox, Message, Request};
+pub use views::{
+    ContactState, Conversation, Inbox, LaneExpiryReminder, Message, PendingSetup, PermissionRoute,
+    RelationshipControls, Request, RequestEntry,
+};
 
 use cs_mail_application::members::{MemberAnswer, RelationshipView};
 use cs_mail_primitives::{
-    CanonicalTime, ContentKeyRef, IdempotencyKey, OperationalKeyRef, ProtocolIdentity,
+    CanonicalTime, ContentKeyRef, IdempotencyKey, OperationalKeyRef, ProtocolIdentity, RequestId,
 };
 use cs_mail_protocol::{ActorRef, PolicySnapshot, ProtocolCommand};
 use cs_mail_security::{
@@ -38,8 +55,19 @@ pub enum Error {
     Unauthorized,
     Unavailable,
     DecisionPending,
+    SendPending,
+    SendRefused,
+    QuoteExpired,
+    RequestPending,
+    RequestRefused,
+    PolicyRefused,
+    SourceUnavailable,
+    SetupPending,
+    SetupRefused,
     NoPendingRequest,
     DecisionRefused,
+    PublicationRefused,
+    AddressUnavailable,
     EnrollmentRequired,
     LoginUnavailable,
     LoginCancelled,
@@ -55,10 +83,22 @@ impl std::error::Error for Error {}
 pub enum Decision {
     Accept,
     Reject,
+    ExpressLane { lifetime_ms: u64 },
+}
+
+/// Historical send result, separate from current relationship authority.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum SendOutcome {
+    Committed(cs_mail_primitives::MessageId),
+    Refused {
+        operation: IdempotencyKey,
+        reason: cs_mail_correspondence::CorrespondenceError,
+    },
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 struct Deployment {
+    custody_key: cs_mail_content::EndpointPublicKey,
     scope: RecipientSigningScope,
     policy: PolicySnapshot,
     provider_key: [u8; 32],
@@ -79,20 +119,61 @@ struct Profile {
 #[derive(Deserialize, Serialize)]
 struct Pending {
     sender: ProtocolIdentity,
-    decision: Decision,
     route: String,
-    command: SignedCommandBytes,
+    command: PendingCommand,
     relationship: cs_mail_primitives::RelationshipRef,
 }
 #[derive(Deserialize, Serialize)]
+enum PendingCommand {
+    Relationship(SignedCommandBytes),
+    Lane {
+        grant: Box<cs_mail_capabilities::SignedLaneGrant>,
+        idempotency_key: IdempotencyKey,
+    },
+}
+impl PendingCommand {
+    fn body(&self) -> Result<Vec<u8>, Error> {
+        match self {
+            Self::Relationship(signed) => serde_json::to_vec(signed),
+            Self::Lane {
+                grant,
+                idempotency_key,
+            } => serde_json::to_vec(
+                &serde_json::json!({"grant":grant, "idempotency_key":idempotency_key}),
+            ),
+        }
+        .map_err(|_| Error::InvalidData)
+    }
+    fn digest(&self) -> Result<[u8; 32], Error> {
+        match self {
+            Self::Relationship(signed) => Ok(Sha256::digest(&signed.payload).into()),
+            Self::Lane { grant, .. } => Ok(Sha256::digest(
+                grant
+                    .grant
+                    .signing_bytes()
+                    .map_err(|_| Error::InvalidData)?,
+            )
+            .into()),
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
 struct State {
+    requesting: Option<requests::RequestJourney>,
+    last_request: Option<requests::RequestResult>,
+    editing_conversation: Option<cs_mail_application::correspondence::SignedRequest>,
+    last_send: Option<SendOutcome>,
+    mailbox: correspondence::Mailbox,
+    sending: Option<correspondence::PendingSend>,
     format: u16,
     profile: Profile,
     synchronized_at: Option<CanonicalTime>,
     inbox: Vec<RelationshipView>,
     pending: Option<Pending>,
-    content:
-        std::collections::BTreeMap<String, Vec<cs_mail_application::members::DeliveredContent>>,
+    content: std::collections::BTreeMap<
+        String,
+        Vec<cs_mail_application::members::GuestDeliveredContent>,
+    >,
     /// Last acknowledged outcome; displayed only as evidence, never current permission.
     last_decision: Option<String>,
     setup: Option<enrollment::Setup>,
@@ -151,7 +232,11 @@ impl MemberClient {
             Some(&serde_json::to_vec(&signed).map_err(|_| Error::InvalidData)?),
         )
     }
-    fn check_account(&self, profile: &Profile, keys: &storage::Secrets) -> Result<(), Error> {
+    fn account_view(
+        &self,
+        profile: &Profile,
+        keys: &storage::Secrets,
+    ) -> Result<cs_mail_application::members::AccountView, Error> {
         let MemberAnswer::Account(account) = self.read(profile, keys, MemberRead::Account)? else {
             return Err(Error::InvalidData);
         };
@@ -165,7 +250,7 @@ impl MemberClient {
         {
             return Err(Error::Unauthorized);
         }
-        Ok(())
+        Ok(account)
     }
     /// Opens locally stored state as a timestamped snapshot, not current server authority.
     /// # Errors
@@ -182,7 +267,7 @@ impl MemberClient {
         {
             return Err(Error::Unauthorized);
         }
-        self.check_account(&state.profile, keys)?;
+        self.account_view(&state.profile, keys)?;
         let MemberAnswer::Inbox(inbox) = self.read(&state.profile, keys, MemberRead::Inbox)? else {
             return Err(Error::InvalidData);
         };
@@ -194,6 +279,7 @@ impl MemberClient {
         }
         state.profile.deployment = deployment;
         state.inbox = inbox;
+        self.sync_mailbox(state, keys)?;
         state.synchronized_at = Some((self.clock)());
         storage::save(self.store.as_ref(), keys, state)
     }
@@ -203,7 +289,24 @@ impl MemberClient {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let mut state = storage::open(self.store.as_ref(), &keys)?;
-        self.finish_device_setup(&mut state, &keys)?;
+        match self.finish_device_setup(&mut state, &keys) {
+            Ok(()) | Err(Error::SetupRefused) => {}
+            Err(error) => return Err(error),
+        }
+        match self.advance_request(&mut state, &keys) {
+            Ok(()) | Err(Error::RequestRefused) => {}
+            Err(error) => return Err(error),
+        }
+        match self.transmit_policy(&mut state, &keys) {
+            Ok(()) | Err(Error::PolicyRefused) => {}
+            Err(error) => return Err(error),
+        }
+        if state.sending.is_some() {
+            match self.transmit_send(&mut state, &keys) {
+                Ok(_) | Err(Error::SendRefused) => {}
+                Err(error) => return Err(error),
+            }
+        }
         self.synchronize(&mut state, &keys)?;
         views::inbox(&state)
     }
@@ -217,18 +320,22 @@ impl MemberClient {
         let sender = parse_sender(sender)?;
         let MemberAnswer::Receiving {
             handle,
-            view: Some(view),
+            view,
             content,
         } = self.read(&state.profile, &keys, MemberRead::AsRecipient { sender })?
         else {
             return Err(Error::InvalidData);
         };
-        if handle != view.handle
+        if view.as_ref().is_some_and(|view| handle != view.handle)
             || handle.sender != sender
             || handle.recipient != state.profile.persona
         {
             return Err(Error::InvalidData);
         }
+        if view.as_ref().is_none_or(|view| view.guest.is_none()) {
+            return self.native_conversation(&mut state, &keys, sender);
+        }
+        let view = view.ok_or(Error::InvalidData)?;
         // A custody denial during the fetch must not release plaintext afterward.
         let current = storage::secrets(self.store.as_ref())?;
         if current.cache != keys.cache {
@@ -236,17 +343,34 @@ impl MemberClient {
         }
         state.content.insert(sender.0.to_string(), content.clone());
         storage::save(self.store.as_ref(), &keys, &state)?;
-        views::conversation(&state.profile, &keys, &view, &content)
+        views::conversation(&state.profile, &keys, &view, &content, (self.clock)())
     }
     /// Journals one exact signed decision before transmission. No unresolved operation is replaced.
     /// # Errors
     /// Pending operation, stale authority, no submitted request, or an uncertain/denied outcome.
-    pub fn decide(&self, sender: &str, decision: Decision) -> Result<Inbox, Error> {
+    pub fn decide(
+        &self,
+        sender: &str,
+        request: RequestId,
+        decision: Decision,
+    ) -> Result<Inbox, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let mut state = storage::open(self.store.as_ref(), &keys)?;
+        if state.requesting.is_some() {
+            return Err(Error::RequestPending);
+        }
+        if state.editing_conversation.is_some() {
+            return Err(Error::DecisionPending);
+        }
+        if state.sending.is_some() {
+            return Err(Error::SendPending);
+        }
         if state.pending.is_some() {
             return Err(Error::DecisionPending);
+        }
+        if state.setup.is_some() {
+            return Err(Error::SetupPending);
         }
         self.synchronize(&mut state, &keys)?;
         let sender = parse_sender(sender)?;
@@ -258,10 +382,13 @@ impl MemberClient {
         if !view
             .requests
             .iter()
-            .any(|r| r.lifecycle.is_awaiting_recipient_decision())
+            .any(|r| r.id == request && r.lifecycle.is_awaiting_recipient_decision())
         {
             return Err(Error::NoPendingRequest);
         }
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).map_err(|_| Error::Unavailable)?;
+        let operation = IdempotencyKey(u128::from_be_bytes(random) | 1);
         let command = match decision {
             Decision::Accept => ProtocolCommand::AcceptRelationship {
                 expected_version: view.version.into(),
@@ -269,9 +396,22 @@ impl MemberClient {
             Decision::Reject => ProtocolCommand::RejectRelationship {
                 expected_version: view.version.into(),
             },
+            Decision::ExpressLane { lifetime_ms } => {
+                let grant =
+                    lane_grant(&state, &keys, view, lifetime_ms, (self.clock)(), operation)?;
+                state.pending = Some(Pending {
+                    sender,
+                    route: "v1/lanes".into(),
+                    command: grant,
+                    relationship: view.handle.relationship,
+                });
+                state.last_decision = None;
+                storage::save(self.store.as_ref(), &keys, &state)?;
+                self.send_pending(&mut state, &keys)?;
+                self.synchronize(&mut state, &keys)?;
+                return views::inbox(&state);
+            }
         };
-        let mut random = [0; 16];
-        getrandom::fill(&mut random).map_err(|_| Error::Unavailable)?;
         let signed = CommandSigner::from_secret_bytes(
             ActorRef::Recipient(state.profile.persona),
             state.profile.recipient_key,
@@ -284,18 +424,17 @@ impl MemberClient {
                 relationship: view.handle.relationship,
             },
             state.profile.deployment.policy.protocol_version,
-            IdempotencyKey(u128::from_be_bytes(random) | 1),
+            operation,
             command,
         )
         .map_err(|_| Error::InvalidData)?;
         state.pending = Some(Pending {
             sender,
-            decision,
             route: format!(
                 "v1/relationships/{}/{}/commands",
                 sender.0, state.profile.persona.0
             ),
-            command: signed,
+            command: PendingCommand::Relationship(signed),
             relationship: view.handle.relationship,
         });
         state.last_decision = None;
@@ -311,6 +450,24 @@ impl MemberClient {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let mut state = storage::open(self.store.as_ref(), &keys)?;
+        match self.finish_device_setup(&mut state, &keys) {
+            Ok(()) | Err(Error::SetupRefused) => {}
+            Err(error) => return Err(error),
+        }
+        match self.advance_request(&mut state, &keys) {
+            Ok(()) | Err(Error::RequestRefused) => {}
+            Err(error) => return Err(error),
+        }
+        match self.transmit_policy(&mut state, &keys) {
+            Ok(()) | Err(Error::PolicyRefused) => {}
+            Err(error) => return Err(error),
+        }
+        if state.sending.is_some() {
+            match self.transmit_send(&mut state, &keys) {
+                Ok(_) | Err(Error::SendRefused) => {}
+                Err(error) => return Err(error),
+            }
+        }
         if state.pending.is_some() {
             self.send_pending(&mut state, &keys)?;
         }
@@ -326,11 +483,11 @@ impl MemberClient {
         let answer: Answer = self.call(
             &state.profile.server,
             &pending.route,
-            Some(&serde_json::to_vec(&pending.command).map_err(|_| Error::InvalidData)?),
+            Some(&pending.command.body()?),
         )?;
         let receipt = &answer.receipt;
         let scope = state.profile.deployment.scope;
-        let digest: [u8; 32] = Sha256::digest(&pending.command.payload).into();
+        let digest = pending.command.digest()?;
         // The signed receipt binds these exact bytes. The canonical state is fetched afterward.
         receipt
             .verify(&state.profile.deployment.provider_key)
@@ -373,3 +530,138 @@ fn parse_sender(sender: &str) -> Result<ProtocolIdentity, Error> {
 
 #[cfg(test)]
 mod tests;
+
+/// Constructs recipient evidence; canonical lane validation and settlement remain server-owned.
+fn lane_grant(
+    state: &State,
+    keys: &storage::Secrets,
+    view: &RelationshipView,
+    lifetime_ms: u64,
+    issued: CanonicalTime,
+    operation: IdempotencyKey,
+) -> Result<PendingCommand, Error> {
+    use cs_mail_capabilities::{
+        DeclarationAuthorityConstraint, LaneGrant, LaneMode, LaneSubject, RateLimit,
+        SignedLaneGrant,
+    };
+    use cs_mail_primitives::{
+        DeclaredPurpose, Duration, KnownPurpose, LaneId, OriginMode, Version,
+    };
+    use ed25519_dalek::Signer;
+    if lifetime_ms == 0 {
+        return Err(Error::InvalidData);
+    }
+    let guest = view.guest.is_some();
+    let grant = LaneGrant {
+        id: view
+            .lane
+            .as_ref()
+            .map_or(LaneId(operation.0), |lane| lane.grant().id),
+        subject: if guest {
+            LaneSubject::GuestMailbox(view.handle.sender)
+        } else {
+            LaneSubject::Native(cs_mail_privacy::ScopedHandle(
+                *view.handle.relationship.as_bytes(),
+            ))
+        },
+        sender: view.handle.sender,
+        recipient: state.profile.persona,
+        protocol_version: state.profile.deployment.policy.protocol_version,
+        deployment_domain: state.profile.deployment.scope.deployment_domain,
+        intended_provider: state.profile.deployment.scope.provider,
+        recipient_operational_key: state.profile.recipient_key,
+        purpose: if guest {
+            DeclaredPurpose::Unspecified
+        } else {
+            DeclaredPurpose::Known(KnownPurpose::Personal)
+        },
+        origin: if guest {
+            None
+        } else {
+            Some(OriginMode::HumanInitiated)
+        },
+        declaration_authority: if guest {
+            DeclarationAuthorityConstraint::GuestGateway
+        } else {
+            DeclarationAuthorityConstraint::NativeSender
+        },
+        lifetime: Duration(lifetime_ms),
+        rate_limit: RateLimit {
+            max_messages: 20,
+            interval: Duration(86_400_000),
+        },
+        mode: LaneMode::Expiring,
+        issued_at: issued,
+        not_before: issued,
+        not_after: issued
+            .checked_add(Duration(lifetime_ms))
+            .ok_or(Error::InvalidData)?,
+        version: Version(view.lane.as_ref().map_or(Ok(1), |l| {
+            l.grant().version.0.checked_add(1).ok_or(Error::InvalidData)
+        })?),
+    };
+    let signature = ed25519_dalek::SigningKey::from_bytes(&keys.recipient)
+        .sign(&grant.signing_bytes().map_err(|_| Error::InvalidData)?)
+        .to_bytes();
+    Ok(PendingCommand::Lane {
+        grant: Box::new(SignedLaneGrant { grant, signature }),
+        idempotency_key: operation,
+    })
+}
+
+impl MemberClient {
+    /// Journals encrypted content and both operation identities before network work.
+    /// # Errors
+    /// Refuses replacing pending work, unavailable custody or a conflicting selection.
+    pub fn send_message(
+        &self,
+        other: &str,
+        conversation: Option<u128>,
+        text: &str,
+        sources: &[SourceDraft],
+    ) -> Result<cs_mail_primitives::MessageId, Error> {
+        let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
+        let keys = storage::secrets(self.store.as_ref())?;
+        let mut state = storage::open(self.store.as_ref(), &keys)?;
+        if state.requesting.is_some() {
+            return Err(Error::RequestPending);
+        }
+        if state.editing_conversation.is_some() {
+            return Err(Error::DecisionPending);
+        }
+        if state.sending.is_some() {
+            return Err(Error::SendPending);
+        }
+        if state.pending.is_some() {
+            return Err(Error::DecisionPending);
+        }
+        if state.setup.is_some() {
+            return Err(Error::SetupPending);
+        }
+        self.synchronize(&mut state, &keys)?;
+        let other = parse_sender(other)?;
+        state.last_send = None;
+        state.sending =
+            Some(self.prepare_send(&state, &keys, other, conversation, text, sources)?);
+        storage::save(self.store.as_ref(), &keys, &state)?;
+        // A known commit is a send outcome. A later view-refresh failure must not
+        // turn it into an apparently failed send and invite a fresh duplicate.
+        self.transmit_send(&mut state, &keys)
+    }
+}
+
+fn require_idle(state: &State) -> Result<(), Error> {
+    if state.requesting.is_some() {
+        return Err(Error::RequestPending);
+    }
+    if state.pending.is_some() || state.editing_conversation.is_some() {
+        return Err(Error::DecisionPending);
+    }
+    if state.sending.is_some() {
+        return Err(Error::SendPending);
+    }
+    if state.setup.is_some() {
+        return Err(Error::SetupPending);
+    }
+    Ok(())
+}

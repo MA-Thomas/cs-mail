@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-accounts = { path = "../cs-mail-accounts" }
 hmac.workspace = true
 tokio.workspace = true
 cs-mail-correspondence = { path = "../cs-mail-correspondence" }
@@ -30,6 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+cs-mail-client = { path = "../cs-mail-client" }
 mail-parser = "=0.11.8"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 cs-mail-accounts = { path = "../cs-mail-accounts" }

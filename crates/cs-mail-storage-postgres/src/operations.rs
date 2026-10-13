@@ -148,8 +148,9 @@ impl OperatorStore for PostgresDeployment {
                 OperatorTarget::RequestPricing(pricing::policy_context(&mut tx, policy)?)
             }
             OperatorCommand::PublishProtocolPolicy(policy) => OperatorTarget::ProtocolPolicy {
-                current: members::current_protocol_policy(&mut tx, true)?,
-                same_version: members::protocol_policy_version(&mut tx, policy.version())?,
+                current: members::current_protocol_policy(&mut tx, true)?.map(Box::new),
+                same_version: members::protocol_policy_version(&mut tx, policy.version())?
+                    .map(Box::new),
             },
         };
         let (record, effect, outcome) = decide(OperatorContext {

@@ -35,11 +35,20 @@ The documents have distinct roles:
 7. **[Express-lane implementation plan](cs_mail_express_lanes_implementation.pdf)** —
    lane authority, lifetime, domain authentication, and product integration.
 
-The matching `.tex` files are the editable sources. `intro_doc.tex` is retained
+The matching `.tex` files are the editable sources. The build-plan source includes
+the 11 October pause checkpoint; the checked-in PDF has not been regenerated in
+this documentation pass. `intro_doc.tex` is retained
 only as a superseded design-history document and must not be used as a current
 protocol reference.
 
-**Current priority (agreed 8 October 2026):** build and validate the SwiftUI member
+**Development paused (11 October 2026):** the persistent local owner-account slice
+is complete. The unified macOS app reopens `marcus@csqd-mail.com`, with fictional
+participants providing canonical requests, standing permission, an express lane
+and unavailable approaches. Identity evidence, banking and payments remain
+simulated. See the [current app state and restart runbook](apps/cs-mail-apple/README.md)
+for preserved storage, validation and limits. No production service is launched.
+
+**Direction when development resumes (agreed 8 October 2026):** build and validate the SwiftUI member
 application locally, shipping macOS first and designing for iPhone/iPad from the
 outset. Business rules and portable client workflows remain in Rust behind a narrow
 Swift binding interface. This replaces the planned Tauri shell; see the
@@ -104,6 +113,12 @@ funding does not delay or reclassify it. Closure preserves the route for
 outstanding distributions and refunds. The earlier utility charge and later
 distribution remain separate transactions; distribution does not revoke coverage.
 
+The current owner app is `target/apple/CsMail-continuity-20261012.app`, backed by
+the preservation-checked copy of the original account. It keeps the original
+Keychain credential and `marcus@csqd-mail.com`, all sample contacts and message
+text, and a separate current-format cache. The older app/database/cache remain
+the rollback checkpoint. See the [current owner-app runbook](apps/cs-mail-apple/README.md#current-owner-app--12-october-2026).
+
 ## Core vocabulary
 
 - **Private principal**: the provider-local subject used for control, recovery,
@@ -158,7 +173,11 @@ PostgreSQL shell, endpoint content encryption, retry-safe workers, native client
 and ingress APIs, privacy/retention types, and bounded adapter state machines. Annual allocation, per-account billing, funded
 coverage, automatic lump-sum distributions, and authorized scheduled payment work are
 implemented. The local server, administrator and member CLIs, and guest request
-page are runnable; the desktop member application remains product work.
+page are runnable. The SwiftUI macOS member application now supports persistent
+development enrollment, same-device reopening, encrypted request reading, standing
+acceptance, rejection, express-lane acceptance and address publication/discovery.
+The full Apple milestone, including replacement-device recovery and iOS runtime
+validation, remains product work.
 The protocol and architecture remain drafts dated September 2026.
 Recipient-defined request classes (up to eight), signed class-specific quotes,
 and lane acceptance with atomic refund settlement are implemented. Native
@@ -175,14 +194,16 @@ The separate `cs-mail-mx` receiver now admits authenticated plain-text and paire
 replies over SMTP with STARTTLS and durable retry handling; see the
 [receiver runbook](docs/smtp-receiver.md). The SMTP2GO HTTPS submission adapter and
 authenticated delivery feedback are now implemented and locally validated; see the
-[outbound guide](docs/smtp2go-outbound.md). No SMTP2GO account or live sending was used.
-Public deployment, account-connected delivery, HTML-only mail/attachments, general member-address
-mail and native quotation exports remain work.
+[outbound guide](docs/smtp2go-outbound.md). Subsequent live outbound observations
+and general member-address reception are recorded in the
+[external-email journey](docs/external-email-journey.md). Those separate transport
+observations do not establish external delivery for the persistent development
+account. Public MX/provider callback validation, HTML-only mail/attachments and
+native quotation exports remain work.
 
 This is not yet a production service. Network transports, TLS connection
 pooling, durable administrative key custody, KMS/HSM integration, external
-funding-rail connectors, the SMTP server/relay around the authentication
-gateway, inter-provider authentication and
+funding-rail connectors, public SMTP deployment and monitoring, inter-provider authentication and
 clearing, abuse operations, and jurisdiction-specific compliance policy are
 deployment work. Express lanes are now a launch-feature implementation slice.
 Inbound legacy authentication is integrated with Stalwart Labs' pinned

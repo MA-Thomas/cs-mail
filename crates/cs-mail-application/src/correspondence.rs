@@ -28,7 +28,7 @@ pub struct PreparedMessage {
     pub sender_recovery: crate::consent::RecoveryCopy,
     pub recipient_recovery: crate::consent::RecoveryCopy,
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", deny_unknown_fields)]
 pub enum Command {
     Mailbox {
@@ -60,6 +60,112 @@ pub enum Command {
     DeleteCopies {
         id: ConversationId,
     },
+}
+// Serde's generic tagged-enum buffer does not preserve u128 values when `data`
+// precedes `kind`. Decode the envelope once, then each typed payload directly.
+// Object order is transport syntax; the single Command representation owns meaning.
+impl<'de> Deserialize<'de> for Command {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Envelope {
+            kind: String,
+            data: serde_json::Value,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Mailbox {
+            after: u64,
+            limit: u16,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Create {
+            id: ConversationId,
+            other: ProtocolIdentity,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Change {
+            id: ConversationId,
+            revision: u64,
+            action: PolicyAction,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Id {
+            id: ConversationId,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Assess {
+            manifest: MessageManifest,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fetch {
+            message: MessageId,
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Resolve {
+            source: MessageSelection,
+        }
+        fn payload<T: serde::de::DeserializeOwned, E: serde::de::Error>(
+            value: serde_json::Value,
+        ) -> Result<T, E> {
+            serde_json::from_value(value).map_err(E::custom)
+        }
+        let input = Envelope::deserialize(deserializer)?;
+        match input.kind.as_str() {
+            "Mailbox" => {
+                let p: Mailbox = payload(input.data)?;
+                Ok(Self::Mailbox {
+                    after: p.after,
+                    limit: p.limit,
+                })
+            }
+            "Create" => {
+                let p: Create = payload(input.data)?;
+                Ok(Self::Create {
+                    id: p.id,
+                    other: p.other,
+                })
+            }
+            "ChangePolicy" => {
+                let p: Change = payload(input.data)?;
+                Ok(Self::ChangePolicy {
+                    id: p.id,
+                    revision: p.revision,
+                    action: p.action,
+                })
+            }
+            "Policy" => {
+                let p: Id = payload(input.data)?;
+                Ok(Self::Policy { id: p.id })
+            }
+            "Assess" => {
+                let p: Assess = payload(input.data)?;
+                Ok(Self::Assess {
+                    manifest: p.manifest,
+                })
+            }
+            "Send" => Ok(Self::Send(payload(input.data)?)),
+            "Fetch" => {
+                let p: Fetch = payload(input.data)?;
+                Ok(Self::Fetch { message: p.message })
+            }
+            "Resolve" => {
+                let p: Resolve = payload(input.data)?;
+                Ok(Self::Resolve { source: p.source })
+            }
+            "DeleteCopies" => {
+                let p: Id = payload(input.data)?;
+                Ok(Self::DeleteCopies { id: p.id })
+            }
+            _ => Err(serde::de::Error::custom("unknown correspondence command")),
+        }
+    }
 }
 impl Command {
     pub fn conversation(&self) -> Option<ConversationId> {
@@ -174,6 +280,7 @@ impl SignedRequest {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MessageRecord {
+    pub sender_key: cs_mail_content::EndpointPublicKey,
     pub manifest: MessageManifest,
     pub author: ProtocolIdentity,
     pub admission: cs_mail_protocol::AdmissionBasis,
@@ -198,6 +305,13 @@ pub struct MessageView {
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Response {
+    /// A durable, terminal result for an authenticated mutation. Exact replay
+    /// retains this result even if permission subsequently changes.
+    Refused {
+        operation: IdempotencyKey,
+        digest: [u8; 32],
+        reason: CorrespondenceError,
+    },
     Mailbox {
         entries: Vec<(u64, MessageRecord)>,
         next_after: u64,
@@ -233,6 +347,7 @@ pub struct Receipt {
     pub policy_revisions: BTreeMap<ConversationId, u64>,
 }
 pub struct Context {
+    pub receiver_contact: Option<Relationship>,
     pub mailbox: Vec<(u64, MessageRecord, CanonicalTime)>,
     pub authority: AccountState,
     pub custody_key: Option<cs_mail_content::EndpointPublicKey>,
@@ -305,6 +420,7 @@ fn contact(
     context: &Context,
     actor: ProtocolIdentity,
     other: ProtocolIdentity,
+    conversation: Option<ConversationId>,
     now: CanonicalTime,
 ) -> Result<&Relationship, CorrespondenceError> {
     context
@@ -314,7 +430,10 @@ fn contact(
             r.key.sender == actor
                 && r.key.recipient == other
                 && r.state != RelationshipState::Blocked
+                && r.state != RelationshipState::Revoked
                 && (r.state == RelationshipState::Accepted
+                    || conversation
+                        .is_some_and(|id| answer_basis(context, r, id, actor, other).is_some())
                     || context.lane.as_ref().is_some_and(|l| {
                         l.grant().sender == actor
                             && l.grant().recipient == other
@@ -326,6 +445,52 @@ fn contact(
                     }))
         })
         .ok_or(CorrespondenceError::Unauthorized)
+}
+fn answer_basis(
+    context: &Context,
+    relationship: &Relationship,
+    conversation: ConversationId,
+    actor: ProtocolIdentity,
+    other: ProtocolIdentity,
+) -> Option<cs_mail_protocol::AdmissionBasis> {
+    if relationship.key.sender != actor || relationship.key.recipient != other {
+        return None;
+    }
+    let source = context
+        .conversations
+        .get(&conversation)?
+        .reply_source(actor, relationship.reply_epoch)?;
+    Some(cs_mail_protocol::AdmissionBasis::ConversationReply { source })
+}
+
+/// An explicit continuity interpretation of retained delivery evidence. A withdrawal
+/// never becomes permission merely because an account was unblocked later.
+/// # Errors
+/// Rejects substituted conversation, author, recipient or relationship facts.
+pub fn restore_received_conversation(
+    conversation: &Conversation,
+    message: &MessageRecord,
+    relationship: Option<&Relationship>,
+    last_withdrawal: Option<CanonicalTime>,
+) -> Result<Conversation, CorrespondenceError> {
+    if message.manifest.conversation() != conversation.id() {
+        return Err(CorrespondenceError::Invalid);
+    }
+    let recipient = conversation.scope().other(message.author)?;
+    let epoch = if let Some(relationship) = relationship {
+        if relationship.key.sender != recipient || relationship.key.recipient != message.author {
+            return Err(CorrespondenceError::Invalid);
+        }
+        if relationship.state.sender_reply_restriction().is_some()
+            || last_withdrawal.is_some_and(|at| message.committed_at <= at)
+        {
+            return Ok(conversation.clone());
+        }
+        relationship.reply_epoch
+    } else {
+        cs_mail_primitives::ReplyEpoch(0)
+    };
+    conversation.receive(recipient, message.manifest.message(), epoch)
 }
 
 /// Policy inheritance is a conservative graph walk; intermediate visual grouping
@@ -403,16 +568,22 @@ fn source_state(
     }
 }
 
-fn validate_payload(
+/// Checks a prepared document against explicit protected author, pair and custody facts.
+/// # Errors
+/// Rejects inconsistent copies, invalid lifetimes or missing custody configuration.
+pub fn validate_prepared(
     package: &PreparedMessage,
-    request: &SignedRequest,
+    actor: ProtocolIdentity,
+    key: OperationalKeyRef,
     other: ProtocolIdentity,
-    relationship: &Relationship,
+    relationship: cs_mail_primitives::RelationshipRef,
     custody_key: Option<cs_mail_content::EndpointPublicKey>,
     now: CanonicalTime,
 ) -> Result<(), CorrespondenceError> {
     let custody_key = custody_key.ok_or(CorrespondenceError::Unavailable)?;
-    let actor = request.persona;
+    let latest = now
+        .checked_add(cs_mail_primitives::Duration(90 * 24 * 60 * 60 * 1000))
+        .ok_or(CorrespondenceError::Invalid)?;
     let mut binding = package.sender_copy.binding.clone();
     binding.recipient = other;
     if binding != package.recipient_copy.binding
@@ -448,13 +619,15 @@ fn validate_payload(
         if binding.sender != actor
             || binding.recipient != owner
             || binding.message_id != package.manifest.message()
-            || binding.relationship != relationship.key.reference
+            || binding.relationship != relationship
             || binding.wire_version != cs_mail_primitives::WireVersion(1)
             || binding.protocol_version != cs_mail_primitives::ProtocolVersion(2)
             || binding.declarations.origin.authority
-                != cs_mail_primitives::DeclarationAuthority::NativeSender(request.key)
+                != cs_mail_primitives::DeclarationAuthority::NativeSender(key)
             || copy.created_at > now
             || copy.expires_at <= now
+            || copy.expires_at > latest
+            || binding.message_valid_until.0 > latest
             || binding.message_valid_until.0 <= now
             || copy.envelope.ciphertext.is_empty()
             || copy.envelope.ciphertext.len() > MAX_ENCODED_DOCUMENT_BYTES + 16
@@ -500,6 +673,18 @@ fn replay(
             ) => c.id() == *id && c.scope().contains(request.persona),
             (Command::Send(p), Response::Committed(id)) => p.manifest.message() == *id,
             (Command::DeleteCopies { .. }, Response::CopiesDeleted) => true,
+            (
+                _,
+                Response::Refused {
+                    operation,
+                    digest: refused_digest,
+                    ..
+                },
+            ) => {
+                request.command.audit_action().is_some()
+                    && *operation == request.operation
+                    && *refused_digest == digest
+            }
             _ => false,
         };
         if !valid {
@@ -532,6 +717,16 @@ fn admit_message(
         cs_mail_protocol::AdmissionBasis::AcceptedRelationship {
             version: relationship.version,
         }
+    } else if package.recipient_copy.binding.capability.is_none()
+        && let Some(basis) = answer_basis(
+            context,
+            relationship,
+            package.manifest.conversation(),
+            actor,
+            destination,
+        )
+    {
+        basis
     } else {
         let mut lane = context
             .lane
@@ -575,7 +770,6 @@ fn admit_message(
     Ok((admission, next_lane))
 }
 
-#[allow(clippy::too_many_lines)] // One atomic dispatch for the signed correspondence command.
 fn decide(
     request: &SignedRequest,
     context: &Context,
@@ -586,6 +780,49 @@ fn decide(
     if let Some(prior) = replay(request, context, digest)? {
         return Ok(prior);
     }
+    match execute(request, context, now, digest) {
+        Ok(decision) => Ok(decision),
+        Err(
+            reason @ (CorrespondenceError::PolicyUnresolved | CorrespondenceError::Unavailable),
+        ) => Err(reason),
+        Err(reason) => {
+            let Some(action) = request.command.audit_action() else {
+                return Err(reason);
+            };
+            let response = Response::Refused {
+                operation: request.operation,
+                digest,
+                reason,
+            };
+            Ok(Decision {
+                response: response.clone(),
+                effects: Some(Effects {
+                    lane: None,
+                    conversation: None,
+                    delivery: None,
+                    delete_copies: None,
+                    receipt: Receipt {
+                        actor: request.persona,
+                        key: request.key,
+                        action,
+                        digest,
+                        outcome: response,
+                        authorized_at: now,
+                        policy_revisions: BTreeMap::new(),
+                    },
+                }),
+            })
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)] // One atomic dispatch for the signed correspondence command.
+fn execute(
+    request: &SignedRequest,
+    context: &Context,
+    now: CanonicalTime,
+    digest: [u8; 32],
+) -> Result<Decision, CorrespondenceError> {
     let actor = request.persona;
     let mut conversation_write = None;
     let mut delivery = None;
@@ -610,7 +847,7 @@ fn decide(
             }
         }
         Command::Create { id, other } => {
-            contact(context, actor, *other, now)?;
+            contact(context, actor, *other, None, now)?;
             if context.conversations.contains_key(id) {
                 return Err(CorrespondenceError::Conflict);
             }
@@ -638,12 +875,19 @@ fn decide(
             let destination = owned(context, manifest.conversation(), actor)?
                 .scope()
                 .other(actor)?;
-            let relationship = contact(context, actor, destination, now)?;
-            validate_payload(
-                package,
-                request,
+            let relationship = contact(
+                context,
+                actor,
                 destination,
-                relationship,
+                Some(manifest.conversation()),
+                now,
+            )?;
+            validate_prepared(
+                package,
+                request.persona,
+                request.key,
+                destination,
+                relationship.key.reference,
                 context.custody_key,
                 now,
             )?;
@@ -651,8 +895,27 @@ fn decide(
                 admit_message(context, relationship, actor, destination, package, now)?;
             lane_write = next_lane;
             policy_revisions = policies(context, manifest, actor)?;
+            if context
+                .receiver_contact
+                .as_ref()
+                .is_none_or(|contact| contact.state.sender_reply_restriction().is_none())
+            {
+                let epoch = context
+                    .receiver_contact
+                    .as_ref()
+                    .map_or(cs_mail_primitives::ReplyEpoch(0), |contact| {
+                        contact.reply_epoch
+                    });
+                conversation_write =
+                    Some(owned(context, manifest.conversation(), actor)?.receive(
+                        destination,
+                        manifest.message(),
+                        epoch,
+                    )?);
+            }
             delivery = Some((
                 MessageRecord {
+                    sender_key: package.sender_recovery.sender,
                     manifest: manifest.clone(),
                     author: actor,
                     admission,

@@ -162,7 +162,7 @@ impl External {
                 relationship,
                 messages,
                 ..
-            } => (relationship, messages),
+            } => (*relationship, messages),
             app::Response::Outcome(_) => panic!("expected conversation"),
         }
     }

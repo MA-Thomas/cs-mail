@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-pub const CALLBACK: &str = "com.csqd.member:/oauth/callback";
+pub const CALLBACK: &str = "com.csqd.member.development:/oauth/callback";
 #[derive(Clone, Deserialize, Serialize)]
 pub(super) struct LoginConfig {
     pub issuer: String,
@@ -109,7 +109,7 @@ impl Attempt {
         ]);
         let authorization = Authorization {
             url: url.into(),
-            callback_scheme: "com.csqd.member".into(),
+            callback_scheme: "com.csqd.member.development".into(),
         };
         Ok((
             Self {

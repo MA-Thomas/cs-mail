@@ -102,9 +102,12 @@ fn replacement_device_recovers_only_after_fresh_scoped_consent() {
         ContentKeyRef(12),
     );
     assert!(
-        replacement
-            .open_correspondence(&h.view(1, 100), h.clients[0].content_public_key())
-            .is_err()
+        cs_mail_client::correspondence::open(
+            &replacement.endpoint_keys().unwrap(),
+            &h.view(1, 100),
+            h.clients[0].content_public_key()
+        )
+        .is_err()
     );
     // Exercise the production verification/application boundary with a test issuer.
     let event = identity_contract::changes::SignedSecurityEvent::sign(

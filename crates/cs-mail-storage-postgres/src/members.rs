@@ -250,12 +250,21 @@ impl PostgresEngine {
     /// each was bound to, in content order.
     /// # Errors
     /// Returns database or decoding errors.
-    pub fn content_with_certificates(
+    pub fn guest_content_with_certificates(
         &self,
     ) -> Result<Vec<(EncryptedContentRecord, Option<SignedContentKeyCertificate>)>, StorageError>
     {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let records = client
+        let mut tx = client.transaction()?;
+        let sender = super::load_locked_aggregate(&mut tx, &self.aggregate_key)?
+            .state
+            .relationship
+            .key
+            .sender;
+        if !super::guests::is_guest(&mut tx, sender)? {
+            return Err(StorageError::ContentScopeMismatch);
+        }
+        let records = tx
             .query(
                 "SELECT record FROM cs_encrypted_content WHERE aggregate_key=$1 \
                  ORDER BY created_at, content_ref",
@@ -264,10 +273,10 @@ impl PostgresEngine {
             .into_iter()
             .map(|row| row.get::<_, Json<EncryptedContentRecord>>(0).0)
             .collect::<Vec<_>>();
-        records
+        let content = records
             .into_iter()
             .map(|record| {
-                let certificate = client
+                let certificate = tx
                     .query_opt(
                         "SELECT certificate FROM cs_content_certificates WHERE digest=$1",
                         &[&record.binding.sender_certificate.0.as_slice()],
@@ -275,7 +284,9 @@ impl PostgresEngine {
                     .map(|row| row.get::<_, Json<SignedContentKeyCertificate>>(0).0);
                 Ok((record, certificate))
             })
-            .collect()
+            .collect::<Result<Vec<_>, StorageError>>()?;
+        tx.commit()?;
+        Ok(content)
     }
 }
 
@@ -317,5 +328,24 @@ impl EndpointKeyStore for PostgresDeployment {
         }
         tx.commit()?;
         Ok(())
+    }
+}
+
+impl PostgresDeployment {
+    /// # Errors
+    /// Reads only pair membership metadata, not another owner's retained copy.
+    pub fn has_native_conversation(
+        &self,
+        a: ProtocolIdentity,
+        b: ProtocolIdentity,
+    ) -> Result<bool, StorageError> {
+        let pair = cs_mail_correspondence::CorrespondenceRef::new(a, b)?;
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        Ok(client
+            .query_opt(
+                "SELECT 1 FROM cs_conversations WHERE record->'scope'=$1 LIMIT 1",
+                &[&Json(pair)],
+            )?
+            .is_some())
     }
 }

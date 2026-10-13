@@ -21,6 +21,11 @@
 //! }
 //! ```
 
+#[cfg(feature = "development-maintenance")]
+mod acceptance_alignment;
+#[cfg(feature = "development-maintenance")]
+pub use acceptance_alignment::AcceptanceAlignmentOutcome;
+
 mod retention;
 pub use retention::{LifecyclePolicy, RetentionReport};
 mod work;
@@ -44,9 +49,16 @@ mod notices;
 pub use guests::GuestRelationship;
 mod members;
 pub use members::StoredRelationship;
+mod directory;
 mod pricing;
+mod request_documents;
+mod requests;
+use cs_mail_application::receipts::{
+    BondFreeAdmissionOutcome, BondFreeAuthority, DurableExecutionOutcome, LaneOperationOutcome,
+    ReceivedOutcome, Refusal,
+};
 use domain::{load_domain_records, persist_domain_records, persist_message};
-pub use ingress::{ProcessingFailure, ReceivedCommand, ReceivedOutcome, Refusal};
+pub use ingress::{ProcessingFailure, ReceivedCommand};
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -66,7 +78,7 @@ use cs_mail_primitives::{
 use cs_mail_protocol::{
     ActorRef, EffectIntent, KernelCommand, Message, PolicySnapshot, ProtocolCommand, ProtocolError,
     ProtocolState, RelationshipState, RequestHistory, SettlementSnapshot, TermsOutcome,
-    TransitionContext, TransitionManifest, transition,
+    TransitionContext, TransitionManifest,
 };
 use cs_mail_security::{
     KeyRegistry, SecurityError, SignedCommandBytes, SignedContactTerms, SignedReceipt, SigningScope,
@@ -82,7 +94,11 @@ const MIGRATION_3: &str = include_str!("../migrations/0003_outbox_content_retent
 const MIGRATION_4: &str = include_str!("../migrations/0004_express_lanes.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_protocol_foundations.sql");
 const MIGRATION_6: &str = include_str!("../migrations/0006_authenticated_message_envelopes.sql");
-const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 9;
+const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 11;
+const MIGRATION_36: &str = include_str!("../migrations/0036_received_conversation_replies.sql");
+const MIGRATION_35: &str = include_str!("../migrations/0035_billing_refusals.sql");
+const MIGRATION_34: &str = include_str!("../migrations/0034_native_request_documents.sql");
+const MIGRATION_33: &str = include_str!("../migrations/0033_paired_request_commits.sql");
 const MIGRATION_15: &str = include_str!("../migrations/0015_product_accounts.sql");
 const MIGRATION_18: &str = include_str!("../migrations/0018_request_classes.sql");
 const MIGRATION_19: &str = include_str!("../migrations/0019_request_pricing.sql");
@@ -92,6 +108,8 @@ const MIGRATION_22: &str = include_str!("../migrations/0022_member_loop.sql");
 const MIGRATION_23: &str = include_str!("../migrations/0023_guest_senders.sql");
 const MIGRATION_26: &str = include_str!("../migrations/0026_provider_events.sql");
 const MIGRATION_29: &str = include_str!("../migrations/0029_inbound_lane_authority.sql");
+const MIGRATION_32: &str = include_str!("../migrations/0032_member_addresses.sql");
+const MIGRATION_31: &str = include_str!("../migrations/0031_address_directory.sql");
 const MIGRATION_30: &str = include_str!("../migrations/0030_transactional_email.sql");
 const MIGRATION_28: &str = include_str!("../migrations/0028_guest_verification.sql");
 const MIGRATION_27: &str = include_str!("../migrations/0027_request_hardening.sql");
@@ -300,15 +318,22 @@ impl From<CapabilityError> for StorageError {
     }
 }
 
-pub use cs_mail_protocol::CommittedTransition;
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DurableExecutionOutcome {
-    pub admission_failure: Option<cs_mail_protocol::admission::AdmissionFailure>,
-    pub transition: CommittedTransition,
-    #[serde(skip)]
-    pub replayed: bool,
+impl From<Refusal> for StorageError {
+    fn from(refusal: Refusal) -> Self {
+        match refusal {
+            Refusal::Billing(e) => StorageError::Billing(e),
+            Refusal::Protocol(e) => StorageError::Protocol(e),
+            Refusal::Admission(e) => StorageError::AdmissionRefused(e),
+            Refusal::Capability(e) => StorageError::Capability(e),
+            Refusal::DuplicateConflict => StorageError::DuplicateConflict,
+            Refusal::VersionConflict => StorageError::VersionConflict,
+            Refusal::NotAuthorized => StorageError::BondFreeNotAuthorized,
+            Refusal::QuoteMissing => StorageError::QuoteMissing,
+            Refusal::InvalidQuote => StorageError::Security(SecurityError::InvalidSignature),
+        }
+    }
 }
+pub use cs_mail_protocol::CommittedTransition;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct ScheduledItem {
@@ -327,28 +352,6 @@ impl ScheduledItem {
     pub const fn due_at(&self) -> CanonicalTime {
         self.due_at
     }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum BondFreeAuthority {
-    AcceptedRelationship,
-    ExpressLane(LaneId),
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct BondFreeAdmissionOutcome {
-    pub authority: BondFreeAuthority,
-    pub journal_position: JournalPosition,
-    #[serde(skip)]
-    pub replayed: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LaneOperationOutcome {
-    pub changed: bool,
-    pub lane: Lane,
-    #[serde(skip)]
-    pub replayed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -715,8 +718,8 @@ impl PostgresEngine {
     }
 
     /// Stores ciphertext supplied by the trusted host or SMTP gateway. This is not an
-    /// authentication proof or a network upload endpoint. Native uploads use
-    /// `store_authenticated_content`; delivery still requires authenticated ingress.
+    /// authentication proof or a native upload endpoint. Native sends use correspondence
+    /// commands and request documents; guest delivery requires authenticated ingress.
     /// # Errors
     /// Rejects conflicting content, invalid numeric values, or persistence failures.
     pub fn store_trusted_content(
@@ -1025,6 +1028,12 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (28_i64, MIGRATION_28),
     (29_i64, MIGRATION_29),
     (30_i64, MIGRATION_30),
+    (31_i64, MIGRATION_31),
+    (32_i64, MIGRATION_32),
+    (33_i64, MIGRATION_33),
+    (34_i64, MIGRATION_34),
+    (35_i64, MIGRATION_35),
+    (36_i64, MIGRATION_36),
 ];
 
 fn migrate(client: &mut Client) -> Result<(), StorageError> {
@@ -1226,35 +1235,26 @@ fn delete_schedule(
     Ok(())
 }
 
-fn revoke_lane_locked(
+fn persist_lane_revocation(
     transaction: &mut Transaction<'_>,
     aggregate_key: &str,
+    effect: &cs_mail_capabilities::LaneRevocation,
     now: CanonicalTime,
     position: JournalPosition,
 ) -> Result<(), StorageError> {
-    let Some(row) = transaction.query_opt(
-        "SELECT lane FROM cs_capability_lanes WHERE aggregate_key = $1 FOR UPDATE",
-        &[&aggregate_key],
-    )?
-    else {
-        return Ok(());
-    };
-    let mut lane = row.try_get::<_, Json<Lane>>("lane")?.0;
-    if lane.state() == LaneState::Revoked {
-        return Ok(());
+    let current = ingress::load_current_lane(transaction, aggregate_key)?
+        .ok_or(StorageError::VersionConflict)?;
+    if current.grant().id != effect.lane().grant().id
+        || current.version() != effect.expected_version()
+    {
+        return Err(StorageError::VersionConflict);
     }
-    lane.revoke()?;
-    upsert_lane(transaction, aggregate_key, &lane, now)?;
-    delete_schedule(
-        transaction,
-        aggregate_key,
-        ScheduleTask::LaneHorizon(lane.grant().id),
-    )?;
+    upsert_lane(transaction, aggregate_key, effect.lane(), now)?;
     insert_capability_event(
         transaction,
         aggregate_key,
         position,
-        &CapabilityEvent::LaneRevoked(lane.grant().id),
+        &CapabilityEvent::LaneRevoked(effect.lane().grant().id),
     )?;
     Ok(())
 }
@@ -1325,7 +1325,6 @@ fn bootstrap_in(
     transaction.execute("INSERT INTO cs_request_relationship_keys (relationship_ref, aggregate_key) VALUES ($1,$2) ON CONFLICT (aggregate_key) DO NOTHING", &[&scoped_key(state.relationship.key.reference.derivation_version(),state.relationship.key.reference.as_bytes()),&aggregate_key])?;
     Ok(())
 }
-
 fn load_locked_aggregate(
     transaction: &mut Transaction<'_>,
     aggregate_key: &str,
@@ -1429,6 +1428,9 @@ fn persist_manifest(
         return Err(StorageError::VersionConflict);
     }
     persist_domain_records(transaction, aggregate_key, manifest, now)?;
+    if let Some(effect) = &manifest.lane_revocation {
+        persist_lane_revocation(transaction, aggregate_key, effect, now, position)?;
+    }
     finance::persist_forfeitures(transaction, &manifest.forfeitures, now)?;
     finance::persist_forfeiture_holds(
         transaction,

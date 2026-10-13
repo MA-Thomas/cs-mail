@@ -21,6 +21,8 @@ const CONTENT_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub mail_domain: Option<String>,
+    pub directory_domain: Option<String>,
     pub deployment: PostgresDeployment,
     pub blocking: Blocking,
     pub bank: Option<std::sync::Arc<dyn crate::enrollment::BankEvidence>>,
@@ -109,6 +111,12 @@ pub fn now() -> cs_mail_primitives::CanonicalTime {
 pub fn router(state: AppState) -> Router {
     let router = Router::new()
         .route("/health", get(health))
+        .route(
+            "/v1/directory/commands",
+            post(crate::directory::command).layer(DefaultBodyLimit::max(CONTENT_LIMIT)),
+        )
+        .route("/v1/directory/search", post(crate::directory::search))
+        .route("/v1/directory/lookup", post(crate::directory::lookup))
         .route("/ready", get(ready))
         .route("/v1/operator/commands", post(operator_command))
         .route("/v1/operator/reviews", post(crate::review::command))
@@ -154,6 +162,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/lanes", post(crate::members::lane))
         .route("/v1/members/reads", post(crate::members::read))
+        .route(
+            "/v1/correspondence/commands",
+            post(crate::members::correspondence).layer(DefaultBodyLimit::max(CONTENT_LIMIT)),
+        )
         .route("/v1/external/prepare", post(crate::external::prepare))
         .route(
             "/v1/external/commands",

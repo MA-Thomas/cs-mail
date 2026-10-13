@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-capabilities = { path = "../cs-mail-capabilities" }
 identity-contract.workspace = true
 cs-mail-accounts = { path = "../cs-mail-accounts" }
 cs-mail-application = { path = "../cs-mail-application" }

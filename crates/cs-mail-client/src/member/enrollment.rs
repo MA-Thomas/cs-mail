@@ -72,6 +72,8 @@ pub(super) struct Enrollment {
 pub(super) enum Setup {
     Register(Option<Box<SignedAccountCommand>>),
     Publish,
+    Purchase(Box<cs_mail_billing::SignedBillingCommand>),
+    Directory(Box<cs_mail_application::directory::SignedRequest>),
 }
 #[derive(Deserialize)]
 struct IntentResponse {
@@ -123,6 +125,33 @@ impl MemberClient {
             Err(error) => Err(error),
         }
     }
+    fn refresh_enrollment_deployment(
+        &self,
+        server: &str,
+        keys: &Secrets,
+        enrollment: &mut Enrollment,
+    ) -> Result<(), Error> {
+        // Resume the same ownership reservation with current browser configuration.
+        // Deployment identity and login issuer remain pinned across a host app cutover.
+        let deployment: Deployment = self.call(server, "v1/deployment", None)?;
+        if deployment.scope != enrollment.deployment.scope
+            || deployment.provider_key != enrollment.deployment.provider_key
+            || deployment.product != enrollment.deployment.product
+            || deployment
+                .browser_login
+                .as_ref()
+                .map(|c| (&c.issuer, &c.client_id))
+                != enrollment
+                    .deployment
+                    .browser_login
+                    .as_ref()
+                    .map(|c| (&c.issuer, &c.client_id))
+        {
+            return Err(Error::Unauthorized);
+        }
+        enrollment.deployment = deployment;
+        self.save_enrollment(keys, enrollment)
+    }
     fn save_enrollment(&self, keys: &Secrets, enrollment: &Enrollment) -> Result<(), Error> {
         #[derive(Serialize)]
         enum Borrowed<'a> {
@@ -173,6 +202,7 @@ impl MemberClient {
             }
             Err(error) => return Err(error),
         };
+        self.refresh_enrollment_deployment(server, &keys, &mut enrollment)?;
         let config = enrollment
             .deployment
             .browser_login
@@ -312,7 +342,9 @@ impl MemberClient {
                 }
                 let ids = EnrollmentIdentifiers::for_operation(&keys.operation);
                 let mut state = State {
-                    format: 1,
+                    format: 3,
+                    mailbox: super::correspondence::Mailbox::default(),
+                    sending: None,
                     profile: Profile {
                         server: enrollment.server.clone(),
                         persona: ids.persona,
@@ -327,6 +359,10 @@ impl MemberClient {
                     pending: None,
                     content: std::collections::BTreeMap::new(),
                     last_decision: None,
+                    last_send: None,
+                    editing_conversation: None,
+                    requesting: None,
+                    last_request: None,
                     setup: Some(Setup::Register(None)),
                 };
                 storage::save(self.store.as_ref(), keys, &state)?;
@@ -381,7 +417,7 @@ impl MemberClient {
                     "v1/accounts/commands",
                     Some(&serde_json::to_vec(command).map_err(|_| Error::InvalidData)?),
                 )?;
-                self.check_account(&state.profile, keys)?;
+                self.account_view(&state.profile, keys)?;
                 state.setup = Some(Setup::Publish);
                 storage::save(self.store.as_ref(), keys, state)?;
             }
@@ -418,6 +454,7 @@ impl MemberClient {
             state.setup = None;
             storage::save(self.store.as_ref(), keys, state)?;
         }
+        self.finish_onboarding(state, keys)?;
         Ok(())
     }
 }

@@ -7,6 +7,7 @@ mod blocking;
 mod callbacks;
 mod config;
 mod diagnostics;
+mod directory;
 mod enrollment;
 mod external;
 mod guests;
@@ -232,6 +233,16 @@ fn member_gateway(
         cs_mail_service::UnixMillisecondClock,
     )
     .map_err(|_| "the provider secret is not the bootstrapped provider key")?;
+    let custody = cs_mail_key_custody::LocalCustodian::from_secret_bytes(
+        members.custody_key_ref,
+        &secret(&members.custody_secret_file)?,
+    )
+    .map_err(|e| e.to_string())?;
+    gateway
+        .deployment()
+        .accounts(crate::http::now)
+        .configure_custody(custody.public_key())
+        .map_err(|e| e.to_string())?;
     Ok(Some(std::sync::Arc::new(gateway)))
 }
 /// The guest request page's service, when configured. Development builds tokenize guest
@@ -349,6 +360,8 @@ fn serve(path: &std::path::Path) -> Result<(), String> {
         (None, None)
     };
     let state = http::AppState {
+        directory_domain: config.directory_domain.clone(),
+        mail_domain: config.external.as_ref().map(|e| e.mail_domain.clone()),
         browser_login: config.browser_login.clone(),
         deployment,
         blocking: blocking::Blocking::new(config.blocking_permits),

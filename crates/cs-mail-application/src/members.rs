@@ -231,6 +231,8 @@ pub fn publish_endpoint_key<R: EndpointKeyStore>(
 /// One party's view of a relationship. Both parties see the same facts about it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RelationshipView {
+    pub reply_epoch: cs_mail_primitives::ReplyEpoch,
+    pub display_name: Option<String>,
     pub handle: RelationshipHandle,
     /// The sender's mailbox, when the sender is a guest: members see who a guest is.
     #[serde(default)]
@@ -269,7 +271,9 @@ impl RelationshipView {
     pub fn of(handle: RelationshipHandle, snapshot: &SettlementSnapshot) -> Self {
         let state = &snapshot.state;
         Self {
+            reply_epoch: state.relationship.reply_epoch,
             handle,
+            display_name: None,
             guest: None,
             external_conversations: Vec::new(),
             state: state.relationship.state,
@@ -378,13 +382,13 @@ pub enum MemberAnswer {
     Receiving {
         handle: RelationshipHandle,
         view: Option<RelationshipView>,
-        content: Vec<DeliveredContent>,
+        content: Vec<GuestDeliveredContent>,
     },
     Inbox(Vec<RelationshipView>),
 }
 /// One ciphertext and the sender certificate it is bound to.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DeliveredContent {
+pub struct GuestDeliveredContent {
     pub record: cs_mail_content::EncryptedContentRecord,
     pub certificate: Option<cs_mail_security::SignedContentKeyCertificate>,
 }

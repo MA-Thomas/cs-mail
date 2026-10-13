@@ -16,6 +16,86 @@ use cs_mail_primitives::{
 };
 use std::collections::BTreeMap;
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum BillingCommandOutcome {
+    Applied(Vec<PaymentOperation>),
+    Refused(BillingError),
+}
+impl BillingCommandOutcome {
+    /// # Errors
+    /// Returns the recorded domain refusal; never treats it as transport failure.
+    pub fn into_operations(self) -> Result<Vec<PaymentOperation>, BillingError> {
+        match self {
+            Self::Applied(operations) => Ok(operations),
+            Self::Refused(error) => Err(error),
+        }
+    }
+}
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BillingResponse {
+    pub digest: [u8; 32],
+    pub outcome: BillingCommandOutcome,
+    pub signature: Vec<u8>,
+}
+impl BillingResponse {
+    fn signing_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        #[derive(serde::Serialize)]
+        struct Payload<'a> {
+            digest: &'a [u8; 32],
+            outcome: &'a BillingCommandOutcome,
+        }
+        let mut bytes = b"cs-mail/billing-response/v1".to_vec();
+        bytes.extend(serde_json::to_vec(&Payload {
+            digest: &self.digest,
+            outcome: &self.outcome,
+        })?);
+        Ok(bytes)
+    }
+    /// # Errors
+    /// Serialization of the exact signed command or outcome failed.
+    pub fn sign(
+        command: &SignedBillingCommand,
+        outcome: BillingCommandOutcome,
+        provider: &[u8; 32],
+    ) -> Result<Self, serde_json::Error> {
+        use ed25519_dalek::Signer;
+        use sha2::{Digest, Sha256};
+        let mut response = Self {
+            digest: Sha256::digest(serde_json::to_vec(command)?).into(),
+            outcome,
+            signature: Vec::new(),
+        };
+        response.signature = ed25519_dalek::SigningKey::from_bytes(provider)
+            .sign(&response.signing_bytes()?)
+            .to_bytes()
+            .to_vec();
+        Ok(response)
+    }
+    /// # Errors
+    /// Rejects a substituted command, outcome or provider signature.
+    pub fn verify(
+        &self,
+        command: &SignedBillingCommand,
+        provider: &[u8; 32],
+    ) -> Result<(), cs_mail_security::SecurityError> {
+        use sha2::{Digest, Sha256};
+        let invalid = || cs_mail_security::SecurityError::InvalidSignature;
+        if self.digest
+            != <[u8; 32]>::from(Sha256::digest(
+                serde_json::to_vec(command).map_err(|_| invalid())?,
+            ))
+        {
+            return Err(invalid());
+        }
+        let signature =
+            ed25519_dalek::Signature::from_slice(&self.signature).map_err(|_| invalid())?;
+        ed25519_dalek::VerifyingKey::from_bytes(provider)
+            .map_err(|_| invalid())?
+            .verify_strict(&self.signing_bytes().map_err(|_| invalid())?, &signature)
+            .map_err(|_| invalid())
+    }
+}
 pub struct BillingScope {
     pub account: BillingAccountId,
     pub command: Option<cs_mail_primitives::IdempotencyKey>,
@@ -29,7 +109,7 @@ pub struct BillingContext {
     pub offer: Option<ServiceOffer>,
     pub sources: BTreeMap<[u8; 32], FundingSource>,
     pub ledger: LedgerView,
-    pub prior: Option<(SignedBillingCommand, Vec<PaymentOperation>)>,
+    pub prior: Option<(SignedBillingCommand, BillingCommandOutcome)>,
 }
 #[derive(Clone)]
 pub struct CollectionWork {
@@ -50,16 +130,21 @@ pub struct BillingWrites {
     pub ledger: LedgerView,
     pub journal: Option<CollectionJournal>,
     pub work: Option<CollectionWork>,
-    pub command: Option<(SignedBillingCommand, Vec<PaymentOperation>, CanonicalTime)>,
+}
+pub struct BillingCommandRecord {
+    pub command: SignedBillingCommand,
+    pub outcome: BillingCommandOutcome,
+    pub at: CanonicalTime,
 }
 /// Application-only construction prevents treating arbitrary persistence values as a decision.
 pub struct BillingDecision<T> {
     outcome: T,
     writes: Option<BillingWrites>,
+    command: Option<BillingCommandRecord>,
 }
 impl<T> BillingDecision<T> {
-    pub fn into_parts(self) -> (T, Option<BillingWrites>) {
-        (self.outcome, self.writes)
+    pub fn into_parts(self) -> (T, Option<BillingWrites>, Option<BillingCommandRecord>) {
+        (self.outcome, self.writes, self.command)
     }
 }
 impl BillingContext {
@@ -75,7 +160,6 @@ impl BillingContext {
             ledger: self.ledger,
             journal: None,
             work: None,
-            command: None,
         }
     }
 }
@@ -135,7 +219,7 @@ impl<'a, R: BillingStore, C: AccountClock + ?Sized> BillingService<'a, R, C> {
     pub fn execute_command(
         &self,
         signed: &SignedBillingCommand,
-    ) -> Result<Vec<PaymentOperation>, R::Error> {
+    ) -> Result<BillingCommandOutcome, R::Error> {
         let offer = if let BillingCommand::PurchaseService { offer } = signed.command {
             Some(offer)
         } else {
@@ -167,63 +251,45 @@ impl<'a, R: BillingStore, C: AccountClock + ?Sized> BillingService<'a, R, C> {
                     return Ok(BillingDecision {
                         outcome,
                         writes: None,
+                        command: None,
                     });
                 }
                 if signed.command == BillingCommand::Inspect {
                     return Ok(BillingDecision {
-                        outcome: Vec::new(),
+                        outcome: BillingCommandOutcome::Applied(Vec::new()),
                         writes: None,
+                        command: None,
                     });
                 }
-                if context.account.revision() != signed.expected_revision {
-                    return Err(OperationConflict::Version.into());
-                }
-                let (contract, operation, collect_at) = match signed.command {
-                    BillingCommand::Inspect => return Err(BillingError::Conflict.into()),
-                    BillingCommand::PurchaseService { .. } => {
-                        if !context.product.control.allows_service() {
-                            return Err(BillingError::ServiceNotCovered.into());
+                let planned = (|| -> Result<(cs_mail_primitives::ServiceContractId, PaymentOperation, CanonicalTime), BillingError> {
+                    if context.account.revision() != signed.expected_revision { return Err(BillingError::Conflict); }
+                    let (contract, operation, collect_at) = match signed.command {
+                        BillingCommand::Inspect => return Err(BillingError::Conflict),
+                        BillingCommand::PurchaseService { .. } => {
+                            if !context.product.control.allows_service() { return Err(BillingError::ServiceNotCovered); }
+                            let offer = context.offer.as_ref().ok_or(BillingError::MissingRecord)?;
+                            if at >= offer.period().end() { return Err(BillingError::InvalidSchedule); }
+                            let contract = context.account.purchase(offer, context.processor)?;
+                            (contract, context.account.contracts()[&contract].collection().current().clone(), offer.collect_at())
                         }
-                        let offer = context.offer.as_ref().ok_or(BillingError::MissingRecord)?;
-                        if at >= offer.period().end() {
-                            return Err(BillingError::InvalidSchedule.into());
+                        BillingCommand::RetryCollection { contract } => {
+                            let operation = context.account.retry_collection(contract)?;
+                            (contract, operation, context.account.contracts()[&contract].offer().collect_at())
                         }
-                        let contract = context.account.purchase(offer, context.processor)?;
-                        (
-                            contract,
-                            context.account.contracts()[&contract]
-                                .collection()
-                                .current()
-                                .clone(),
-                            offer.collect_at(),
-                        )
+                    };
+                    context.source(&operation.destination)?.reserve(&operation).map_err(BillingError::Payment)?;
+                    Ok((contract, operation, collect_at))
+                })();
+                let (outcome, writes) = match planned {
+                    Ok((contract, operation, collect_at)) => {
+                        let outcome = BillingCommandOutcome::Applied(vec![operation.clone()]);
+                        let mut writes = context.writes();
+                        writes.work = Some(CollectionWork { account: signed.account, contract, operation: operation.id, at: at.max(collect_at) });
+                        (outcome, Some(writes))
                     }
-                    BillingCommand::RetryCollection { contract } => {
-                        let operation = context.account.retry_collection(contract)?;
-                        (
-                            contract,
-                            operation,
-                            context.account.contracts()[&contract].offer().collect_at(),
-                        )
-                    }
+                    Err(error) => (BillingCommandOutcome::Refused(error), None),
                 };
-                context
-                    .source(&operation.destination)?
-                    .reserve(&operation)
-                    .map_err(BillingError::Payment)?;
-                let outcome = vec![operation.clone()];
-                let mut writes = context.writes();
-                writes.work = Some(CollectionWork {
-                    account: signed.account,
-                    contract,
-                    operation: operation.id,
-                    at: at.max(collect_at),
-                });
-                writes.command = Some((signed.clone(), outcome.clone(), at));
-                Ok(BillingDecision {
-                    outcome,
-                    writes: Some(writes),
-                })
+                Ok(BillingDecision { command: Some(BillingCommandRecord { command: signed.clone(), outcome: outcome.clone(), at }), outcome, writes })
             },
         )
     }
@@ -237,8 +303,8 @@ impl<'a, R: BillingStore, C: AccountClock + ?Sized> BillingService<'a, R, C> {
     ) -> Result<Option<PaymentOperation>, R::Error> {
         self.repository.billing(
             BillingScope {
-                account,
                 command: None,
+                account,
                 offer: None,
             },
             |mut context| {
@@ -265,6 +331,7 @@ impl<'a, R: BillingStore, C: AccountClock + ?Sized> BillingService<'a, R, C> {
                 Ok(BillingDecision {
                     outcome,
                     writes: Some(context.writes()),
+                    command: None,
                 })
             },
         )
@@ -279,8 +346,8 @@ impl<'a, R: BillingStore, C: AccountClock + ?Sized> BillingService<'a, R, C> {
     ) -> Result<(), R::Error> {
         self.repository.billing(
             BillingScope {
-                account,
                 command: None,
+                account,
                 offer: None,
             },
             |mut context| {
@@ -317,6 +384,7 @@ impl<'a, R: BillingStore, C: AccountClock + ?Sized> BillingService<'a, R, C> {
                 Ok(BillingDecision {
                     outcome: (),
                     writes: Some(writes),
+                    command: None,
                 })
             },
         )
@@ -349,6 +417,7 @@ impl<'a, R: BillingStore, C: AccountClock + ?Sized> BillingService<'a, R, C> {
                 Ok(BillingDecision {
                     outcome: (),
                     writes: Some(context.writes()),
+                    command: None,
                 })
             },
         )

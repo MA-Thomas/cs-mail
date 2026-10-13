@@ -1,6 +1,7 @@
 use crate::{ConversationId, CorrespondenceError};
-use cs_mail_primitives::ProtocolIdentity;
+use cs_mail_primitives::{MessageId, ProtocolIdentity, ReplyEpoch};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// An unordered persona pair, not a contact grant or a shared person identifier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -70,10 +71,23 @@ struct ConversationRecord {
     policy: ReusePolicy,
     revision: u64,
     relaxation_proposer: Option<ProtocolIdentity>,
+    received: BTreeMap<ProtocolIdentity, ReceivedMessage>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceivedMessage {
+    message: MessageId,
+    epoch: ReplyEpoch,
 }
 impl TryFrom<ConversationRecord> for Conversation {
     type Error = CorrespondenceError;
     fn try_from(v: ConversationRecord) -> Result<Self, Self::Error> {
+        if v.received
+            .iter()
+            .any(|(actor, receipt)| !v.scope.contains(*actor) || receipt.message.0 == 0)
+        {
+            return Err(CorrespondenceError::Invalid);
+        }
         if v.relaxation_proposer.is_some_and(|p| {
             !v.scope.contains(p)
                 || v.policy != ReusePolicy::OriginatingRelationshipOnly
@@ -90,6 +104,16 @@ impl From<Conversation> for ConversationRecord {
     }
 }
 impl Conversation {
+    pub fn begun_by_request(id: ConversationId, scope: CorrespondenceRef) -> Self {
+        Self(ConversationRecord {
+            id,
+            scope,
+            policy: ReusePolicy::OriginatingRelationshipOnly,
+            revision: 0,
+            relaxation_proposer: None,
+            received: BTreeMap::new(),
+        })
+    }
     pub fn new(id: ConversationId, scope: CorrespondenceRef) -> Self {
         Self(ConversationRecord {
             id,
@@ -97,6 +121,7 @@ impl Conversation {
             policy: ReusePolicy::AcrossRelationships,
             revision: 0,
             relaxation_proposer: None,
+            received: BTreeMap::new(),
         })
     }
     pub const fn id(&self) -> ConversationId {
@@ -113,6 +138,31 @@ impl Conversation {
     }
     pub const fn relaxation_proposer(&self) -> Option<ProtocolIdentity> {
         self.0.relaxation_proposer
+    }
+    /// Reply evidence applies only in this conversation and only in the current withdrawal epoch.
+    pub fn reply_source(&self, actor: ProtocolIdentity, epoch: ReplyEpoch) -> Option<MessageId> {
+        self.0
+            .received
+            .get(&actor)
+            .filter(|receipt| receipt.epoch == epoch)
+            .map(|receipt| receipt.message)
+    }
+    /// # Errors
+    /// Rejects a foreign recipient or an empty message identity. Publication commits this with delivery.
+    pub fn receive(
+        &self,
+        recipient: ProtocolIdentity,
+        message: MessageId,
+        epoch: ReplyEpoch,
+    ) -> Result<Self, CorrespondenceError> {
+        if !self.scope().contains(recipient) || message.0 == 0 {
+            return Err(CorrespondenceError::Invalid);
+        }
+        let mut next = self.clone();
+        next.0
+            .received
+            .insert(recipient, ReceivedMessage { message, epoch });
+        Ok(next)
     }
     pub fn permits(&self, destination: CorrespondenceRef) -> bool {
         self.policy() == ReusePolicy::AcrossRelationships || self.scope() == destination

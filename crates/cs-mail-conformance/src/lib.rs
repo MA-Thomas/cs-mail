@@ -74,6 +74,19 @@ mod tests {
     }
     fn policy() -> PolicySnapshot {
         PolicySnapshot {
+            reply_lane: cs_mail_capabilities::reply::ReplyLaneTerms::new(
+                cs_mail_capabilities::reply::ReplyTermsRecord {
+                    lifetime: cs_mail_primitives::Duration(604_800_000),
+                    rate_limit: cs_mail_capabilities::RateLimit {
+                        max_messages: 20,
+                        interval: cs_mail_primitives::Duration(86_400_000),
+                    },
+                    purpose: cs_mail_primitives::DeclaredPurpose::Known(
+                        cs_mail_primitives::KnownPurpose::Personal,
+                    ),
+                },
+            )
+            .unwrap(),
             protocol_version: ProtocolVersion(2),
             policy_version: PolicyVersion(1),
             privacy_profile_version: PrivacyProfileVersion(1),

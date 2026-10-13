@@ -2,7 +2,7 @@
 use super::*;
 use cs_mail_billing::{BillingAccount, BillingError, ServiceOffer, SignedBillingCommand};
 use cs_mail_finance::{FundingSource, PaymentKind, PaymentOperation, SignedPaymentEvidence};
-use cs_mail_primitives::{AllocationId, BillingAccountId, PolicyVersion, ProtocolIdentity};
+use cs_mail_primitives::{AllocationId, BillingAccountId, ProtocolIdentity};
 
 fn load(tx: &mut Transaction<'_>, id: BillingAccountId) -> Result<BillingAccount, StorageError> {
     let row = tx.query_one(
@@ -117,18 +117,6 @@ impl PostgresDeployment {
     }
 }
 
-fn service_offer(
-    tx: &mut Transaction<'_>,
-    version: PolicyVersion,
-) -> Result<ServiceOffer, StorageError> {
-    Ok(tx
-        .query_one(
-            "SELECT record FROM cs_service_offers WHERE version=$1",
-            &[&version.0.to_string()],
-        )?
-        .get::<_, Json<ServiceOffer>>(0)
-        .0)
-}
 pub(super) fn reserve_source(
     tx: &mut Transaction<'_>,
     account: BillingAccountId,
@@ -344,8 +332,9 @@ impl BillingStore for PostgresDeployment {
         let (processor, bank_authority) = arrangement(&mut tx, account.scope(), account.unit())?;
         let offer = scope
             .offer
-            .map(|version| service_offer(&mut tx, version))
-            .transpose()?;
+            .map(|version| offer_version(&mut tx, version))
+            .transpose()?
+            .flatten();
         let ledger = tx
             .query_one("SELECT ledger FROM cs_billing_accounts WHERE id=$1", &[&id])?
             .get::<_, Json<LedgerView>>(0)
@@ -353,19 +342,19 @@ impl BillingStore for PostgresDeployment {
         let sources = tx.query("SELECT record FROM cs_funding_sources WHERE account=$1 ORDER BY source_key FOR UPDATE", &[&id])?.into_iter().map(|row| { let source = row.get::<_,Json<FundingSource>>(0).0; (*source.bank_token(), source) }).collect();
         let prior = if let Some(command) = scope.command {
             tx.query_opt(
-                "SELECT command,outcome FROM cs_billing_commands WHERE account=$1 AND id=$2",
+                "SELECT command,outcome,refusal FROM cs_billing_commands WHERE account=$1 AND id=$2",
                 &[&id, &command.0.to_string()],
             )?
             .map(|row| {
                 (
                     row.get::<_, Json<SignedBillingCommand>>(0).0,
-                    row.get::<_, Json<Vec<PaymentOperation>>>(1).0,
+                    match row.get::<_, Option<Json<BillingError>>>(2) { Some(error) => cs_mail_application::billing::operations::BillingCommandOutcome::Refused(error.0), None => cs_mail_application::billing::operations::BillingCommandOutcome::Applied(row.get::<_, Json<Vec<PaymentOperation>>>(1).0) },
                 )
             })
         } else {
             None
         };
-        let (outcome, writes) = decide(BillingContext {
+        let (outcome, writes, command) = decide(BillingContext {
             account,
             product,
             processor,
@@ -407,9 +396,22 @@ impl BillingStore for PostgresDeployment {
                     work.at,
                 )?;
             }
-            if let Some((command, outcome, at)) = writes.command {
-                tx.execute("INSERT INTO cs_billing_commands(account,id,command,outcome,received_at) VALUES($1,$2,$3,$4,$5)", &[&id,&command.idempotency_key.0.to_string(),&Json(command),&Json(outcome),&to_i64(at.0)?])?;
-            }
+        }
+        if let Some(cs_mail_application::billing::operations::BillingCommandRecord {
+            command,
+            outcome,
+            at,
+        }) = command
+        {
+            let (operations, refusal) = match outcome {
+                cs_mail_application::billing::operations::BillingCommandOutcome::Applied(
+                    operations,
+                ) => (operations, None),
+                cs_mail_application::billing::operations::BillingCommandOutcome::Refused(error) => {
+                    (Vec::new(), Some(Json(error)))
+                }
+            };
+            tx.execute("INSERT INTO cs_billing_commands(account,id,command,outcome,received_at,refusal) VALUES($1,$2,$3,$4,$5,$6)", &[&id,&command.idempotency_key.0.to_string(),&Json(command),&Json(operations),&to_i64(at.0)?,&refusal])?;
         }
         tx.commit()?;
         Ok(outcome)

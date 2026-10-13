@@ -30,6 +30,34 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Send native correspondence in an existing conversation, or start a new one.
+    Send {
+        #[arg(long)]
+        to: u128,
+        #[arg(long)]
+        conversation: Option<u128>,
+        #[arg(long)]
+        message: String,
+        /// Keep this label unchanged to retry the same send.
+        #[arg(long)]
+        operation: String,
+    },
+    /// Read native conversations with a contact; content is decrypted in memory.
+    Read {
+        #[arg(long)]
+        with: u128,
+    },
+    /// Publish a member-authored profile through the same atomic address workflow as the app.
+    PublishDirectory {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        description: String,
+        #[arg(long)]
+        mailbox: Option<String>,
+        #[arg(long)]
+        unlisted: bool,
+    },
     /// Accept external contact, or grant an express lane for the specified duration.
     ExternalAccept {
         #[arg(long)]
@@ -211,6 +239,7 @@ enum Decision {
     Reject,
     Block,
     Unblock,
+    Revoke,
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Side {
@@ -227,6 +256,13 @@ fn run(cli: Cli) -> Result<(), String> {
             let mut member = member::Member::open(&home)?;
             match command {
                 Command::Init { .. } => unreachable!(),
+                Command::Send {
+                    to,
+                    conversation,
+                    message,
+                    operation,
+                } => member.native_send(to, conversation, &message, &operation),
+                Command::Read { with } => member.native_read(with),
                 Command::ExternalAccept {
                     conversation,
                     lane_lifetime_ms,
@@ -281,6 +317,12 @@ fn run(cli: Cli) -> Result<(), String> {
                 Command::RegisterRecipientKey => member.register_recipient_key(),
                 Command::PublishContentKey => member.publish_content_key(),
                 Command::Account => member.account(),
+                Command::PublishDirectory {
+                    name,
+                    description,
+                    mailbox,
+                    unlisted,
+                } => member.publish_directory(name, description, mailbox, unlisted),
                 Command::Purchase { offer } => member.purchase(offer),
                 Command::PublishClasses { version, classes } => {
                     member.publish_classes(version, &classes)
@@ -313,6 +355,7 @@ fn run(cli: Cli) -> Result<(), String> {
                         Decision::Reject => member::Decision::Reject,
                         Decision::Block => member::Decision::Block,
                         Decision::Unblock => member::Decision::Unblock,
+                        Decision::Revoke => member::Decision::Revoke,
                     },
                 ),
                 Command::Inbox => member.inbox(),

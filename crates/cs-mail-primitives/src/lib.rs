@@ -3,6 +3,10 @@
 use core::fmt;
 use serde::{Deserialize, Serialize};
 
+/// Explicit withdrawal generation for replies; independent of request/payment generations.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ReplyEpoch(pub u64);
 /// An exact Gregorian UTC date at midnight; supported years are 1970 through 9999.
 pub fn calendar_date(year: u16, month: u8, day: u8) -> Option<CanonicalTime> {
     if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) {

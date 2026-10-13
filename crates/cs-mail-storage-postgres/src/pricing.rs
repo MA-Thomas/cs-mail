@@ -181,24 +181,36 @@ impl RequestPricingStore for PostgresDeployment {
         })?
         .into_effects()
         {
-            let version = to_i64(classes.version())?;
-            tx.execute(
-                "INSERT INTO cs_request_class_publications(recipient,version,publication,received_at) \
-                 VALUES($1,$2,$3,$4)",
-                &[
-                    &recipient.0.to_string(),
-                    &version,
-                    &Json(signed),
-                    &to_i64(at.0)?,
-                ],
-            )?;
-            tx.execute(
-                "INSERT INTO cs_recipient_request_classes(recipient,version,classes) VALUES($1,$2,$3) \
-                 ON CONFLICT(recipient) DO UPDATE SET version=EXCLUDED.version,classes=EXCLUDED.classes",
-                &[&recipient.0.to_string(), &version, &Json(&classes)],
-            )?;
+            persist_classes(&mut tx, signed, &classes, at)?;
         }
         tx.commit()?;
         Ok(())
     }
+}
+
+/// Persists one application-authorized canonical class publication.
+pub(super) fn persist_classes(
+    tx: &mut Transaction<'_>,
+    signed: &SignedRequestClasses,
+    classes: &RecipientRequestClasses,
+    at: cs_mail_primitives::CanonicalTime,
+) -> Result<(), StorageError> {
+    let recipient = classes.recipient();
+    let version = to_i64(classes.version())?;
+    tx.execute(
+        "INSERT INTO cs_request_class_publications(recipient,version,publication,received_at) \
+                 VALUES($1,$2,$3,$4)",
+        &[
+            &recipient.0.to_string(),
+            &version,
+            &Json(signed),
+            &to_i64(at.0)?,
+        ],
+    )?;
+    tx.execute(
+                "INSERT INTO cs_recipient_request_classes(recipient,version,classes) VALUES($1,$2,$3) \
+                 ON CONFLICT(recipient) DO UPDATE SET version=EXCLUDED.version,classes=EXCLUDED.classes",
+                &[&recipient.0.to_string(), &version, &Json(&classes)],
+            )?;
+    Ok(())
 }

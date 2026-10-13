@@ -9,8 +9,8 @@ use cs_mail_capabilities::{
     DeclarationAuthorityConstraint, LaneGrant, LaneMode, LaneSubject, RateLimit, SignedLaneGrant,
 };
 use cs_mail_content::{
-    ContentBinding, ContentKeyCertificate, EncryptedContentRecord, EndpointPublicKey,
-    EndpointSecretKey, content_key_certificate_digest, message_declaration_digest,
+    ContentBinding, ContentKeyCertificate, EndpointPublicKey, EndpointSecretKey,
+    content_key_certificate_digest, message_declaration_digest,
 };
 use cs_mail_primitives::{
     CanonicalTime, ContentKeyRef, ContentKeyVersion, ContentRef, DeclarationAuthority,
@@ -31,6 +31,7 @@ use std::path::Path;
 mod external;
 #[cfg(test)]
 mod journal_tests;
+mod native;
 
 /// How long uploaded content and message validity last.
 const CONTENT_LIFETIME: Duration = Duration(30 * 24 * 60 * 60 * 1000);
@@ -45,13 +46,23 @@ pub enum Decision {
     Reject,
     Block,
     Unblock,
+    Revoke,
 }
 
 #[derive(Deserialize)]
 struct DeploymentInfo {
+    custody_key: EndpointPublicKey,
     scope: RecipientSigningScope,
     product: String,
     policy: PolicySnapshot,
+}
+
+#[derive(Clone, Copy)]
+struct RequestMessageIds {
+    request: RequestId,
+    message: MessageId,
+    content: ContentRef,
+    conversation: cs_mail_correspondence::ConversationId,
 }
 
 pub struct Member {
@@ -274,6 +285,92 @@ impl Member {
         })
     }
 
+    pub fn publish_directory(
+        &mut self,
+        name: String,
+        description: String,
+        mailbox: Option<String>,
+        unlisted: bool,
+    ) -> Result<(), String> {
+        use cs_mail_accounts::directory::{
+            DirectoryRevision, DiscoveryVisibility, MemberAddress, PublicProfile,
+        };
+        use cs_mail_application::directory::{Command, Response, SignedRequest};
+        let deployment = self.deployment()?;
+        let address = self.persona()?;
+        let key = self.recipient_key()?;
+        let inspect = SignedRequest {
+            scope: deployment.scope,
+            address,
+            key,
+            operation: IdempotencyKey(identifier()?),
+            command: Command::Inspect { at: now() },
+            signature: Vec::new(),
+        }
+        .sign(&self.state().recipient_secret)
+        .map_err(|e| e.to_string())?;
+        let response: Response = decode(
+            self.api
+                .post("v1/directory/commands", &inspect)
+                .map_err(|e| e.to_string())?,
+            "directory settings",
+        )?;
+        let Response::Settings(settings) = response else {
+            return Err("unexpected directory settings".into());
+        };
+        let expected = settings.entry.as_ref().map_or(
+            DirectoryRevision(0),
+            cs_mail_accounts::directory::DirectoryEntry::revision,
+        );
+        let classes = settings.classes.ok_or("publish request classes first")?;
+        let signed_classes = self
+            .recipient_signer()?
+            .sign_request_classes(deployment.scope, classes)
+            .map_err(|e| e.to_string())?;
+        let mailbox = mailbox
+            .map(MemberAddress::try_from)
+            .transpose()
+            .map_err(|e| format!("mailbox: {e:?}"))?;
+        let profile =
+            PublicProfile::new(name, description, None).map_err(|e| format!("profile: {e:?}"))?;
+        let step = format!("directory:{}", expected.0);
+        let secret = self.state().recipient_secret;
+        let answer = self.journaled(
+            &step,
+            "v1/directory/commands",
+            |_| {
+                let request = SignedRequest {
+                    scope: deployment.scope,
+                    address,
+                    key,
+                    operation: IdempotencyKey(identifier()?),
+                    command: Command::Publish {
+                        expected,
+                        profile,
+                        mailbox,
+                        visibility: if unlisted {
+                            DiscoveryVisibility::Unlisted
+                        } else {
+                            DiscoveryVisibility::Listed
+                        },
+                        classes: Box::new(signed_classes),
+                    },
+                    signature: Vec::new(),
+                }
+                .sign(&secret)
+                .map_err(|e| e.to_string())?;
+                serde_json::to_value(request).map_err(|e| e.to_string())
+            },
+            false,
+        )?;
+        match decode::<Response>(answer, "directory receipt")? {
+            Response::Published(_) => {
+                println!("directory publication recorded");
+                Ok(())
+            }
+            _ => Err("directory publication refused".into()),
+        }
+    }
     pub fn enroll_begin(&mut self, bank: &Path) -> Result<(), String> {
         let operation = if let Some(operation) = &self.store.state.enrollment {
             operation.clone()
@@ -572,15 +669,41 @@ impl Member {
             .map_err(|e| format!("cannot sign: {e}"))?;
         serde_json::to_value(bytes).map_err(|e| e.to_string())
     }
-    /// Encrypts `message` to the recipient's published content key and uploads it.
+    /// Journals a native request document before staging it with the service.
     fn upload(
         &mut self,
         step: &str,
         to: u128,
-        message_id: MessageId,
-        content_ref: ContentRef,
+        ids: RequestMessageIds,
         message: &str,
     ) -> Result<MessageValidityUntil, String> {
+        let route = format!("v1/relationships/{}/{to}/content", self.persona()?.0);
+        self.journaled(
+            step,
+            &route,
+            |member| {
+                serde_json::to_value(member.prepare_request_document(to, &ids, message)?)
+                    .map_err(|e| e.to_string())
+            },
+            false,
+        )?;
+        let packet: cs_mail_application::requests::documents::SignedRequestDocument = decode(
+            self.store.state.journal[step].body.clone(),
+            "recorded document",
+        )?;
+        Ok(packet
+            .document
+            .package()
+            .recipient_copy
+            .binding
+            .message_valid_until)
+    }
+    fn prepare_request_document(
+        &self,
+        to: u128,
+        ids: &RequestMessageIds,
+        message: &str,
+    ) -> Result<cs_mail_application::requests::documents::SignedRequestDocument, String> {
         let deployment = self.deployment()?;
         let (handle, _) = self.sending(to)?;
         let created = now();
@@ -592,67 +715,79 @@ impl Member {
         let persona = self.persona()?;
         let signer = self.sender_signer()?;
         let declarations = self.declarations()?;
-        let route = format!("v1/relationships/{}/{to}/content", persona.0);
-        let answer = self.journaled(
-            step,
-            &route,
-            |m| {
-                let recipient_key: EndpointKeyPublication = decode(
-                    m.api
-                        .get(&format!("v1/addresses/{to}/endpoint-key"))
-                        .map_err(|e| format!("recipient content key: {e}"))?,
-                    "endpoint key",
-                )?;
-                let (secret, public) = m.content_key()?;
-                let certificate = signer
-                    .sign_content_key_certificate(ContentKeyCertificate {
-                        wire_version: WireVersion(1),
-                        protocol_version: deployment.policy.protocol_version,
-                        deployment_domain: deployment.scope.deployment_domain,
-                        intended_provider: deployment.scope.provider,
-                        relationship: handle.relationship,
-                        owner: persona,
-                        operational_key: signer.reference(),
-                        content_key_version: ContentKeyVersion(1),
-                        key: public,
-                        valid_from: created,
-                        valid_until: valid_until.0,
-                    })
-                    .map_err(|e| format!("cannot certify content key: {e}"))?;
-                let record = cs_mail_content::encrypt(
-                    &secret,
-                    recipient_key.key,
-                    ContentBinding {
-                        wire_version: WireVersion(1),
-                        content_ref,
-                        message_id,
-                        sender: persona,
-                        recipient: ProtocolIdentity(to),
-                        protocol_version: deployment.policy.protocol_version,
-                        relationship: handle.relationship,
-                        content_scope: handle.content_scope,
-                        sender_certificate: content_key_certificate_digest(
-                            &certificate.certificate,
-                        ),
-                        declarations,
-                        message_valid_until: valid_until,
-                        capability: None,
-                    },
-                    message.as_bytes(),
-                    created,
-                    valid_until.0,
-                )
-                .map_err(|e| format!("cannot encrypt: {e:?}"))?;
-                Ok(json!({ "record": record, "certificate": certificate }))
+        let recipient_key: EndpointKeyPublication = decode(
+            self.api
+                .get(&format!("v1/addresses/{to}/endpoint-key"))
+                .map_err(|e| format!("recipient content key: {e}"))?,
+            "endpoint key",
+        )?;
+        let (secret, public) = self.content_key()?;
+        let certificate = signer
+            .sign_content_key_certificate(ContentKeyCertificate {
+                wire_version: WireVersion(1),
+                protocol_version: deployment.policy.protocol_version,
+                deployment_domain: deployment.scope.deployment_domain,
+                intended_provider: deployment.scope.provider,
+                relationship: handle.relationship,
+                owner: persona,
+                operational_key: signer.reference(),
+                content_key_version: ContentKeyVersion(1),
+                key: public,
+                valid_from: created,
+                valid_until: valid_until.0,
+            })
+            .map_err(|e| format!("cannot certify content key: {e}"))?;
+        let document = cs_mail_client::correspondence::compose(vec![
+            cs_mail_correspondence::DocumentPart::Text(message.to_owned()),
+        ])
+        .map_err(|e| e.to_string())?;
+        let package = cs_mail_client::correspondence::prepare(
+            &cs_mail_client::correspondence::EndpointKeys {
+                owner: persona,
+                secret: &secret,
+                public,
             },
-            false,
-        )?;
-        let _ = answer;
-        let record: EncryptedContentRecord = decode(
-            self.store.state.journal[step].body["record"].clone(),
-            "recorded content",
-        )?;
-        Ok(record.binding.message_valid_until)
+            &document,
+            ids.conversation,
+            recipient_key.key,
+            deployment.custody_key,
+            ContentBinding {
+                wire_version: WireVersion(1),
+                content_ref: ids.content,
+                message_id: ids.message,
+                sender: persona,
+                recipient: ProtocolIdentity(to),
+                protocol_version: deployment.policy.protocol_version,
+                relationship: handle.relationship,
+                content_scope: handle.content_scope,
+                sender_certificate: content_key_certificate_digest(&certificate.certificate),
+                declarations,
+                message_valid_until: valid_until,
+                capability: None,
+            },
+            (created, valid_until.0),
+        )
+        .map_err(|e| e.to_string())?;
+        let document = cs_mail_application::requests::documents::RequestDocument::new(
+            ids.request,
+            ids.content,
+            package,
+        )
+        .map_err(|e| e.to_string())?;
+        let packet = cs_mail_application::requests::documents::SignedRequestDocument {
+            scope: SigningScope {
+                deployment_domain: deployment.scope.deployment_domain,
+                intended_provider: deployment.scope.provider,
+                relationship: handle.relationship,
+            },
+            key: signer.reference(),
+            document,
+            certificate,
+            signature: Vec::new(),
+        }
+        .sign(&self.state().device_secret)
+        .map_err(|e| e.to_string())?;
+        Ok(packet)
     }
 
     #[allow(clippy::too_many_lines)] // One request: terms, charge, funding, upload, submission.
@@ -678,6 +813,7 @@ impl Member {
                 "message": identifier()?.to_string(),
                 "content": identifier()?.to_string(),
                 "delivery": identifier()?.to_string(),
+                "conversation":identifier()?.to_string(),
             });
             self.store.state.values.insert(key.clone(), plan.clone());
             self.store.save()?;
@@ -722,7 +858,13 @@ impl Member {
             },
             lose("issue"),
         )?;
-        Self::accepted(&step, &answer)?;
+        if let Err(error) = Self::accepted(&step, &answer) {
+            // An authenticated terms refusal created no request or charge. Keep its
+            // journal evidence, but permit a fresh approach after prerequisites change.
+            self.store.state.values.remove(&key);
+            self.store.save()?;
+            return Err(error);
+        }
         let terms: SignedContactTerms = decode(answer["signed_terms"].clone(), "signed terms")?;
         render::terms(&terms.terms);
 
@@ -760,8 +902,13 @@ impl Member {
         let valid_until = self.upload(
             &format!("request:{}:upload", request_id.0),
             to,
-            message_id,
-            content_ref,
+            RequestMessageIds {
+                message: message_id,
+                content: content_ref,
+                request: request_id,
+                conversation: cs_mail_correspondence::ConversationId::new(id("conversation")?)
+                    .map_err(|e| e.to_string())?,
+            },
             message,
         )?;
 
@@ -843,8 +990,25 @@ impl Member {
         let valid_until = self.upload(
             &format!("followup:{}:upload", message_id.0),
             to,
-            message_id,
-            content_ref,
+            RequestMessageIds {
+                message: message_id,
+                content: content_ref,
+                request: request.id,
+                conversation: {
+                    let original: cs_mail_application::requests::documents::SignedRequestDocument =
+                        decode(
+                            self.store
+                                .state
+                                .journal
+                                .get(&format!("request:{}:upload", request.id.0))
+                                .ok_or("original request journal unavailable")?
+                                .body
+                                .clone(),
+                            "original request document",
+                        )?;
+                    original.document.package().manifest.conversation()
+                },
+            },
             message,
         )?;
         let signer = self.sender_signer()?;
@@ -980,6 +1144,12 @@ impl Member {
             Decision::Accept => (
                 "accept",
                 ProtocolCommand::AcceptRelationship {
+                    expected_version: expected,
+                },
+            ),
+            Decision::Revoke => (
+                "revoke",
+                ProtocolCommand::RevokeRelationship {
                     expected_version: expected,
                 },
             ),
@@ -1119,6 +1289,9 @@ impl Member {
         let MemberAnswer::Receiving { view, content, .. } = self.receiving(from)? else {
             return Err("unexpected read answer".into());
         };
+        if view.as_ref().is_some_and(|view| view.guest.is_none()) {
+            return self.native_read(from);
+        }
         let (secret, _) = self.content_key()?;
         for delivered in content {
             let text = match &delivered.certificate {

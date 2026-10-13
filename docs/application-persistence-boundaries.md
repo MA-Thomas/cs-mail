@@ -107,6 +107,78 @@ without decrypting historical identity data.
 
 ## Cutover and validation
 
+### Native request/conversation cutover — planned boundary, 12 October 2026
+
+The confirmed product rules are in [the domain model](../DOMAIN_MODEL.md#native-requests-and-replies--agreed-next-implementation-12-october-2026).
+This section specifies the next implementation's boundary, not a claim that the
+current native request reader already implements it.
+
+The first implemented boundary is the paired request decision in
+`cs-mail-application::requests`. It coordinates a forward kernel transition with
+an optional opposite cancellation from `cs-mail-protocol::supersede_preparation`.
+The opaque opposite effect identifies its exact relationship, expected revisions,
+financial batch, schedules, work and causal position. The storage adapter loads
+the complete opposite snapshot, protects its absence with receipt-order locking,
+and persists the declared effect after ownership/revision checks. It makes no
+cancellation decision and invokes no extra kernel transition during persistence.
+Requests retain the existing canonical receipt-time interpretation; an issued
+decision deadline, rather than an expiry-worker flag, determines whether an
+opposite request remains actionable at that receipt.
+
+Migration 0033 makes the journal key `(position, aggregate_key)`. Both direction
+records use the initiating command's causal position and commit together. There
+is no separately allocated opposite event that could overtake a queued receipt.
+The migration refuses populated older environments. Native document publication,
+request-answer authority and automatic reverse lanes are still planned below.
+
+The request application use case must receive the two directed relationships,
+their revisions and lanes, affected requests and financial state, shared request
+histories, account/key authority, issued terms and the relevant conversation
+records as one protected context. The existing receipt-order protection covers
+both directions and absent records; taking independent snapshots and composing
+their results later is insufficient. Trusted time is sampled after that context
+is protected. No external network or custody-secret lookup runs under the lock.
+
+| Operation | Domain/application-declared consequence |
+| --- | --- |
+| Prepare a native request | Refuse an actionable opposite request before allocating payment work; otherwise preserve one operation and its frozen reply agreement |
+| Submit | Recheck both directions, funding and the opposite decision deadline; cancel opposite preparation with its complete financial consequences; publish the initial restricted conversation/document and both owners' endpoint/recovery copies with request submission |
+| Follow up | Enforce the existing request windows and follow-up policy; append a document to that request's conversation without another charge |
+| Answer | Establish current conversation-confined answer authority from submitted-request provenance and the sender-owned direction; commit the document and mailbox copies without a request decision or settlement |
+| Accept | Coordinate forward permission and request settlement with reverse permission derived from the signed agreement; preserve existing standing/custom access without refilling allowance; commit all effects together |
+| Revoke or block | Terminate current routes in that direction, including request-answer authority; retain historical evidence, deliveries and terminal settlement |
+| Reject, expire or cancel | Apply the request's existing financial rules and preserve delivered copies; do not turn retained content into permission or resurrect an opposite cancelled preparation |
+
+Request settlement, lane lifecycle, directional permission and conversation reuse
+remain domain-owned. The application returns one opaque decision containing
+their effects, expected revisions, explicit mailbox deliveries, audit provenance,
+ledger effects and recoverable payment work. The adapter commits it without
+changing any declared result. In particular, it cannot issue an extra reverse
+grant after acceptance or invoke a second protocol transition during persistence.
+Original sender agreement is evidence for automatic reverse permission; the host
+must not create a signature on the sender's behalf.
+
+Pending preparation, submitted-request provenance and current send authority need
+distinct checked types. Restored request/conversation links must bind the exact
+pair, request and initial document. Already delivered content survives financial
+termination. Both-party reuse relaxation remains conversation-owned, including
+restrictions inherited through known source edges.
+
+The client journals the exact signed operation and encrypted payload before I/O.
+Uncertain outcomes retain that operation across restart. Exact replay returns the
+original committed result without fresh delivery, allowance or financial effects.
+Neither a replay receipt nor cached request status authorizes a new send.
+Transport JSON field order is separate from the defined signing representation;
+normal object-field reordering cannot change a typed command's meaning.
+
+The existing content custody contract requires four owner-bound ciphertext copies
+per native document: two endpoint and two recovery copies, committed together.
+The public custody key must be configured and published by the host, while its
+private key remains behind the custody port. Recovery decryption still requires
+entitlement and scoped consent independently of send/answer permission.
+
+### Earlier account/billing cutover
+
 Callers use the application services directly. The storage methods
 `execute_account_command`, `apply_identity_security_event`, `execute_billing_command`,
 `authorize_utility_dispatch`, `confirm_utility_payment`, `reverify_funding_source`,

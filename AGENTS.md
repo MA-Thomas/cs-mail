@@ -17,6 +17,13 @@ Read these before making any code or design change:
 
 Working conventions:
 
+- Marcus's owner address during development is always `marcus@csqd-mail.com`.
+  Retain that address across development-environment setup and cutovers. Preserving
+  the address and preserving the existing account/Keychain identity are distinct
+  requirements; do not treat a newly enrolled account as continuity of the old one.
+  Maintain Marcus's original Keychain entry and its account association. Do not
+  replace, delete, overwrite or substitute that credential during development or
+  a cutover; use an explicit preservation-checked continuity upgrade.
 - identity-model is a separate repository, checked out as a sibling at `../identity-model`.
   Commit identity-model changes before the cs-mail changes that depend on them, and keep
   `identity-source.sha256` in step (`sha256sum --check identity-source.sha256`).

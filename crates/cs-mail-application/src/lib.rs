@@ -4,12 +4,14 @@
 pub mod accounts;
 pub mod billing;
 pub mod correspondence;
+pub mod directory;
 pub mod guests;
 pub mod members;
 pub mod notices;
 pub mod operations;
 pub mod relationships;
 pub mod request_pricing;
+pub mod requests;
 
 use cs_mail_primitives::{MessageId, RelationshipRef, RequestHistoryRef, RequestId};
 use cs_mail_protocol::{Message, RequestHistory};
@@ -103,7 +105,7 @@ struct StoreState {
         (cs_mail_primitives::BillingAccountId, IdempotencyKey),
         (
             cs_mail_billing::SignedBillingCommand,
-            Vec<cs_mail_finance::PaymentOperation>,
+            billing::operations::BillingCommandOutcome,
         ),
     >,
     utility_work:
@@ -304,6 +306,7 @@ impl InMemoryEngine {
             inner.ledger.view(),
         );
         let context = TransitionContext {
+            request_delivery: cs_mail_protocol::RequestDeliveryRoute::GuestRelay,
             // This trusted kernel harness does not host ciphertext or provider policy.
             admission: Ok(()),
             now,
@@ -602,3 +605,5 @@ impl From<cs_mail_finance::ProgramError> for EngineError {
 }
 
 pub mod consent;
+
+pub mod receipts;

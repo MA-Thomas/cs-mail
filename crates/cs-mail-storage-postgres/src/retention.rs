@@ -188,6 +188,12 @@ fn delete_record(
     object: &str,
 ) -> Result<bool, StorageError> {
     match domain {
+        "request-document" => {
+            tx.execute(
+                "DELETE FROM cs_request_documents WHERE aggregate_key=$1 AND content_ref=$2",
+                &[&key, &object],
+            )?;
+        }
         "content" => {
             if tx.query_opt("SELECT 1 FROM cs_work WHERE aggregate_key=$1 AND content_ref=$2 AND status<>'complete' LIMIT 1",&[&key,&object])?.is_some(){return Ok(false);}
             tx.execute(

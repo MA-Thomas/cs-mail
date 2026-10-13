@@ -11,9 +11,10 @@ let package = Package(
         .systemLibrary(name: "CsMailFFI", path: "Generated/CsMailFFI"),
         .systemLibrary(name: "CSQLite"),
         .target(name: "CsMailRust", dependencies: ["CsMailFFI"], path: "Generated/CsMailRust", linkerSettings: [.unsafeFlags([library]), .linkedFramework("Security"), .linkedFramework("SystemConfiguration")]),
-        .target(name: "CsMailApple", dependencies: ["CsMailRust", "CSQLite"]),
+        .target(name: "CsMailPresentation"),
+        .target(name: "CsMailApple", dependencies: ["CsMailRust", "CSQLite", "CsMailPresentation"]),
         .executableTarget(name: "CsMailMac", dependencies: ["CsMailApple"]),
-        .executableTarget(name: "CsMailAppleCheck", dependencies: ["CsMailApple", "CsMailRust"])
+        .executableTarget(name: "CsMailAppleCheck", dependencies: ["CsMailApple", "CsMailRust", "CsMailPresentation"])
     ],
-    swiftLanguageModes: [.v5]
+    swiftLanguageModes: [.v6]
 )

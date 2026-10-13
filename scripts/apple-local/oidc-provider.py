@@ -3,7 +3,7 @@
 
 Exercises code flow, single-use codes, S256, nonce and real RS256 verification by
 identity-model. All identities are fictional; no password or real login is tested.
-OAuth transactions live only in memory. No request URLs/tokens are logged.
+The signing key persists; OAuth transactions live only in memory. No request URLs/tokens are logged.
 """
 import argparse
 import base64
@@ -14,10 +14,10 @@ import json
 import os
 import secrets
 import subprocess
-import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 
@@ -31,6 +31,10 @@ def one(values, name):
         raise ValueError("invalid parameter")
     return value[0]
 
+
+USERS = {'marcus': 'Marcus · development account', 'maya': 'Maya Chen',
+         'daniel': 'Daniel Reed', 'elena': 'Elena Park', 'jules': 'Jules Morgan',
+         'noah': 'Noah Ellis', 'alice': 'Alice', 'bob': 'Bob'}
 
 class Provider(BaseHTTPRequestHandler):
     def log_message(self, *_):
@@ -65,7 +69,7 @@ class Provider(BaseHTTPRequestHandler):
                 self.respond(200, {"keys": [self.server.jwk]})
             elif route.path == "/authorize":
                 query = parse_qs(route.query, strict_parsing=True)
-                expected = {"client_id": "cs-mail-apple", "redirect_uri": "com.csqd.member:/oauth/callback",
+                expected = {"client_id": "cs-mail-apple", "redirect_uri": "com.csqd.member.development:/oauth/callback",
                     "response_type": "code", "scope": "openid", "code_challenge_method": "S256", "max_age": "0"}
                 if any(one(query, k) != v for k, v in expected.items()):
                     raise ValueError("unsupported request")
@@ -78,9 +82,9 @@ class Provider(BaseHTTPRequestHandler):
                         raise ValueError("busy")
                     self.server.pending[handle] = record
                 self.respond(200, '<!doctype html><meta charset="utf-8"><title>cs-mail test sign-in</title>'
-                    '<h1>Local test sign-in</h1><p>Fictional users only. This does not verify a real person.</p>'
+                    '<h1>Local development sign-in</h1><p>Controlled logins, fictional identity evidence and simulated banking. This does not verify a real person.</p>'
                     '<form method="post" action="/approve"><input type="hidden" name="handle" value="' + html.escape(handle) + '">'
-                    '<label>Test login <select name="subject"><option value="alice">Alice</option><option value="bob">Bob</option></select></label>'
+                    '<label>Development login <select name="subject">' + ''.join('<option value="' + subject + '">' + html.escape(label) + '</option>' for subject, label in USERS.items()) + '</select></label>'
                     '<button type="submit">Sign in as test user</button></form>', 'text/html; charset=utf-8')
             else:
                 self.respond(404, {"error": "not_found"})
@@ -95,7 +99,7 @@ class Provider(BaseHTTPRequestHandler):
             form = parse_qs(self.rfile.read(size).decode(), strict_parsing=True)
             if self.path == "/approve":
                 subject = one(form, "subject")
-                if subject not in ("alice", "bob"):
+                if subject not in USERS:
                     raise ValueError("invalid user")
                 with self.server.lock:
                     record = self.server.pending.pop(one(form, "handle"))
@@ -107,7 +111,9 @@ class Provider(BaseHTTPRequestHandler):
                     self.server.codes = {k:v for k,v in self.server.codes.items() if v["expires"] > time.time()}
                     self.server.codes[code] = record
                 callback = record["redirect_uri"] + "?" + urlencode({"code": code, "state": record["state"], "iss": self.server.issuer})
-                self.respond(303, "", "text/plain", callback)
+                self.respond(200, '<!doctype html><meta charset="utf-8"><title>Return to cs-mail</title>'
+                    '<h1>Development login complete</h1><p>Return to the app to finish this enrollment.</p>'
+                    '<a href="' + html.escape(callback, quote=True) + '">Open cs-mail Development</a>', 'text/html; charset=utf-8')
             elif self.path == "/token":
                 if one(form, "grant_type") != "authorization_code" or one(form, "client_id") != "cs-mail-apple":
                     raise ValueError("invalid client")
@@ -133,24 +139,31 @@ class Provider(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8482)
+    parser.add_argument("--state-dir", required=True, type=Path)
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="cs-mail-local-oidc-") as directory:
-        key = os.path.join(directory, "signing.pem")
+    directory = args.state_dir
+    fresh = not directory.exists()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    key = str(directory / "signing.pem")
+    if fresh:
         subprocess.run(["openssl", "genrsa", "-out", key, "2048"], check=True, capture_output=True)
         os.chmod(key, 0o600)
-        modulus = subprocess.run(["openssl", "rsa", "-in", key, "-noout", "-modulus"], check=True, capture_output=True).stdout.decode().strip().split("=", 1)[1]
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), Provider)
-        server.key = key
-        server.jwk = {"kty":"RSA", "kid":"local-test", "use":"sig", "alg":"RS256", "n":b64(bytes.fromhex(modulus)), "e":"AQAB"}
-        server.issuer = f"http://127.0.0.1:{args.port}"
-        server.pending, server.codes, server.lock = {}, {}, Lock()
-        print(f"Controlled fictional-login provider on {server.issuer}", flush=True)
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.server_close()
+    elif not Path(key).is_file():
+        raise SystemExit("Persistent OIDC signing key is missing; refusing replacement.")
+    modulus = subprocess.run(["openssl", "rsa", "-in", key, "-noout", "-modulus"], check=True, capture_output=True).stdout.decode().strip().split("=", 1)[1]
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Provider)
+    server.key = key
+    server.jwk = {"kty":"RSA", "kid":"local-test", "use":"sig", "alg":"RS256", "n":b64(bytes.fromhex(modulus)), "e":"AQAB"}
+    server.issuer = f"http://127.0.0.1:{args.port}"
+    server.pending, server.codes, server.lock = {}, {}, Lock()
+    print(f"Controlled fictional-login provider on {server.issuer}", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

@@ -104,7 +104,7 @@ impl BillingStore for InMemoryStore {
         let prior = scope
             .command
             .and_then(|id| staged.billing_commands.get(&(scope.account, id)).cloned());
-        let (outcome, writes) = decide(BillingContext {
+        let (outcome, writes, command) = decide(BillingContext {
             account,
             product,
             processor,
@@ -139,13 +139,18 @@ impl BillingStore for InMemoryStore {
             if let Some(work) = writes.work {
                 staged.utility_work.insert(work.operation, work);
             }
-            if let Some((command, outcome, _)) = writes.command {
-                let key = (scope.account, command.idempotency_key);
-                if staged.billing_commands.contains_key(&key) {
-                    return Err(EngineError::DuplicateConflict);
-                }
-                staged.billing_commands.insert(key, (command, outcome));
+        }
+        if let Some(super::operations::BillingCommandRecord {
+            command,
+            outcome,
+            at: _,
+        }) = command
+        {
+            let key = (scope.account, command.idempotency_key);
+            if staged.billing_commands.contains_key(&key) {
+                return Err(EngineError::DuplicateConflict);
             }
+            staged.billing_commands.insert(key, (command, outcome));
         }
         *world = staged;
         Ok(outcome)

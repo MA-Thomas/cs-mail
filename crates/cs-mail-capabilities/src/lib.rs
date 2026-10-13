@@ -13,6 +13,7 @@ use cs_mail_primitives::{
 use cs_mail_privacy::ScopedHandle;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+pub mod reply;
 
 const SIGNING_DOMAIN: &[u8] = b"cs-mail/lane-grant/v2";
 const CONTROL_SIGNING_DOMAIN: &[u8] = b"cs-mail/lane-control/v1";
@@ -52,7 +53,7 @@ impl DeclarationAuthorityConstraint {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RateLimit {
     pub max_messages: u32,
     pub interval: Duration,
@@ -306,9 +307,54 @@ pub enum LaneState {
     Revoked,
 }
 
+/// Complete, revision-bound consequence of ending an existing lane.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "LaneRevocationRecord", into = "LaneRevocationRecord")]
+pub struct LaneRevocation {
+    expected_version: Version,
+    lane: Lane,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LaneRevocationRecord {
+    expected_version: Version,
+    lane: Lane,
+}
+impl TryFrom<LaneRevocationRecord> for LaneRevocation {
+    type Error = CapabilityError;
+    fn try_from(record: LaneRevocationRecord) -> Result<Self, Self::Error> {
+        if record.lane.state() != LaneState::Revoked
+            || record.expected_version.checked_next() != Some(record.lane.version())
+        {
+            return Err(CapabilityError::InvalidGrant);
+        }
+        Ok(Self {
+            expected_version: record.expected_version,
+            lane: record.lane,
+        })
+    }
+}
+impl From<LaneRevocation> for LaneRevocationRecord {
+    fn from(effect: LaneRevocation) -> Self {
+        Self {
+            expected_version: effect.expected_version,
+            lane: effect.lane,
+        }
+    }
+}
+impl LaneRevocation {
+    pub const fn expected_version(&self) -> Version {
+        self.expected_version
+    }
+    pub const fn lane(&self) -> &Lane {
+        &self.lane
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "LaneRecord", into = "LaneRecord")]
 pub struct Lane {
+    authority: reply::LaneAuthority,
     grant: LaneGrant,
     state: LaneState,
     last_activity: CanonicalTime,
@@ -321,6 +367,7 @@ pub struct Lane {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct LaneRecord {
+    authority: reply::LaneAuthority,
     grant: LaneGrant,
     state: LaneState,
     last_activity: CanonicalTime,
@@ -334,6 +381,11 @@ impl TryFrom<LaneRecord> for Lane {
     type Error = CapabilityError;
     fn try_from(r: LaneRecord) -> Result<Self, Self::Error> {
         r.grant.validate()?;
+        if matches!(r.authority, reply::LaneAuthority::RequestAcceptance {request, creation, acceptance, ..}
+            if request.0 == 0 || creation.0.0 == 0 || acceptance.0.0 == 0)
+        {
+            return Err(CapabilityError::InvalidGrant);
+        }
         let activity_horizon = r
             .last_activity
             .checked_add(r.grant.lifetime)
@@ -362,6 +414,7 @@ impl TryFrom<LaneRecord> for Lane {
             return Err(CapabilityError::InvalidGrant);
         }
         Ok(Self {
+            authority: r.authority,
             grant: r.grant,
             state: r.state,
             last_activity: r.last_activity,
@@ -376,6 +429,7 @@ impl TryFrom<LaneRecord> for Lane {
 impl From<Lane> for LaneRecord {
     fn from(l: Lane) -> Self {
         Self {
+            authority: l.authority,
             grant: l.grant,
             state: l.state,
             last_activity: l.last_activity,
@@ -401,6 +455,7 @@ impl Lane {
             .checked_add(grant.rate_limit.interval)
             .ok_or(CapabilityError::ArithmeticOverflow)?;
         Ok(Self {
+            authority: reply::LaneAuthority::RecipientGrant,
             rate_window_started_at: grant.issued_at,
             last_activity: grant.issued_at,
             grant,
@@ -414,6 +469,9 @@ impl Lane {
 
     pub const fn grant(&self) -> &LaneGrant {
         &self.grant
+    }
+    pub const fn authority(&self) -> &reply::LaneAuthority {
+        &self.authority
     }
     pub const fn state(&self) -> LaneState {
         self.state
@@ -611,6 +669,21 @@ impl Lane {
         self.state = LaneState::Revoked;
         self.version = version;
         Ok(())
+    }
+
+    /// Plans revocation without modifying the protected input snapshot.
+    /// # Errors
+    /// Rejects version overflow before producing any effect.
+    pub fn plan_revocation(&self) -> Result<Option<LaneRevocation>, CapabilityError> {
+        if self.state == LaneState::Revoked {
+            return Ok(None);
+        }
+        let mut lane = self.clone();
+        lane.revoke()?;
+        Ok(Some(LaneRevocation {
+            expected_version: self.version,
+            lane,
+        }))
     }
 
     /// Reactivates an awaiting lane within its signed hard validity interval.
@@ -812,30 +885,6 @@ impl BondFreeAdmission {
             AdmissionAuthentication::LegacyDmarc => bytes.push(1),
         }
         Ok(bytes)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SignedBondFreeAdmission {
-    pub admission: BondFreeAdmission,
-    pub signature: [u8; 64],
-}
-
-impl SignedBondFreeAdmission {
-    /// Verifies the sender's signature over the complete delivery request and
-    /// its provider/deployment scope.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for malformed keys or invalid signatures.
-    pub fn verify(&self, sender_key: &[u8; 32]) -> Result<(), CapabilityError> {
-        let key =
-            VerifyingKey::from_bytes(sender_key).map_err(|_| CapabilityError::InvalidPublicKey)?;
-        key.verify(
-            &self.admission.signing_bytes()?,
-            &Signature::from_bytes(&self.signature),
-        )
-        .map_err(|_| CapabilityError::InvalidSignature)
     }
 }
 
@@ -1278,60 +1327,6 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(lane.messages_in_rate_window, 1);
-    }
-
-    #[test]
-    fn bond_free_admission_signature_covers_scope_and_evidence() {
-        let signing = SigningKey::from_bytes(&[8; 32]);
-        let admission = BondFreeAdmission {
-            wire_version: WireVersion(1),
-            sender: ProtocolIdentity(2),
-            recipient: ProtocolIdentity(3),
-            message_id: MessageId(4),
-            content_ref: ContentRef(5),
-            delivery_intent_ref: DeliveryIntentRef(6),
-            declarations: MessageDeclarations {
-                purpose: DeclaredPurpose::Known(cs_mail_primitives::KnownPurpose::Transactional),
-                origin: cs_mail_primitives::OriginDeclaration {
-                    mode: OriginMode::AutomatedSystem,
-                    authority: DeclarationAuthority::NativeSender(OperationalKeyRef(11)),
-                },
-                payload_schema: None,
-            },
-            message_valid_until: MessageValidityUntil(CanonicalTime(100)),
-            capability: Some(LaneId(1)),
-            evidence: Some(evidence()),
-            idempotency_key: IdempotencyKey(7),
-            protocol_version: ProtocolVersion(2),
-            deployment_domain: [9; 32],
-            intended_provider: ProviderRef(10),
-            authentication: AdmissionAuthentication::NativeKey(OperationalKeyRef(11)),
-        };
-        let signed = SignedBondFreeAdmission {
-            signature: signing.sign(&admission.signing_bytes().unwrap()).to_bytes(),
-            admission: admission.clone(),
-        };
-        signed.verify(&signing.verifying_key().to_bytes()).unwrap();
-        let mut altered = signed;
-        altered.admission.intended_provider = ProviderRef(12);
-        assert_eq!(
-            altered.verify(&signing.verifying_key().to_bytes()),
-            Err(CapabilityError::InvalidSignature)
-        );
-
-        let mut altered_origin = BondFreeAdmission {
-            intended_provider: ProviderRef(10),
-            ..admission.clone()
-        };
-        altered_origin.declarations.origin.mode = OriginMode::AutonomousAgent;
-        let altered_origin = SignedBondFreeAdmission {
-            admission: altered_origin,
-            signature: signing.sign(&admission.signing_bytes().unwrap()).to_bytes(),
-        };
-        assert_eq!(
-            altered_origin.verify(&signing.verifying_key().to_bytes()),
-            Err(CapabilityError::InvalidSignature)
-        );
     }
 
     #[test]

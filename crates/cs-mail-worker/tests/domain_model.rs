@@ -118,6 +118,8 @@ fn account_command(
     cs_mail_application::billing::operations::BillingService::new(engine.deployment(), &|| time)
         .execute_command(&signed)
         .unwrap()
+        .into_operations()
+        .unwrap()
 }
 fn program_command(
     engine: &PostgresEngine,
@@ -562,4 +564,47 @@ fn annual_allocation_automatically_pays_one_lump_sum_after_closure() {
         .member_statement(MemberId(1));
     assert_eq!(statement[0].outstanding, Money::ZERO);
     assert_eq!(statement[0].status, AllocationStatus::Confirmed);
+}
+
+#[test]
+#[ignore = "requires isolated PostgreSQL"]
+fn refused_billing_command_replays_after_offer_changes_without_reserving_funding() {
+    // Conjecture: an authenticated refusal remains terminal after later policy publication.
+    // A replay creating collection work would turn a resolved refusal into an unexpected charge.
+    use cs_mail_application::billing::operations::{BillingCommandOutcome, BillingService};
+    let (_, engine) = setup();
+    let before = engine
+        .deployment()
+        .billing_account(BillingAccountId(1))
+        .unwrap();
+    let signed = SignedBillingCommand::sign(
+        before.id(),
+        OperationalKeyRef(1),
+        scope(),
+        before.revision(),
+        IdempotencyKey(801),
+        BillingCommand::PurchaseService {
+            offer: PolicyVersion(801),
+        },
+        &[1; 32],
+    )
+    .unwrap();
+    let clock = || at(2025, 1, 1);
+    let service = BillingService::new(engine.deployment(), &clock);
+    let refused = service.execute_command(&signed).unwrap();
+    assert!(matches!(
+        refused,
+        BillingCommandOutcome::Refused(BillingError::MissingRecord)
+    ));
+    cs_mail_test_support::operator(
+        engine.deployment(),
+        cs_mail_operations::OperatorCommand::PublishServiceOffer(offer(801, 2026)),
+        at(2025, 1, 1),
+    )
+    .unwrap();
+    assert_eq!(service.execute_command(&signed).unwrap(), refused);
+    assert_eq!(
+        engine.deployment().billing_account(before.id()).unwrap(),
+        before
+    );
 }

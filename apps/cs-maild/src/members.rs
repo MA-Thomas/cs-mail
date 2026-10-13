@@ -11,11 +11,9 @@ use cs_mail_accounts::control::SignedAccountCommand;
 use cs_mail_application::accounts::operations::AccountService;
 use cs_mail_billing::SignedBillingCommand;
 use cs_mail_capabilities::SignedLaneGrant;
-use cs_mail_content::EncryptedContentRecord;
 use cs_mail_primitives::{IdempotencyKey, ProtocolIdentity};
 use cs_mail_security::{
-    SignedCommandBytes, SignedContentKeyCertificate, SignedEndpointKey, SignedMemberRead,
-    SignedRequestClasses,
+    SignedCommandBytes, SignedEndpointKey, SignedMemberRead, SignedRequestClasses,
 };
 use cs_mail_service::members::MemberGateway;
 use cs_mail_service::{ServiceError, UnixMillisecondClock};
@@ -86,17 +84,19 @@ fn json<T: serde::Serialize>(value: &T) -> Result<Json<Value>, ApiError> {
 /// commands name, and the current protocol policy.
 pub async fn deployment(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let browser_login = state.browser_login.clone();
-    let (scope, product, policy, provider_key) = run(&state, |g| {
+    let mail_domain = state.mail_domain.clone();
+    let (scope, product, policy, provider_key, custody_key) = run(&state, |g| {
         Ok((
             g.scope(),
             g.record().record().identity.product.clone(),
             g.policy().map_err(refused)?,
             g.signer().verifying_key_bytes(),
+            g.custody_key().map_err(refused)?,
         ))
     })
     .await?;
     Ok(Json(
-        json!({ "scope": scope, "product": product, "policy": policy, "provider_key": provider_key, "browser_login": browser_login }),
+        json!({ "scope": scope, "product": product, "policy": policy, "provider_key": provider_key,"custody_key":custody_key, "browser_login": browser_login, "mail_domain": mail_domain }),
     ))
 }
 
@@ -121,17 +121,11 @@ pub async fn billing_command(
     State(state): State<AppState>,
     Json(signed): Json<SignedBillingCommand>,
 ) -> Result<Json<Value>, ApiError> {
-    let operations = run(&state, move |g| {
-        cs_mail_application::billing::operations::BillingService::new(
-            g.deployment(),
-            &crate::http::now,
-        )
-        .execute_command(&signed)
-        .map_err(ApiError::from)
+    let outcome = run(&state, move |g| {
+        g.billing_response(&signed).map_err(refused)
     })
     .await?;
-    tracing::info!(operations = operations.len(), "billing command committed");
-    Ok(Json(json!({ "operations": operations.len() })))
+    json(&outcome)
 }
 
 /// A recipient address's request classes.
@@ -207,30 +201,23 @@ pub async fn relationship_command(
     json(&outcome)
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Upload {
-    record: EncryptedContentRecord,
-    certificate: SignedContentKeyCertificate,
-}
 /// The sender's ciphertext for a message it will submit.
 pub async fn content(
     State(state): State<AppState>,
     Path((sender, recipient)): Path<(u128, u128)>,
-    Json(upload): Json<Upload>,
+    Json(upload): Json<cs_mail_application::requests::documents::SignedRequestDocument>,
 ) -> Result<Json<Value>, ApiError> {
-    run(&state, move |g| {
-        g.upload(
+    let receipt = run(&state, move |g| {
+        g.upload_request_document(
             ProtocolIdentity(sender),
             ProtocolIdentity(recipient),
-            &upload.record,
-            &upload.certificate,
+            &upload,
         )
         .map_err(refused)
     })
     .await?;
     tracing::info!("content stored");
-    Ok(Json(json!({ "stored": true })))
+    json(&receipt)
 }
 
 #[derive(Deserialize)]
@@ -295,4 +282,19 @@ pub fn worker(
         }
         Err(_) => failures.failed("relationships", "service".into()),
     }
+}
+
+/// Typed native commands: transport object-field order has no authority.
+pub async fn correspondence(
+    State(state): State<AppState>,
+    Json(request): Json<cs_mail_application::correspondence::SignedRequest>,
+) -> Result<Json<cs_mail_application::correspondence::Response>, ApiError> {
+    run(&state, move |g| {
+        let repository = g.deployment().accounts(crate::http::now);
+        cs_mail_application::correspondence::CorrespondenceService::new(&repository)
+            .handle(&request)
+            .map_err(ApiError::from)
+    })
+    .await
+    .map(Json)
 }

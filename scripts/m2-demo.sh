@@ -45,7 +45,7 @@ echo "work directory: $work"
 
 step "keys (secrets are written 0600 and never printed)"
 for name in provider scheduler operator processor bank-authority bank-ownership \
-            identity-decision identity-product evidence relationships principals; do
+            identity-decision identity-product evidence relationships principals custody; do
   "$admin" keygen --out "$work/$name.key" > "$work/$name.pub"
 done
 public() { python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["verifying_key"]))' "$work/$1.pub"; }
@@ -74,7 +74,7 @@ cat > "$work/maild.json" <<EOF
  "workers": {"interval_ms": 300, "lease_ms": 30000, "batch": 50},
  "identity": {"endpoint": "http://127.0.0.1:$identity_port/v1/enrollment",
               "product_secret_file": "$work/identity-product.key"},
- "members": {"provider_secret_file": "$work/provider.key",
+ "members": {"custody_key_ref":900,"custody_secret_file":"$work/custody.key","provider_secret_file": "$work/provider.key",
              "relationship_secret_file": "$work/relationships.key",
              "principal_secret_file": "$work/principals.key"},
  "simulation": {"processor_secret_file": "$work/processor.key",
@@ -122,7 +122,7 @@ EOF
 cat > "$work/protocol.json" <<'EOF'
 {"PublishProtocolPolicy":{"version":1,"privacy_profile_version":1,"retention_policy_version":1,
  "submission_window":120000,"decision_window":20000,"quote_lifetime":120000,
- "backoff":[0,1000],"expiry_cooldown":1000,"rejection_cooldown":1000,
+ "reply_lane":{"lifetime":604800000,"rate_limit":{"max_messages":20,"interval":86400000},"purpose":{"Known":"Personal"}},"backoff":[0,1000],"expiry_cooldown":1000,"rejection_cooldown":1000,
  "corporate_basis_points":300,"maturity_delay":1000}}
 EOF
 for command in offer pricing protocol; do
@@ -186,6 +186,11 @@ as Alice request --to "$bob" --class 1 --message "Hello Bob, I would like to int
 as Alice retry
 as Alice request --to "$bob" --class 1 --message "Hello Bob, I would like to introduce myself."
 
+step "Bob answers the pending request in its own conversation, without deciding it"
+conversation=$("$cli" --home "$work/Bob" read --with "$alice" | awk '/^conversation / {print $2; exit}')
+as Bob send --to "$alice" --conversation "$conversation" --message "Before I decide, could you tell me more?" --operation first-answer
+as Alice read --with "$bob"
+
 step "Bob permits follow-ups; Alice sends one; Bob reads his inbox"
 as Bob permit-followups --from "$alice" --max-messages 2 --max-per-interval 2 --interval-ms 60000
 as Alice followup --to "$bob" --message "A short follow-up with more detail."
@@ -193,6 +198,10 @@ as Bob inbox
 
 step "Bob accepts Alice with standing permission: the full charge is owed back"
 as Bob decide --from "$alice" --decision accept
+step "Bob starts another conversation through the accepted reverse lane"
+as Bob send --to "$alice" --message "Thank you; we can now correspond." --operation accepted-reply
+as Alice read --with "$bob"
+
 
 step "Carol requests; Bob accepts with an express lane"
 as Carol request --to "$bob" --class 2 --message "A business proposal for you."
@@ -235,7 +244,7 @@ as Alice status --with "$bob"
 step "redaction: no secret, key or database URL appears in the service log"
 leaks=0
 for name in provider scheduler operator processor bank-authority bank-ownership \
-            identity-decision identity-product evidence relationships principals; do
+            identity-decision identity-product evidence relationships principals custody; do
   secret="$(tr -d ' \n' < "$work/$name.key")"
   if tr -d ' \n' < "$work/serve.log" | grep -qF "$secret"; then echo "LEAK: $name secret"; leaks=1; fi
 done

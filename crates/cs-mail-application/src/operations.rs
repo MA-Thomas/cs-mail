@@ -61,9 +61,9 @@ pub enum OperatorTarget {
     RequestPricing(PolicyPublicationContext),
     ProtocolPolicy {
         /// The current protocol policy, if any.
-        current: Option<ProtocolPolicy>,
+        current: Option<Box<ProtocolPolicy>>,
         /// A stored protocol policy with the same version, if any.
-        same_version: Option<ProtocolPolicy>,
+        same_version: Option<Box<ProtocolPolicy>>,
     },
 }
 pub struct OperatorContext {
@@ -189,8 +189,8 @@ impl<'a, R: OperatorStore> OperatorService<'a, R> {
                     ) => {
                         let changed = decide_protocol_policy(
                             policy,
-                            current.as_ref(),
-                            same_version.as_ref(),
+                            current.as_deref(),
+                            same_version.as_deref(),
                         )?;
                         (
                             changed

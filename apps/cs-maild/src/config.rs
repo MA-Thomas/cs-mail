@@ -17,6 +17,8 @@ impl std::error::Error for ConfigError {}
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub database_url: String,
+    /// Namespace for deployment-issued member addresses; grants no external mail transport.
+    pub directory_domain: Option<String>,
     /// Loopback only; TLS is terminated by the deployment's proxy.
     pub listen: SocketAddr,
     /// Upper bound on concurrent blocking storage calls from HTTP handlers.
@@ -43,6 +45,8 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 #[allow(clippy::struct_field_names)] // Each field names one protected secret file.
 pub struct MembersConfig {
+    pub custody_key_ref: cs_mail_primitives::ContentKeyRef,
+    pub custody_secret_file: PathBuf,
     /// JSON array of the provider's 32-byte signing seed; its public key must be the
     /// bootstrapped provider key.
     pub provider_secret_file: PathBuf,

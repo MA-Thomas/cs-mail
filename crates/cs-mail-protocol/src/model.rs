@@ -6,10 +6,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use cs_mail_ledger::LedgerView;
 use cs_mail_primitives::{
     CanonicalTime, ContentRef, DeliveryIntentRef, Duration, EventRef, LaneId,
-    MessageDeclarationDigest, MessageId, MessageValidityUntil, Money, PolicyVersion, PrincipalRef,
-    PrivacyProfileVersion, ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId,
-    RelationshipRef, RelationshipVersion, RequestHistoryRef, RequestHistoryVersion, RequestId,
-    RequestVersion, RetentionPolicyVersion, SettlementUnit, Version,
+    MessageDeclarationDigest, MessageId, MessageValidityUntil, Money, OperationalKeyRef,
+    PolicyVersion, PrincipalRef, PrivacyProfileVersion, ProtocolIdentity, ProtocolVersion,
+    ProviderRef, QuoteId, RelationshipRef, RelationshipVersion, RequestHistoryRef,
+    RequestHistoryVersion, RequestId, RequestVersion, RetentionPolicyVersion, SettlementUnit,
+    Version,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,9 +31,24 @@ pub enum RelationshipState {
     Revoked,
     Blocked,
 }
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SenderReplyRestriction {
+    Blocked,
+    Revoked,
+}
+impl RelationshipState {
+    pub const fn sender_reply_restriction(self) -> Option<SenderReplyRestriction> {
+        match self {
+            Self::Blocked => Some(SenderReplyRestriction::Blocked),
+            Self::Revoked => Some(SenderReplyRestriction::Revoked),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Relationship {
+    pub reply_epoch: cs_mail_primitives::ReplyEpoch,
     pub key: RelationshipKey,
     pub history: RequestHistoryRef,
     pub generation: u64,
@@ -41,8 +57,7 @@ pub struct Relationship {
     pub last_event: Option<EventRef>,
     pub changed_at: CanonicalTime,
 }
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RequestReservation {
     pub relationship: RelationshipRef,
     pub request: RequestId,
@@ -165,6 +180,11 @@ pub enum RequestLifecycle {
     },
 }
 impl RequestLifecycle {
+    /// Whether an opposite preparation must wait for this request's decision.
+    /// Expiry recording is independent of the issued decision deadline.
+    pub const fn awaits_decision_at(self, now: CanonicalTime) -> bool {
+        matches!(self, Self::AwaitingRecipientDecision(submission) if now.0 <= submission.decision_deadline.0)
+    }
     pub const fn is_terminal(self) -> bool {
         !matches!(
             self,
@@ -198,8 +218,43 @@ impl RequestLifecycle {
     }
 }
 
+/// Recorded reply agreement. Absence of an offer never grants answer or lane authority.
+/// Historical facts are explicit; newly formed requests must carry agreed terms.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(
+    from = "Option<cs_mail_capabilities::reply::ReplyLaneTerms>",
+    into = "Option<cs_mail_capabilities::reply::ReplyLaneTerms>"
+)]
+pub enum RequestReplyAgreement {
+    NotOffered,
+    Agreed(cs_mail_capabilities::reply::ReplyLaneTerms),
+}
+impl RequestReplyAgreement {
+    pub const fn agreed(&self) -> Option<&cs_mail_capabilities::reply::ReplyLaneTerms> {
+        match self {
+            Self::NotOffered => None,
+            Self::Agreed(terms) => Some(terms),
+        }
+    }
+}
+impl From<Option<cs_mail_capabilities::reply::ReplyLaneTerms>> for RequestReplyAgreement {
+    fn from(value: Option<cs_mail_capabilities::reply::ReplyLaneTerms>) -> Self {
+        value.map_or(Self::NotOffered, Self::Agreed)
+    }
+}
+impl From<RequestReplyAgreement> for Option<cs_mail_capabilities::reply::ReplyLaneTerms> {
+    fn from(value: RequestReplyAgreement) -> Self {
+        match value {
+            RequestReplyAgreement::NotOffered => None,
+            RequestReplyAgreement::Agreed(terms) => Some(terms),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RequestTerms {
+    #[serde(deserialize_with = "explicit_reply_agreement")]
+    pub reply_lane: RequestReplyAgreement,
     pub selected_class: crate::pricing::SelectedRequestClass,
     pub pricing_policy_version: PolicyVersion,
     pub quote_id: QuoteId,
@@ -232,6 +287,14 @@ pub struct RequestTerms {
     pub next_request_backoff: Duration,
 }
 
+fn explicit_reply_agreement<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RequestReplyAgreement, D::Error> {
+    // Null is an explicit historical fact. A missing field is an old record and
+    // must be converted offline, never accepted by a runtime fallback reader.
+    RequestReplyAgreement::deserialize(deserializer)
+}
+
 impl RequestTerms {
     /// Returns the `C + S` request portion of the reservation.
     ///
@@ -247,6 +310,8 @@ impl RequestTerms {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RelationshipRequest {
+    pub creation_key: OperationalKeyRef,
+    pub creation_event: EventRef,
     pub id: RequestId,
     pub generation: u64,
     pub initial_message: MessageId,
@@ -267,6 +332,13 @@ impl RelationshipRequest {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum AdmissionBasis {
+    ConversationReply {
+        source: MessageId,
+    },
+    RequestAnswer {
+        request: RequestReservation,
+        submission: EventRef,
+    },
     InitialRequest {
         request: RequestId,
     },
@@ -339,6 +411,7 @@ impl ProtocolState {
             quotes: BTreeMap::new(),
             used_quotes: BTreeSet::new(),
             relationship: Relationship {
+                reply_epoch: cs_mail_primitives::ReplyEpoch(0),
                 history: request_history,
                 generation: 0,
                 key: RelationshipKey {

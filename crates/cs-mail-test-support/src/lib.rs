@@ -1,3 +1,4 @@
+use sha2::Digest;
 pub mod enrollment;
 pub mod smtp;
 // Explicit paid-service setup for protocol regression fixtures, separate from domain acceptance tests.
@@ -169,6 +170,35 @@ pub fn provision(
             at,
         )?;
     }
+    // Fixture hosts own both directions just as the real member gateway does.
+    let pair = engine.snapshot()?.state.relationship.key;
+    let reverse_ref =
+        sha2::Sha256::digest([b"fixture/reverse".as_slice(), pair.reference.as_bytes()].concat());
+    let history_ref = sha2::Sha256::digest(
+        [
+            b"fixture/reverse-history".as_slice(),
+            pair.reference.as_bytes(),
+        ]
+        .concat(),
+    );
+    let reverse = engine.deployment().relationship(
+        format!(
+            "fixture-reverse-{}",
+            reverse_ref
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
+        &cs_mail_protocol::ProtocolState::initial_scoped(
+            cs_mail_primitives::RelationshipRef::new(1, reverse_ref.into()),
+            cs_mail_primitives::RequestHistoryRef::new(1, history_ref.into()),
+            pair.recipient,
+            pair.sender,
+            at,
+        ),
+        policy.unit,
+    )?;
+    reverse.initialize_key_registry(&provider_keys, at)?;
     engine.initialize_key_registry(&provider_keys, at)?;
     engine.configure_ingress(
         policy.financial.scope.deployment_domain,
@@ -286,6 +316,8 @@ pub fn purchase_service(
     )?;
     let op = cs_mail_application::billing::operations::BillingService::new(deployment, &|| at)
         .execute_command(&signed)?
+        .into_operations()
+        .map_err(StorageError::from)?
         .remove(0);
     cs_mail_application::billing::operations::BillingService::new(deployment, &|| at)
         .authorize_dispatch(id, ServiceContractId(op.id.0), op.id)?;
@@ -299,3 +331,5 @@ pub fn purchase_service(
 pub mod external;
 
 pub mod smtp2go;
+
+pub mod requests;

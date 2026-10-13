@@ -7,7 +7,7 @@ use cs_mail_application::members::{
     AccountView, RelationshipAddress, RelationshipView, authorize_read, member_history,
     publish_endpoint_key,
 };
-pub use cs_mail_application::members::{DeliveredContent, MemberAnswer};
+pub use cs_mail_application::members::{GuestDeliveredContent, MemberAnswer};
 use cs_mail_capabilities::SignedLaneGrant;
 use cs_mail_content::EncryptedContentRecord;
 use cs_mail_operations::DeploymentBootstrap;
@@ -16,13 +16,11 @@ use cs_mail_privacy::PrivacyDeriver;
 use cs_mail_protocol::{ActorRef, PolicySnapshot, admission::AdmissionPolicy};
 use cs_mail_security::{
     AuthoritySnapshot, EndpointKeyPublication, KeyRegistry, MemberRead, ProviderSigner,
-    RecipientSigningScope, SignedCommandBytes, SignedContentKeyCertificate, SignedEndpointKey,
-    SignedMemberRead, SignedRequestClasses,
+    RecipientSigningScope, SignedCommandBytes, SignedEndpointKey, SignedMemberRead,
+    SignedRequestClasses, SigningScope,
 };
 use cs_mail_storage_postgres::{PostgresDeployment, PostgresEngine, StorageError};
 
-/// Largest content lifetime a member may declare.
-pub const MAX_CONTENT_LIFETIME: Duration = Duration(90 * 24 * 60 * 60 * 1000);
 /// Version of the legacy sender identity mapping.
 pub const LEGACY_IDENTITY_MAPPING_VERSION: u16 = 1;
 
@@ -101,6 +99,25 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
             self.secrets.principal_secret,
         )
     }
+    /// A signed native billing outcome, including durable authenticated refusals.
+    /// # Errors
+    /// Current account authority, signature or persistence is unavailable.
+    pub fn billing_response(
+        &self,
+        command: &cs_mail_billing::SignedBillingCommand,
+    ) -> Result<cs_mail_application::billing::operations::BillingResponse, ServiceError> {
+        let outcome = cs_mail_application::billing::operations::BillingService::new(
+            &self.deployment,
+            &|| self.clock.now(),
+        )
+        .execute_command(command)?;
+        cs_mail_application::billing::operations::BillingResponse::sign(
+            command,
+            outcome,
+            &self.secrets.provider_seed,
+        )
+        .map_err(|_| ServiceError::ReceiptUnavailable)
+    }
     /// Where `sender` writing to `recipient` lives. The recipient must be a member's
     /// address and the sender a registered sender: a member's address or a guest.
     /// # Errors
@@ -174,7 +191,6 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
             ServicePolicy {
                 protocol: self.policy()?,
                 deployment_domain: record.deployment_domain,
-                max_content_lifetime: MAX_CONTENT_LIFETIME,
                 legacy_identity_mapping_version: LEGACY_IDENTITY_MAPPING_VERSION,
             },
             &AdmissionPolicy::default(),
@@ -206,21 +222,52 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
         recipient: ProtocolIdentity,
         command: &SignedCommandBytes,
     ) -> Result<ServiceOutcome, ServiceError> {
-        self.open(&self.address(sender, recipient)?)?
-            .submit(command)
+        let address = self.address(sender, recipient)?;
+        self.open_pair(&address)?;
+        self.open(&address)?.submit(command)
     }
-    /// Stores the sender's ciphertext for a message it will submit.
+    fn open_pair(&self, address: &RelationshipAddress) -> Result<(), ServiceError> {
+        self.open(address)?;
+        if matches!(
+            self.deployment.sender_subject(address.sender())?,
+            Some(cs_mail_guests::SenderSubject::Member(_))
+        ) {
+            self.open(&self.address(address.recipient(), address.sender())?)?;
+        }
+        Ok(())
+    }
+    /// Stages the sender's signed native document before submission.
     /// # Errors
     /// Invalid certificates, bindings or lifetimes; storage refusals.
-    pub fn upload(
+    pub fn upload_request_document(
         &self,
         sender: ProtocolIdentity,
         recipient: ProtocolIdentity,
-        record: &EncryptedContentRecord,
-        certificate: &SignedContentKeyCertificate,
-    ) -> Result<(), ServiceError> {
-        self.open(&self.address(sender, recipient)?)?
-            .upload_content(record, certificate)
+        signed: &cs_mail_application::requests::documents::SignedRequestDocument,
+    ) -> Result<cs_mail_application::requests::documents::StageReceipt, ServiceError> {
+        let address = self.address(sender, recipient)?;
+        self.open_pair(&address)?;
+        let engine = self
+            .deployment
+            .existing_relationship(address.aggregate_key())?
+            .ok_or(StorageError::VersionConflict)?;
+        Ok(engine.stage_request_document(
+            signed,
+            SigningScope {
+                deployment_domain: self.scope().deployment_domain,
+                intended_provider: self.scope().provider,
+                relationship: address.public().relationship,
+            },
+            || self.clock.now(),
+        )?)
+    }
+    /// # Errors
+    /// Native messaging requires the configured durable custody key.
+    pub fn custody_key(&self) -> Result<cs_mail_content::EndpointPublicKey, ServiceError> {
+        Ok(self
+            .deployment
+            .accounts(ClockAdapter(self.clock.clone()))
+            .custody_public_key()?)
     }
     /// Accepts a request with an express lane: the recipient's signed grant.
     /// # Errors
@@ -230,8 +277,9 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
         signed: &SignedLaneGrant,
         idempotency_key: IdempotencyKey,
     ) -> Result<ServiceOutcome, ServiceError> {
-        self.open(&self.address(signed.grant.sender, signed.grant.recipient)?)?
-            .grant_lane(signed, idempotency_key)
+        let address = self.address(signed.grant.sender, signed.grant.recipient)?;
+        self.open_pair(&address)?;
+        self.open(&address)?.grant_lane(signed, idempotency_key)
     }
     /// Publishes a recipient address's request classes.
     /// # Errors
@@ -298,6 +346,7 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
             }
             MemberRead::AsSender { recipient } => {
                 let address = self.address(signed.persona, recipient)?;
+                self.open(&address)?;
                 MemberAnswer::Sending {
                     handle: address.public(),
                     view: self.view(&address)?,
@@ -305,13 +354,14 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
             }
             MemberRead::AsRecipient { sender } => {
                 let address = self.address(sender, signed.persona)?;
+                let view = self.view(&address)?;
                 let content = match self
                     .deployment
                     .existing_relationship(address.aggregate_key())?
                 {
                     // Only admitted messages reach the recipient: content stored for a
                     // request that was never submitted stays with the sender's side.
-                    Some(engine) => {
+                    Some(engine) if view.as_ref().is_some_and(|view| view.guest.is_some()) => {
                         let admitted = engine
                             .snapshot()?
                             .messages
@@ -319,25 +369,26 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
                             .map(|message| message.content)
                             .collect::<std::collections::BTreeSet<_>>();
                         engine
-                            .content_with_certificates()?
+                            .guest_content_with_certificates()?
                             .into_iter()
                             .filter(|(record, _)| admitted.contains(&record.binding.content_ref))
-                            .map(|(record, certificate)| DeliveredContent {
+                            .map(|(record, certificate)| GuestDeliveredContent {
                                 record,
                                 certificate,
                             })
                             .collect()
                     }
-                    None => Vec::new(),
+                    _ => Vec::new(),
                 };
                 let invited = self
                     .deployment
-                    .has_external_invitation(address.public().sender, signed.persona)?;
+                    .has_external_invitation(address.public().sender, signed.persona)?
+                    || self
+                        .deployment
+                        .has_native_conversation(address.public().sender, signed.persona)?;
                 MemberAnswer::Receiving {
                     handle: address.public(),
-                    view: self
-                        .view(&address)?
-                        .and_then(|view| view.for_recipient(invited)),
+                    view: view.and_then(|view| view.for_recipient(invited)),
                     content,
                 }
             }
@@ -347,7 +398,10 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
                     let address = self.address(stored.sender, stored.recipient)?;
                     let invited = self
                         .deployment
-                        .has_external_invitation(stored.sender, signed.persona)?;
+                        .has_external_invitation(stored.sender, signed.persona)?
+                        || self
+                            .deployment
+                            .has_native_conversation(stored.sender, signed.persona)?;
                     if let Some(view) = self
                         .view(&address)?
                         .and_then(|view| view.for_recipient(invited))
@@ -377,6 +431,15 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
             view.external_conversations = self
                 .deployment
                 .external_conversations_for(address.aggregate_key())?;
+        }
+        if view.guest.is_none() {
+            view.display_name = self
+                .deployment
+                .directory_lookup(
+                    cs_mail_accounts::directory::DirectoryReference::Protocol(address.sender()),
+                    || self.clock.now(),
+                )?
+                .map(|p| p.entry.profile().display_name().to_owned());
         }
         Ok(Some(view))
     }

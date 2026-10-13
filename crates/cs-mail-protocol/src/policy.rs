@@ -24,6 +24,7 @@ pub struct ProtocolPolicy(ProtocolPolicyRecord);
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProtocolPolicyRecord {
+    pub reply_lane: cs_mail_capabilities::reply::ReplyLaneTerms,
     pub version: PolicyVersion,
     pub privacy_profile_version: PrivacyProfileVersion,
     pub retention_policy_version: RetentionPolicyVersion,
@@ -110,6 +111,7 @@ impl ProtocolPolicy {
         }
         let record = &self.0;
         let snapshot = PolicySnapshot {
+            reply_lane: record.reply_lane.clone(),
             protocol_version: deployment.protocol_version,
             policy_version: record.version,
             privacy_profile_version: record.privacy_profile_version,

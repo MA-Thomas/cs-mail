@@ -788,8 +788,60 @@ and reads one request, and accepts or rejects it through the existing service.
 Check this slice on iPhone early before expanding to the full milestone journeys. See
 \href{docs/apple-client-architecture.md}{the Apple client architecture}.
 
+The 11 October 2026 address-directory slice adds account-owned per-address public
+profiles, listed/unlisted discovery and a shared in-app search experience. Profiles
+contain a member-authored name, description and optional image; initial publication
+is listed with explicit opt-out. Exact address/shared-link lookup includes unlisted
+publications. Active recipient keys authorize atomic profile/class saves with reviewed
+revisions and stable operation identities. Suspended/closed accounts are unavailable;
+expired service leaves information visible but disables new requests. See the
+address-publication rules in \href{DOMAIN_MODEL.md}{the domain model}.
+
+Agreed experiments challenge cross-address authority, partial saves, searches after
+unlisting and response-loss replay over later edits. Native checks cover editing,
+discovery and reopening. Public-web behavior, external indexing and iOS runtime
+behavior remain outside this slice. The directory reuses Rust contracts; a future
+single web interface can consume the same API.
+
+The unified native application also provides an explicit offline visual-demo mode.
+It uses the same communication-space, directory and address-editor screens with
+transient fictional fixtures, without a credential store or service connection.
+Demo decisions are explanations only; edits reset when the demo session ends.
+This is visual-review evidence, separate from canonical account and settlement
+validation. The standalone preview and automatic-enrollment review path are retired.
+
+The persistent-development groundwork preserves local deployment, evidence and
+OIDC signing keys across service restart, binds them to the PostgreSQL databases,
+and uses a stable Apple Development signature for the unified app. Reopening
+preserves encrypted device progress and exposes saved setup operations for retry.
+A supervised restart observation retained the same account identity and all
+signing/evidence keys, alongside the existing recovery suites. The subsequent owner-account cutover enrolled the persistent development account
+with fictional evidence and claimed \texttt{marcus@csqd-mail.com} through signed,
+atomic address publication. Fictional participants now supply canonical incoming
+requests, a standing contact, an express lane, rejection and an uncovered public
+profile. Rebuilt-app reopening and an interrupted publication across offline
+reopening and service restart preserved the account, credentials and exact
+operation. Existing gate/recovery suites and native checks passed; no new test
+cases were added. External mail, live banking/value and replacement-device
+recovery remain separate work.
+
+
+\paragraph{Pause checkpoint, 11 October 2026.} Development is paused after the
+persistent owner-account slice. The final signed macOS build reopened against the
+restarted backend and was left on the populated communication space. Directory
+listing and exact lookup of \texttt{marcus@csqd-mail.com} were observed.
+Participant states have real-time deadlines and expiry; they are not permanent
+fixtures. Preserve the existing databases, deployment keys and device custody
+when resuming; the \href{apps/cs-mail-apple/README.md}{Apple runbook} records restart
+commands and validation limits. This checkpoint does not close Milestone~4:
+iOS runtime, replacement-device recovery and remaining member journeys need work.
+The browser provider is a controlled local fixture; production authentication,
+bank verification and payment connectors remain deferred.
+
 Bob sees the chosen class, one request with its grouped messages, and a clear
-deadline, and decides with permission explained first and money second. He
+deadline, and decides with permission explained in the request flow. General
+charge, refund and member-pool explanations appear in the separate Q\&A section,
+as agreed on 12 October 2026. He
 manages each address's request classes with collateral within the operator's bounds,
 follow-up preferences, lanes, and blocks. Financial status shows request charges
 and refunds separately from annual service and distributions. Apple interface
@@ -955,6 +1007,96 @@ boundary is repaired. If a policy parameter is unresolved, use an explicitly
 versioned simulation policy and keep the live deployment gate closed.
 
 \section{Current Next Assignment}
+
+\paragraph{Native requests and replies, agreed 12 October 2026.}
+Preserve the working baseline, repair relationship revocation, then implement
+the native request/conversation cutover and member composing workflow. The
+confirmed rules and atomic ownership boundary are recorded in
+\href{DOMAIN_MODEL.md}{the domain model}. Recipient answers remain confined to
+the request conversation after rejection or expiry until the sender revokes or
+blocks. Acceptance activates agreed reverse permission from frozen request terms.
+The first submitted request takes precedence over an opposite unsubmitted
+preparation; cancellation, refund work and uncertain funding reconciliation are
+explicit application consequences. Do not let SQL add these effects or rewrite
+the protocol decision.
+
+The revocation repair is a bounded first pass with no schema cutover. Validate
+retained-lane termination, failed-transaction rollback and original-operation
+recovery using the existing PostgreSQL experiment and the complete quality gate.
+The later messaging cutover requires separate delivery, consent, reuse, retry,
+device-persistence and crossed-request experiments. It is not complete merely
+because the revocation checks pass.
+
+The first request cutover slice introduces the application-owned paired request
+decision. A submitted request cancels opposite preparation with its original
+funding/refund operation; actionable opposite requests refuse new preparation,
+and sender-side block/revocation refuses submission. PostgreSQL commits both
+directions at one causal position. Migration 0033 requires a fresh environment
+and refuses populated earlier schemas. Native document publication, automatic
+reverse permission and composing/answering are implemented in the subsequent
+native messaging cutover. Migration 0034 requires a fresh environment and rejects
+populated predecessors. Requests stage signed four-copy documents; the application
+publishes the restricted conversation, mailbox records and scoped answer permit as
+one declared commit. Acceptance also declares the agreed reverse lane and its
+schedule, preserving a current custom lane. Native sends use one correspondence
+command and reader; the former raw native upload/admission paths are removed.
+The portable client journals signed ciphertext before sending, and the Swift app
+selects and labels conversations from content decrypted in memory. CLI request
+initiation and native sends exercise the HTTP boundary. The subsequent native member workflow slice implements paid request initiation,
+explicit signed-quote review before charge authorization, durable preparation,
+submission/cancellation and follow-up, contact controls and source reuse/policy
+controls. The subsequent native UX cutover replaces whole-message inclusion with
+composer-led exact passage selection and explicit person/conversation navigation. Exact authenticated native refusals become durable outcomes;
+transport uncertainty retains the original operation. Per-conversation answer
+projections and request-scoped decision callbacks replace the singular answer
+selector. The existing native check journey exercised two isolated fictional
+members, quote/reopen/funding, post-rejection and older-thread answers, acceptance,
+quotation/share/reference, no-charge quoting, policy relaxation, revoke/block/unblock,
+lane regrant, refusal recovery and encrypted persistence. The complete gate and
+signed macOS build passed. Interactive inspection was blocked by app-control
+timeout; iOS execution, replacement-device recovery, annual financial interfaces
+and external-email UI remain separate work. Device cache format 3 has one reader and no old-format fallback. A separately authorized
+standalone development conversion preserves the original owner account, Keychain
+credential and four sample requests on a verified backup copy, leaving the
+original environment intact. It verifies message plaintext only in memory and
+preserves historical absence of broader consent; the October 13 correction
+restores replies for every received conversation from delivery evidence. New
+requests still require agreed terms. The current Swift app has sent a pending answer through that same account
+and the fixture endpoint decrypted it. See
+\href{tools/development-continuity/README.md}{the preservation record}.
+
+The contact-action clarification of 13 October distinguishes incoming permission
+from the member's outgoing route: standing permission or an active express lane
+offers New conversation; otherwise Request a relationship opens the selected
+published approach and signed quote review. The recipient owns standing upgrades.
+An in-app reminder projects current lane evidence and explicit time within the
+confirmed three-day expiry window; letting it expire leaves its schedule unchanged.
+The existing native journey challenged reminder timing and direction, standing
+upgrade and unchanged reverse permission. It passed, as did all eight local gate
+checks. Native inspection also challenged direct profile routing, stable quote
+presentation through journal updates, uncharged discard and retained replies.
+Interactive near-expiry layout and iOS execution remain unestablished.
+
+The preserved accepted development samples were aligned on 13 October using fresh
+signed consent from their original fictional recipient identities. Immutable
+request/acceptance history and the original acceptance-based expiry remain.
+The feature-gated maintenance contract declares the correction in the application
+owner and commits ordinary lane effects, receipt and provenance atomically. Lost
+acknowledgement/replay, later signed withdrawal/unblock, altered retry and unchanged
+identity/financial records were challenged locally. The complete gate and signed
+macOS build passed; native inspection confirmed Daniel's New conversation and
+separate incoming/outgoing explanations. The runtime has no maintenance endpoint
+or historical permission fallback. iOS and actual power loss remain untested.
+
+The pending-request entry correction of 13 October projects authenticated pair
+state in Rust and reuses the domain decision-window rule. A still-pending incoming
+request replaces the contact's relationship-request entry with Review request;
+Directory profile lookup uses the same private projection. Public invitations do
+not establish eligibility, and own-profile lookup does not construct a self pair.
+The existing native journey challenged incoming/outgoing classification, Directory
+consistency, terminal-state release and retained replies. It passed, as did the
+full gate and signed macOS build. Maya's actual pending notice, review path and
+Reply were inspected; iOS and interactive passage across expiry remain untested.
 
 As agreed on 8 October 2026, proceed with Milestone~4: build the SwiftUI member
 application, shipping macOS first and establishing iOS targets from the outset.

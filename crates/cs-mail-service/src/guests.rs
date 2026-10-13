@@ -10,6 +10,7 @@ use crate::{CanonicalClock, ServiceError};
 use cs_mail_application::guests::{GuestApproach, plan_guest_relationship};
 use cs_mail_application::members::{DERIVATION_VERSION, RelationshipAddress, RelationshipView};
 use cs_mail_application::notices::{NoticePurpose, NoticeRecord};
+use cs_mail_application::receipts::ReceivedOutcome;
 use cs_mail_content::{
     ContentBinding, ContentKeyCertificate, EndpointSecretKey, content_key_certificate_digest,
     message_declaration_digest,
@@ -26,7 +27,7 @@ use cs_mail_primitives::{
 };
 use cs_mail_protocol::{CancellationReason, ProtocolCommand, RequestLifecycle, TermsOutcome};
 use cs_mail_smtp_gateway::outbound::OutboundMail;
-use cs_mail_storage_postgres::{ReceivedOutcome, StorageError};
+use cs_mail_storage_postgres::StorageError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
@@ -296,7 +297,7 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
     }
     fn accepted(outcome: ReceivedOutcome) -> Result<ReceivedOutcome, ServiceError> {
         if let ReceivedOutcome::Refused(refusal) = outcome {
-            return Err(refusal.into_error().into());
+            return Err(cs_mail_storage_postgres::StorageError::from(refusal).into());
         }
         Ok(outcome)
     }

@@ -11,6 +11,7 @@ publish.workspace = true
 simulation = ["dep:cs-mail-simulation"]
 
 [dependencies]
+cs-mail-key-custody = { path = "../../crates/cs-mail-key-custody" }
 cs-mail-adapters = { path = "../../crates/cs-mail-adapters" }
 cs-mail-correspondence = { path = "../../crates/cs-mail-correspondence" }
 axum.workspace = true

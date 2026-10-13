@@ -186,39 +186,39 @@ impl Fixture {
         conv: u128,
         parts: Vec<DocumentPart>,
     ) -> PreparedMessage {
-        let document = NativeClient::compose_correspondence(parts).unwrap();
-        self.clients[actor]
-            .prepare_correspondence(
-                &document,
-                conversation(conv),
-                self.clients[recipient].content_public_key(),
-                self.repository.custody_public_key().unwrap(),
-                ContentBinding {
-                    wire_version: WireVersion(1),
-                    content_ref: ContentRef(id),
-                    message_id: MessageId(id),
-                    sender: persona(actor),
-                    recipient: persona(recipient),
-                    protocol_version: ProtocolVersion(2),
-                    relationship: relation(actor, recipient),
-                    content_scope: ContentScopeRef::from_u128_for_test(id),
-                    sender_certificate: ContentCertificateDigest([7; 32]),
-                    declarations: MessageDeclarations {
-                        purpose: DeclaredPurpose::Known(KnownPurpose::Personal),
-                        origin: OriginDeclaration {
-                            mode: OriginMode::HumanInitiated,
-                            authority: DeclarationAuthority::NativeSender(OperationalKeyRef(
-                                persona(actor).0,
-                            )),
-                        },
-                        payload_schema: None,
+        let document = cs_mail_client::correspondence::compose(parts).unwrap();
+        cs_mail_client::correspondence::prepare(
+            &self.clients[actor].endpoint_keys().unwrap(),
+            &document,
+            conversation(conv),
+            self.clients[recipient].content_public_key(),
+            self.repository.custody_public_key().unwrap(),
+            ContentBinding {
+                wire_version: WireVersion(1),
+                content_ref: ContentRef(id),
+                message_id: MessageId(id),
+                sender: persona(actor),
+                recipient: persona(recipient),
+                protocol_version: ProtocolVersion(2),
+                relationship: relation(actor, recipient),
+                content_scope: ContentScopeRef::from_u128_for_test(id),
+                sender_certificate: ContentCertificateDigest([7; 32]),
+                declarations: MessageDeclarations {
+                    purpose: DeclaredPurpose::Known(KnownPurpose::Personal),
+                    origin: OriginDeclaration {
+                        mode: OriginMode::HumanInitiated,
+                        authority: DeclarationAuthority::NativeSender(OperationalKeyRef(
+                            persona(actor).0,
+                        )),
                     },
-                    message_valid_until: MessageValidityUntil(CanonicalTime(100_000)),
-                    capability: self.capability.get(),
+                    payload_schema: None,
                 },
-                (NOW, CanonicalTime(100_000)),
-            )
-            .unwrap()
+                message_valid_until: MessageValidityUntil(CanonicalTime(100_000)),
+                capability: self.capability.get(),
+            },
+            (NOW, CanonicalTime(100_000)),
+        )
+        .unwrap()
     }
     fn view(&self, actor: usize, message: u128) -> MessageView {
         let Response::Message(view) = self.call(
@@ -242,9 +242,12 @@ impl Fixture {
         );
         let manifest = message.manifest.clone();
         self.call(0, Command::Send(Box::new(message)));
-        let document = self.clients[1]
-            .open_correspondence(&self.view(1, 100), self.clients[0].content_public_key())
-            .unwrap();
+        let document = cs_mail_client::correspondence::open(
+            &self.clients[1].endpoint_keys().unwrap(),
+            &self.view(1, 100),
+            self.clients[0].content_public_key(),
+        )
+        .unwrap();
         let anchor = MessageSelection::new(
             MessageId(100),
             manifest.version(),
@@ -375,15 +378,21 @@ fn two_clients_retain_quotes_but_references_do_not_grant_or_restore_access() {
         h.call(1, Command::Resolve { source: anchor }),
         Response::Unavailable
     );
-    let retained = h.clients[1]
-        .open_correspondence(&h.view(1, 101), h.clients[0].content_public_key())
-        .unwrap();
+    let retained = cs_mail_client::correspondence::open(
+        &h.clients[1].endpoint_keys().unwrap(),
+        &h.view(1, 101),
+        h.clients[0].content_public_key(),
+    )
+    .unwrap();
     assert!(
         matches!(&retained.parts()[1], DocumentPart::Quotation(q) if q.blocks() == [ContentBlock::Text("private proposal".into())])
     );
-    let copy = h.clients[2]
-        .open_correspondence(&h.view(2, 102), h.clients[0].content_public_key())
-        .unwrap();
+    let copy = cs_mail_client::correspondence::open(
+        &h.clients[2].endpoint_keys().unwrap(),
+        &h.view(2, 102),
+        h.clients[0].content_public_key(),
+    )
+    .unwrap();
     assert!(
         matches!(&copy.parts()[1], DocumentPart::Share(s) if s.0.blocks() == [ContentBlock::Text("private proposal".into())])
     );
@@ -409,9 +418,12 @@ fn two_clients_retain_quotes_but_references_do_not_grant_or_restore_access() {
     let mut tampered = h.view(1, 101);
     tampered.record.manifest = manifest;
     assert!(
-        h.clients[1]
-            .open_correspondence(&tampered, h.clients[0].content_public_key())
-            .is_err()
+        cs_mail_client::correspondence::open(
+            &h.clients[1].endpoint_keys().unwrap(),
+            &tampered,
+            h.clients[0].content_public_key()
+        )
+        .is_err()
     );
 }
 
@@ -430,9 +442,12 @@ fn current_policy_survives_derivation_deletion_and_conflicting_approvals() {
     let intermediate = h.prepare(0, 1, 101, 2, vec![DocumentPart::Quotation(quote)]);
     let intermediate_manifest = intermediate.manifest.clone();
     h.call(0, Command::Send(Box::new(intermediate)));
-    let document = h.clients[1]
-        .open_correspondence(&h.view(1, 101), h.clients[0].content_public_key())
-        .unwrap();
+    let document = cs_mail_client::correspondence::open(
+        &h.clients[1].endpoint_keys().unwrap(),
+        &h.view(1, 101),
+        h.clients[0].content_public_key(),
+    )
+    .unwrap();
     let selection = MessageSelection::new(
         MessageId(101),
         intermediate_manifest.version(),
@@ -484,9 +499,10 @@ fn current_policy_survives_derivation_deletion_and_conflicting_approvals() {
     let outgoing = h.request(1, Command::Send(Box::new(onward)));
     assert!(matches!(
         CorrespondenceService::new(&h.repository).handle(&outgoing),
-        Err(StorageError::Correspondence(
-            CorrespondenceError::PolicyRestricted
-        ))
+        Ok(Response::Refused {
+            reason: CorrespondenceError::PolicyRestricted,
+            ..
+        })
     ));
     h.call(
         0,
@@ -504,11 +520,10 @@ fn current_policy_survives_derivation_deletion_and_conflicting_approvals() {
             action: PolicyAction::ApproveRelaxation,
         },
     );
-    assert!(
-        CorrespondenceService::new(&h.repository)
-            .handle(&self_approve)
-            .is_err()
-    );
+    assert!(matches!(
+        CorrespondenceService::new(&h.repository).handle(&self_approve),
+        Ok(Response::Refused { .. })
+    ));
     let stale = h.request(
         1,
         Command::ChangePolicy {
@@ -525,11 +540,10 @@ fn current_policy_survives_derivation_deletion_and_conflicting_approvals() {
             action: PolicyAction::Restrict,
         },
     );
-    assert!(
-        CorrespondenceService::new(&h.repository)
-            .handle(&stale)
-            .is_err()
-    );
+    assert!(matches!(
+        CorrespondenceService::new(&h.repository).handle(&stale),
+        Ok(Response::Refused { .. })
+    ));
     h.call(
         0,
         Command::ChangePolicy {
@@ -546,9 +560,19 @@ fn current_policy_survives_derivation_deletion_and_conflicting_approvals() {
             action: PolicyAction::ApproveRelaxation,
         },
     );
+    // A refused operation stays refused after relaxation; a deliberate new operation
+    // may use the newly granted authority without changing the original outcome.
+    assert!(matches!(
+        CorrespondenceService::new(&h.repository).handle(&outgoing),
+        Ok(Response::Refused {
+            reason: CorrespondenceError::PolicyRestricted,
+            ..
+        })
+    ));
+    let renewed = h.request(1, outgoing.command.clone());
     assert_eq!(
         CorrespondenceService::new(&h.repository)
-            .handle(&outgoing)
+            .handle(&renewed)
             .unwrap(),
         Response::Committed(MessageId(102))
     );
@@ -630,7 +654,10 @@ fn concurrent_commits_and_storage_failures_preserve_one_complete_delivery() {
             let receipt:postgres::types::Json<cs_mail_application::correspondence::Receipt>=db.query_one("SELECT receipt FROM cs_correspondence_receipts WHERE account=$1 AND operation=$2",&[&send.account.0.to_string(),&send.operation.0.to_string()]).unwrap().get(0);
             assert_eq!(receipt.0.policy_revisions[&conversation(1)], 0);
         }
-        Err(StorageError::Correspondence(CorrespondenceError::PolicyRestricted)) => {
+        Ok(Response::Refused {
+            reason: CorrespondenceError::PolicyRestricted,
+            ..
+        }) => {
             assert_eq!(
                 db.query_one(
                     "SELECT count(*) FROM cs_correspondence_messages WHERE id='101'",
@@ -791,9 +818,10 @@ fn mailbox_and_live_authority_do_not_inherit_permission_from_correspondence_scop
     let request = h.request(1, Command::Send(Box::new(reply)));
     assert!(matches!(
         CorrespondenceService::new(&h.repository).handle(&request),
-        Err(StorageError::Correspondence(
-            CorrespondenceError::Unauthorized
-        ))
+        Ok(Response::Refused {
+            reason: CorrespondenceError::Unauthorized,
+            ..
+        })
     ));
     exercise_native_lane(&h);
     let late = PostgresAccountRepository::connect(&h.url, || CanonicalTime(100_000)).unwrap();
@@ -876,11 +904,14 @@ fn exercise_native_lane(h: &Fixture) {
         50,
         vec![DocumentPart::Text("missing capability".into())],
     );
-    assert!(
+    assert!(matches!(
         CorrespondenceService::new(&h.repository)
-            .handle(&h.request(1, Command::Send(Box::new(no_capability))))
-            .is_err()
-    );
+            .handle(&h.request(1, Command::Send(Box::new(no_capability)))),
+        Ok(Response::Refused {
+            reason: CorrespondenceError::Unauthorized,
+            ..
+        })
+    ));
     h.capability.set(Some(LaneId(800)));
     let package = h.prepare(1, 0, 802, 50, vec![DocumentPart::Text("permitted".into())]);
     let request = h.request(1, Command::Send(Box::new(package)));
@@ -916,11 +947,10 @@ fn exercise_native_lane(h: &Fixture) {
         1,
         vec![DocumentPart::Text("over allowance".into())],
     );
-    assert!(
-        service
-            .handle(&h.request(1, Command::Send(Box::new(excess))))
-            .is_err()
-    );
+    assert!(matches!(
+        service.handle(&h.request(1, Command::Send(Box::new(excess)))),
+        Ok(Response::Refused { .. })
+    ));
     h.capability.set(None);
 }
 
@@ -980,9 +1010,12 @@ fn mixed_selections_survive_copy_delivery_without_bypassing_source_authority() {
     ) else {
         panic!()
     };
-    let document = h.clients[1]
-        .open_correspondence(&view, h.clients[0].content_public_key())
-        .unwrap();
+    let document = cs_mail_client::correspondence::open(
+        &h.clients[1].endpoint_keys().unwrap(),
+        &view,
+        h.clients[0].content_public_key(),
+    )
+    .unwrap();
     let expected = vec![
         ContentBlock::Text("café".into()),
         ContentBlock::Image(image),
@@ -1019,9 +1052,12 @@ fn mixed_selections_survive_copy_delivery_without_bypassing_source_authority() {
         h.call(1, Command::Resolve { source: selection }),
         Response::Unavailable
     );
-    let retained = h.clients[1]
-        .open_correspondence(&h.view(1, 201), h.clients[0].content_public_key())
-        .unwrap();
+    let retained = cs_mail_client::correspondence::open(
+        &h.clients[1].endpoint_keys().unwrap(),
+        &h.view(1, 201),
+        h.clients[0].content_public_key(),
+    )
+    .unwrap();
     assert!(matches!(&retained.parts()[1],DocumentPart::Quotation(q) if q.blocks()==expected));
     assert!(matches!(&retained.parts()[2],DocumentPart::Share(s) if s.0.blocks()==expected));
     // The reference occupies block 0; the retained quotation's image is block 2.
@@ -1060,9 +1096,10 @@ fn mixed_selections_survive_copy_delivery_without_bypassing_source_authority() {
     assert!(matches!(
         CorrespondenceService::new(&h.repository)
             .handle(&h.request(1, Command::Send(Box::new(onward)))),
-        Err(StorageError::Correspondence(
-            CorrespondenceError::PolicyRestricted
-        ))
+        Ok(Response::Refused {
+            reason: CorrespondenceError::PolicyRestricted,
+            ..
+        })
     ));
 }
 

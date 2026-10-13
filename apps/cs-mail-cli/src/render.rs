@@ -56,6 +56,21 @@ pub fn terms(terms: &RequestTerms) {
     println!(
         "  accept: full refund; reject: C retained, S to the member program; expire: C retained, S refunded; cancel before submission: full refund"
     );
+    if let Some(agreed) = terms.reply_lane.agreed() {
+        let reply = agreed.rate_limit();
+        println!(
+            "  submission permits answers in this conversation until you revoke or block; answering decides nothing"
+        );
+        println!(
+            "  acceptance permits replies across your conversations for {} s, up to {} messages per {} s, purpose {:?}",
+            agreed.lifetime().0 / 1000,
+            reply.max_messages,
+            reply.interval.0 / 1000,
+            agreed.purpose()
+        );
+    } else {
+        println!("Reply permission was not offered in this request.");
+    }
 }
 
 fn lifecycle(lifecycle: &RequestLifecycle) -> String {

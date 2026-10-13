@@ -3,6 +3,7 @@ use cs_mail_test_support as support;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
+use cs_mail_application::receipts::DurableExecutionOutcome;
 use cs_mail_capabilities::{
     AdmissionAuthentication, BondFreeAdmission, DeclarationAuthorityConstraint, LaneEvidence,
     LaneGrant, LaneMode, LaneState, LaneSubject, RateLimit, SignedLaneGrant,
@@ -28,8 +29,7 @@ use cs_mail_security::{
     CommandSigner, KeyRegistry, ProviderSigner, SignedCommandBytes, SigningScope,
 };
 use cs_mail_storage_postgres::{
-    DurableExecutionOutcome, PostgresDeployment, PostgresEngine, RelationshipQueue, StorageError,
-    WorkClaims,
+    PostgresDeployment, PostgresEngine, RelationshipQueue, StorageError, WorkClaims,
 };
 use ed25519_dalek::{Signer, SigningKey};
 
@@ -79,6 +79,19 @@ fn state(attempt_seed: u128) -> ProtocolState {
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
+        reply_lane: cs_mail_capabilities::reply::ReplyLaneTerms::new(
+            cs_mail_capabilities::reply::ReplyTermsRecord {
+                lifetime: cs_mail_primitives::Duration(604_800_000),
+                rate_limit: cs_mail_capabilities::RateLimit {
+                    max_messages: 20,
+                    interval: cs_mail_primitives::Duration(86_400_000),
+                },
+                purpose: cs_mail_primitives::DeclaredPurpose::Known(
+                    cs_mail_primitives::KnownPurpose::Personal,
+                ),
+            },
+        )
+        .unwrap(),
         protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
         privacy_profile_version: PrivacyProfileVersion(1),
@@ -198,8 +211,10 @@ impl TestExecute for PostgresEngine {
         let outcome = self.process_received(&handle)?;
         self.sign_artifacts_batch(&provider_signer(), test_time(0), Duration(30_000), 100)?;
         match outcome {
-            cs_mail_storage_postgres::ReceivedOutcome::Protocol(o) => Ok(*o),
-            cs_mail_storage_postgres::ReceivedOutcome::Refused(e) => Err(e.into_error()),
+            cs_mail_application::receipts::ReceivedOutcome::Protocol(o) => Ok(*o),
+            cs_mail_application::receipts::ReceivedOutcome::Refused(e) => {
+                Err(cs_mail_storage_postgres::StorageError::from(e))
+            }
             _ => unreachable!(),
         }
     }
@@ -262,35 +277,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
             policy(),
         )
         .unwrap();
-    let (sender_content_key, _) = EndpointSecretKey::generate(ContentKeyRef(2));
-    let (_, recipient_key) = EndpointSecretKey::generate(ContentKeyRef(1));
-    engine
-        .store_trusted_content(
-            &encrypt(
-                &sender_content_key,
-                recipient_key,
-                ContentBinding {
-                    wire_version: WireVersion(1),
-                    content_ref: ContentRef(1),
-                    message_id: MessageId(1),
-                    sender: SENDER,
-                    recipient: RECIPIENT,
-                    protocol_version: ProtocolVersion(2),
-                    relationship: RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
-                    content_scope: ContentScopeRef::from_u128_for_test(1),
-                    sender_certificate: ContentCertificateDigest([1; 32]),
-                    declarations: native_declarations(),
-                    message_valid_until: MessageValidityUntil(test_time(1_000)),
-                    capability: None,
-                },
-                b"encrypted before upload",
-                test_time(2),
-                test_time(1_000),
-            )
-            .unwrap(),
-            cs_mail_primitives::RetentionPolicyVersion(1),
-        )
-        .unwrap();
+    stage_native_request(&engine, native_declarations(), test_time(1_000));
     confirm_capture(&engine, RequestId(1), 2);
     let admission = sender(
         ProtocolCommand::SubmitRequestToRecipient {
@@ -322,7 +309,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
             10,
         )
         .unwrap();
-    assert_eq!(claimed.len(), 2);
+    assert_eq!(claimed.len(), 1);
     assert!(claimed.iter().any(|item| matches!(
         item.payload,
         cs_mail_storage_postgres::WorkPayload::Effect(
@@ -348,7 +335,7 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
             10,
         )
         .unwrap();
-    assert_eq!(reclaimed.len(), 2);
+    assert_eq!(reclaimed.len(), 1);
     assert!(engine.complete_work(&reclaimed[0], test_time(15)).unwrap());
 
     drop(engine);
@@ -489,7 +476,7 @@ fn admission_requires_durable_correctly_scoped_ciphertext() {
     engine
         .store_trusted_content(&record, cs_mail_primitives::RetentionPolicyVersion(1))
         .unwrap();
-    let cs_mail_storage_postgres::ReceivedOutcome::Protocol(refusal) =
+    let cs_mail_application::receipts::ReceivedOutcome::Protocol(refusal) =
         engine.process_received(&handle).unwrap()
     else {
         panic!("expected cancellation")
@@ -563,7 +550,9 @@ fn signed_lane_grant() -> SignedLaneGrant {
     let recipient_signing = SigningKey::from_bytes(&[2; 32]);
     let grant = LaneGrant {
         id: LaneId(90),
-        subject: LaneSubject::Native(cs_mail_privacy::ScopedHandle([1; 32])),
+        subject: LaneSubject::Native(cs_mail_privacy::ScopedHandle(
+            *signing_scope().relationship.as_bytes(),
+        )),
         sender: SENDER,
         recipient: RECIPIENT,
         protocol_version: ProtocolVersion(2),
@@ -595,178 +584,218 @@ fn signed_lane_grant() -> SignedLaneGrant {
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 #[allow(clippy::too_many_lines)]
-fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_block() {
-    let url = database_url();
-    let engine = PostgresDeployment::connect(&url)
-        .unwrap()
-        .relationship(aggregate_key("lane"), &state(4), UNIT)
-        .unwrap();
-    let signed = signed_lane_grant();
-    exercise_lane_settlement(&signed);
-    support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
-    engine
-        .configure_ingress(
-            DEPLOYMENT_DOMAIN,
-            &policy(),
-            &cs_mail_protocol::admission::AdmissionPolicy::default(),
-        )
-        .unwrap();
-    let handle = engine
-        .receive_grant(
-            &signed,
-            IdempotencyKey(90),
-            DEPLOYMENT_DOMAIN,
-            || test_time(1),
-            policy(),
-        )
-        .unwrap();
-    assert!(matches!(
-        engine.process_received(&handle).unwrap(),
-        cs_mail_storage_postgres::ReceivedOutcome::Lane(_)
-    ));
-
-    let (sender_content_key, _) = EndpointSecretKey::generate(ContentKeyRef(90));
-    let (_, recipient_content_key) = EndpointSecretKey::generate(ContentKeyRef(91));
-    engine
-        .store_trusted_content(
-            &encrypt(
-                &sender_content_key,
-                recipient_content_key,
-                ContentBinding {
-                    wire_version: WireVersion(1),
-                    content_ref: ContentRef(90),
-                    message_id: MessageId(90),
-                    sender: SENDER,
-                    recipient: RECIPIENT,
-                    protocol_version: ProtocolVersion(2),
-                    relationship: RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
-                    content_scope: ContentScopeRef::from_u128_for_test(90),
-                    sender_certificate: ContentCertificateDigest([1; 32]),
-                    declarations: native_declarations(),
-                    message_valid_until: MessageValidityUntil(test_time(1_000)),
-                    capability: Some(LaneId(90)),
-                },
-                b"lane ciphertext",
-                test_time(1),
-                test_time(1_000),
+fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_relationship_control() {
+    // Claim: ending standing access cannot leave a retained lane usable; failure
+    // must preserve both original permissions and the original retry identity.
+    exercise_lane_settlement(&signed_lane_grant());
+    for (revoke, standing) in [(false, true), (true, true), (true, false)] {
+        let url = database_url();
+        let engine = PostgresDeployment::connect(&url)
+            .unwrap()
+            .relationship(aggregate_key("lane"), &state(4), UNIT)
+            .unwrap();
+        let signed = signed_lane_grant();
+        support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
+        engine
+            .configure_ingress(
+                DEPLOYMENT_DOMAIN,
+                &policy(),
+                &cs_mail_protocol::admission::AdmissionPolicy::default(),
             )
-            .unwrap(),
-            cs_mail_primitives::RetentionPolicyVersion(1),
-        )
-        .unwrap();
-    let evidence = LaneEvidence::Native(cs_mail_privacy::ScopedHandle([1; 32]));
-    let admission = BondFreeAdmission {
-        wire_version: WireVersion(1),
-        sender: SENDER,
-        recipient: RECIPIENT,
-        message_id: MessageId(90),
-        content_ref: ContentRef(90),
-        delivery_intent_ref: DeliveryIntentRef(90),
-        declarations: native_declarations(),
-        message_valid_until: MessageValidityUntil(test_time(1_000)),
-        capability: Some(LaneId(90)),
-        evidence: Some(evidence),
-        idempotency_key: IdempotencyKey(91),
-        protocol_version: ProtocolVersion(2),
-        deployment_domain: DEPLOYMENT_DOMAIN,
-        intended_provider: PROVIDER,
-        authentication: AdmissionAuthentication::NativeKey(OperationalKeyRef(1)),
-    };
-    assert!(
-        !sign_and_admit(&engine, &admission, test_time(2))
-            .unwrap()
-            .replayed
-    );
-    assert!(
-        sign_and_admit(&engine, &admission, test_time(3))
-            .unwrap()
-            .replayed
-    );
-    assert_eq!(engine.lane().unwrap().unwrap().messages_in_rate_window(), 1);
-
-    engine
-        .execute(
-            recipient(
-                ProtocolCommand::AcceptRelationship {
-                    expected_version: Version(1),
-                },
-                94,
-            ),
-            test_time(3),
-            policy(),
-        )
-        .unwrap();
-    let (_, second_recipient_content_key) = EndpointSecretKey::generate(ContentKeyRef(92));
-    engine
-        .store_trusted_content(
-            &encrypt(
-                &sender_content_key,
-                second_recipient_content_key,
-                ContentBinding {
-                    wire_version: WireVersion(1),
-                    content_ref: ContentRef(91),
-                    message_id: MessageId(91),
-                    sender: SENDER,
-                    recipient: RECIPIENT,
-                    protocol_version: ProtocolVersion(2),
-                    relationship: RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
-                    content_scope: ContentScopeRef::from_u128_for_test(91),
-                    sender_certificate: ContentCertificateDigest([1; 32]),
-                    declarations: native_declarations(),
-                    message_valid_until: MessageValidityUntil(test_time(1_000)),
-                    capability: None,
-                },
-                b"accepted ciphertext",
-                test_time(3),
-                test_time(1_000),
+            .unwrap();
+        let handle = engine
+            .receive_grant(
+                &signed,
+                IdempotencyKey(90),
+                DEPLOYMENT_DOMAIN,
+                || test_time(1),
+                policy(),
             )
-            .unwrap(),
-            cs_mail_primitives::RetentionPolicyVersion(1),
-        )
-        .unwrap();
-    let accepted_admission = BondFreeAdmission {
-        wire_version: WireVersion(1),
-        sender: SENDER,
-        recipient: RECIPIENT,
-        message_id: MessageId(91),
-        content_ref: ContentRef(91),
-        delivery_intent_ref: DeliveryIntentRef(91),
-        declarations: native_declarations(),
-        message_valid_until: MessageValidityUntil(test_time(1_000)),
-        capability: None,
-        evidence: None,
-        idempotency_key: IdempotencyKey(95),
-        protocol_version: ProtocolVersion(2),
-        deployment_domain: DEPLOYMENT_DOMAIN,
-        intended_provider: PROVIDER,
-        authentication: AdmissionAuthentication::NativeKey(OperationalKeyRef(1)),
-    };
-    assert!(matches!(
-        sign_and_admit(&engine, &accepted_admission, test_time(3))
-            .unwrap()
-            .authority,
-        cs_mail_storage_postgres::BondFreeAuthority::AcceptedRelationship
-    ));
+            .unwrap();
+        assert!(matches!(
+            engine.process_received(&handle).unwrap(),
+            cs_mail_application::receipts::ReceivedOutcome::Lane(_)
+        ));
 
-    engine
-        .execute(
-            recipient(
+        let evidence = LaneEvidence::Native(cs_mail_privacy::ScopedHandle([1; 32]));
+        let admission = BondFreeAdmission {
+            wire_version: WireVersion(1),
+            sender: SENDER,
+            recipient: RECIPIENT,
+            message_id: MessageId(90),
+            content_ref: ContentRef(90),
+            delivery_intent_ref: DeliveryIntentRef(90),
+            declarations: native_declarations(),
+            message_valid_until: MessageValidityUntil(test_time(1_000)),
+            capability: Some(LaneId(90)),
+            evidence: Some(evidence),
+            idempotency_key: IdempotencyKey(91),
+            protocol_version: ProtocolVersion(2),
+            deployment_domain: DEPLOYMENT_DOMAIN,
+            intended_provider: PROVIDER,
+            authentication: AdmissionAuthentication::NativeKey(OperationalKeyRef(1)),
+        };
+        let packet = native_send_packet(&engine, &admission, test_time(2));
+        assert_eq!(
+            execute_native(&engine, &packet, test_time(2)).unwrap(),
+            cs_mail_application::correspondence::Response::Committed(MessageId(90))
+        );
+        assert_eq!(
+            execute_native(&engine, &packet, test_time(3)).unwrap(),
+            cs_mail_application::correspondence::Response::Committed(MessageId(90))
+        );
+        assert_eq!(engine.lane().unwrap().unwrap().messages_in_rate_window(), 1);
+
+        if standing {
+            engine
+                .execute(
+                    recipient(
+                        ProtocolCommand::AcceptRelationship {
+                            expected_version: Version(1),
+                        },
+                        94,
+                    ),
+                    test_time(3),
+                    policy(),
+                )
+                .unwrap();
+        }
+        let accepted_admission = BondFreeAdmission {
+            wire_version: WireVersion(1),
+            sender: SENDER,
+            recipient: RECIPIENT,
+            message_id: MessageId(91),
+            content_ref: ContentRef(91),
+            delivery_intent_ref: DeliveryIntentRef(91),
+            declarations: native_declarations(),
+            message_valid_until: MessageValidityUntil(test_time(1_000)),
+            capability: None,
+            evidence: None,
+            idempotency_key: IdempotencyKey(95),
+            protocol_version: ProtocolVersion(2),
+            deployment_domain: DEPLOYMENT_DOMAIN,
+            intended_provider: PROVIDER,
+            authentication: AdmissionAuthentication::NativeKey(OperationalKeyRef(1)),
+        };
+        if standing {
+            let packet = native_send_packet(&engine, &accepted_admission, test_time(3));
+            assert_eq!(
+                execute_native(&engine, &packet, test_time(3)).unwrap(),
+                cs_mail_application::correspondence::Response::Committed(MessageId(91))
+            );
+        }
+        let mut blocked = admission.clone();
+        blocked.idempotency_key = IdempotencyKey(93);
+        blocked.message_id = MessageId(93);
+        blocked.content_ref = ContentRef(93);
+        let waiting = native_send_packet(&engine, &blocked, test_time(3));
+        let control = recipient(
+            if revoke {
+                ProtocolCommand::RevokeRelationship {
+                    expected_version: Version(if standing { 2 } else { 1 }),
+                }
+            } else {
                 ProtocolCommand::BlockRelationship {
-                    expected_version: Version(2),
+                    expected_version: Version(if standing { 2 } else { 1 }),
+                }
+            },
+            92,
+        );
+        let handle = engine
+            .receive_signed(&control, DEPLOYMENT_DOMAIN, || test_time(4), policy())
+            .unwrap();
+        let before = engine.snapshot().unwrap();
+        let lane_before = engine.lane().unwrap().unwrap();
+        let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+        db.batch_execute("CREATE FUNCTION fail_termination() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected termination failure'; END $$; CREATE TRIGGER fail_termination BEFORE INSERT ON cs_capability_events FOR EACH ROW EXECUTE FUNCTION fail_termination();").unwrap();
+        assert!(engine.process_received(&handle).is_err());
+        assert_eq!(engine.snapshot().unwrap(), before);
+        assert_eq!(engine.lane().unwrap().unwrap(), lane_before);
+        db.batch_execute("DROP TRIGGER fail_termination ON cs_capability_events; DROP FUNCTION fail_termination();").unwrap();
+        assert!(matches!(
+            engine.process_received(&handle).unwrap(),
+            cs_mail_application::receipts::ReceivedOutcome::Protocol(_)
+        ));
+        assert!(
+            engine
+                .execute(control, test_time(4), policy())
+                .unwrap()
+                .replayed
+        );
+        assert_eq!(engine.lane().unwrap().unwrap().state(), LaneState::Revoked);
+        assert!(matches!(
+            execute_native(&engine, &waiting, test_time(5)),
+            Ok(cs_mail_application::correspondence::Response::Refused {
+                reason: cs_mail_correspondence::CorrespondenceError::Unauthorized,
+                ..
+            })
+        ));
+        let terms = engine.execute(
+            sender(
+                ProtocolCommand::IssueRequestTerms {
+                    class_id: cs_mail_primitives::RequestClassId(1),
+                    quote_id: QuoteId(99),
+                    declaration_digest: None,
                 },
-                92,
+                99,
             ),
-            test_time(4),
+            test_time(5),
             policy(),
-        )
-        .unwrap();
-    assert_eq!(engine.lane().unwrap().unwrap().state(), LaneState::Revoked);
-    let mut blocked = admission;
-    blocked.idempotency_key = IdempotencyKey(93);
-    assert!(matches!(
-        sign_and_admit(&engine, &blocked, test_time(5)),
-        Err(StorageError::Protocol(ProtocolError::ContactBlocked))
-    ));
+        );
+        if revoke {
+            assert!(matches!(
+                terms.unwrap().transition.terms_outcome,
+                Some(TermsOutcome::ChargeRequired(_))
+            ));
+        } else {
+            assert!(matches!(
+                terms,
+                Err(StorageError::Protocol(ProtocolError::ContactBlocked))
+            ));
+            engine
+                .execute(
+                    recipient(
+                        ProtocolCommand::UnblockRelationship {
+                            expected_version: Version(3),
+                        },
+                        96,
+                    ),
+                    test_time(6),
+                    policy(),
+                )
+                .unwrap();
+        }
+        // Replaying historical grant evidence must not restore a terminated route.
+        let replay = engine
+            .receive_grant(
+                &signed,
+                IdempotencyKey(90),
+                DEPLOYMENT_DOMAIN,
+                || test_time(6),
+                policy(),
+            )
+            .unwrap();
+        engine.process_received(&replay).unwrap();
+        assert_eq!(engine.lane().unwrap().unwrap().state(), LaneState::Revoked);
+        let terms = engine
+            .execute(
+                sender(
+                    ProtocolCommand::IssueRequestTerms {
+                        class_id: cs_mail_primitives::RequestClassId(1),
+                        quote_id: QuoteId(100),
+                        declaration_digest: None,
+                    },
+                    100,
+                ),
+                test_time(6),
+                policy(),
+            )
+            .unwrap();
+        assert!(matches!(
+            terms.transition.terms_outcome,
+            Some(TermsOutcome::ChargeRequired(_))
+        ));
+    }
 }
 
 // Claim: granting access commits its refund atomically, including preparation and
@@ -836,7 +865,7 @@ fn exercise_lane_settlement(signed: &SignedLaneGrant) {
         }
         assert!(matches!(
             engine.process_received(&handle).unwrap(),
-            cs_mail_storage_postgres::ReceivedOutcome::Lane(_)
+            cs_mail_application::receipts::ReceivedOutcome::Lane(_)
         ));
         let snapshot = engine.snapshot().unwrap();
         assert_eq!(
@@ -939,35 +968,7 @@ fn submit_initial_request(engine: &PostgresEngine) {
             policy(),
         )
         .unwrap();
-    let (sender_content_key, _) = EndpointSecretKey::generate(ContentKeyRef(2));
-    let (_, recipient_key) = EndpointSecretKey::generate(ContentKeyRef(1));
-    engine
-        .store_trusted_content(
-            &encrypt(
-                &sender_content_key,
-                recipient_key,
-                ContentBinding {
-                    wire_version: WireVersion(1),
-                    content_ref: ContentRef(1),
-                    message_id: MessageId(1),
-                    sender: SENDER,
-                    recipient: RECIPIENT,
-                    protocol_version: ProtocolVersion(2),
-                    relationship: RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
-                    content_scope: ContentScopeRef::from_u128_for_test(1),
-                    sender_certificate: ContentCertificateDigest([1; 32]),
-                    declarations: native_declarations(),
-                    message_valid_until: MessageValidityUntil(test_time(1_000)),
-                    capability: None,
-                },
-                b"encrypted before upload",
-                test_time(2),
-                test_time(1_000),
-            )
-            .unwrap(),
-            cs_mail_primitives::RetentionPolicyVersion(1),
-        )
-        .unwrap();
+    stage_native_request(engine, native_declarations(), test_time(1_000));
     confirm_capture(engine, RequestId(1), 2);
     let admission = sender(
         ProtocolCommand::SubmitRequestToRecipient {
@@ -1366,7 +1367,12 @@ fn domain_owners_are_separate_and_history_survives_alias_registration() {
     assert!(second.snapshot().unwrap().payments.is_empty());
     let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
     let count: i64 = db
-        .query_one("SELECT count(*) FROM cs_request_histories", &[])
+        .query_one(
+            "SELECT count(*) FROM cs_request_histories WHERE history_state->'reference'=$1",
+            &[&postgres::types::Json(
+                first.snapshot().unwrap().history.reference,
+            )],
+        )
         .unwrap()
         .get(0);
     assert_eq!(count, 1);
@@ -1399,31 +1405,12 @@ fn domain_owners_are_separate_and_history_survives_alias_registration() {
     ));
 }
 
-fn sign_and_admit(
-    engine: &PostgresEngine,
-    admission: &BondFreeAdmission,
-    now: CanonicalTime,
-) -> Result<cs_mail_storage_postgres::BondFreeAdmissionOutcome, StorageError> {
-    let signed = cs_mail_capabilities::SignedBondFreeAdmission {
-        admission: admission.clone(),
-        signature: SigningKey::from_bytes(&[1; 32])
-            .sign(&admission.signing_bytes().unwrap())
-            .to_bytes(),
-    };
-    let handle = engine.receive_message(&signed, DEPLOYMENT_DOMAIN, || now, policy())?;
-    match engine.process_received(&handle)? {
-        cs_mail_storage_postgres::ReceivedOutcome::Message(o) => Ok(o),
-        cs_mail_storage_postgres::ReceivedOutcome::Refused(e) => Err(e.into_error()),
-        _ => unreachable!(),
-    }
-}
-
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 #[allow(clippy::too_many_lines)] // One ordered receipt, expiry and restart scenario.
 fn receipt_survives_restart_and_timely_decision_precedes_queued_expiry() {
+    use cs_mail_application::receipts::ReceivedOutcome;
     use cs_mail_security::ReceiptKind;
-    use cs_mail_storage_postgres::ReceivedOutcome;
     use sha2::Digest;
     let url = database_url();
     let key = aggregate_key("received-order");
@@ -1600,7 +1587,7 @@ fn detached_verification_cannot_cross_durable_revocation_and_refusals_have_recei
         .unwrap();
     assert!(matches!(
         engine.process_received(&handle).unwrap(),
-        cs_mail_storage_postgres::ReceivedOutcome::Refused(_)
+        cs_mail_application::receipts::ReceivedOutcome::Refused(_)
     ));
     // The signer authority was pinned at receipt; later key revocation cannot erase this work.
     engine
@@ -1677,33 +1664,7 @@ fn policy_change_after_upload_cancels_submission_with_void_or_full_refund() {
             criticality: ExtensionCriticality::Critical,
         });
         supported.evaluate(&declarations).unwrap();
-        let (secret, _) = EndpointSecretKey::generate(ContentKeyRef(1));
-        let (_, public) = EndpointSecretKey::generate(ContentKeyRef(2));
-        let record = encrypt(
-            &secret,
-            public,
-            ContentBinding {
-                wire_version: WireVersion(1),
-                content_ref: ContentRef(1),
-                message_id: MessageId(1),
-                sender: SENDER,
-                recipient: RECIPIENT,
-                protocol_version: ProtocolVersion(2),
-                relationship: signing_scope().relationship,
-                content_scope: ContentScopeRef::from_u128_for_test(1),
-                sender_certificate: ContentCertificateDigest([1; 32]),
-                declarations: declarations.clone(),
-                message_valid_until: MessageValidityUntil(test_time(100)),
-                capability: None,
-            },
-            b"ciphertext",
-            test_time(2),
-            test_time(100),
-        )
-        .unwrap();
-        engine
-            .store_trusted_content(&record, RetentionPolicyVersion(1))
-            .unwrap();
+        stage_native_request(&engine, declarations.clone(), test_time(100));
         engine
             .configure_admission_policy(&AdmissionPolicy {
                 version: Version(2),
@@ -1740,7 +1701,7 @@ fn policy_change_after_upload_cancels_submission_with_void_or_full_refund() {
             .unwrap();
         let outcome = engine.process_received(&handle).unwrap();
         assert!(
-            matches!(outcome,cs_mail_storage_postgres::ReceivedOutcome::Protocol(ref o) if o.admission_failure==Some(AdmissionFailure::UnsupportedCriticalExtension))
+            matches!(outcome,cs_mail_application::receipts::ReceivedOutcome::Protocol(ref o) if o.admission_failure==Some(AdmissionFailure::UnsupportedCriticalExtension))
         );
         let snapshot = engine.snapshot().unwrap();
         assert!(matches!(
@@ -1773,9 +1734,9 @@ fn policy_change_after_upload_cancels_submission_with_void_or_full_refund() {
         assert_eq!(
             engine.process_received(&replay).unwrap(),
             match outcome {
-                cs_mail_storage_postgres::ReceivedOutcome::Protocol(mut o) => {
+                cs_mail_application::receipts::ReceivedOutcome::Protocol(mut o) => {
                     o.replayed = true;
-                    cs_mail_storage_postgres::ReceivedOutcome::Protocol(o)
+                    cs_mail_application::receipts::ReceivedOutcome::Protocol(o)
                 }
                 _ => unreachable!(),
             }
@@ -1836,7 +1797,7 @@ fn issued_quote_remains_bound_to_its_original_signing_authority() {
         .unwrap();
     assert!(matches!(
         engine.process_received(&handle).unwrap(),
-        cs_mail_storage_postgres::ReceivedOutcome::Protocol(_)
+        cs_mail_application::receipts::ReceivedOutcome::Protocol(_)
     ));
     engine
         .sign_artifacts_batch(&replacement, test_time(0), Duration(30_000), 100)
@@ -1980,8 +1941,9 @@ fn reclaimed_work_fences_stale_completion_retry_and_foreign_engines() {
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 #[allow(clippy::too_many_lines)] // One end-to-end recovery sequence.
 fn request_erasure_preserves_pending_refunds_and_receipt_replay_identity() {
+    use cs_mail_application::receipts::ReceivedOutcome;
     use cs_mail_finance::PaymentProcessor;
-    use cs_mail_storage_postgres::{LifecyclePolicy, ReceivedOutcome};
+    use cs_mail_storage_postgres::LifecyclePolicy;
     let url = database_url();
     let key = aggregate_key("erasure");
     let engine = PostgresDeployment::connect(&url)
@@ -2185,7 +2147,7 @@ fn ciphertext_retention_honors_extended_deadlines_and_scoped_holds() {
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
-    use cs_mail_storage_postgres::ReceivedOutcome;
+    use cs_mail_application::receipts::ReceivedOutcome;
     let url = database_url();
     let key = aggregate_key("atomic-work");
     let engine = PostgresDeployment::connect(&url)
@@ -2262,7 +2224,8 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
-    use cs_mail_storage_postgres::{LifecyclePolicy, ReceivedOutcome};
+    use cs_mail_application::receipts::ReceivedOutcome;
+    use cs_mail_storage_postgres::LifecyclePolicy;
     let url = database_url();
     let engine = PostgresDeployment::connect(&url)
         .unwrap()
@@ -2864,7 +2827,7 @@ fn restored_grant_rechecks_signed_evidence_using_frozen_authority() {
     ));
     assert!(matches!(
         engine.process_received(&handle).unwrap(),
-        cs_mail_storage_postgres::ReceivedOutcome::Lane(_)
+        cs_mail_application::receipts::ReceivedOutcome::Lane(_)
     ));
     assert_eq!(engine.lane().unwrap().unwrap().grant(), &signed.grant);
     assert!(
@@ -2875,4 +2838,133 @@ fn restored_grant_rechecks_signed_evidence_using_frozen_authority() {
         .unwrap()
         .get::<_, bool>(0)
     );
+}
+
+fn stage_native_request(
+    engine: &PostgresEngine,
+    declarations: MessageDeclarations,
+    until: CanonicalTime,
+) {
+    support::requests::stage_request_message(
+        engine,
+        &policy(),
+        DEPLOYMENT_DOMAIN,
+        &support::requests::StagedMessage {
+            request: RequestId(1),
+            message: MessageId(1),
+            content: ContentRef(1),
+            conversation: 1,
+            sender_key: OperationalKeyRef(1),
+            sender_secret: [1; 32],
+            declarations,
+            created: test_time(2),
+            valid_until: MessageValidityUntil(until),
+            text: "encrypted before upload",
+        },
+    )
+    .unwrap();
+}
+
+fn native_command(
+    engine: &PostgresEngine,
+    operation: u128,
+    command: cs_mail_application::correspondence::Command,
+    at: CanonicalTime,
+) -> cs_mail_application::correspondence::SignedRequest {
+    cs_mail_application::correspondence::SignedRequest {
+        product: "cs-mail/test".into(),
+        account: engine
+            .deployment()
+            .accounts(move || at)
+            .persona_account(SENDER)
+            .unwrap(),
+        persona: SENDER,
+        key: OperationalKeyRef(1),
+        operation: IdempotencyKey(operation),
+        command,
+        signature: vec![],
+    }
+    .sign(&[1; 32])
+    .unwrap()
+}
+fn execute_native(
+    engine: &PostgresEngine,
+    packet: &cs_mail_application::correspondence::SignedRequest,
+    at: CanonicalTime,
+) -> Result<cs_mail_application::correspondence::Response, StorageError> {
+    cs_mail_application::correspondence::CorrespondenceService::new(
+        &engine.deployment().accounts(move || at),
+    )
+    .handle(packet)
+}
+fn native_send_packet(
+    engine: &PostgresEngine,
+    admission: &BondFreeAdmission,
+    at: CanonicalTime,
+) -> cs_mail_application::correspondence::SignedRequest {
+    use cs_mail_application::correspondence::Command;
+    let (_, custody) = EndpointSecretKey::from_secret_bytes(ContentKeyRef(900), &[90; 32]).unwrap();
+    engine
+        .deployment()
+        .accounts(move || at)
+        .configure_custody(custody)
+        .unwrap();
+    let conversation = cs_mail_correspondence::ConversationId::new(90).unwrap();
+    execute_native(
+        engine,
+        &native_command(
+            engine,
+            89_000,
+            Command::Create {
+                id: conversation,
+                other: RECIPIENT,
+            },
+            at,
+        ),
+        at,
+    )
+    .unwrap();
+    let (secret, public) =
+        EndpointSecretKey::from_secret_bytes(ContentKeyRef(2), &[1; 32]).unwrap();
+    let recipient = EndpointSecretKey::from_secret_bytes(ContentKeyRef(1), &[41; 32])
+        .unwrap()
+        .1;
+    let document =
+        cs_mail_client::correspondence::compose(vec![cs_mail_correspondence::DocumentPart::Text(
+            "native ciphertext".into(),
+        )])
+        .unwrap();
+    let packet = cs_mail_client::correspondence::prepare(
+        &cs_mail_client::correspondence::EndpointKeys {
+            owner: SENDER,
+            secret: &secret,
+            public,
+        },
+        &document,
+        conversation,
+        recipient,
+        custody,
+        ContentBinding {
+            wire_version: WireVersion(1),
+            content_ref: admission.content_ref,
+            message_id: admission.message_id,
+            sender: SENDER,
+            recipient: RECIPIENT,
+            protocol_version: ProtocolVersion(2),
+            relationship: signing_scope().relationship,
+            content_scope: ContentScopeRef::from_u128_for_test(admission.content_ref.0),
+            sender_certificate: ContentCertificateDigest([0; 32]),
+            declarations: admission.declarations.clone(),
+            message_valid_until: admission.message_valid_until,
+            capability: admission.capability,
+        },
+        (at, admission.message_valid_until.0),
+    )
+    .unwrap();
+    native_command(
+        engine,
+        admission.idempotency_key.0,
+        Command::Send(Box::new(packet)),
+        at,
+    )
 }

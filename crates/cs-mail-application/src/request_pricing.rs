@@ -149,30 +149,63 @@ impl<'a, R: RequestPricingStore> RequestPricingService<'a, R> {
     ) -> Result<(), R::Error> {
         self.repository.transact_request_classes(signed, |context| {
             let now = clock();
-            if signed.scope != expected {
-                return Err(SecurityError::SigningScopeMismatch.into());
-            }
-            let key = context.authority.active_verifying_key(
-                signed.operational_key,
-                ActorRef::Recipient(signed.classes.recipient()),
-                now,
-            )?;
-            signed.verify(&key)?;
-            let policy = context.policy.ok_or(ProtocolError::PolicyInvalid)?;
-            if !policy.permits(&signed.classes) {
-                return Err(ProtocolError::RequestClassOutsidePolicy.into());
-            }
-            if let Some(old) = context.current {
-                if old == signed.classes {
-                    return Ok(ClassesPublicationDecision { next: None });
-                }
-                if signed.classes.version() <= old.version() {
-                    return Err(ProtocolError::VersionConflict.into());
-                }
-            }
-            Ok(ClassesPublicationDecision {
-                next: Some((signed.classes.clone(), now)),
+            decide_classes(signed, expected, context, now).map_err(|error| match error {
+                ClassesError::Protocol(e) => e.into(),
+                ClassesError::Security(e) => e.into(),
             })
         })
+    }
+}
+
+/// The single class-publication decision, also used by atomic address setup.
+/// # Errors
+/// Rejects foreign authority, invalid bounds, stale versions and altered publications.
+pub fn decide_classes(
+    signed: &SignedRequestClasses,
+    expected: RecipientSigningScope,
+    context: ClassesPublicationContext,
+    now: CanonicalTime,
+) -> Result<ClassesPublicationDecision, ClassesError> {
+    if signed.scope != expected {
+        return Err(SecurityError::SigningScopeMismatch.into());
+    }
+    let key = context.authority.active_verifying_key(
+        signed.operational_key,
+        ActorRef::Recipient(signed.classes.recipient()),
+        now,
+    )?;
+    signed.verify(&key)?;
+    let policy = context
+        .policy
+        .ok_or(ClassesError::Protocol(ProtocolError::PolicyInvalid))?;
+    if !policy.permits(&signed.classes) {
+        return Err(ProtocolError::RequestClassOutsidePolicy.into());
+    }
+    if let Some(old) = context.current {
+        if old == signed.classes {
+            return Ok(ClassesPublicationDecision { next: None });
+        }
+        if signed.classes.version() <= old.version() {
+            return Err(ProtocolError::VersionConflict.into());
+        }
+    }
+    Ok(ClassesPublicationDecision {
+        next: Some((signed.classes.clone(), now)),
+    })
+}
+
+#[derive(Debug)]
+pub enum ClassesError {
+    Protocol(ProtocolError),
+    Security(SecurityError),
+}
+impl From<ProtocolError> for ClassesError {
+    fn from(e: ProtocolError) -> Self {
+        Self::Protocol(e)
+    }
+}
+impl From<SecurityError> for ClassesError {
+    fn from(e: SecurityError) -> Self {
+        Self::Security(e)
     }
 }

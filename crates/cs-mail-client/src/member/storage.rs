@@ -7,7 +7,7 @@ use chacha20poly1305::{
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-const CONTEXT: &[u8] = b"cs-mail/apple-member-cache/v1";
+const CONTEXT: &[u8] = b"cs-mail/apple-member-cache/v3";
 
 /// The host must hold exclusive ownership of this store for the client's lifetime.
 /// Cache replacement must be durable and atomic, including on process termination.
@@ -71,7 +71,7 @@ pub(super) fn open_device(store: &dyn DeviceStore, keys: &Secrets) -> Result<Dev
             .map_err(|_| Error::InvalidData)?,
     );
     let state: DeviceState = serde_json::from_slice(&plain).map_err(|_| Error::InvalidData)?;
-    if matches!(&state, DeviceState::Active(s) if s.format != 1) {
+    if matches!(&state, DeviceState::Active(s) if s.format != 3) {
         return Err(Error::InvalidData);
     }
     Ok(state)

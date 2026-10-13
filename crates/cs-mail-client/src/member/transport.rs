@@ -80,6 +80,9 @@ impl Transport for HttpTransport {
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(Error::Unauthorized);
         }
+        if response.status() == reqwest::StatusCode::NOT_FOUND && route == "v1/directory/lookup" {
+            return Err(Error::AddressUnavailable);
+        }
         if !response.status().is_success() {
             return Err(Error::Unavailable);
         }

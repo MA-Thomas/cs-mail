@@ -14,6 +14,7 @@ use std::fmt;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CorrespondenceError {
+    AdmissionRefused(cs_mail_protocol::admission::AdmissionFailure),
     Invalid,
     Unauthorized,
     Conflict,

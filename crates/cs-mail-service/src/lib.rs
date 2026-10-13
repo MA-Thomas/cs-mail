@@ -10,12 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use cs_mail_adapters::{DmarcError, DmarcVerifier, SmtpAuthenticationRequest};
 use cs_mail_capabilities::{
-    LaneSubject, LegacyBondFreeAdmission, SignedBondFreeAdmission, SignedLaneControl,
-    SignedLaneGrant,
+    LaneSubject, LegacyBondFreeAdmission, SignedLaneControl, SignedLaneGrant,
 };
 use cs_mail_content::EncryptedContentRecord;
 use cs_mail_primitives::{
-    CanonicalTime, Duration, IdempotencyKey, OperationalKeyRef, ProtocolVersion, Version,
+    CanonicalTime, IdempotencyKey, OperationalKeyRef, ProtocolVersion, Version,
 };
 use cs_mail_protocol::{ActorRef, PolicySnapshot, SettlementSnapshot, TermsOutcome};
 use cs_mail_security::{
@@ -45,7 +44,6 @@ impl CanonicalClock for UnixMillisecondClock {
 pub struct ServicePolicy {
     pub protocol: PolicySnapshot,
     pub deployment_domain: [u8; 32],
-    pub max_content_lifetime: Duration,
     pub legacy_identity_mapping_version: u16,
 }
 
@@ -126,7 +124,7 @@ impl From<StorageError> for ServiceError {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ServiceOutcome {
-    pub outcome: cs_mail_storage_postgres::ReceivedOutcome,
+    pub outcome: cs_mail_application::receipts::ReceivedOutcome,
     pub signed_terms: Option<SignedContactTerms>,
     pub receipt: SignedReceipt,
 }
@@ -216,7 +214,9 @@ impl<C: CanonicalClock> IngressService<C> {
             self.engine.deployment(),
             &|| self.clock.now(),
         )
-        .execute_command(command)?;
+        .execute_command(command)?
+        .into_operations()
+        .map_err(StorageError::from)?;
         let account = self.engine.deployment().billing_account(command.account)?;
         let allocations = self
             .engine
@@ -338,7 +338,7 @@ impl<C: CanonicalClock> IngressService<C> {
     pub fn submit_guest(
         &self,
         command: &cs_mail_guests::GuestCommand,
-    ) -> Result<cs_mail_storage_postgres::ReceivedOutcome, ServiceError> {
+    ) -> Result<cs_mail_application::receipts::ReceivedOutcome, ServiceError> {
         let handle = self.engine.receive_guest(
             command,
             self.provider_signer.reference(),
@@ -399,7 +399,7 @@ impl<C: CanonicalClock> IngressService<C> {
         )?;
         let outcome = result?;
         let signed_terms = match &outcome {
-            cs_mail_storage_postgres::ReceivedOutcome::Protocol(o) => {
+            cs_mail_application::receipts::ReceivedOutcome::Protocol(o) => {
                 match &o.transition.terms_outcome {
                     Some(TermsOutcome::ChargeRequired(t)) => {
                         Some(self.engine.signed_quote(t.quote_id)?)
@@ -465,25 +465,6 @@ impl<C: CanonicalClock> IngressService<C> {
         self.complete_receipt(&handle)
     }
 
-    /// Authenticates and durably admits one accepted-relationship or lane message.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an invalid sender signature, wrong provider scope,
-    /// blocked contact, missing authority, rate exhaustion, or storage failure.
-    pub fn admit_native_bond_free(
-        &self,
-        signed: &SignedBondFreeAdmission,
-    ) -> Result<ServiceOutcome, ServiceError> {
-        let handle = self.engine.receive_message(
-            signed,
-            self.policy.deployment_domain,
-            || self.clock.now(),
-            self.policy.protocol.clone(),
-        )?;
-        self.complete_receipt(&handle)
-    }
-
     /// Runs DMARC at the trusted edge and admits a legacy message using the
     /// resulting evidence rather than a sender assertion.
     ///
@@ -512,36 +493,6 @@ impl<C: CanonicalClock> IngressService<C> {
             self.policy.protocol.clone(),
         )?;
         self.complete_receipt(&handle)
-    }
-
-    /// Stores ciphertext only when its client-declared lifetime is bounded by service policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid time bounds or storage failure.
-    pub fn upload_content(
-        &self,
-        record: &EncryptedContentRecord,
-        certificate: &SignedContentKeyCertificate,
-    ) -> Result<(), ServiceError> {
-        let now = self.clock.now();
-        let latest = now
-            .checked_add(self.policy.max_content_lifetime)
-            .ok_or(ServiceError::ContentTimeInvalid)?;
-        if record.created_at > now || record.expires_at <= now || record.expires_at > latest {
-            return Err(ServiceError::ContentTimeInvalid);
-        }
-        if record.binding.message_valid_until.0 < now {
-            return Err(ServiceError::MessageValidityClosed);
-        }
-        self.engine.store_authenticated_content(
-            record,
-            certificate,
-            || self.clock.now(),
-            &self.policy.protocol,
-            self.policy.deployment_domain,
-        )?;
-        Ok(())
     }
 
     /// Registers an actor-scoped operational key through the administrative boundary.

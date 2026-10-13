@@ -38,6 +38,8 @@ package struct KeychainVault: CredentialVault {
 
 /// SQLite stores one Rust-authenticated ciphertext snapshot. It never receives profile secrets
 /// or decrypted messages. An advisory lock excludes a second process using this store.
+/// The unchecked conformance covers the C handle: cache access holds `access`, the vault
+/// is Sendable, and handles are initialized before publication and closed only at deinit.
 package final class SQLiteDeviceStore: AppleStore, @unchecked Sendable {
     private let vault: CredentialVault
     private var database: OpaquePointer?

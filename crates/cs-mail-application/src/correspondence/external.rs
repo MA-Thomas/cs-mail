@@ -155,7 +155,7 @@ pub enum Response {
     Outcome(Outcome),
     Conversation {
         conversation: Box<ExternalConversation>,
-        relationship: Relationship,
+        relationship: Box<Relationship>,
         messages: Vec<MessageView>,
         next_after: u64,
     },
@@ -342,7 +342,7 @@ fn decide(request: &SignedCommand, c: Context, now: CanonicalTime) -> Result<Dec
         return Ok(Decision {
             response: Response::Conversation {
                 conversation: Box::new(c.conversation.ok_or(Error::Unavailable)?),
-                relationship: c.relationship,
+                relationship: Box::new(c.relationship),
                 messages: c
                     .messages
                     .into_iter()

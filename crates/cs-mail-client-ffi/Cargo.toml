@@ -8,7 +8,12 @@ rust-version.workspace = true
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
+cs-mail-accounts = { path = "../cs-mail-accounts" }
+cs-mail-application = { path = "../cs-mail-application" }
 cs-mail-primitives = { path = "../cs-mail-primitives" }
+cs-mail-protocol = { path = "../cs-mail-protocol" }
+cs-mail-finance = { path = "../cs-mail-finance" }
+cs-mail-correspondence = { path = "../cs-mail-correspondence" }
 cs-mail-client = { path = "../cs-mail-client", features = ["member-runtime"] }
 uniffi = "=0.31.0"
 

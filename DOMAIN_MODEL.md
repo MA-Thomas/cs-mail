@@ -2,7 +2,7 @@
 
 > **Design principles.** Before changing code or this design, read the [Rust-domain design principles](docs/rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
 
-Confirmed product rules, updated September 29, 2026. Start here when changing
+Confirmed product rules, updated October 13, 2026. Start here when changing
 the code or documentation. These rules record the user's confirmed clarifications.
 The [deployment profile](cs_mail_deployment_profile.tex) gives the detailed
 financial-program requirements; the [protocol specification](cs_mail_protocol_spec.tex)
@@ -129,6 +129,12 @@ management, bank-account replacement, and detailed erasure policy remain deferre
 
 ## Request classes, permission, and refunds
 
+In the recipient's Apple request flow, request reading and decision confirmations
+focus on messages, permission and deadlines. Financial breakdowns and general
+explanations of charges, refunds, expiry and the member pool belong in the app's
+separate Q&A section, as confirmed on 12 October 2026. This presentation choice
+does not change financial terms, settlement or recorded payment outcomes.
+
 Each protocol identity (email address) publishes its own set of up to eight
 user-defined request classes describing the approaches it welcomes. Addresses of
 the same account have independent sets. Each class has its own collateral `S`,
@@ -177,6 +183,171 @@ snapshots, and atomic lane/settlement effects. See
 [implementation and cutover](docs/request-classes-implementation.md). The operator
 policy, per-address publication and quote pricing follow the
 [request pricing design](docs/request-pricing-design.md).
+
+Revoking standing permission or an express-lane relationship ends any retained
+lane in that same direction. Blocking also ends it. The protocol declares the
+lane termination, its expected revision and schedule cancellation; persistence
+commits these with the relationship change and durable outcome. Neither action
+retracts delivered copies or changes a completed settlement. Unblocking does not
+reactivate the terminated lane; a later explicit grant is a new authority.
+
+### Native requests and replies — agreed next implementation, 12 October 2026
+
+These rules are confirmed product requirements. The request/document cutover and
+member composing interface are implemented. The native workflow completion slice
+adds explicit paid-request quote review/authorization, journaled formation,
+follow-ups, contact controls, and source/policy controls. The subsequent native
+UX cutover replaces whole-message inclusion with composer-led exact passage
+selection and explicit person/conversation navigation. Scope and
+validation limits are recorded in the [Apple runbook](apps/cs-mail-apple/README.md).
+Replacement-device recovery and remaining financial/external-email interfaces
+remain separate work.
+
+The paired-request boundary is implemented as the first cutover slice.
+`cs-mail-application::requests::RequestDecision` receives both protected direction
+snapshots and declares the forward transition and any opposite preparation
+cancellation together. The protocol owns cancellation and its financial effects;
+the adapter commits them under one causal journal position. Sender blocking and
+revocation are distinct refusal reasons. Guest requests use their existing path.
+Native mailbox publication and automatic reverse lanes remain subsequent work.
+Migration 0033 requires a fresh environment; preserved schema-32 databases are
+evidence and cannot be opened with the new binary. They have not been reset.
+
+- A native request begins one conversation. Its submitted message and follow-ups
+  are ordinary correspondence documents in that conversation, with endpoint and
+  owner-bound recovery copies. Acceptance continues that same conversation.
+  Rejection, expiry and cancellation preserve already delivered copies.
+- Every native conversation in which a participant receives a message permits
+  replies in that conversation, regardless of whether it began with a request or
+  ordinary correspondence. Replying does not accept or reject a request, and
+  does not grant permission to start another conversation. This reply route
+  survives rejection, expiry and expiration of a broader reverse lane. The sender
+  may explicitly revoke or block the replying direction. Unblocking alone does
+  not restore previous reply offers; subsequent received messages while that
+  direction is open establish fresh conversation-scoped reply evidence.
+- Accepting a native request with standing permission or a lane also activates an
+  express lane in the reverse direction across the pair's conversations. Its
+  purpose, allowance and lifetime are versioned operator policy, frozen in the
+  request terms and agreed by the sender before funding. Authority derives from
+  that agreement and the recorded acceptance, not a fabricated sender signature.
+  The sender owns this direction and may grant standing permission, revoke or
+  block it. Existing standing permission is never downgraded by acceptance.
+  An existing custom lane that still provides relationship access is preserved
+  with its own terms and remaining allowance; acceptance does not replace it
+  with the operator-defined lane or refill it. When no such route exists,
+  acceptance activates the lane agreed in the request terms.
+- The contact overview offers New conversation when the sending direction has
+  standing permission or a currently active express lane. Without that initiation
+  route it offers Request a relationship, opening the person's published approaches
+  and signed-quote review. While a received request remains within its decision
+  window, the relationship-request entry is replaced by its pending notice and a
+  link to review that request. Directory uses the same private request-state
+  projection; its public invitations do not establish request eligibility.
+  Existing conversation replies remain separate.
+- Upgrading an express lane to standing permission is initiated by the recipient
+  granting that direction. The sender is not asked to request an upgrade. Within
+  three days of the lane's effective expiry, the recipient sees an in-app reminder
+  to upgrade or let it expire. Letting it expire preserves the existing schedule;
+  it does not revoke it early or remove received-conversation reply access.
+- Submission is refused while the sender blocks or has revoked the recipient.
+  It does not silently unblock or restore permission. Both directions are checked
+  under the same protection as submission and delivery.
+- A request conversation initially restricts reuse to its originating pair.
+  Relaxation requires both participants through the existing conversation-policy
+  mechanism. Rejected or expired content retains that restriction, including
+  known ancestry through quotations and shared copies.
+- Conversations have no stored titles. Clients derive a label from locally
+  decrypted content, a date or the request class, with a fallback for unavailable
+  content. Labels are presentation, not authority or canonical content metadata.
+- For crossed requests, the first submitted request takes precedence. Its
+  submission cancels any unsubmitted preparation in the other direction in the
+  same complete consequence. Finalized funding is returned in full; uncertain
+  funding is reconciled under the original operation. While an opposite request
+  awaits a decision within its decision window, a new preparation is refused
+  before new payment work is created. Submission rechecks this condition.
+  A request past its decision deadline no longer prevents a new request,
+  regardless of whether its expiry worker has run. Terminal settlements remain
+  fixed; accepting an opposite request cannot revive a cancelled preparation.
+- Guest requests and external correspondence retain their existing contracts.
+
+The application coordinates these domain decisions against a protected context
+containing both directed relationships, their current authority and revisions,
+affected requests and funding states, conversation policy and staged documents.
+One opaque decision declares every relationship, request, lane, conversation,
+mailbox, ledger, audit and recoverable-work effect. Storage checks ownership and
+revisions and commits that consequence; it never appends a business effect or
+rewrites the protocol's settlement after the decision.
+
+The cutover removes the replaced native request-content implementation and
+reader. Ordinary schema migrations require a fresh development environment.
+The separately authorized local development-account conversion operates on a
+backup copy, verifying original account/persona IDs, registered keys, address,
+permissions and exact message text while preserving the original Keychain item
+and rollback environment. It adds no old-format runtime reader. Historical
+absence of an offered broader reverse lane is retained as evidence; it does not
+remove reply permission established by receiving a message. The explicit
+continuity upgrade restores conversation receipt evidence while preserving
+withdrawals, the original account and credential, and completed financial facts.
+New requests still carry agreed broader-lane terms.
+Retaining Keychain bytes alone never establishes account continuity in a newly
+enrolled account. See the [conversion record](tools/development-continuity/README.md).
+
+Agreed validation challenges atomic acceptance and reverse permission, refusal
+under sender revocation/block, absence of new delivery after termination commits,
+restricted reuse including derivatives, exact retry delivery, encrypted device
+persistence, and crossed-request funding/expiry races. PostgreSQL is required
+for atomicity and concurrency claims. Previously delivered copies remain readable
+under their existing retention/custody rules; historical replay never supplies
+new send authority.
+
+## Address publications and directory discovery
+
+Agreed 11 October 2026. Accounts own their addresses; each address independently
+owns its public presentation, up to eight request classes and directory visibility.
+The directory is a searchable view of these publications, not a second class owner.
+
+- Public profiles contain a member-authored display name, description and optional
+  image. They are public statements, never copied from verified enrollment evidence.
+- Initial publication is listed by default, with an explicit option to opt out.
+  Enrollment alone publishes no profile. Setup explains visibility before saving.
+- Unlisted addresses are excluded from name/partial-address searches and browsing,
+  but remain accessible through an exact address or shared request link. A shared
+  link locates public information; it is neither secret nor communication authority.
+- The address's active recipient key authorizes profile, visibility and class edits.
+  A key for another address, including another address of the same account, does
+  not authorize those edits. Combined saves commit profile, visibility, class
+  publication and operation evidence atomically.
+- Suspended and closed accounts disappear from search; direct lookup returns a
+  neutral unavailable result without revealing the reason. Suspension preserves
+  configuration for resumption. Closed accounts cannot reopen.
+- Expired service preserves public information but prevents new requests. An empty
+  class publication is valid and offers no paid request route. Classes outside the
+  current operator bounds cannot be selected; issued quotes keep their terms.
+- Initial search covers published names, address references and descriptions, with
+  deterministic ordering and bounded pagination. It does not rank by collateral.
+  Pagination is a current view, not a frozen snapshot across edits.
+- Searches beginning after unlisting commits exclude the address. Previously
+  displayed information cannot be recalled. Unlisting does not change existing
+  requests, quotes, permission or settlement.
+- Edits bind a reviewed revision and stable signed operation. Exact retries return
+  their historical outcome without overwriting later edits. Altered retries conflict;
+  transport failures retain uncertainty. Explicit refusals are recorded distinctly.
+
+The local Rust/Swift slice uses the existing public persona references and shared
+`/r/{persona}` links. Exact lookup also accepts the deployment's generated member
+email addresses when external mail is configured. The subsequent persistent-account
+slice also supports a uniquely claimed, normalized human-readable mailbox in the
+explicitly configured development namespace, including `marcus@csqd-mail.com`.
+This is local address assignment, not external inbox verification or delivery.
+The current claim is immutable through profile editing; supported naming syntax,
+renaming, release and reclamation are implementation scope or deferred policy,
+not additional confirmed product rules. See the
+[Apple runbook](apps/cs-mail-apple/README.md#persistent-owner-account-cutover--11-october-2026).
+Images are uploaded bytes, not remotely fetched URLs. The initial
+operational bounds are 160 name bytes, 2048 description bytes, a 256-KiB PNG with
+at most 512 pixels per dimension, and 20 entries per search page. Header validation
+is not proof of image-decoder acceptance; Apple prepares and displays images using
+its platform decoder. No public directory website is launched in this pass.
 
 ## Guest senders
 

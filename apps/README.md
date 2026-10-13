@@ -108,14 +108,15 @@ protocol policy (`PublishProtocolPolicy`) before requests can be made.
 
 | Route | What it takes |
 |---|---|
-| `GET /v1/deployment` | Nothing; returns the signing scope, product and current protocol policy |
+| `GET /v1/deployment` | Nothing; returns the signing scope, product, custody content key and current protocol policy |
 | `POST /v1/accounts/commands` | A signed account command, for example registering a recipient key |
 | `POST /v1/billing/commands` | A signed billing command, for example purchasing annual service |
 | `POST /v1/request-classes` | A recipient's signed request classes |
 | `GET /v1/addresses/{persona}/offer` | Nothing; returns `C` and the classes a sender may choose |
 | `POST /v1/endpoint-keys`, `GET /v1/addresses/{persona}/endpoint-key` | An address's signed content key |
 | `POST /v1/relationships/{sender}/{recipient}/commands` | A participant's signed relationship command |
-| `POST /v1/relationships/{sender}/{recipient}/content` | The sender's ciphertext and content-key certificate |
+| `POST /v1/relationships/{sender}/{recipient}/content` | A signed native request document with both endpoint and both recovery copies |
+| `POST /v1/correspondence/commands` | Signed native create/send, mailbox/fetch, reuse and policy commands |
 | `POST /v1/lanes` | A recipient's signed express-lane grant |
 | `POST /v1/members/reads` | A signed read of the member's account, a relationship, or its inbox |
 
@@ -123,11 +124,18 @@ protocol policy (`PublishProtocolPolicy`) before requests can be made.
 (mode 0600). Its commands are `init`, `enroll-begin`, `enroll-complete`,
 `enroll-status`, `register-recipient-key`, `publish-content-key`, `account`,
 `purchase`, `publish-classes`, `offer`, `request`, `followup`, `cancel`,
-`permit-followups`, `decide`, `inbox`, `status`, `retry` and `whoami`. Every signed
+`permit-followups`, `decide`, `send`, `read`, `inbox`, `status`, `retry` and `whoami`. Every signed
 request is journaled before it is sent; after a lost response, the same command or
 `retry` sends exactly the same bytes again, and the service answers with the recorded
-outcome. Message content is encrypted on the member's side to the recipient's
-published content key and decrypted by the recipient's client.
+outcome. Native messages are documents with author/recipient endpoint copies and
+owner-bound copies to the published custody key. Requests start restricted
+conversations; `read --with PERSONA` decrypts their messages in memory. Use
+`send --to PERSONA --conversation ID --message TEXT --operation LABEL` to answer
+or continue one. Omitting `--conversation` starts a new conversation when current
+standing permission or an express lane allows it. Keep the operation label
+unchanged to retry. `decide --from PERSONA --decision revoke` withdraws that
+sending direction, including its lane and request answers. The client journal
+retains ciphertext, never message text.
 
 ## The sender request page (Milestone 3b)
 

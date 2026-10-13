@@ -5,9 +5,582 @@ SwiftUI presentation over `cs-mail-client::member`, exported through
 existing Rust owners. Minimum development targets: macOS 14 and iOS 17.
 
 Implemented: browser sign-in and first-device enrollment; encrypted device-state
-persistence; reopening the same device; inbox/request reading and accept/reject;
-durable decision retry; explicit offline, denied-custody, review and expiry errors.
+persistence; reopening the same device; inbox/request reading, standing acceptance, rejection and express-lane acceptance;
+durable decision and encrypted-send retry; native conversation reading and composing; explicit offline, denied-custody, review and expiry errors.
 The interface requires fresh synchronization before enabling decisions.
+
+## Principles repair and received-conversation replies — 13 October 2026
+
+Every received native conversation now has a confined reply route, independent
+of request origin and broader reverse-lane expiry. Starting another conversation
+still requires separate permission. Conversation receipt evidence and a distinct
+relationship reply-withdrawal epoch replace per-request answer permits. Blocking
+or revocation advances that epoch; unblocking alone does not revive old offers.
+A request's broader reverse-lane consent is separate immutable submission evidence,
+so later receipt of a message cannot silently restore withdrawn broader consent.
+
+Both request and ordinary publication declare receipt evidence with mailbox
+publication in one atomic consequence. Request delivery distinguishes creating a
+conversation from updating an existing one. Unchanged opposite directions have
+no invented transition or journal entry. The native source picker explicitly
+loads retained message detail for the selected source contact. Same-contact
+navigation, request formation and cancellation reload current correspondence.
+
+Protocol outcomes have one typed application owner; the client verifies their
+commitment against the signed receipt. Billing refusals are durable outcomes and
+native billing responses bind the exact command and outcome under the provider's
+signature. Definite refusals resolve setup journals; transport uncertainty retains
+exact bytes. The superseded standalone native class-publication workflow is
+removed in favor of atomic address publication. Request finances distinguish
+pending, finalized, voided and reversed funding from the authorized amount.
+
+Schema 36 and device-cache format 3 are explicit cutovers. Ordinary migrations
+require a fresh environment. The preservation-checked maintenance tool upgrades
+Marcus's existing database and a separate encrypted cache copy, retaining the
+original Keychain entry, account/persona association and address. It records reply
+receipt corrections, preserves withdrawals and financial history, and never
+changes historical agreement to a broader reverse lane. Prepared ciphertext and
+its durable intent survive uncertain commit acknowledgements and can be reconciled
+without re-enrollment or a second charge. Runtime has only the format-3 reader.
+
+Agreed checks challenge receipt substitution, refusal replay after policy change,
+source-picker discovery through the actual presentation model, same-person reload,
+failed funding, original-conversation replies and interrupted conversion recovery.
+All eight local quality-gate checks passed, including PostgreSQL
+(`/tmp/cs-mail-repair-clean-quality-gate.log`). The native journey passed
+(`/tmp/cs-mail-repair6-native-checks.log`), including exact Unicode selections,
+source discovery, same-contact reload, setup refusal and voided funding.
+Standalone maintenance-tool tests, clippy and build passed. An injected lost
+commit acknowledgement retained and reconciled the encrypted prepared cache.
+
+The original account upgrade and signed app installation are complete. A fresh
+backup comparison preserved account/persona records, endpoint keys, requests,
+billing, request finances and ledger records. The original v2 cache and Keychain
+credential remain unchanged; the new separate store uses v3. The signing
+requirement matches the previous app. All four original fictional peer endpoints
+decrypted exact verification replies from the original owner identity. Native
+inspection confirmed the original address, updated synchronization, and Reply in
+Elena's retained conversation and Maya's expired original conversation.
+The contact overview distinguishes outgoing initiation permission from permission
+the contact has to approach the member. Standing permission and active outgoing
+lanes offer New conversation; otherwise Request a relationship opens the selected
+Directory profile. Received-conversation replies remain separate. Requests retain
+published-approach selection and signed quote review.
+Native clipboard/focus interaction, full visual layout, iOS, real providers
+and replacement-device recovery remain separate evidence.
+
+## Pending incoming request entry — 13 October 2026
+
+Contact and Directory actions use one Rust `RequestEntry` projection over the
+authenticated pair. A received request still within its decision window projects
+IncomingPending; the contact overview offers Review request instead of Request a
+relationship, preserving Reply in the existing conversation. A pending outgoing
+request, existing initiation permission, unavailable direction and own address
+have distinct alternatives. Public Directory search results are Unverified;
+profile lookup independently obtains the private authenticated request state.
+A published class is an invitation, not eligibility or charge authorization.
+
+The projection reuses `RequestLifecycle::awaits_decision_at`, the same rule used by
+paired preparation/submission. It passes time explicitly; Swift does no deadline
+comparison. Passed decision windows no longer appear as awaiting a decision even
+when expiry recording is delayed. A later quote/formation still rechecks the
+protected pair, history, class and policy before creating payment work.
+
+Agreed checks extend the existing native journey to challenge incoming/outgoing
+classification, Directory consistency, terminal-state release and retained replies.
+Native inspection confirmed Maya's pending notice and Review request, the existing
+request's decision controls and Reply, and no Directory request action after class
+selection. The first native harness run exposed a self-profile lookup constructing
+a self relationship; OwnAddress now preserves public profile access without that
+pair read. The fresh native journey passed (`/tmp/cs-mail-request-entry3-native.log`), including
+incoming/outgoing and Directory classification, terminal-state release and retained
+replies. Its Directory check publishes its fictional sender's public profile before
+lookup; an unpublished profile is correctly unavailable. All eight quality-gate checks passed (`/tmp/cs-mail-request-entry-quality-gate.log`),
+as did the signed build and signature verification. Final native inspection again
+confirmed Maya's pending notice, Review request and retained conversation access.
+Expiry uses the existing domain decision-window
+experiment; no interactive wait across expiry or iOS execution was performed.
+
+The preserved local backend now runs independently from an immutable binary copy,
+using the same database, configuration and keys. Its restart script also pins each
+built binary so rebuilding the repository cannot replace its executable in place.
+The earlier isolated fixture and its data are retained; no owner account was reset.
+
+## Preserved acceptance alignment — 13 October 2026
+
+The original accepted Daniel and Elena development samples were converted without
+reverse-lane agreement. The explicit maintenance correction obtains fresh signed
+consent from each original fictional recipient key, while retaining the historical
+request terms and acceptance evidence. Its current policy, immutable source
+request and acceptance event define the correction window. Expiry remains original
+acceptance time plus the policy lifetime; the correction does not restart it.
+
+The application owns the deterministic correction decision. The storage adapter
+protects both directions and current authority, then uses the ordinary lane
+transition and receipt persistence. Effects, receipt and correction provenance
+commit in one transaction. Exact prepared commands survive unknown acknowledgements;
+a changed retry is refused. Later withdrawals are compared by canonical event
+order. Current stronger permission, later explicit grants, expired windows and
+unresolved reverse requests are preserved. The maintenance API is compiled only
+with `development-maintenance`; it is not a runtime fallback or a new app endpoint.
+
+The original account correction was applied after rehearsal. Account/persona,
+operational/content keys, requests, billing, request finances and ledger records
+compared unchanged. The original Keychain helper verified credential continuity.
+Both corrections applied once; Maya and Jules were preserved because their
+original requests were not accepted. Rehearsal retained the exact correction
+through simulated lost acknowledgement, replayed without another grant, and
+refused resurrection after signed block/unblock and an altered retry. Evidence is
+in `target/acceptance-alignment-20261013`. Actual power loss and iOS are not covered.
+
+The sidebar quietly labels its groups Who can contact you. Manage contact
+separates the member's outgoing route from permission they grant to the contact.
+Inactive incoming lanes no longer appear as current express-lane permission.
+The signed macOS build and signature verification passed. All eight final gate
+checks passed (`/tmp/cs-mail-acceptance-alignment-final2-quality-gate.log`). Native
+inspection confirmed the original address, Who can contact you, Daniel's New
+conversation action, a fresh empty composer, and the two directions in Manage
+contact. The validation composer was closed without sending. Exact original-account
+replay reported both corrections as replayed with no second grant. Original
+signing requirement, Keychain credential and predecessor encrypted cache remain
+preserved. iOS and a comprehensive visual/accessibility audit remain untested.
+
+## Contact actions and recipient expiry reminder — 13 October 2026
+
+Rust projects the outgoing route for New conversation; Swift does not interpret
+incoming standing permission as permission to send. The contact header explicitly
+labels permission for contact from the other person. Request a relationship opens
+that person's published approaches before quote review. Profile lookup finishes
+before Directory navigation, and initial result loading cannot replace a profile
+or erase its lookup failure.
+
+A typed Rust projection supplies a recipient-side expiry reminder only for a
+current lane within the confirmed three-day window. The effective expiry uses an
+expiring lane's horizon and a persistent lane's final validity. It is evaluated
+from explicit lane evidence and time on synchronization/contact reads, with no
+permission mutation. The sidebar offers a review entry; the contact view offers
+Upgrade to standing permission and Let it expire. Upgrade uses the existing
+recipient-signed standing transition after confirmation. Let it expire merely
+acknowledges the reminder for that open view; the lane's schedule remains unchanged.
+No operating-system notification or background reminder service is established.
+
+The existing native journey was extended (no new test cases) to challenge a
+recipient-only two-day reminder, no seven-day reminder, the standing upgrade,
+and unchanged reverse permission. It passed on an isolated environment
+(`/tmp/cs-mail-contact-actions-native.log`). All eight quality-gate checks passed
+(`/tmp/cs-mail-contact-actions-quality-gate.log`). Native inspection confirmed direct profile routing, approach selection, signed
+quote review remaining presented through journal updates, discarding the uncharged
+quote, and Reply in the existing conversation. Quote presentation is now owned by
+the main member view rather than a Directory row whose lifetime can end on update.
+The saved-workflow review retains Done even after the quote is discarded. No
+validation charge was authorized. iOS and interactive near-expiry reminder layout
+are not established. The preserved owner fixtures do not establish outgoing
+standing/lane permission: native checks used isolated two-party actors for those
+routes; the header distinguishes incoming permission from the outgoing action.
+
+## Appearance control restoration — 13 October 2026
+
+The shared member view exposes a toolbar button to switch between light and dark
+appearance. Before the first explicit choice it follows the system appearance;
+once selected, `csMailAppearance` in the app's preferences retains the choice
+across account locking, demo changes and reopening. Sheets inherit the window's
+appearance. This is local presentation preference, with no Rust domain rule or
+credential change. No automated test cases were added.
+
+Validation scope: switch both ways in the signed macOS app, reopen to challenge
+persistence, and run the existing full quality gate. iOS execution is not covered.
+The signed macOS build and all eight quality-gate checks passed
+(`/tmp/cs-mail-appearance-quality-gate.log`). The installed app was observed
+switching to Light and back to Dark. After a confirmed process exit and reopening,
+Dark remained selected and the toolbar offered Light. The original designated
+signing requirement and account association are retained. iOS was not run.
+
+## Native member workflows — 12 October 2026
+
+The current signed continuity app now exposes native paid requests from the
+Directory, explicit signed-quote review before charge authorization, encrypted
+formation/submission retry, cancellation of unsubmitted preparation, and follow-ups
+under the original request. No-charge and existing-request quote outcomes are
+separate from refusal. Expired quotes are reported explicitly. Funding waits return
+to the interface rather than polling. The staging endpoint returns the Rust
+application's durable document receipt, replacing the former unbound `stored` flag.
+
+Contact management exposes standing permission, revocation, blocking/unblocking,
+a personal/human-initiated express-lane preset (20 messages per day, with reviewed
+lifetime), and exact follow-up limits. Lane regrants retain the lane identity and
+advance its version. Request status and current request money are available to the
+sender; recorded money appears separately in Q&A, outside recipient decisions.
+
+Authenticated native mutation refusals now commit a terminal operation receipt.
+Exact replay remains refused even after permission/policy changes. The portable
+client checks its operation/digest, resolves only acknowledged work, and retains
+uncertain transport outcomes. Refused sends no longer prevent synchronization.
+Conversation-policy changes have their own durable journal. Both participants must
+approve relaxation at the reviewed revision; restriction cancels a proposal.
+
+Each conversation projects its own confined answer permission and received/sent
+request linkage. Selecting a thread scopes its request controls, and decision
+callbacks name that exact displayed request. Older rejected/expired conversations
+remain answerable when their original permits remain active. Historical absence of broader-lane terms does not remove confined replies;
+conversation receipt evidence now supplies those replies.
+
+Source inclusion is explicit: quotations, retained shared copies and references
+are assembled by Rust from exact selections, retain provenance, and are checked
+against current ancestry policy at commit. References can be opened without
+treating their pointers as access grants. The composer-led passage interface below
+replaces the former whole-message interface.
+
+## Conversation navigation and exact source selection — 13 October 2026
+
+Opening a person now shows their conversations directly, with content-derived
+labels, previews and dates. Opening a row scopes reading and request decisions to
+that conversation; there is no “Conversation” picker or combined-history composer.
+Reply appears only for a currently projected answer/standing/lane route. Otherwise
+the reader explains that replying is unavailable. Starting a new conversation is
+separate from starting a request, which opens the recipient's Directory profile
+and signed-quote review. Contact controls remain under Manage contact.
+
+Reply and New conversation open an outgoing composer with a named destination.
+Include an existing message opens an authenticated retained source in a resizable
+panel beside that composer on macOS. Its read-only native text view supports normal
+highlighting and copying. Swift maps UTF-16 highlights to ordered UTF-8 ranges in
+the source's exact flattened content blocks. A selection can cross text blocks.
+Images can be selected as whole blocks; embedded reference markers cannot be
+selected, and crossing them is refused rather than silently dropping content.
+Quote selection, Reference selection and Share selected copy add removable previews
+with source attribution to that draft only. There is no source-selection state
+carried between contacts and no reuse menu in the reading view. Closing an unsent
+draft asks before discarding its in-memory content; locking removes it.
+
+Rust exports the authenticated source's immutable version and selectable blocks
+in memory. The bridge now requires that version and explicit elements; the old
+whole-message constructor and unsupported-whole-message error are removed.
+Rust validates target version, block bounds and UTF-8 boundaries for references
+as well as retained copies before journaling a send. Domain policy and live
+permission are still rechecked at the atomic commit boundary. Plain copying and
+pasting authored text does not manufacture quotation provenance.
+
+Agreed validation adapts the existing native journey to challenge exact Unicode
+excerpt preservation, cross-block mapping, exclusion of surrounding text and
+refusal of out-of-bounds, substituted-version and split-UTF-8 selections. No new
+test cases were introduced. The corrected native journey, signed macOS build and
+all eight final quality-gate checks (including PostgreSQL) passed. Preservation
+checks retained the original credential/account/address, cache and signing
+requirement; the previous app and validation logs are saved in
+`target/native-selection-owner-upgrade-20261013`. The first run stopped on a test
+helper attempting to match a component of a compound emoji; that helper was
+corrected and the full journey passed on a fresh isolated environment.
+Interactive visual behavior, image-selection runtime,
+iOS, native-view focus/clipboard interaction and response-loss/crash injection are
+outside this evidence. The new source reader does render retained images;
+ordinary conversation reading still uses image placeholders. Image authoring
+remains separate work.
+
+Validation reused the existing native enrollment check sequence, extended for the
+consequential new member journeys; no new test cases were added. Two fresh fictional
+members exercised quote review without a charge, same-device reopening, finalized
+funding and native submission, follow-up, answers after rejection and after a later
+request, acceptance, quotation/share/reference resolution, no-charge quoting,
+two-party policy relaxation, revoke/block/unblock, lane regrant, refusal recovery,
+and plaintext exclusion from both encrypted SQLite caches. The complete quality
+gate, including PostgreSQL, and signed macOS build passed. The first isolated run
+exposed the discarded staging receipt; its database/state were preserved and the
+repaired journey passed on fresh isolated environments.
+
+The original credential was read only through the preservation helper's anonymous
+pipe. Checks retain its bytes, account/persona association, registered public keys,
+`marcus@csqd-mail.com`, readable sample conversations and original signing
+requirement. The current encrypted cache was unchanged during the upgrade checks.
+A rollback copy of the prior continuity app/cache/database is in
+`target/native-owner-upgrade-20261012`; the earlier schema-32 checkpoint remains
+untouched. The same schema-34 backend/configuration and keys are reused.
+
+Interactive inspection was blocked by an app-control timeout. Reopen
+`target/apple/CsMail-continuity-20261012.app` to load the rebuilt executable;
+a previously running process still contains the earlier build. iOS runtime,
+replacement-device recovery, annual billing/distribution interfaces, external-email
+composition/consent UI, crash/response-loss injection in the new native facade,
+and live providers were not exercised in this pass. Existing Rust/PostgreSQL
+replay, concurrency, expiry, consent and rollback suites remain separate evidence.
+
+## Current owner app — 12 October 2026
+
+The recipient request screens and decision confirmations show communication
+permission rather than charge/refund breakdowns. A separate Q&A sidebar section
+explains charges, refunds, expiry, cancellation and the shared member pool in
+plain language. This is presentation only; Rust settlement and financial records
+are unchanged. The signed macOS build and full Rust/PostgreSQL gate passed,
+and original-credential account/conversation checks passed. Interactive visual
+verification of this Q&A change was blocked by app-control timeouts; iOS layout
+was not exercised.
+
+Open `target/apple/CsMail-continuity-20261012.app`. The explicit development
+conversion restored a separate candidate from the original account backup and
+verified Marcus's original account/persona IDs, registered keys, address and
+Keychain credential. The four original sample conversations are now current
+native documents with matching message text and original decisions/permissions.
+The original schema-32 databases, signed app and encrypted device cache remain
+unchanged for rollback. This is the same account, not a fresh enrollment.
+
+The current app uses `com.csqd.member.development` for Keychain and stable signing
+identity `com.csqd.member.dev`, but keeps its converted cache separately in
+`target/apple-continuity-state-20261012/device`. The backend listens on 9693 using
+`cs_mail_continuity_20261012`; restart with the `start.sh` in that state directory.
+Do not open the saved old `CsMail.app` against the current backend.
+
+A new, clearly labelled Maya request exercises agreed native reply permission.
+The app sent a pending answer and Maya's endpoint decrypted it; the request is
+left awaiting Marcus's decision. The original Maya request expired under its
+original deadline and remains readable. Original samples did not offer the new
+reply consent, so their conversion does not grant new reply permission. Accepting
+new requests activates the agreed reverse lane. Paid request initiation, revocation/blocking and source-reuse controls are now
+implemented in the native member workflow slice described above.
+
+The full Rust/PostgreSQL gate, signed macOS build, original-credential live reads,
+plaintext comparisons and transaction rollback passed. See the standalone
+[development conversion record](../../tools/development-continuity/README.md)
+for exact preservation checks and limitations. iOS and replacement-device
+recovery remain untested.
+
+## Current baseline — development paused 11 October 2026
+
+The 12 October native messaging cutover requires schema 34 and device-cache format
+2 in a fresh, separate environment. Migration 0034 refuses populated earlier
+schemas; the preserved schema-32 environment below remains an earlier checkpoint.
+Keep its databases, deployment keys, state directory, signed app, Keychain
+credential and Application Support store. Current binaries do not upgrade that
+checkpoint or read its old native request content/cache. Use new empty databases,
+state directory, ports, client-store directory and credential-service name for
+cutover validation. Retaining the old Keychain bytes does not establish authority
+in a new database; no credential or account is silently recreated.
+
+Native requests now publish ordinary documents in one restricted conversation.
+The contact card lists conversations with labels derived in memory, and provides
+an encrypted send journal, composing and retry. A recipient can answer the
+request conversation before deciding, after rejection or after expiry. Acceptance
+activates frozen reverse-lane terms while preserving an existing custom lane.
+Rust owns all admission and settlement; Swift selects the conversation and
+presents the outcome. Paid request initiation uses the CLI; source reuse is available through Rust
+correspondence APIs. Those UI workflows are not implemented here.
+For a fresh backend launched with separate databases, state directory and ports,
+package its matching app with `CS_MAIL_APPLE_ENVIRONMENT_NAME=messaging-20261012`
+and `CS_MAIL_LOCAL_STATE_DIR` set to that backend's state directory when running
+`scripts/apple-account-app.sh`. The named build writes
+`target/apple/CsMail-messaging-20261012.app`, uses
+`com.csqd.member.development.messaging-20261012` for both its Application Support
+store and Keychain service, and leaves the saved `CsMail.app` and owner namespace
+in place. This is explicit development isolation, not credential reuse or a reader
+for old caches. Ordinary reopening of that fresh environment must retain the same
+name and backend state.
+
+The offline visual demo does not pretend to send live messages. Historical
+reopening observations below apply to the saved schema-32 checkpoint.
+
+Validation of this cutover: the complete Rust quality gate passed (112 workspace
+checks and 104 PostgreSQL experiments), along with the HTTP/CLI demonstration
+of pending answers, follow-ups, reverse-lane sends and settlement. The portable
+client experiment also challenged an acknowledged send followed by a failed read,
+so a refresh failure cannot be presented as a failed delivery. The macOS/FFI build
+and native SQLite/isolated-Keychain checks passed. Browser enrollment was skipped
+in that native harness; an interactive Swift messaging journey, iOS execution and
+replacement-device recovery were not validated in this pass. These results use
+separate test environments, not the saved owner account.
+
+### Fresh messaging environment — 12 October 2026
+
+The separate persistent backend is initialized at schema 34, with its own keys,
+member and identity databases, and controlled browser provider. Its service is
+`http://127.0.0.1:8580`; identity and browser-provider ports are 8581 and 8582.
+State is in `target/apple-messaging-state-20261012`. Its signed app is
+`target/apple/CsMail-messaging-20261012.app`, with bundle identifier
+`com.csqd.member.dev.messaging-20261012` and client/Keychain namespace
+`com.csqd.member.development.messaging-20261012`.
+
+The fresh app completed browser sign-in using Marcus's fictional development
+evidence and the controlled Marcus login. Its newly enrolled account has claimed
+`marcus@csqd-mail.com` through the signed address-publication workflow. That address
+is the owner's fixed development address across environments. No old account,
+credential or contacts were imported; the original account remains separate and
+preserved. The fresh profile currently has no paid request classes or simulated
+service purchase. Those workflows are separate from claiming the address.
+
+If the backend is stopped, restart it with:
+
+```sh
+target/apple-messaging-state-20261012/start.sh
+```
+
+The launcher refuses concurrent ownership and changed settings; reopening retains
+this environment's keys and journals. The saved schema-32 databases, owner app and
+credential namespace remain unchanged.
+
+The normal signed app reopens Marcus's persistent development account at
+`marcus@csqd-mail.com`. Communication space, Directory and My approach page share
+one app and navigation model. The profile is currently listed with one introduction
+class; up to eight classes may be published per address. Standing contacts and
+express lanes are visually separate. Directory profiles have Back navigation,
+readable text supports native Copy/Paste, and clicking the selected request class
+clears its selection. The optional offline demo stays separate from account data.
+
+The preserved personal environment contains six enrolled accounts: the owner and
+five independently credentialed fictional participants. Maya was left awaiting a
+decision; Daniel has standing permission; Elena has a seven-day express lane;
+Jules was rejected; Noah's profile is visible but new requests are unavailable.
+These are dated observations: request deadlines, service periods and lane expiry
+advance with real time. On resuming, refresh canonical projections rather than
+expect these categories indefinitely.
+
+Identity evidence, banking and payments are simulated. The claimed mailbox neither
+verifies a real external inbox nor enables public email delivery. Validation and
+recovery observations are recorded under **Persistent owner-account cutover** below.
+Earlier validation sections are historical records, not current account status.
+
+The restart command below is historical: resuming that checkpoint requires its
+matching schema-32 server and saved app, rather than current cutover binaries.
+The saved app reopens its device without browser login. Preserve the
+two databases, `target/apple-local-state` (including participant credentials),
+`target/apple-signing`, the app's Keychain credential and Application Support store.
+Do not reset storage or re-enroll to recover from custody or connectivity failure.
+Quit the app before replacing its bundle with a rebuilt version. These same-device
+observations do not establish backup or replacement-device recovery. This
+documentation pause does not shut down the app or local services.
+
+## Cancellation and Swift concurrency — 11 October 2026
+
+The package and iOS target now use Swift 6 language mode. Queued client work checks
+task cancellation and presentation lifetime before invoking Rust; late results
+cannot reopen a locked or removed member view. Already-started Rust workflows
+retain their existing durable operation and reconciliation semantics. Stopping
+the UI wait is distinct from cancelling a domain request. Directory cancellation
+preserves the prior screen, and delayed browser cleanup is scoped to its original
+ceremony. SQLite's unchecked Sendable ownership was reviewed and documented; the
+native harness vault's custody-denial flag now uses its existing lock.
+
+Validation used existing checks only, with no new tests. The macOS Swift 6 build
+passed (`/tmp/cs-mail-cancellation-build.log`), native encrypted SQLite replacement,
+exclusive ownership and isolated Keychain checks passed
+(`/tmp/cs-mail-cancellation-native.log`), and all eight quality-gate checks passed,
+including PostgreSQL (`/tmp/cs-mail-cancellation-gate.log`). The initial sandboxed
+gate failed on local socket permissions; the successful run had local test access.
+Browser enrollment was explicitly skipped in the native harness. Native UI
+cancellation/lock races, browser interaction and iOS builds/runtime were not
+exercised. Full Xcode currently requires license acceptance; macOS validation used
+the installed Command Line Tools. This pass did not replace the running signed
+app or alter the preserved account environment.
+
+## Visual development
+
+The first visual direction draws on Cereal's editorial typography and warm
+off-white palette, and John Pawson's proportions and use of space. Helvetica Neue
+Light headings and regular Helvetica Neue controls/message text follow the
+owner's preference for sans serif typography. Headings use a restrained scale,
+labels use sentence case and ordinary spacing, and the light canvas is #F7F6EF.
+The shared `CsMailPresentation` views provide the inbox, request reading area,
+decision controls and empty state; the real member view supplies canonical facts
+and retains the existing authenticated decision and confirmation workflows.
+Dark appearance has its own palette. Inspection of the live reference pages found
+NeueHaasUnicaPro-Regular for Cereal's sans-serif controls and
+UniversNextPro-Light for Pawson's navigation and heading. Neither family is
+installed here. The current typeface is an available approximation; those sites'
+font files have not been copied or licensed for the app. The lighter weights,
+smaller hierarchy and consistent family replace the initial generic sans-serif
+treatment, without copying the sites' very small text sizes into reading surfaces.
+
+The communication-space view now makes the membrane visible: a thin enclosing
+boundary contains standing relationships and bounded express lanes. Pending
+approaches without such permission sit outside it; closed/revoked history sits
+outside as well. A pending request on a permitted relationship does not displace
+that relationship from the interior. Each relationship portal has a continuous
+closed outline, a broad opening for standing permission, or a narrow passage
+with two boundary marks for an express lane. Text labels carry the same meaning,
+so access is not communicated through geometry alone.
+
+Rust's existing client projection now supplies a typed `PermissionRoute` alongside
+the permission label. Both come from one match over the canonical relationship
+state, and the narrow Swift binding forwards that type. Swift receives the route;
+it does not infer membership from labels. This describes the recorded arrangement,
+not current authorization to send: lane scope, expiry and allowance checks stay
+with their existing owners. Cached views remain snapshots.
+
+Selecting a visible correspondent card expands its boundary into their framed
+portal over a short, 0.42-second transition; returning contracts it into the
+communication space. Sidebar navigation remains available. Both the native member
+app and preview use the same `EditorialSpaceView` and geometry namespace. "Read request" or
+"Open correspondence" expands that frame into the reading surface with a short
+local transition. System reduced-motion preferences disable motion; the preview
+also exposes a local motion toggle. Opening and returning change only navigation;
+both surfaces remain mounted to retain reading position. Reading never opens a
+permission route. A return control leads back to the communication space, and
+the sidebar supplies a familiar alternative to spatial navigation. Separate
+conversation selection and side-by-side sources await richer client projections.
+
+During an operation the member view disables correspondent selection. It also
+requires the displayed conversation and selected sender to match before showing
+a portal or executing a decision, preventing stale correspondence from supplying
+the context for a different selection. These are presentation safeguards; no
+permission or settlement rule changed.
+
+The standalone design-preview executable has been retired. Visual review now uses
+the member executable with one local-demo account, its real encrypted inbox, and
+visible sidebar destinations for Communication space, Directory and My approach page.
+The shared editorial presentation remains the member application's presentation.
+
+Validation scope for this presentation slice: compile the shared views and native
+preview, inspect layout and interactions, parse the member view, and attempt the
+existing quality gate. No new tests or domain-rule changes. Full backend journeys and
+iOS/device behavior require separate validation. Earlier presentation passes were
+blocked because the sibling identity checkout lacked `identity-contract` and did
+not match `identity-source.sha256`. Pulling identity-model from GitHub on 10 October
+restored all pinned sources without changing the manifest. PostgreSQL suites were
+explicitly skipped in those earlier passes; they provide no evidence from those runs.
+
+Observed on 10 October 2026: the native preview compiled and launched; visual
+inspection covered light and dark appearance. Conversation selection, the
+external-email disclosure label, an established conversation without decision
+buttons, accept/reject explanations and the empty inbox were exercised through
+the native UI. Swift parsing and whitespace checks passed. Full member-view
+type checking, live decisions, resizing/accessibility audits and iOS behavior
+remain unverified.
+
+The subsequent sans-serif and membrane/portal pass also compiled and launched.
+Native inspection confirmed separate Requests/Relationships headings, explicit
+standing/lane/revoked labels, overview-to-reader navigation, and the same scroll
+position after returning and reopening. A revoked example retained its historical
+message without decision buttons; an external request retained its disclosure
+label. The empty inbox was exercised again. These are presentation observations
+over fictional content, not new evidence for server authority or settlement.
+At that stage, the existing quality gate was attempted again with PostgreSQL
+explicitly skipped and remained blocked by missing/mismatched identity-model sources.
+
+The spatial pass compiled the shared native presentation without warnings and
+launched the membrane view. Native inspection covered closed approach portals,
+standing openings, bounded passage marks, overview/reader navigation and the
+preview reduced-motion path. Swift parsing, direct Rust formatting checks and
+whitespace checks passed. At that stage, the Rust client projection/FFI additions
+and the full member integration had not compiled against identity-model in this checkout;
+the repository gate remained blocked. No new PostgreSQL evidence, accessibility
+audit, lane-expiry experiment or iOS runtime evidence is claimed.
+
+The subsequent card-to-portal pass restored identity-model by a fast-forward pull
+to `f530e8c`, with all pinned hashes matching. The full Rust bridge, generated
+Swift bindings, shared presentation, member view and native app compiled, and
+the macOS app launched. The existing native harness passed SQLite durability and
+exclusivity, isolated Keychain creation/reopen/refusal, browser enrollment through
+the local identity service, encrypted-cache reopening and denied custody checks.
+Native preview interactions covered standing and bounded portal navigation,
+the reduced-motion path, and a closed request remaining closed while reading.
+Reading position survived overview/reader navigation. No tests were added and
+no domain permission or settlement rules changed. Live request decisions through
+SwiftUI, a full accessibility audit, lane-expiry behavior and iOS runtime behavior
+remain outside this pass's evidence.
+
+The full repository quality gate subsequently passed all eight checks, including
+the existing workspace and PostgreSQL suites, with
+`CS_MAIL_TEST_DATABASE_URL=postgresql://localhost/cs_mail_portal_gate_1010`.
+The controlled enrollment journey used separate fresh member and identity
+databases (`cs_mail_portal_member_1010` and `cs_mail_portal_identity_1010`), fictional
+browser identities and simulated banking. This establishes local integration
+evidence; it does not establish real-provider assurance or release readiness.
 
 ## Build and run
 
@@ -17,12 +590,14 @@ open target/apple/CsMail.app
 ```
 
 The script generates bindings, builds the native static library and Swift package,
-and produces an ad hoc signed development app. Generated binding files are ignored
+and produces the unified development app. Once a signing identity is selected,
+subsequent builds reuse it; otherwise the bundle permits visual review only. Generated binding files are ignored
 and regenerated from the Rust interface. The Mac app uses a single window and a
-serial worker queue; blocking network work never runs on the UI actor.
+client worker actor; blocking network work never runs on the UI actor.
 
-For a controlled local backend, create two **empty, disposable** PostgreSQL
-databases, then run:
+For the persistent local backend, the **first initialization** requires two empty
+local PostgreSQL databases. Later starts use the same databases and the same state
+directory; they neither reset the databases nor regenerate keys. For example:
 
 ```sh
 CS_MAIL_DEMO_DATABASE_URL=postgresql://localhost/apple_mail \
@@ -30,19 +605,139 @@ CS_MAIL_DEMO_IDENTITY_DATABASE_URL=postgresql://localhost/apple_identity \
   scripts/apple-local.sh
 ```
 
-Keep the launcher running. It prints its temporary configuration/log directory and
-starts cs-maild on port 8480, the existing identity-model application on 8481, and
-the fictional OIDC provider on 8482. Ctrl-C stops those processes. It creates no
-hosted resources and sends no external email. Banking and service charges are
-simulated. Use fictional applicant and bank details in the app, then select Alice
-or Bob in the browser. Use the same details after an interrupted enrollment.
-Each fictional login can enroll only once in a fresh deployment. The native
-validation harness uses Bob; Alice remains available for manual enrollment.
+The state directory defaults to `target/apple-local-state`; set
+`CS_MAIL_LOCAL_STATE_DIR` for a separate validation environment. Database URLs,
+ports and directory identity are bound in a private manifest. Changing any of them
+requires a separate environment. Initialization refuses nonempty databases,
+missing durable keys, or occupied ports. An advisory lock excludes a second
+launcher; shutdown waits for companion processes before releasing ownership.
+The cs-mail and identity databases, simulator records, deployment/evidence keys,
+and OIDC signing key persist. OAuth codes and browser ceremonies remain transient.
+Operator bootstrap and configuration use existing idempotent Rust commands.
+
+The default ports are 8480–8482. The prepared personal development environment
+uses 9693–9695, databases `cs_mail_personal_development_1011` and
+`cs_mail_personal_identity_development_1011`, and the default state directory.
+Restart it with:
+
+```sh
+CS_MAIL_DEMO_DATABASE_URL=postgresql://localhost/cs_mail_personal_development_1011 \
+CS_MAIL_DEMO_IDENTITY_DATABASE_URL=postgresql://localhost/cs_mail_personal_identity_development_1011 \
+CS_MAIL_DEMO_PORT=9693 CS_MAIL_DEMO_IDENTITY_PORT=9694 CS_MAIL_DEMO_OIDC_PORT=9695 \
+  scripts/apple-local.sh
+```
+
+The controlled browser provider offers Marcus plus fictional participants Maya,
+Daniel, Elena, Jules, Noah, Alice and Bob. These are local fixture logins, not
+real-user authentication. Every account must still enroll through the existing
+identity application with distinct fictional evidence and simulated banking.
+Naming a fixture does not create an account, relationship or financial effect.
+There is no hosted service or external email in this environment.
+
+Select an existing code-signing identity once, then build:
+
+```sh
+scripts/apple-signing-setup.sh
+scripts/apple-account-app.sh
+```
+
+The selection script reads existing valid identities in Keychain and records only
+the selected certificate fingerprint. It changes no certificate trust. Set
+`CS_MAIL_APPLE_SIGNING_IDENTITY` when more than one identity is available.
+Account packaging refuses ad hoc signing. The bundle is signed and verified before
+replacing the previous bundle. The app's enrollment service URL comes from the
+persistent environment manifest, or an explicit loopback
+`CS_MAIL_DEVELOPMENT_SERVICE_URL`. No device credential is imported by these scripts.
+
+The selected signer on this Mac is the existing Apple Development identity. The
+signed app automatically reopens saved device state and synchronizes; offline
+failure preserves a visibly dated snapshot. Unfinished enrollment reconciles its
+existing operation. Custody failures never replace the stored credential or make
+another account. Browser cancellation fences callbacks from an older ceremony.
+All connected screens show that banking and payments are simulated. The same app
+retains Explore demo for offline review.
+
+The persistent owner account is enrolled and has claimed `marcus@csqd-mail.com`
+through the ordinary signed address publication workflow. Its public name is
+Marcus; all enrollment evidence is fictional and service/payment activity is
+simulated. The app reopens this account as its normal experience. The development
+profile starts listed and contains one illustrative introduction class with 500
+minor units collateral plus the operator's 50-unit processing component.
+
+This Mac uses Chrome for browser login. Set `CS_MAIL_LOGIN_BROWSER_BUNDLE_ID` when
+building to select an installed browser; the choice is retained under
+`target/apple-signing/login-browser.txt`. Without a saved choice, macOS uses its
+system authentication browser. The development app has its own callback scheme,
+`com.csqd.member.development`, separate from older preview bundles. The controlled
+provider presents an explicit return link so Chrome can return to the signed app
+without weakening the login-page security policy. Rust still checks issuer,
+state, nonce, PKCE and enrollment possession.
+
+Fictional counterparts have separate development credentials and use the normal
+signed CLI workflows. Provision or resume them with:
+
+```sh
+cargo build -p cs-mail-cli
+python3 scripts/apple-local/provision-participants.py \
+  --state-dir target/apple-local-state --recipient marcus@csqd-mail.com
+```
+
+The script binds the participant stores to this recipient, excludes concurrent
+provisioners, waits for canonical coverage, and preserves journals on uncertain
+outcomes. It does not recreate completed requests on rerun. The CLI fixture keys
+are local development files protected by directory/file permissions; the owner's
+credential remains in Keychain and is never imported into these stores. All
+canonical effects pass through signed services; no database population bypasses
+authority or settlement. The current app contains Maya's pending request, Daniel's
+standing contact, Elena's seven-day personal/human-initiated express lane (20
+messages/day), and Jules's rejected approach. Noah's public profile remains
+visible with new requests unavailable because he has no purchased service.
+
+A terms refusal creates no request or charge. The CLI retains that refused
+operation's journal and retires only its unfinished approach plan, so a later
+approach can start with a new operation. Transport failures retain the same plan
+and signed bytes.
 
 Device enrollment does not buy annual service or publish request classes. Those
-remain separate workflows; until their screens arrive, provision development
-members through the existing signed member APIs/CLI. The app displays an empty
-inbox until a sender has submitted a request to a properly configured recipient.
+remain separate workflows. The portable client and Swift binding now expose
+signed purchase and class-publication use cases. My approach page now exposes
+class/profile editing and the configured simulated annual-service purchase;
+general billing and financial management remain separate work. Each setup request is committed to the encrypted setup
+journal before transmission, and a retry retains the exact signed bytes.
+A purchase acknowledgement does not imply funded service: current coverage comes
+from the authenticated account view. The app displays an empty inbox until a
+sender has submitted a request to a properly configured recipient.
+
+Request confirmations now retain the reviewed sender and request ID. Selection
+changes or locking dismiss the confirmation. Swift checks that the same request
+is displayed, and Rust refreshes canonical state and requires that exact request
+to remain awaiting a decision before signing. A later request from the same
+sender cannot silently replace the reviewed request.
+
+Rejected-request financial outcomes include a quiet "How the pool works" link.
+Its visibility comes from the Rust financial projection's recorded nonzero
+collateral forfeiture, forwarded as a typed flag; Swift does not infer it from
+permission or status labels. The sheet explains pending forfeiture and maturity,
+the previous calendar year's shared pool and equal shares for qualifying members,
+and CSQD's separate processing charge. It does not estimate a personal payout.
+The shared native preview includes Jules Morgan's fictional rejected request.
+The full app and preview built; native inspection verified link placement,
+sheet opening/dismissal, and absence on a pending request. The full quality gate
+passed, including PostgreSQL. No tests were added;
+live settlement, iOS and a full accessibility audit were not repeated for this
+explanatory presentation change.
+
+For visual review, package the same member executable in explicit demo mode:
+
+```sh
+bash scripts/apple-demo-app.sh
+open target/apple/CsMailLocalDemo.app
+```
+
+This opens populated fictional correspondence immediately. It uses no Keychain,
+SQLite store, account enrollment or network service. The ordinary application also
+has an **Explore demo** entry on its welcome screen. **Exit demo** returns to that
+screen; **Open account** explicitly starts the connected account workflow.
 
 ## Existing identity model and browser configuration
 
@@ -61,7 +756,7 @@ S256 challenges. It does **not** establish a real person's identity.
   "browser_login": {
     "issuer": "http://127.0.0.1:8482",
     "client_id": "cs-mail-apple",
-    "redirect_uri": "com.csqd.member:/oauth/callback"
+    "redirect_uri": "com.csqd.member.development:/oauth/callback"
   }
 }
 ```
@@ -79,8 +774,8 @@ on a replacement device remains a separate task using the identity model's
 
 ## Local data and interrupted work
 
-Keychain service/account: `com.csqd.member.dev` / `member-device-v1`, device-only,
-unlocked access. SQLite: `Application Support/com.csqd.member.dev/member.sqlite`.
+Keychain service/account: `com.csqd.member.development` / `member-device-v1`, device-only,
+unlocked access. SQLite: `Application Support/com.csqd.member.development/member.sqlite`.
 It contains one authenticated encrypted snapshot, using a separate Keychain cache
 key. Cached message records remain HPKE ciphertext even inside that snapshot.
 SQLite uses full synchronous commits; a process lock prevents concurrent owners.
@@ -135,3 +830,271 @@ Full Xcode and iOS Rust targets are absent on the current machine. The project
 plist parses, but iOS compilation, packaging and suspension/device behavior have
 not been validated. The local loopback provider works on the Mac or simulator;
 a physical phone needs a reachable HTTPS development deployment.
+
+## Address publications and directory — 11 October 2026
+
+The sidebar navigates between **Communication space**, **My approach page** and **Directory** in the same window. The editor publishes the
+current device address's member-authored name, description, optional image, visibility
+and up to eight request classes as one signed, revision-checked operation. Initial
+publication is listed; visibility can be changed independently of access through
+an exact reference or shared link. Image selection uses Apple's decoder to prepare
+a bounded PNG and strips the input file's metadata. The screen displays the current
+operator collateral bounds and processing component. Saved quotes are unaffected.
+
+Directory search shows public publications; direct lookup includes unlisted ones.
+A recipient detail shows currently quotable classes and their conditional-charge
+rules. Class selection is review only: it does not authorize payment or contact.
+Suspended/closed accounts return unavailable, without a reason. Expired coverage
+leaves information visible and disables selection. An empty class collection offers
+no paid request route. The sidebar separates standing contacts, express lanes and
+closed approaches, retaining the existing Rust permission projection.
+
+Portable Rust owns validation, signing, the encrypted publication journal and exact
+retry. Explicit publication refusals resolve that operation; transport failures do
+not. Reload retrieves canonical state. A second address needs its own recipient-key
+authority; this slice does not introduce alias creation or device-key management.
+The local service exposes `POST /v1/directory/commands`, `/search` and `/lookup`.
+The public query endpoints support the future website, but this pass adds no website
+or hosting. Discovery uses existing numeric public persona references and `/r/` links;
+exact lookup also recognizes configured generated member email addresses. Human-readable mailbox claims were added in the subsequent owner-account cutover
+recorded below; richer search and additional-address lifecycle remain later work. Search pages are live views, so edits
+between pages can move entries; no frozen cross-page snapshot is claimed.
+
+Migration 0031 adds address publications and operation receipts, with no replaced
+reader or duplicate class store. Use fresh isolated development databases for validation;
+older evidence databases remain untouched.
+
+Validation completed locally on 11 October 2026. The full gate passed all eight
+checks, including 113 ordinary tests/doctests, 94 PostgreSQL cases and the pinned
+identity source manifest. Four new PostgreSQL experiments challenge foreign-address
+(including same-account alias) authority, receipt-failure rollback and concurrent
+edits, unlisting/account status/coverage, and replay over later edits. One portable
+client experiment challenges lost responses and failed local acknowledgement commits,
+requiring identical signed bytes after encrypted-store reopening.
+
+The final macOS build and native harness passed SQLite/Keychain checks, browser
+enrollment against the existing identity application, PNG publication, directory
+search, unlisting, shared-link lookup and reopening. Native visual inspection found
+and repaired editor clipping. Actual SwiftUI controls published the fictional Alice
+profile and existing class, removed it from browsing through unlisting, opened it
+through exact lookup, and preserved name/description/classes/unlisted state after
+quit/reopen. Selecting a class displayed its 1550-minor-unit conditional charge
+without authorizing a charge. Profile images were exercised by the native FFI
+harness; the graphical file chooser was not separately exercised.
+
+The final isolated demo runs against `cs_mail_directory_visual_1011` and
+`cs_mail_directory_visual_identity_1011` on ports 9493–9495, with its encrypted
+store at `target/apple/directory-final-recipient-1011`. The normal member store
+was untouched. An earlier demo credential refused access after an ad hoc rebuild;
+it and its database were preserved, and no replacement credential was written
+into that store. Same-binary quit/reopen passed in the final demo. Earlier harness
+checks used separate `cs_mail_directory_native_1011` and identity databases.
+
+Not covered: public-web behavior/indexing, iOS runtime, a full accessibility audit,
+remote image-decoder abuse campaigns, additional
+address/device management, cross-page snapshot consistency or sending a paid request
+from the directory. This slice publishes and reviews approaches; it adds no new
+payment authority, public hosting, bank connector or external mail sending.
+
+## Unified visual demo — 11 October 2026
+
+One member executable and shared screens serve two explicit modes. Visual demo mode
+uses a transient `DemoSession` fixture adapter and never constructs a `ClientWorker`,
+Rust client, SQLite store or credential vault. Connected mode retains the existing
+Rust workflows and Keychain custody. Entering a demo never opens an account, and
+exiting it returns to the account welcome screen without accessing credentials.
+
+The sidebar navigates among Communication space, Directory and My approach page.
+The communication space includes Maya and an external-email request, Daniel's
+standing contact, Elena's express lane, Jules's rejected approach and Noah's revoked
+permission. Directory fixtures include listed recipients and unavailable requests.
+The address editor supports a name, description, image, listed/unlisted visibility
+and up to eight classes. Saving changes updates the demo session; unlisting removes
+Alice from demo search while exact address/shared-link lookup still finds her.
+Use `alice@demo.example` or `https://demo.example/r/alice`. All addresses and links
+are fictional. Reset demo restores the initial fixtures. Edits reset on quit or when exiting demo mode.
+
+Acceptance and rejection show consequence explanations and explicitly record no
+decision, permission, settlement or payment. Default class totals are fixed example
+terms. Editing amounts does not calculate or issue new quotes. No demo result is
+server validation or financial evidence, and demo data is never merged into an
+account cache. The old automatic enrollment/CLI population demo path and its unused
+portable lane bridge have been removed. Previously created accounts and encrypted
+stores remain untouched. The standalone preview executable source remains retired.
+
+Validation scope is unchanged: build, existing full quality gate, visual navigation,
+editing and quit/reopen; no new automated tests. iOS runtime and a complete
+accessibility audit remain outside this pass.
+
+Observed in the final macOS build: launch opened the populated communication space
+without a Keychain prompt; shared-sidebar navigation opened Directory and My approach
+page; search found Elena; profile/name/class-description edits saved in memory;
+unlisting excluded Alice from browsing while her fictional shared link still opened
+her edited profile. Class selection displayed fixed example terms with no payment
+action. The editor reached eight rows and removed its Add control; eight completed
+classes saved in the demo session. Maya's decision explanation explicitly recorded
+no decision or payment and left the pending request unchanged. Exit/re-enter worked
+in the same executable without opening an account. Same-binary quit/reopen restored
+all six contacts, Alice's listed profile and three initial classes with no credential
+prompt. The app was left open on the populated communication space.
+
+The final native build passed (`/tmp/cs-mail-offline-demo-final-build.log`) and all
+eight existing quality-gate checks passed, including PostgreSQL suites
+(`/tmp/cs-mail-offline-demo-gate.log`). No automated test was added in this pass.
+The image file chooser, iOS runtime and a full accessibility audit were not assessed.
+Connected account workflows were not re-exercised in this visual-demo pass.
+
+Directory recipient profiles now include an explicit **Back to Directory** control.
+Opening a profile preserves the current results, search text and page; returning
+restores that view without issuing another search. This applies to both search
+results and exact-address/shared-link lookups. The Directory toolbar refreshes the
+visible profile or current results; the communication-space refresh is shown only
+in the communication space.
+
+The navigation correction was checked in the rebuilt offline macOS demo: search
+for Daniel, open his profile, refresh it, return to the same filtered results,
+and open Maya through a shared link before returning to those same results.
+The native build and all eight quality-gate checks, including PostgreSQL, passed
+(`/tmp/cs-mail-directory-back-build.log`, `/tmp/cs-mail-directory-back-gate.log`).
+No automated tests were added under the agreed scope. Live-service navigation,
+paginated results and iOS runtime behavior were not exercised in this UI check.
+
+Readable member-screen text inherits native text selection from `MemberView`,
+including directory profiles, explanations and status text. The standard macOS
+Edit menu supplies Copy/Paste; no separate clipboard implementation is needed.
+Contact and navigation rows remain buttons that open their readable detail views.
+Native verification selected Daniel's profile description by dragging, copied it
+with Command-C, and pasted it with Command-V into both Directory search and the
+profile description field. The editor draft was reloaded without saving.
+The build and full quality gate passed (`/tmp/cs-mail-text-selection-build.log`,
+`/tmp/cs-mail-text-selection-gate.log`). No automated tests were added; iOS selection
+and every individual text/control combination were not exercised.
+
+Clicking the selected “Ways to approach me” class now clears the selection and
+its conditional-charge explanation. Clicking another class switches the single
+selection. Native macOS verification covered selecting Alice's introduction,
+switching to research collaboration and clicking research again to clear it.
+The native build and full quality gate passed (`/tmp/cs-mail-class-deselect-build.log`,
+`/tmp/cs-mail-class-deselect-gate.log`). No new automated tests were added under
+the agreed visual-review scope; live-service and iOS interaction were not exercised.
+
+The Swift presentation consolidation replaces label-string navigation with
+`MemberDestination`, introduces distinct presentation identifier structs, moves
+Directory's search/profile/return/refresh/failure state into `DirectoryModel`,
+and exposes model output read-only. Session and operation enums replace stored
+flags. Scoped errors preserve unrelated content and ordinary refusals no longer
+mark the connection offline. A Swift actor replaces `ClientWorker`'s manually
+confined queue and unchecked Sendable declaration. See
+`docs/apple-client-architecture.md` for the boundary and ownership details.
+
+Validation retained the agreed scope, with no new automated tests. The native
+build and all eight existing quality-gate checks, including PostgreSQL, passed
+(`/tmp/cs-mail-swift-state-build.log`, `/tmp/cs-mail-swift-state-gate.log`). A complete
+Swift concurrency-check build of CsMailApple passed without source diagnostics
+(`/tmp/cs-mail-swift-concurrency.log`; SwiftPM's user-cache access warnings remain).
+Native offline checks covered contact/request navigation and its decision
+explanation, filtered Directory search, unavailable lookup preserving results,
+screen switching retaining search, profile refresh and return, shared-link lookup,
+class selection/deselection, editing/saving a profile, Copy/Paste into search,
+and quit/reopen resetting demo edits. The actor's live-service call path, browser
+cancellation, response-loss recovery, paginated results, image selection and iOS
+runtime were not exercised in this visual pass. Existing Rust suites remain
+separate evidence for canonical behavior.
+
+
+## Historical durability groundwork — before owner enrollment
+
+Durable-development validation on 11 October 2026 used the existing suites and
+native harness, with optional coordination added to its existing enrollment/reopen
+scenario for a supervised-service restart; no new test cases were added. The
+first restart attempt exposed shutdown/port-reuse races; the launcher now waits
+for children and permits ordinary TCP restart reuse while refusing live listeners.
+The final observation used `cs_mail_durable_check_1011_2` and
+`cs_mail_durable_identity_check_1011_2`, with state in
+`target/apple-durable-validation-2`. Its 12 deployment/evidence/OIDC key digests
+were identical after restart, the reopened native account ID was identical, and
+the account count remained one. The native check also passed encrypted SQLite
+replacement/exclusivity, isolated real Keychain creation/reopen/overwrite refusal,
+directory editing/discovery/unlisting, and custody-denial checks
+(`/tmp/cs-mail-durable-native-final.log`). The existing interrupted-enrollment,
+response-loss decision/publication and local-commit recovery suites passed in the
+full eight-check quality gate (`/tmp/cs-mail-durable-gate.log`). The stably signed
+app built (`/tmp/cs-mail-durable-final-build.log`), preserved its designated
+requirement across rebuilds, and native inspection confirmed development labeling
+and the saved 9693 enrollment endpoint. At that groundwork checkpoint no personal enrollment had been submitted;
+the prepared personal database contained zero accounts. The completed cutover
+below supersedes that status. Existing account stores
+and the first validation attempt's databases remain preserved.
+
+Groundwork limits at that time: persistent **personal** account quit/reopen and
+credential access across an app rebuild still required actual enrollment; the native harness
+used an isolated fictional account. Replacement-device recovery, aliases, active
+counterpart provisioning, live banking/payments, public email and iOS runtime are
+not established by these observations. The subsequent cutover adds checked mailbox claims; broader naming and
+address-lifecycle policy remain separate work.
+
+
+## Persistent owner-account cutover — 11 October 2026
+
+Migration 0032 adds a unique normalized public mailbox to the address directory.
+Rust's checked `MemberAddress` distinguishes it from `ProtocolIdentity`; a typed
+`DirectoryReference` selects exact protocol or mailbox lookup through one storage
+projection. The signed publication atomically claims the mailbox, saves the
+profile/classes, and records its receipt. The protected absence/ownership check
+and PostgreSQL uniqueness constraint exclude competing claims. This development
+slice limits claims to the configured namespace (`csqd-mail.com`), reserves the
+old generated-address prefix, and supports simple lowercase names containing
+letters, digits, hyphens and periods. Once claimed, a mailbox cannot be removed or
+renamed by profile editing. Additional naming and reclamation policies remain
+future work. This is local address assignment, with no DNS or external delivery.
+
+Public profile names populate native correspondence projections; Swift does not
+hardcode live participant names. The Rust client now journals standing, rejection
+and scoped express-lane evidence as distinct command alternatives and checks the
+same provider receipts before clearing uncertainty. Service activation displays
+canonical current coverage separately from command acknowledgement. Successful
+publication refreshes cached Directory results.
+
+Validation used the agreed existing gate/recovery suites and native checks, with
+no new automated test cases. The existing cross-address PostgreSQL experiment was
+extended to challenge exclusive mailbox claims, refusal without class effects,
+and normalized direct lookup. All eight gate checks passed, including PostgreSQL
+(`/tmp/cs-mail-account-cutover-gate.log`). The native SQLite/Keychain, interrupted
+browser enrollment, directory/image/unlisting/reopen and custody-denial checks
+passed against fresh isolated databases on 9793–9795
+(`/tmp/cs-mail-cutover-native-check.log`).
+
+Native interaction enrolled the owner with fictional evidence in Chrome, claimed
+the requested mailbox, published an introduction class, activated simulated
+coverage and read encrypted participant messages. Standing acceptance and an
+express lane each showed a confirmed simulated 550-unit refund; rejection showed
+50 units retained and 500 units pending forfeiture. Directory Back navigation,
+unlisted exact mailbox lookup, unavailable Noah and publication editing were
+checked. The owner account, contacts and unlisted setting survived a signed rebuild
+and quit/reopen without a credential prompt. A publication attempted with the
+backend stopped remained pending after offline quit/reopen, then replayed after
+restart; its receipt count increased from two to three exactly once, restoring
+listed visibility. All six account IDs and all 12 deployment/evidence/OIDC key
+digests were unchanged. No canonical database record was written directly.
+
+Not covered: replacement-device recovery, iOS runtime, live identity/banking or
+payments, public hosting/DNS/email, additional address management, a full
+accessibility audit, or paid sending from the Directory UI. The owner's enrollment
+is a persistent local development account and supplies no verified real-world
+identity or mailbox-delivery claim.
+
+
+The final signed build reopened against the restarted personal backend. Native
+inspection confirmed the listed six-profile directory, exact lookup of
+`marcus@csqd-mail.com`, its introduction class, and the populated communication
+space. The app was left on that screen. An older running copy was closed after
+bundle replacement prevented further UI control; saved state was preserved and
+the final copy reopened successfully.
+
+The browser is used for development enrollment. The app opens the local OIDC
+fixture; selecting Marcus authorizes a fictional login assertion, not legal
+identity or bank ownership. Rust binds the returned code to the attempt, and the
+identity service validates signed evidence and device proof. See the
+[production boundary](../../docs/apple-client-architecture.md#browser-evidence-and-production-boundary).
+Production authentication/verification providers and real payment integration
+are not established by this simulated journey.

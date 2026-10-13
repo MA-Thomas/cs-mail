@@ -66,6 +66,7 @@ fn load_context(
         .map(|r| r.try_get::<_, Json<Receipt>>(0).map(|j| j.0))
         .transpose()?;
     let mut context = Context {
+        receiver_contact: None,
         mailbox: vec![],
         authority,
         custody_key: None,
@@ -127,17 +128,11 @@ impl CorrespondenceStore for PostgresAccountRepository {
                 tx.execute("INSERT INTO cs_conversations(id,record) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record", &[&conversation.id().value().to_string(), &Json(conversation)])?;
             }
             if let Some((record, package)) = effects.delivery {
-                let id = record.manifest.message().0.to_string();
-                tx.execute("INSERT INTO cs_correspondence_messages(id,conversation,record) VALUES($1,$2,$3)", &[&id, &record.manifest.conversation().value().to_string(), &Json(&record)])?;
-                for copy in [package.sender_copy, package.recipient_copy] {
-                    tx.execute("INSERT INTO cs_correspondence_copies(message,owner,ciphertext) VALUES($1,$2,$3)", &[&id, &copy.binding.recipient.0.to_string(), &Json(copy)])?;
-                }
-                for recovery in [package.sender_recovery, package.recipient_recovery] {
-                    tx.execute("INSERT INTO cs_correspondence_recovery(message,owner,record) VALUES($1,$2,$3)", &[&id,&recovery.ciphertext.binding.recipient.0.to_string(),&Json(recovery)])?;
-                }
+                persist_delivery(&mut tx, &record, &package)?;
             }
             if let Some(id) = effects.delete_copies {
                 tx.execute("DELETE FROM cs_correspondence_copies c USING cs_correspondence_messages m WHERE c.message=m.id AND m.conversation=$1 AND c.owner=$2", &[&id.value().to_string(), &request.persona.0.to_string()])?;
+                tx.execute("DELETE FROM cs_correspondence_recovery c USING cs_correspondence_messages m WHERE c.message=m.id AND m.conversation=$1 AND c.owner=$2", &[&id.value().to_string(), &request.persona.0.to_string()])?;
             }
             tx.execute("INSERT INTO cs_correspondence_receipts(account,operation,receipt) VALUES($1,$2,$3)", &[&request.account.0.to_string(), &request.operation.0.to_string(), &Json(effects.receipt)])?;
         }
@@ -304,6 +299,7 @@ fn load_contact(
         _ => None,
     };
     if let Some(other) = other {
+        context.receiver_contact = tx.query_opt("SELECT relationship_state FROM cs_relationship_aggregates WHERE relationship_state#>>'{relationship,key,sender}'=$1 AND relationship_state#>>'{relationship,key,recipient}'=$2 AND protocol_format_version=$3 FOR SHARE", &[&other.0.to_string(),&request.persona.0.to_string(),&super::CURRENT_PROTOCOL_FORMAT_VERSION])?.map(|row| row.try_get::<_,Json<RelationshipRecord>>(0).map(|r| r.0.into_state().relationship)).transpose()?;
         // A received but unprocessed block/revocation must not be overtaken by
         // this separate mailbox commit. The host drains the existing inbox then retries.
         ingress::require_drained(tx)?;
@@ -347,6 +343,39 @@ fn load_contact(
                     .relationship,
             );
         }
+    }
+    Ok(())
+}
+
+pub(super) fn persist_delivery(
+    tx: &mut Transaction<'_>,
+    record: &MessageRecord,
+    package: &cs_mail_application::correspondence::PreparedMessage,
+) -> Result<(), StorageError> {
+    let id = record.manifest.message().0.to_string();
+    tx.execute(
+        "INSERT INTO cs_correspondence_messages(id,conversation,record) VALUES($1,$2,$3)",
+        &[
+            &id,
+            &record.manifest.conversation().value().to_string(),
+            &Json(record),
+        ],
+    )?;
+    for copy in [&package.sender_copy, &package.recipient_copy] {
+        tx.execute(
+            "INSERT INTO cs_correspondence_copies(message,owner,ciphertext) VALUES($1,$2,$3)",
+            &[&id, &copy.binding.recipient.0.to_string(), &Json(copy)],
+        )?;
+    }
+    for recovery in [&package.sender_recovery, &package.recipient_recovery] {
+        tx.execute(
+            "INSERT INTO cs_correspondence_recovery(message,owner,record) VALUES($1,$2,$3)",
+            &[
+                &id,
+                &recovery.ciphertext.binding.recipient.0.to_string(),
+                &Json(recovery),
+            ],
+        )?;
     }
     Ok(())
 }

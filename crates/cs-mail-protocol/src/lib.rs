@@ -26,6 +26,7 @@ pub use model::*;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct PolicySnapshot {
+    pub reply_lane: cs_mail_capabilities::reply::ReplyLaneTerms,
     pub protocol_version: ProtocolVersion,
     pub policy_version: PolicyVersion,
     pub privacy_profile_version: PrivacyProfileVersion,
@@ -67,6 +68,7 @@ impl PolicySnapshot {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransitionContext {
+    pub request_delivery: RequestDeliveryRoute,
     /// Result of the host's content and policy checks at canonical receipt time.
     pub admission: Result<(), admission::AdmissionFailure>,
     pub now: CanonicalTime,
@@ -76,6 +78,11 @@ pub struct TransitionContext {
     /// The host's resolution of the class requested by `IssueRequestTerms`, against the
     /// current pricing policy and the recipient's current publication.
     pub pricing: pricing::QuotePricing,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum RequestDeliveryRoute {
+    GuestRelay,
+    NativeMailboxes,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -244,8 +251,13 @@ pub enum ProtocolEventKind {
     RequestCreated(RequestId),
 
     RequestSubmitted(RequestId),
+    RequestAnswersGranted(RequestReservation),
 
     RequestSubmissionCancelled(RequestId),
+    RequestPreparationSuperseded {
+        request: RequestId,
+        incoming: RequestReservation,
+    },
     RequestHistoryChanged(RequestId),
     MessageValidityClosed(RequestId),
     DeclarationMismatch(RequestId),
@@ -275,6 +287,8 @@ pub struct CommittedTransition {
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransitionManifest {
+    pub mailbox_deliveries: Vec<MessageId>,
+    pub lane_revocation: Option<cs_mail_capabilities::LaneRevocation>,
     pub forfeitures: Vec<Forfeiture>,
     pub forfeiture_holds: Vec<PaymentOperationId>,
     pub expected_snapshot_revision: u64,
@@ -297,10 +311,11 @@ impl TransitionManifest {
             journal_position,
             protocol_events: self.protocol_events.clone(),
             terms_outcome: self.terms_outcome.clone(),
-            delivered: self
-                .outbox_intents
-                .iter()
-                .any(|effect| matches!(effect, EffectIntent::DeliverMessage { .. })),
+            delivered: !self.mailbox_deliveries.is_empty()
+                || self
+                    .outbox_intents
+                    .iter()
+                    .any(|effect| matches!(effect, EffectIntent::DeliverMessage { .. })),
         }
     }
 }
@@ -318,6 +333,10 @@ pub enum ProtocolError {
     },
     InsufficientFunds,
     RequestAlreadyExists,
+    OppositeRequestPending {
+        request: RequestId,
+    },
+    SenderReplyRestricted(SenderReplyRestriction),
     PaymentNotConfirmed,
     PaymentInvalid,
     FollowupNotAllowed,
@@ -357,7 +376,10 @@ impl From<LedgerError> for ProtocolError {
 }
 
 struct ManifestBuilder {
+    delivery_route: RequestDeliveryRoute,
+    mailbox_deliveries: Vec<MessageId>,
     lane: Option<cs_mail_capabilities::Lane>,
+    lane_revocation: Option<cs_mail_capabilities::LaneRevocation>,
     next: ProtocolState,
     history: RequestHistory,
     payments: BTreeMap<RequestId, cs_mail_finance::RequestFinancials>,
@@ -377,7 +399,10 @@ struct ManifestBuilder {
 impl ManifestBuilder {
     fn new(snapshot: &SettlementSnapshot, context: &TransitionContext) -> Self {
         Self {
+            delivery_route: context.request_delivery,
+            mailbox_deliveries: Vec::new(),
             lane: snapshot.lane.clone(),
+            lane_revocation: None,
             next: snapshot.state.clone(),
             history: snapshot.history.clone(),
             payments: snapshot.payments.clone(),
@@ -394,6 +419,16 @@ impl ManifestBuilder {
         }
     }
 
+    fn deliver(&mut self, message: MessageId, content: ContentRef, intent: DeliveryIntentRef) {
+        match self.delivery_route {
+            RequestDeliveryRoute::NativeMailboxes => self.mailbox_deliveries.push(message),
+            RequestDeliveryRoute::GuestRelay => self.effects.push(EffectIntent::DeliverMessage {
+                message_id: message,
+                content_ref: content,
+                delivery_intent_ref: intent,
+            }),
+        }
+    }
     fn event(&mut self, kind: ProtocolEventKind) {
         self.events.push(ProtocolEvent {
             reference: self.event,
@@ -405,6 +440,8 @@ impl ManifestBuilder {
     fn finish(self, snapshot: &SettlementSnapshot) -> Result<TransitionManifest, ProtocolError> {
         snapshot.ledger.apply(&self.batch)?;
         Ok(TransitionManifest {
+            mailbox_deliveries: self.mailbox_deliveries,
+            lane_revocation: self.lane_revocation,
             forfeitures: self.forfeitures,
             forfeiture_holds: self.forfeiture_holds,
             expected_snapshot_revision: snapshot.revision,
@@ -444,7 +481,13 @@ pub fn transition(
     )?;
     let mut manifest = ManifestBuilder::new(snapshot, context);
 
-    apply_command(&mut manifest, context, actor, command)?;
+    apply_command(
+        &mut manifest,
+        context,
+        actor,
+        authorized.operational_key(),
+        command,
+    )?;
     manifest.finish(snapshot)
 }
 
@@ -477,6 +520,12 @@ fn validate_snapshot(
     {
         return Err(ProtocolError::IncompleteSnapshot);
     }
+    if snapshot.lane.as_ref().is_some_and(|lane| {
+        lane.grant().sender != snapshot.state.relationship.key.sender
+            || lane.grant().recipient != snapshot.state.relationship.key.recipient
+    }) {
+        return Err(ProtocolError::IncompleteSnapshot);
+    }
     Ok(())
 }
 
@@ -484,6 +533,7 @@ fn apply_command(
     manifest: &mut ManifestBuilder,
     context: &TransitionContext,
     actor: ActorRef,
+    key: OperationalKeyRef,
     command: &ProtocolCommand,
 ) -> Result<(), ProtocolError> {
     match command {
@@ -533,6 +583,7 @@ fn apply_command(
             *message_id,
             *payment_method,
             terms,
+            key,
         )?,
         ProtocolCommand::SubmitRequestToRecipient {
             request_id,
@@ -695,6 +746,7 @@ fn issue_terms(
                 return Err(ProtocolError::PolicyInvalid);
             }
             let terms = RequestTerms {
+                reply_lane: RequestReplyAgreement::Agreed(policy.reply_lane.clone()),
                 selected_class: price.selected().clone(),
                 pricing_policy_version: price.policy_version(),
                 quote_id,
@@ -753,7 +805,11 @@ fn create_request(
     message_id: MessageId,
     payment_method: [u8; 32],
     terms: &RequestTerms,
+    creation_key: OperationalKeyRef,
 ) -> Result<(), ProtocolError> {
+    if terms.reply_lane.agreed().is_none() {
+        return Err(ProtocolError::PolicyInvalid);
+    }
     match manifest.next.relationship.state {
         RelationshipState::Accepted => return Err(ProtocolError::RelationshipAccepted),
         RelationshipState::Blocked => return Err(ProtocolError::ContactBlocked),
@@ -846,6 +902,8 @@ fn create_request(
     manifest.next.requests.insert(
         request_id,
         RelationshipRequest {
+            creation_key,
+            creation_event: manifest.event,
             id: request_id,
             generation,
             initial_message: message_id,
@@ -991,11 +1049,11 @@ fn submit_request_to_recipient(
         task: ScheduleTask::RequestExpiry(request_id),
         at: deadline,
     });
-    manifest.effects.push(EffectIntent::DeliverMessage {
+    manifest.deliver(
         message_id,
-        content_ref: submission.content_ref,
-        delivery_intent_ref: submission.delivery_intent_ref,
-    });
+        submission.content_ref,
+        submission.delivery_intent_ref,
+    );
     manifest
         .effects
         .push(EffectIntent::EstablishRequestSolicitation {
@@ -1128,6 +1186,45 @@ fn cancel_submission(
     Ok(())
 }
 
+/// Cancels an opposite preparation as a consequence of a submitted incoming request.
+/// This is a domain transition, not a synthetic command signed for the losing sender.
+/// # Errors
+/// Rejects a foreign pair, an unsubmitted winner, incomplete financial state or overflow.
+pub fn receive_native_request(
+    snapshot: &SettlementSnapshot,
+    incoming: &RelationshipRequest,
+    context: &TransitionContext,
+) -> Result<Option<TransitionManifest>, ProtocolError> {
+    validate_snapshot(snapshot, context)?;
+    let pair = snapshot.state.relationship.key;
+    if incoming.terms.sender != pair.recipient
+        || incoming.terms.recipient != pair.sender
+        || incoming
+            .lifecycle
+            .submission()
+            .is_none_or(|submission| submission.at > context.now)
+    {
+        return Err(ProtocolError::InvalidState);
+    }
+    if let Some(reason) = snapshot.state.relationship.state.sender_reply_restriction() {
+        return Err(ProtocolError::SenderReplyRestricted(reason));
+    }
+    let Some(request) = snapshot
+        .state
+        .active_request()
+        .filter(|request| request.lifecycle.is_preparing_submission())
+    else {
+        return Ok(None);
+    };
+    let mut manifest = ManifestBuilder::new(snapshot, context);
+    let id = request.id;
+    cancel_submission(&mut manifest, id, ReservedCancellation::Ordinary)?;
+    manifest.event(ProtocolEventKind::RequestPreparationSuperseded {
+        request: id,
+        incoming: incoming.reservation(),
+    });
+    manifest.finish(snapshot).map(Some)
+}
 #[derive(Clone, Copy)]
 enum Decision {
     Accept,
@@ -1170,6 +1267,9 @@ fn relationship_decision(
     manifest.next.relationship.last_event = Some(manifest.event);
     manifest.next.relationship.changed_at = manifest.now;
 
+    if matches!(decision, Decision::Block) {
+        terminate_lane(manifest)?;
+    }
     if let Some(request) = manifest.next.active_request().cloned() {
         let id = request.id;
         match request.lifecycle {
@@ -1338,15 +1438,39 @@ fn revoke(manifest: &mut ManifestBuilder, expected: Version) -> Result<(), Proto
     if manifest.next.relationship.version != expected.into() {
         return Err(ProtocolError::VersionConflict);
     }
-    if manifest.next.relationship.state != RelationshipState::Accepted {
-        return Err(ProtocolError::InvalidState);
-    }
+    terminate_lane(manifest)?;
     manifest.next.relationship.state = RelationshipState::Revoked;
     manifest.next.relationship.version =
         next_relationship_version(manifest.next.relationship.version)?;
     manifest.next.relationship.last_event = Some(manifest.event);
     manifest.next.relationship.changed_at = manifest.now;
     manifest.event(ProtocolEventKind::RelationshipRevoked);
+    Ok(())
+}
+
+fn terminate_lane(manifest: &mut ManifestBuilder) -> Result<(), ProtocolError> {
+    manifest.next.relationship.reply_epoch.0 = manifest
+        .next
+        .relationship
+        .reply_epoch
+        .0
+        .checked_add(1)
+        .ok_or(ProtocolError::ArithmeticOverflow)?;
+    let Some(lane) = &manifest.lane else {
+        return Ok(());
+    };
+    let effect = lane.plan_revocation().map_err(|error| match error {
+        cs_mail_capabilities::CapabilityError::ArithmeticOverflow => {
+            ProtocolError::ArithmeticOverflow
+        }
+        _ => ProtocolError::InvalidState,
+    })?;
+    if let Some(effect) = effect {
+        manifest.schedules.push(ScheduleChange::Cancel {
+            task: ScheduleTask::LaneHorizon(effect.lane().grant().id),
+        });
+        manifest.lane_revocation = Some(effect);
+    }
     Ok(())
 }
 
@@ -1560,11 +1684,7 @@ fn admit_followup(
             },
         },
     );
-    manifest.effects.push(EffectIntent::DeliverMessage {
-        message_id,
-        content_ref,
-        delivery_intent_ref,
-    });
+    manifest.deliver(message_id, content_ref, delivery_intent_ref);
     manifest.event(ProtocolEventKind::FollowupAdmitted(id, message_id));
     Ok(())
 }
@@ -1610,6 +1730,19 @@ mod tests {
             cs_mail_ledger::LedgerState::new(SettlementUnit(1)).view(),
         );
         let policy = PolicySnapshot {
+            reply_lane: cs_mail_capabilities::reply::ReplyLaneTerms::new(
+                cs_mail_capabilities::reply::ReplyTermsRecord {
+                    lifetime: Duration(604_800_000),
+                    rate_limit: cs_mail_capabilities::RateLimit {
+                        max_messages: 20,
+                        interval: Duration(86_400_000),
+                    },
+                    purpose: cs_mail_primitives::DeclaredPurpose::Known(
+                        cs_mail_primitives::KnownPurpose::Personal,
+                    ),
+                },
+            )
+            .unwrap(),
             protocol_version: ProtocolVersion(2),
             policy_version: PolicyVersion(1),
             privacy_profile_version: PrivacyProfileVersion(1),
@@ -1637,6 +1770,7 @@ mod tests {
             rejection_cooldown: Duration(90),
         };
         let context = TransitionContext {
+            request_delivery: RequestDeliveryRoute::GuestRelay,
             admission: Ok(()),
             now: CanonicalTime(1),
             journal_position: JournalPosition(1),

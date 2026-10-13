@@ -1,0 +1,27 @@
+[package]
+name = "cs-mail-development-continuity"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+cs-mail-storage-postgres = { path = "../../crates/cs-mail-storage-postgres", features = ["development-maintenance"] }
+cs-mail-security = { path = "../../crates/cs-mail-security" }
+cs-mail-privacy = { path = "../../crates/cs-mail-privacy" }
+serde = { version = "1", features = ["derive"] }
+cs-mail-capabilities = { path = "../../crates/cs-mail-capabilities" }
+cs-mail-client = { path = "../../crates/cs-mail-client", features = ["member-runtime"] }
+cs-mail-application = { path = "../../crates/cs-mail-application" }
+cs-mail-content = { path = "../../crates/cs-mail-content" }
+cs-mail-correspondence = { path = "../../crates/cs-mail-correspondence" }
+cs-mail-protocol = { path = "../../crates/cs-mail-protocol" }
+cs-mail-primitives = { path = "../../crates/cs-mail-primitives" }
+postgres = { version = "0.19.10", features = ["with-serde_json-1"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+chacha20poly1305 = "0.11"
+getrandom = "0.4.3"
+zeroize = "1"
+ed25519-dalek = "2"
+sha2 = "0.10"

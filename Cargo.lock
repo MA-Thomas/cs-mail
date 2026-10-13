@@ -667,6 +667,7 @@ dependencies = [
  "ed25519-dalek 3.0.0",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -678,6 +679,7 @@ dependencies = [
  "cs-mail-application",
  "cs-mail-billing",
  "cs-mail-capabilities",
+ "cs-mail-client",
  "cs-mail-content",
  "cs-mail-correspondence",
  "cs-mail-finance",
@@ -704,10 +706,12 @@ dependencies = [
  "cs-mail-accounts",
  "cs-mail-application",
  "cs-mail-billing",
+ "cs-mail-capabilities",
  "cs-mail-content",
  "cs-mail-correspondence",
  "cs-mail-finance",
  "cs-mail-primitives",
+ "cs-mail-privacy",
  "cs-mail-protocol",
  "cs-mail-security",
  "ed25519-dalek 3.0.0",
@@ -724,8 +728,13 @@ dependencies = [
 name = "cs-mail-client-ffi"
 version = "0.1.0"
 dependencies = [
+ "cs-mail-accounts",
+ "cs-mail-application",
  "cs-mail-client",
+ "cs-mail-correspondence",
+ "cs-mail-finance",
  "cs-mail-primitives",
+ "cs-mail-protocol",
  "uniffi",
 ]
 
@@ -734,6 +743,7 @@ name = "cs-mail-conformance"
 version = "0.1.0"
 dependencies = [
  "cs-mail-application",
+ "cs-mail-capabilities",
  "cs-mail-content",
  "cs-mail-finance",
  "cs-mail-ledger",
@@ -914,6 +924,7 @@ dependencies = [
  "cs-mail-application",
  "cs-mail-billing",
  "cs-mail-capabilities",
+ "cs-mail-client",
  "cs-mail-content",
  "cs-mail-correspondence",
  "cs-mail-finance",
@@ -1040,6 +1051,7 @@ dependencies = [
  "cs-mail-adapters",
  "cs-mail-application",
  "cs-mail-billing",
+ "cs-mail-client",
  "cs-mail-content",
  "cs-mail-correspondence",
  "cs-mail-finance",
@@ -1072,10 +1084,12 @@ dependencies = [
 name = "cs-mail-wire"
 version = "0.1.0"
 dependencies = [
+ "cs-mail-capabilities",
  "cs-mail-finance",
  "cs-mail-primitives",
  "cs-mail-protocol",
  "minicbor",
+ "serde_json",
 ]
 
 [[package]]
@@ -1085,6 +1099,7 @@ dependencies = [
  "cs-mail-accounts",
  "cs-mail-application",
  "cs-mail-billing",
+ "cs-mail-capabilities",
  "cs-mail-content",
  "cs-mail-finance",
  "cs-mail-ledger",
@@ -1116,6 +1131,7 @@ dependencies = [
  "cs-mail-finance",
  "cs-mail-guests",
  "cs-mail-identity-client",
+ "cs-mail-key-custody",
  "cs-mail-operations",
  "cs-mail-primitives",
  "cs-mail-protocol",

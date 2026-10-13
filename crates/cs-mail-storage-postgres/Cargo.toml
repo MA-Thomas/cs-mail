@@ -46,3 +46,6 @@ ed25519-dalek.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+development-maintenance = ["cs-mail-application/development-maintenance"]

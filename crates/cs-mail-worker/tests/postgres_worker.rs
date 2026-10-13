@@ -2,25 +2,20 @@ use cs_mail_test_support as support;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cs_mail_content::{
-    ContentBinding, ContentCertificateDigest, EncryptedContentRecord, EndpointSecretKey, encrypt,
-    message_declaration_digest,
-};
+use cs_mail_application::receipts::DurableExecutionOutcome;
+use cs_mail_content::{EncryptedContentRecord, message_declaration_digest};
 use cs_mail_primitives::{
-    CanonicalTime, ContentKeyRef, ContentRef, ContentScopeRef, DeclarationAuthority,
-    DeclaredPurpose, DeliveryIntentRef, Duration, IdempotencyKey, KnownPurpose,
-    MessageDeclarations, MessageId, MessageValidityUntil, Money, OperationalKeyRef,
-    OriginDeclaration, OriginMode, PolicyVersion, PrivacyProfileVersion, ProtocolIdentity,
-    ProtocolVersion, ProviderRef, QuoteId, RelationshipRef, RequestHistoryRef, RequestId,
-    RetentionPolicyVersion, SettlementUnit, Version, WireVersion,
+    CanonicalTime, ContentRef, DeclarationAuthority, DeclaredPurpose, DeliveryIntentRef, Duration,
+    IdempotencyKey, KnownPurpose, MessageDeclarations, MessageId, MessageValidityUntil, Money,
+    OperationalKeyRef, OriginDeclaration, OriginMode, PolicyVersion, PrivacyProfileVersion,
+    ProtocolIdentity, ProtocolVersion, ProviderRef, QuoteId, RelationshipRef, RequestHistoryRef,
+    RequestId, RetentionPolicyVersion, SettlementUnit, Version,
 };
 use cs_mail_protocol::{ActorRef, PolicySnapshot, ProtocolCommand, ProtocolState, TermsOutcome};
 use cs_mail_security::{
     CommandSigner, KeyRegistry, ProviderSigner, SignedCommandBytes, SigningScope,
 };
-use cs_mail_storage_postgres::{
-    DurableExecutionOutcome, PostgresDeployment, PostgresEngine, StorageError, WorkItem,
-};
+use cs_mail_storage_postgres::{PostgresDeployment, PostgresEngine, StorageError, WorkItem};
 use cs_mail_worker::{DeliverySink, deliver_batch, run_schedule_batch};
 
 const SENDER: ProtocolIdentity = ProtocolIdentity(102);
@@ -73,6 +68,19 @@ fn engine(url: &str, label: &str) -> PostgresEngine {
 
 fn policy() -> PolicySnapshot {
     PolicySnapshot {
+        reply_lane: cs_mail_capabilities::reply::ReplyLaneTerms::new(
+            cs_mail_capabilities::reply::ReplyTermsRecord {
+                lifetime: cs_mail_primitives::Duration(604_800_000),
+                rate_limit: cs_mail_capabilities::RateLimit {
+                    max_messages: 20,
+                    interval: cs_mail_primitives::Duration(86_400_000),
+                },
+                purpose: cs_mail_primitives::DeclaredPurpose::Known(
+                    cs_mail_primitives::KnownPurpose::Personal,
+                ),
+            },
+        )
+        .unwrap(),
         protocol_version: ProtocolVersion(2),
         policy_version: PolicyVersion(1),
         privacy_profile_version: PrivacyProfileVersion(1),
@@ -188,8 +196,10 @@ impl TestExecute for PostgresEngine {
         let outcome = self.process_received(&handle)?;
         self.sign_artifacts_batch(&provider_signer(), test_time(0), Duration(30_000), 100)?;
         match outcome {
-            cs_mail_storage_postgres::ReceivedOutcome::Protocol(o) => Ok(*o),
-            cs_mail_storage_postgres::ReceivedOutcome::Refused(e) => Err(e.into_error()),
+            cs_mail_application::receipts::ReceivedOutcome::Protocol(o) => Ok(*o),
+            cs_mail_application::receipts::ReceivedOutcome::Refused(e) => {
+                Err(cs_mail_storage_postgres::StorageError::from(e))
+            }
             _ => unreachable!(),
         }
     }
@@ -266,7 +276,7 @@ impl DeliverySink for TestSink {
             && matches!(
                 item.payload,
                 cs_mail_storage_postgres::WorkPayload::Effect(
-                    cs_mail_protocol::EffectIntent::DeliverMessage { .. }
+                    cs_mail_protocol::EffectIntent::EstablishRequestSolicitation { .. }
                 )
             )
         {
@@ -290,35 +300,24 @@ fn submit_request_to_recipient(engine: &PostgresEngine) {
         &policy(),
     )
     .unwrap();
-    let (sender_content_key, _) = EndpointSecretKey::generate(ContentKeyRef(2));
-    let (_, public) = EndpointSecretKey::generate(ContentKeyRef(1));
-    engine
-        .store_trusted_content(
-            &encrypt(
-                &sender_content_key,
-                public,
-                ContentBinding {
-                    wire_version: WireVersion(1),
-                    content_ref: ContentRef(1),
-                    message_id: MessageId(1),
-                    sender: SENDER,
-                    recipient: RECIPIENT,
-                    protocol_version: ProtocolVersion(2),
-                    relationship: RelationshipRef::from_u128_for_test(SENDER.0 ^ RECIPIENT.0),
-                    content_scope: ContentScopeRef::from_u128_for_test(1),
-                    sender_certificate: ContentCertificateDigest([1; 32]),
-                    declarations: declarations(),
-                    message_valid_until: MessageValidityUntil(test_time(9)),
-                    capability: None,
-                },
-                b"private",
-                test_time(2),
-                test_time(10),
-            )
-            .unwrap(),
-            cs_mail_primitives::RetentionPolicyVersion(1),
-        )
-        .unwrap();
+    support::requests::stage_request_message(
+        engine,
+        &policy(),
+        DEPLOYMENT_DOMAIN,
+        &support::requests::StagedMessage {
+            request: RequestId(1),
+            message: MessageId(1),
+            content: ContentRef(1),
+            conversation: 1,
+            sender_key: OperationalKeyRef(1),
+            sender_secret: [1; 32],
+            declarations: declarations(),
+            created: test_time(2),
+            valid_until: MessageValidityUntil(test_time(9)),
+            text: "private",
+        },
+    )
+    .unwrap();
     engine
         .execute(
             sender(
@@ -340,7 +339,7 @@ fn submit_request_to_recipient(engine: &PostgresEngine) {
 
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
-fn delivery_failure_is_retried_after_lease_expiry() {
+fn solicitation_failure_is_retried_after_lease_expiry() {
     let url = database_url();
     let engine = engine(&url, "delivery");
     submit_request_to_recipient(&engine);
@@ -351,21 +350,19 @@ fn delivery_failure_is_retried_after_lease_expiry() {
     };
     let first = deliver_batch(&engine, &mut sink, test_time(4), Duration(10), 10).unwrap();
     assert_eq!(first.retried, 1);
-    assert_eq!(first.completed, 1);
+    assert_eq!(first.completed, 0);
     assert_eq!(
         deliver_batch(&engine, &mut sink, test_time(5), Duration(10), 10)
             .unwrap()
             .claimed,
         0
     );
-    assert_eq!(engine.run_retention(test_time(10), 100).unwrap().deleted, 0);
     let report = deliver_batch(&engine, &mut sink, test_time(2004), Duration(10), 10).unwrap();
     assert_eq!(report.completed, 1);
-    assert_eq!(
-        engine.run_retention(test_time(2004), 100).unwrap().deleted,
-        1
-    );
-    assert!(engine.content(ContentRef(1)).unwrap().is_none());
+    assert_eq!(sink.published.len(), 1);
+    // Native messages were committed to mailboxes at submission; this worker only
+    // establishes the independently recoverable solicitation.
+    assert_eq!(engine.snapshot().unwrap().messages.len(), 1);
 }
 
 #[test]
@@ -575,8 +572,8 @@ fn request_expiry_recovers_an_old_refusal_without_rewriting_its_receipt() {
     let refused = engine.process_received(&handle).unwrap();
     assert!(matches!(
         refused,
-        cs_mail_storage_postgres::ReceivedOutcome::Refused(
-            cs_mail_storage_postgres::Refusal::Protocol(
+        cs_mail_application::receipts::ReceivedOutcome::Refused(
+            cs_mail_application::receipts::Refusal::Protocol(
                 cs_mail_protocol::ProtocolError::DecisionWindowClosed
             )
         )
@@ -611,7 +608,7 @@ fn request_expiry_recovers_an_old_refusal_without_rewriting_its_receipt() {
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 #[allow(clippy::too_many_lines)] // One failure/recovery sequence keeps its original receipt.
 fn blocked_inbox_still_signs_its_quote_and_recovers_across_relationship_workers() {
-    use cs_mail_storage_postgres::ReceivedOutcome;
+    use cs_mail_application::receipts::ReceivedOutcome;
     use cs_mail_worker::{WorkerError, run_received_batch};
     let url = database_url();
     let engine = engine(&url, "unsigned-quote");

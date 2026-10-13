@@ -461,7 +461,7 @@ fn encode_version_command(
 }
 
 fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &RequestTerms) -> Result<(), WireError> {
-    encoder.array(33)?;
+    encoder.array(34)?;
     encode_id(encoder, terms.selected_class.id().0)?;
     encoder.str(terms.selected_class.description())?;
     encode_id(encoder, terms.quote_id.0)?;
@@ -503,7 +503,8 @@ fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &RequestTerms) -> Result<
         .bytes(&terms.payment_provider_key)?
         .u64(terms.expiry_cooldown.0)?
         .u64(terms.rejection_cooldown.0)?
-        .u64(terms.next_request_backoff.0)?;
+        .u64(terms.next_request_backoff.0)?
+        .bytes(&serde_json::to_vec(&terms.reply_lane).map_err(|_| WireError::InvalidIdentifier)?)?;
     Ok(())
 }
 
@@ -533,7 +534,7 @@ fn decode_financial_scope(
 }
 
 fn decode_terms(decoder: &mut Decoder<'_>) -> Result<RequestTerms, WireError> {
-    expect_array(decoder, 33)?;
+    expect_array(decoder, 34)?;
     let selected_class = cs_mail_protocol::pricing::SelectedRequestClass::new(
         cs_mail_primitives::RequestClassId(decode_id(decoder)?),
         decoder.str()?.into(),
@@ -582,6 +583,8 @@ fn decode_terms(decoder: &mut Decoder<'_>) -> Result<RequestTerms, WireError> {
         expiry_cooldown: Duration(decoder.u64()?),
         rejection_cooldown: Duration(decoder.u64()?),
         next_request_backoff: Duration(decoder.u64()?),
+        reply_lane: serde_json::from_slice(decoder.bytes()?)
+            .map_err(|_| WireError::InvalidIdentifier)?,
     })
 }
 
@@ -701,6 +704,21 @@ mod tests {
 
                 message_id: MessageId(4),
                 terms: Box::new(RequestTerms {
+                    reply_lane: cs_mail_protocol::RequestReplyAgreement::Agreed(
+                        cs_mail_capabilities::reply::ReplyLaneTerms::new(
+                            cs_mail_capabilities::reply::ReplyTermsRecord {
+                                lifetime: cs_mail_primitives::Duration(604_800_000),
+                                rate_limit: cs_mail_capabilities::RateLimit {
+                                    max_messages: 20,
+                                    interval: cs_mail_primitives::Duration(86_400_000),
+                                },
+                                purpose: cs_mail_primitives::DeclaredPurpose::Known(
+                                    cs_mail_primitives::KnownPurpose::Personal,
+                                ),
+                            },
+                        )
+                        .unwrap(),
+                    ),
                     selected_class: cs_mail_protocol::pricing::SelectedRequestClass::new(
                         cs_mail_primitives::RequestClassId(1),
                         "Test class".into(),
@@ -813,6 +831,20 @@ mod tests {
             },
         ];
         for command in commands {
+            if let ProtocolCommand::CreateRequest { terms, .. } = &command {
+                // A cutover must distinguish explicitly absent agreement from an
+                // unconverted record, without changing current signed bytes.
+                let mut value = serde_json::to_value(terms).unwrap();
+                value.as_object_mut().unwrap().remove("reply_lane");
+                assert!(serde_json::from_value::<RequestTerms>(value.clone()).is_err());
+                value["reply_lane"] = serde_json::Value::Null;
+                assert_eq!(
+                    serde_json::from_value::<RequestTerms>(value)
+                        .unwrap()
+                        .reply_lane,
+                    cs_mail_protocol::RequestReplyAgreement::NotOffered
+                );
+            }
             let expected = envelope(command);
             let bytes = encode_command_envelope(&expected).unwrap();
             assert_eq!(decode_command_envelope(&bytes).unwrap(), expected);

@@ -16,6 +16,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 
+use cs_mail_application::receipts::ReceivedOutcome;
 use cs_mail_capabilities::{
     DeclarationAuthorityConstraint, LaneGrant, LaneMode, LaneSubject, RateLimit, SignedLaneGrant,
 };
@@ -44,7 +45,7 @@ use cs_mail_protocol::{
 use cs_mail_security::{CommandSigner, SignedCommandBytes, SigningScope};
 use cs_mail_service::members::{GatewaySecrets, MemberGateway};
 use cs_mail_service::{CanonicalClock, ServiceError, ServiceOutcome};
-use cs_mail_storage_postgres::{PostgresDeployment, ReceivedOutcome, StorageError};
+use cs_mail_storage_postgres::{PostgresDeployment, StorageError};
 
 const UNIT: SettlementUnit = SettlementUnit(1);
 const ALICE: ProtocolIdentity = ProtocolIdentity(10);
@@ -130,6 +131,19 @@ struct Loop {
 
 fn policy() -> ProtocolPolicy {
     ProtocolPolicy::new(ProtocolPolicyRecord {
+        reply_lane: cs_mail_capabilities::reply::ReplyLaneTerms::new(
+            cs_mail_capabilities::reply::ReplyTermsRecord {
+                lifetime: cs_mail_primitives::Duration(604_800_000),
+                rate_limit: cs_mail_capabilities::RateLimit {
+                    max_messages: 20,
+                    interval: cs_mail_primitives::Duration(86_400_000),
+                },
+                purpose: cs_mail_primitives::DeclaredPurpose::Known(
+                    cs_mail_primitives::KnownPurpose::Personal,
+                ),
+            },
+        )
+        .unwrap(),
         version: PolicyVersion(1),
         privacy_profile_version: PrivacyProfileVersion(1),
         retention_policy_version: RetentionPolicyVersion(1),
@@ -182,6 +196,15 @@ fn enroll(
 fn gateway(url: &str, clock: &Clock) -> MemberGateway<Clock> {
     let deployment = PostgresDeployment::connect(url).unwrap();
     let record = deployment.deployment_record().unwrap().unwrap();
+    let custody_clock = clock.clone();
+    deployment
+        .accounts(move || custody_clock.now())
+        .configure_custody(
+            EndpointSecretKey::from_secret_bytes(ContentKeyRef(900), &[90; 32])
+                .unwrap()
+                .1,
+        )
+        .unwrap();
     MemberGateway::new(
         deployment,
         record,
@@ -372,9 +395,20 @@ impl Loop {
                 valid_until: valid_until.0,
             })
             .unwrap();
-        let record = cs_mail_content::encrypt(
-            &alice_content,
+        let document = cs_mail_client::correspondence::compose(vec![
+            cs_mail_correspondence::DocumentPart::Text("Hello Bob".into()),
+        ])
+        .unwrap();
+        let package = cs_mail_client::correspondence::prepare(
+            &cs_mail_client::correspondence::EndpointKeys {
+                owner: ALICE,
+                secret: &alice_content,
+                public: alice_public,
+            },
+            &document,
+            cs_mail_correspondence::ConversationId::new(content + 1000).unwrap(),
             bob_public,
+            self.gateway.custody_key().unwrap(),
             ContentBinding {
                 wire_version: WireVersion(1),
                 content_ref: ContentRef(content),
@@ -389,13 +423,30 @@ impl Loop {
                 message_valid_until: valid_until,
                 capability: None,
             },
-            b"Hello Bob",
-            now,
-            valid_until.0,
+            (now, valid_until.0),
         )
         .unwrap();
+        let document = cs_mail_application::requests::documents::RequestDocument::new(
+            RequestId(1),
+            ContentRef(content),
+            package,
+        )
+        .unwrap();
+        let signed = cs_mail_application::requests::documents::SignedRequestDocument {
+            scope: SigningScope {
+                deployment_domain: [7; 32],
+                intended_provider: ProviderRef(30),
+                relationship: handle.relationship,
+            },
+            key: ALICE_KEY,
+            document,
+            certificate,
+            signature: Vec::new(),
+        }
+        .sign(&[11; 32])
+        .unwrap();
         self.gateway
-            .upload(ALICE, BOB, &record, &certificate)
+            .upload_request_document(ALICE, BOB, &signed)
             .unwrap();
         valid_until
     }
@@ -728,7 +779,6 @@ fn altered_retries_under_an_existing_operation_identity_are_rejected() {
 
     f.work();
     let valid_until = f.upload(1);
-    f.upload(2);
     f.send(&f.submit(3, 1, valid_until)).unwrap();
     let before = f.snapshot();
     // Other content under the submission's identity.
@@ -751,18 +801,23 @@ fn altered_retries_under_an_existing_operation_identity_are_rejected() {
 
 #[path = "core_loop/external_flow.rs"]
 mod external_flow;
+#[path = "core_loop/native.rs"]
+mod native;
+#[path = "core_loop/paired.rs"]
+mod paired;
 
 // Claim: reopening ingress preserves a published admission policy, and a previously
 // opened gateway uses subsequent updates. Reverting policy or accepting a now-forbidden
 // critical extension falsifies it and makes operator policy ineffective.
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+#[allow(clippy::too_many_lines)] // Keep staging, policy replacement and historical retry together.
 fn admission_policy_survives_reopening_and_is_checked_at_content_commit() {
     use cs_mail_primitives::{ExtensionCriticality, NamespacedIdentifier, PayloadSchema};
     use cs_mail_protocol::admission::{AdmissionFailure, AdmissionPolicy};
     let f = Loop::new();
-    f.terms(100);
-    f.upload(55);
+    let terms = f.terms(1);
+    f.send(&f.create(2, &terms, 41)).unwrap();
     let address = f.gateway.address(ALICE, BOB).unwrap();
     let engine = f
         .gateway
@@ -778,31 +833,89 @@ fn admission_policy_survives_reopening_and_is_checked_at_content_commit() {
         })
         .unwrap();
     let reopened = gateway(&f.url, &f.clock);
-    let (record, certificate) = engine.content_with_certificates().unwrap().pop().unwrap();
-    let certificate = certificate.unwrap();
-    let mut binding = record.binding;
-    binding.declarations.payload_schema = Some(PayloadSchema {
-        id: schema,
-        criticality: ExtensionCriticality::Critical,
-    });
-    let (secret, _) = EndpointSecretKey::from_secret_bytes(ContentKeyRef(12), &[12; 32]).unwrap();
-    let (_, recipient) =
-        EndpointSecretKey::from_secret_bytes(ContentKeyRef(22), &[22; 32]).unwrap();
-    let content = |id| {
-        let mut binding = binding.clone();
-        binding.content_ref = ContentRef(id);
-        cs_mail_content::encrypt(
-            &secret,
+    let make = |content: u128| {
+        let now = f.clock.now();
+        let valid = MessageValidityUntil(CanonicalTime(now.0 + 10000));
+        let (secret, public) =
+            EndpointSecretKey::from_secret_bytes(ContentKeyRef(12), &[12; 32]).unwrap();
+        let recipient = EndpointSecretKey::from_secret_bytes(ContentKeyRef(22), &[22; 32])
+            .unwrap()
+            .1;
+        let certificate = f
+            .alice
+            .sign_content_key_certificate(ContentKeyCertificate {
+                wire_version: WireVersion(1),
+                protocol_version: ProtocolVersion(2),
+                deployment_domain: [7; 32],
+                intended_provider: ProviderRef(30),
+                relationship: address.public().relationship,
+                owner: ALICE,
+                operational_key: ALICE_KEY,
+                content_key_version: ContentKeyVersion(1),
+                key: public,
+                valid_from: now,
+                valid_until: valid.0,
+            })
+            .unwrap();
+        let mut declarations = declarations();
+        declarations.payload_schema = Some(PayloadSchema {
+            id: schema.clone(),
+            criticality: ExtensionCriticality::Critical,
+        });
+        let doc = cs_mail_client::correspondence::compose(vec![
+            cs_mail_correspondence::DocumentPart::Text("checked policy".into()),
+        ])
+        .unwrap();
+        let package = cs_mail_client::correspondence::prepare(
+            &cs_mail_client::correspondence::EndpointKeys {
+                owner: ALICE,
+                secret: &secret,
+                public,
+            },
+            &doc,
+            cs_mail_correspondence::ConversationId::new(content + 1000).unwrap(),
             recipient,
-            binding,
-            b"checked policy",
-            record.created_at,
-            record.expires_at,
+            reopened.custody_key().unwrap(),
+            ContentBinding {
+                wire_version: WireVersion(1),
+                content_ref: ContentRef(content),
+                message_id: MessageId(1),
+                sender: ALICE,
+                recipient: BOB,
+                protocol_version: ProtocolVersion(2),
+                relationship: address.public().relationship,
+                content_scope: address.public().content_scope,
+                sender_certificate: content_key_certificate_digest(&certificate.certificate),
+                declarations,
+                message_valid_until: valid,
+                capability: None,
+            },
+            (now, valid.0),
         )
+        .unwrap();
+        let document = cs_mail_application::requests::documents::RequestDocument::new(
+            RequestId(1),
+            ContentRef(content),
+            package,
+        )
+        .unwrap();
+        cs_mail_application::requests::documents::SignedRequestDocument {
+            scope: SigningScope {
+                deployment_domain: [7; 32],
+                intended_provider: ProviderRef(30),
+                relationship: address.public().relationship,
+            },
+            key: ALICE_KEY,
+            document,
+            certificate,
+            signature: Vec::new(),
+        }
+        .sign(&[11; 32])
         .unwrap()
     };
+    let original = make(56);
     reopened
-        .upload(ALICE, BOB, &content(56), &certificate)
+        .upload_request_document(ALICE, BOB, &original)
         .unwrap();
     engine
         .configure_admission_policy(&AdmissionPolicy {
@@ -810,11 +923,25 @@ fn admission_policy_survives_reopening_and_is_checked_at_content_commit() {
             supported_critical_schemas: BTreeSet::new(),
         })
         .unwrap();
+    // Historical acknowledgement does not republish ciphertext under a new policy.
+    reopened
+        .upload_request_document(ALICE, BOB, &original)
+        .unwrap();
     assert!(matches!(
-        reopened.upload(ALICE, BOB, &content(57), &certificate),
-        Err(ServiceError::Storage(StorageError::AdmissionRefused(
-            AdmissionFailure::UnsupportedCriticalExtension
+        reopened.upload_request_document(ALICE, BOB, &make(57)),
+        Err(ServiceError::Storage(StorageError::Correspondence(
+            cs_mail_correspondence::CorrespondenceError::AdmissionRefused(
+                AdmissionFailure::UnsupportedCriticalExtension
+            )
         )))
     ));
-    assert!(!engine.has_content(ContentRef(57)).unwrap());
+    let mut db = postgres::Client::connect(&f.url, postgres::NoTls).unwrap();
+    assert!(
+        db.query_opt(
+            "SELECT 1 FROM cs_request_documents WHERE content_ref='57'",
+            &[]
+        )
+        .unwrap()
+        .is_none()
+    );
 }

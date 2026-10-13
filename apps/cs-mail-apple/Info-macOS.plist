@@ -9,5 +9,5 @@
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
-<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>com.csqd.member</string></array></dict></array>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>com.csqd.member.development</string></array></dict></array>
 </dict></plist>

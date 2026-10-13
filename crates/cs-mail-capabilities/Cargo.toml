@@ -10,6 +10,7 @@ cs-mail-primitives = { path = "../cs-mail-primitives" }
 cs-mail-privacy = { path = "../cs-mail-privacy" }
 ed25519-dalek.workspace = true
 serde.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
