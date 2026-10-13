@@ -183,7 +183,7 @@ struct MessageComposerView: View {
                 Text(thread.label).font(.caption).lineLimit(2)
             }
             TextEditor(text: $text).frame(minHeight: 130).disableAutocorrection(true).accessibilityLabel("Outgoing message")
-            Button("Include an existing message…", systemImage: "text.quote") { choosingSource = true }.disabled(model.isDemo || !ready)
+            Button("Include an existing message…", systemImage: "text.quote") { choosingSource = true }.disabled(!ready)
             if !inclusions.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {

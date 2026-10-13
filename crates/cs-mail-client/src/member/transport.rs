@@ -83,6 +83,9 @@ impl Transport for HttpTransport {
         if response.status() == reqwest::StatusCode::NOT_FOUND && route == "v1/directory/lookup" {
             return Err(Error::AddressUnavailable);
         }
+        if response.status() == reqwest::StatusCode::CONFLICT && route == "v1/external/commands" {
+            return Err(Error::ExternalRefused);
+        }
         if !response.status().is_success() {
             return Err(Error::Unavailable);
         }

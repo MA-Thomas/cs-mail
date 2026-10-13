@@ -65,3 +65,55 @@ public struct EditorialEmptyView: View {
         .foregroundStyle(EditorialStyle.ink(scheme)).background(EditorialStyle.canvas(scheme))
     }
 }
+
+/// The highlighted region and the hit region have the same bounds.
+public struct EditorialRegionButtonStyle: ButtonStyle {
+    let selected: Bool
+    public init(selected: Bool = false) { self.selected = selected }
+    public func makeBody(configuration: Configuration) -> some View {
+        RegionLabel(selected: selected, pressed: configuration.isPressed, label: configuration.label)
+    }
+    private struct RegionLabel: View {
+        let selected: Bool
+        let pressed: Bool
+        let label: ButtonStyleConfiguration.Label
+        @State private var hovered = false
+        @Environment(\.colorScheme) private var scheme
+        @Environment(\.isEnabled) private var enabled
+        var body: some View {
+            label
+                .background(EditorialStyle.ink(scheme).opacity(enabled && (hovered || pressed || selected) ? 0.09 : 0), in: RoundedRectangle(cornerRadius: 10))
+                .contentShape(Rectangle())
+                .onHover { hovered = $0 }
+                .opacity(enabled ? 1 : 0.45)
+        }
+    }
+}
+
+/// Portal feedback follows the permission boundary without filling its interior.
+public struct EditorialPortalButtonStyle: ButtonStyle {
+    let route: EditorialRoute
+    public init(route: EditorialRoute) { self.route = route }
+    public func makeBody(configuration: Configuration) -> some View {
+        PortalLabel(route: route, pressed: configuration.isPressed, label: configuration.label)
+    }
+    private struct PortalLabel: View {
+        let route: EditorialRoute
+        let pressed: Bool
+        let label: ButtonStyleConfiguration.Label
+        @State private var hovered = false
+        @Environment(\.colorScheme) private var scheme
+        @Environment(\.isEnabled) private var enabled
+        var body: some View {
+            label
+                .overlay {
+                    EditorialBoundary(route: route)
+                        .stroke(EditorialStyle.ink(scheme).opacity(enabled && (hovered || pressed) ? 0.85 : 0), lineWidth: pressed ? 2.5 : 2)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+                .onHover { hovered = $0 }
+                .opacity(enabled ? 1 : 0.45)
+        }
+    }
+}

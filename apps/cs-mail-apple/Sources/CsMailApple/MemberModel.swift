@@ -42,7 +42,9 @@ actor ClientWorker {
 
 @MainActor public final class MemberModel: ObservableObject {
     @Published private(set) var addressSettings: AddressSettings?
-    @Published private(set) var directory: DirectoryModel
+    @Published private(set) var externalInbox: ExternalInbox?
+    @Published private(set) var sentExternalConversation: String?
+    let directory: DirectoryModel
     enum Connection { case synchronized, saved }
     enum Session { case locked, open(Inbox, Connection) }
     enum Work { case source, reference, request, policy, relationship, unlock, signIn, enrollment, refresh, conversation, decision, retry, addressLoad, publication, purchase, message }
@@ -91,10 +93,7 @@ actor ClientWorker {
         guard let failure, failure.work != .addressLoad && failure.work != .publication else { return nil }
         return failure.explanation
     }
-    private var backend: MemberBackend
-    private var demoSession: DemoSession? { if case .demo(let session) = backend { return session }; return nil }
-    private var worker: ClientWorker? { if case .live(let worker) = backend { return worker }; return nil }
-    var isDemo: Bool { demoSession != nil }
+    private let worker: ClientWorker
     private let browser: BrowserLogin
     private var sourceGeneration = 0
     private var referenceGeneration = 0
@@ -102,20 +101,15 @@ actor ClientWorker {
     private var lifetime = PresentationLifetime()
     private var browserCeremony: BrowserCeremony?
 
-    public init(directory: URL? = nil, demo: Bool = false, credentialService: String = "com.csqd.member.development", loginBrowserBundleID: String? = nil) {
+    public init(directory: URL? = nil, credentialService: String = "com.csqd.member.development", loginBrowserBundleID: String? = nil) {
         browser = BrowserLogin(browserBundleID: loginBrowserBundleID)
-        if demo {
-            let session = DemoSession()
-            backend = .demo(session); self.directory = DirectoryModel(backend: .demo(session)); self.session = .open(session.inbox, .synchronized)
-        } else {
-            let worker = ClientWorker(directory: directory, credentialService: credentialService)
-            backend = .live(worker); self.directory = DirectoryModel(backend: .live(worker))
-        }
+        let worker = ClientWorker(directory: directory, credentialService: credentialService)
+        self.worker = worker; self.directory = DirectoryModel(worker: worker)
     }
-    package convenience init(client: AppleClient) {
-        self.init()
-        let injected = ClientWorker(client: client)
-        backend = .live(injected); directory = DirectoryModel(backend: backend)
+    package init(client: AppleClient) {
+        browser = BrowserLogin()
+        let worker = ClientWorker(client: client)
+        self.worker = worker; directory = DirectoryModel(worker: worker)
     }
     func receiveLogin(_ url: URL) { browser.receive(url) }
     func lock() {
@@ -124,16 +118,15 @@ actor ClientWorker {
         lifetime = PresentationLifetime()
         generation += 1
         browser.cancel(); authenticating = false
-        if let worker, let ceremony = browserCeremony {
+        if let ceremony = browserCeremony {
             Task { try? await worker.cancelLogin(ceremony: ceremony) }
         }
         browserCeremony = nil
         addressSettings = nil; directory.clear()
-        clearSourceContact(); reference = nil; inbox = nil; conversation = nil; selectedSender = nil
+        clearSourceContact(); reference = nil; externalInbox = nil; sentExternalConversation = nil; inbox = nil; conversation = nil; selectedSender = nil
         connected = false; failure = nil; notice = nil; operation = .idle
     }
     package func unlock() async {
-        if let demoSession { inbox = demoSession.inbox; connected = true; return }
         await perform(.unlock) {
             do { self.inbox = try await self.call { try $0.cachedInbox() } }
             catch ClientError.EnrollmentRequired {
@@ -141,20 +134,21 @@ actor ClientWorker {
                 try await self.showEnrollment(status)
                 return
             }
+            self.externalInbox = try await self.call { try $0.externalInbox() }
             self.notice = "Saved snapshot. Refreshing current state…"
             self.connected = false
             self.inbox = try await self.call { try $0.sync() }
             self.connected = true; self.notice = nil
+            self.externalInbox = try await self.call { try $0.externalInbox() }
         }
         if connected { await loadAddressSettings() }
     }
     func signIn(server: String, details: EnrollmentDetails) async {
-        guard !isDemo else { return }
         await perform(.signIn) {
             let started = self.generation
             let requestedLifetime = self.lifetime
             let ceremony = BrowserCeremony()
-            guard let worker = self.worker else { throw ClientError.Unavailable }
+            let worker = self.worker
             self.browserCeremony = ceremony
             defer {
                 if self.browserCeremony == ceremony { self.browserCeremony = nil }
@@ -181,7 +175,6 @@ actor ClientWorker {
         if connected { await loadAddressSettings() }
     }
     func resumeEnrollment() async {
-        guard !isDemo else { return }
         await perform(.enrollment) {
             let status = try await self.call { try $0.enrollmentStatus() }
             try await self.showEnrollment(status)
@@ -200,10 +193,10 @@ actor ClientWorker {
         }
     }
     func refresh() async {
-        if let demoSession { inbox = demoSession.inbox; notice = "Demo data refreshed. No service was contacted."; return }
         await perform(.refresh) {
             self.inbox = try await self.call { try $0.sync() }
             self.connected = true; self.notice = nil
+            self.externalInbox = try await self.call { try $0.externalInbox() }
             if let sender = self.selectedSender { self.conversation = try await self.call { try $0.conversation(sender: sender.value) } }
         }
     }
@@ -214,13 +207,11 @@ actor ClientWorker {
     package func select(_ sender: SenderReference) async {
         guard !busy else { return }
         selectedSender = sender; conversation = nil
-        if let demoSession { conversation = demoSession.conversation(sender.value); return }
         await perform(.conversation) {
             self.conversation = try await self.call { try $0.conversation(sender: sender.value) }
         }
     }
     func decide(sender: SenderReference, request: RequestID, decision: Decision) async {
-        if isDemo { notice = "Demo explanation only. No decision, permission change or payment was recorded."; return }
         guard selectedSender == sender, conversation?.sender == sender.value,
               conversation?.requests.contains(where: { $0.id == request.value && $0.awaitingDecision }) == true,
               connected, inbox?.pendingSender == nil else { return }
@@ -231,16 +222,15 @@ actor ClientWorker {
         }
     }
     func retry() async {
-        if isDemo { notice = "Demo mode has no pending service operations."; return }
         await perform(.retry) {
             self.inbox = try await self.call { try $0.retry() }
             self.connected = true
+            self.externalInbox = try await self.call { try $0.externalInbox() }
             if let sender = self.selectedSender { self.conversation = try await self.call { try $0.conversation(sender: sender.value) } }
         }
         if connected { await loadAddressSettings() }
     }
     func purchaseDevelopmentService() async {
-        guard !isDemo else { return }
         await perform(.purchase) {
             let covered = try await self.call { try $0.purchaseService(offer: 1) }
             self.inbox = try await self.call { try $0.sync() }
@@ -249,17 +239,11 @@ actor ClientWorker {
         }
     }
     func loadAddressSettings() async {
-        if let demoSession { addressSettings = demoSession.settings; return }
         await perform(.addressLoad) { self.addressSettings = try await self.call { try $0.addressSettings() } }
     }
     func publishAddress(expected: UInt64, classVersion: UInt64, name: String, description: String,
                         image: Data?, listed: Bool, classes: [RequestClassDraft], mailbox: String?) async {
-        if let demoSession {
-            demoSession.edit(name: name, description: description, image: image, listed: listed, classes: classes)
-            addressSettings = demoSession.settings; failure = nil
-            notice = "Demo changes saved for this session. Nothing was published."
-            return
-        }
+
         await perform(.publication) {
             try await self.call { try $0.publishAddress(expected: expected, classVersion: classVersion,
                 displayName: name, description: description, image: image, listed: listed, classes: classes, mailbox: mailbox) }
@@ -269,7 +253,6 @@ actor ClientWorker {
         }
     }
     func controlRelationship(sender: SenderReference, control: RelationshipControl) async {
-        if isDemo { notice = "Demo explanation only. No permission was changed."; return }
         guard selectedSender == sender, connected else { return }
         await perform(.relationship) {
             self.inbox = try await self.call { try $0.controlRelationship(sender: sender.value, control: control) }
@@ -291,7 +274,6 @@ actor ClientWorker {
     func openSource(_ message: String) async {
         clearSource()
         let requested = sourceGeneration
-        guard !isDemo else { notice = "Source selection requires an authenticated retained message."; return }
         await perform(.source) {
             let source = try await self.call { try $0.sourceMessage(message: message) }
             if self.sourceGeneration == requested { self.sourceMessage = source }
@@ -299,7 +281,6 @@ actor ClientWorker {
     }
     func clearSource() { sourceGeneration += 1; sourceMessage = nil }
     func resolveReference(message: MessageID, part: UInt32) async {
-        guard !isDemo else { return }
         clearReference()
         let requested = referenceGeneration
         await perform(.reference) {
@@ -309,14 +290,12 @@ actor ClientWorker {
     }
     func clearReference() { referenceGeneration += 1; reference = nil }
     package func quoteRequest(other: SenderReference, requestClass: RequestClassID) async {
-        guard !isDemo else { notice = "Demo explanation only. No quote or charge was created."; return }
         await perform(.request) {
             _ = try await self.call { try $0.quoteRequest(other: other.value, class: requestClass.value) }
             self.inbox = try await self.call { try $0.cachedInbox() }
         }
     }
     package func authorizeRequest(request: RequestID, text: String) async -> Bool {
-        guard !isDemo else { return false }
         var accepted = false
         await perform(.request) {
             _ = try await self.call { try $0.authorizeRequest(request: request.value, text: text) }
@@ -328,7 +307,6 @@ actor ClientWorker {
         return accepted || inbox?.pendingRequest == true && inbox?.requestProgress?.status != .review
     }
     func cancelRequest() async {
-        guard !isDemo else { return }
         await perform(.request) {
             try await self.call { try $0.cancelRequest() }
             self.inbox = try await self.call { try $0.cachedInbox() }
@@ -337,7 +315,7 @@ actor ClientWorker {
         }
     }
     func sendFollowup(request: RequestID, text: String) async -> Bool {
-        guard !isDemo, let sender = selectedSender, connected else { return false }
+        guard let sender = selectedSender, connected else { return false }
         var accepted = false
         await perform(.request) {
             _ = try await self.call { try $0.sendFollowup(other: sender.value, request: request.value, text: text) }
@@ -348,7 +326,6 @@ actor ClientWorker {
         return accepted || inbox?.pendingRequest == true
     }
     func changePolicy(conversationID: String, revision: UInt64, action: PolicyAction) async {
-        if isDemo { notice = "Demo explanation only. No policy was changed."; return }
         guard let sender = selectedSender, connected else { return }
         await perform(.policy) {
             try await self.call { try $0.changeConversationPolicy(conversation: conversationID, revision: revision, action: action) }
@@ -357,7 +334,7 @@ actor ClientWorker {
         }
     }
     func sendMessage(conversationID: String?, text: String, sources: [SourceDraft]) async -> Bool {
-        guard !isDemo, let sender = selectedSender, conversation?.sender == sender.value, connected else { return false }
+        guard let sender = selectedSender, conversation?.sender == sender.value, connected else { return false }
         var succeeded = false
         await perform(.message) {
             _ = try await self.call { try $0.sendMessage(other: sender.value, conversation: conversationID, text: text, sources: sources) }
@@ -371,15 +348,43 @@ actor ClientWorker {
         }
         return succeeded
     }
-    func resetDemo() {
-        guard isDemo else { return }
-        let session = DemoSession(); backend = .demo(session)
-        directory.clear(); directory = DirectoryModel(backend: backend)
-        inbox = session.inbox; conversation = nil; selectedSender = nil
-        addressSettings = nil; failure = nil; notice = nil
+
+    func loadExternal() async {
+        await perform(.conversation) { self.externalInbox = try await self.call { try $0.externalInbox() } }
     }
+    func sendExternal(conversation: String?, mailbox: String, text: String, disclose: Bool) async -> Bool {
+        let started = generation
+        var queued = false
+        sentExternalConversation = nil
+        await perform(.message) {
+            self.sentExternalConversation = try await self.call { try $0.sendExternal(conversation: conversation, mailbox: mailbox, text: text, disclose: disclose) }
+            queued = true
+            self.notice = "Email queued. Relay acceptance and delivery are reported separately."
+            self.inbox = try await self.call { try $0.sync() }
+        }
+        // Read the encrypted journal even when transport failed, so a new send cannot replace it.
+        let savedFailure = failure
+        await loadExternal()
+        guard started == generation else { return false }
+        if let savedFailure { failure = savedFailure }
+        return queued || externalInbox?.pending != nil
+    }
+    func controlExternal(conversation: String, action: ExternalAction) async {
+        await perform(.message) {
+            try await self.call { try $0.controlExternal(conversation: conversation, action: action) }
+            self.notice = action == .withdrawDisclosure ? "Consent withdrawn. Waiting emails are cancelled; dispatch already begun may be too late to recall." : "Conversation change recorded."
+            self.inbox = try await self.call { try $0.sync() }
+            self.externalInbox = try await self.call { try $0.externalInbox() }
+        }
+    }
+    func controlExternalRelationship(thread: ExternalThread, control: RelationshipControl) async {
+        await perform(.relationship) {
+            self.inbox = try await self.call { try $0.controlRelationship(sender: thread.guest, control: control) }
+            self.externalInbox = try await self.call { try $0.externalInbox() }
+        }
+    }
+
     private func call<T: Sendable>(_ action: @escaping @Sendable (AppleClient) throws -> T) async throws -> T {
-        guard let worker else { throw ClientError.Unavailable }
         let requested = generation
         let requestedLifetime = lifetime
         let result = try await worker.run(lifetime: requestedLifetime, action)
@@ -417,7 +422,8 @@ actor ClientWorker {
                 if work == .purchase || work == .request || work == .policy || work == .relationship || work == .decision || work == .retry || work == .publication || work == .message {
                     // Preserve the Rust journal's uncertain outcome without assuming rollback.
                     let cached = try? await call { try $0.cachedInbox() }
-                    if generation == started { inbox = cached ?? inbox }
+                    let external = try? await call { try $0.externalInbox() }
+                    if generation == started { inbox = cached ?? inbox; externalInbox = external ?? externalInbox }
                 }
             }
         }
@@ -426,6 +432,8 @@ actor ClientWorker {
     nonisolated static func explanation(_ error: Error) -> String {
         guard let error = error as? ClientError else { return "The operation could not finish. No success has been assumed." }
         switch error {
+        case .ExternalPending: return "An external-email operation has an unresolved outcome. Resume its saved operation before composing again."
+        case .ExternalRefused: return "The service refused this external-email operation. Refresh its current permission and consent before trying again."
         case .NotConfigured: return "Sign in to enroll this device."
         case .EnrollmentRequired: return "Device enrollment is unfinished. Check enrollment status or continue sign-in."
         case .LoginUnavailable: return "Browser sign-in is not configured or could not start."

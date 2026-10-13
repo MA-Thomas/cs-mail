@@ -39,6 +39,24 @@ local persistence, transport, time and lifecycle services as needed. The exact
 adapter implementation language follows the platform requirement; domain rules
 do not move into Swift or get duplicated at the binding boundary.
 
+## One application, one backend path — 13 October 2026
+
+The member application has no demo mode or parallel preview app. `MemberModel` and
+`DirectoryModel` share a concrete `ClientWorker`; all workflows use the portable
+Rust client and canonical service. The transient fixture adapter and its alternate
+mutation/read behavior have been removed. The macOS entry point opens the preserved
+account with its original credential service and encrypted device store. The existing
+local evidence/payment simulators and persistent fictional participant accounts are
+backend development adapters, not an alternative application mode.
+
+`apple-build.sh` packages one stable-signed app at the existing continuity path and
+checks its signing requirement before replacement. Named review builds and their
+packaging entry points are retired. Earlier signed app checkpoints remain recoverable
+archives, paired with their matching databases and caches. The original Keychain
+item identity, credential bytes, account/persona association and public keys were
+checked unchanged across the installed update. Swift navigation and all previously
+implemented native workflows now run together in this one account-backed app.
+
 ## Swift presentation ownership
 
 The 11 October consolidation gives sidebar destinations a shared enum and uses
@@ -85,6 +103,37 @@ are supported by locked mutable access; generated UniFFI conformances are not
 edited. iOS language settings are configuration, not device validation.
 
 ## Rust-to-Swift interface
+
+### Navigation framework, 13 October 2026
+
+The Swift presentation has six top-level areas, a reactive content list and a main
+space. `MemberDestination` owns both the area and its detail route; a correspondence
+route retains its originating area. `EditorialNavigationShell` owns transient
+pointer/focus preview state. The preview and content list use one
+`EditorialInboxView` implementation, with callbacks for ordinary navigation.
+Search and contact selection do not establish eligibility or sending authority.
+
+The hover correction gives pointer-opened and explicitly keyboard-opened previews
+distinct typed sessions. One shell pointer observer projects the hovered destination
+and popup presence from measured visible regions in one coordinate space. Padding
+has no hover authority. Incidental focus cannot overwrite or retain a pointer
+preview; explicit keyboard previews retain their own focus. These are presentation
+lifecycles, with no server command or journal effect.
+
+Main-space portal buttons use a separate perimeter style over the supplied
+`EditorialBoundary` shape. Hover strengthens its stroke without filling the
+interior or changing its standing opening or lane markers. The full card remains
+the click target; the decorative stroke does not participate in hit testing.
+List and rail rows retain their existing region style. This changes presentation
+feedback only, with no permission interpretation or command effect.
+
+The existing correspondence view stays mounted behind other destinations, retaining
+reading and composer state without creating another reader or journal. Session lock
+removes it as before. Hover reads already-projected summaries and performs no
+credential access or decryption. Whole-region buttons leave message selection and
+the popup composer with their existing owners. Layout changes adapt the rail into
+a row without replacing the content view. Rust contracts and durable operation
+identities are unchanged. Notes and annual-finance interfaces remain deferred.
 
 Introduce the narrow client FFI facade during Milestone 4, alongside its first
 consumer. Expose client use cases and checked results, not arbitrary domain
@@ -339,3 +388,16 @@ The schema/cache cutover uses a preservation-checked offline upgrade and prepare
 encrypted artifacts with durable recovery intent. Original identity and Keychain
 credentials persist. No old runtime cache reader or parallel reply implementation
 is retained.
+
+## External-email client boundary — 13 October 2026
+
+The portable member client now owns external authored-text preparation, scoped
+consent commands and exact signed-operation retry through the existing service.
+Its optional external workspace records an uninitialized or observed external
+mailbox in the one encrypted format-3 snapshot; there is one cache reader and no
+credential replacement or separate storage path. The workspace stores encrypted
+message copies and signed commands, not plaintext. An acknowledgement resolves the
+operation before fetching updated views, preventing a failed refresh from inviting
+a fresh duplicate. Swift presents external conversations under Communications with
+a popup composer and explicit consent/permission confirmations. It does not grant
+permission, authenticate email, or derive delivery success.

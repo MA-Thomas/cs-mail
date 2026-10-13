@@ -13,6 +13,8 @@ pub enum ClientError {
     Offline,
     Unauthorized,
     Unavailable,
+    ExternalPending,
+    ExternalRefused,
     DecisionPending,
     SendPending,
     SendRefused,
@@ -40,6 +42,8 @@ impl std::error::Error for ClientError {}
 impl From<core::Error> for ClientError {
     fn from(error: core::Error) -> Self {
         match error {
+            core::Error::ExternalPending => Self::ExternalPending,
+            core::Error::ExternalRefused => Self::ExternalRefused,
             core::Error::NotConfigured => Self::NotConfigured,
             core::Error::AlreadyConfigured => Self::AlreadyConfigured,
             core::Error::KeyUnavailable => Self::KeyUnavailable,
@@ -1235,6 +1239,105 @@ impl AppleClient {
                 core::ReferenceContent::Unavailable => ReferenceContent::Unavailable,
                 core::ReferenceContent::AccessDenied => ReferenceContent::AccessDenied,
             })
+            .map_err(Into::into)
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct ExternalInbox {
+    pub pending: Option<String>,
+    pub threads: Vec<ExternalThread>,
+}
+#[derive(uniffi::Record)]
+pub struct ExternalThread {
+    pub id: String,
+    pub mailbox: String,
+    pub guest: String,
+    pub permission: String,
+    pub pending_invitation: bool,
+    pub disclosure: bool,
+    pub blocked: bool,
+    pub messages: Vec<ExternalMessage>,
+}
+#[derive(uniffi::Record)]
+pub struct ExternalMessage {
+    pub id: String,
+    pub text: String,
+    pub outgoing: bool,
+    pub delivery: String,
+}
+#[derive(uniffi::Enum)]
+pub enum ExternalAction {
+    Reject,
+    WithdrawDisclosure,
+    GrantDisclosure,
+}
+#[uniffi::export]
+impl AppleClient {
+    /// # Errors
+    /// Unavailable custody or invalid encrypted content.
+    pub fn external_inbox(&self) -> Result<ExternalInbox, ClientError> {
+        self.0
+            .external_inbox()
+            .map(|v| ExternalInbox {
+                pending: v.pending,
+                threads: v
+                    .threads
+                    .into_iter()
+                    .map(|t| ExternalThread {
+                        id: t.id,
+                        mailbox: t.mailbox,
+                        guest: t.guest,
+                        permission: t.permission,
+                        pending_invitation: t.pending_invitation,
+                        disclosure: t.disclosure,
+                        blocked: t.blocked,
+                        messages: t
+                            .messages
+                            .into_iter()
+                            .map(|m| ExternalMessage {
+                                id: m.id,
+                                text: m.text,
+                                outgoing: m.outgoing,
+                                delivery: m.delivery,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .map_err(Into::into)
+    }
+    /// # Errors
+    /// Invalid inputs, unresolved work, unavailable service or refused command.
+    #[allow(clippy::needless_pass_by_value)] // UniFFI requires owned values at the language boundary.
+    pub fn send_external(
+        &self,
+        conversation: Option<String>,
+        mailbox: String,
+        text: String,
+        disclose: bool,
+    ) -> Result<String, ClientError> {
+        self.0
+            .send_external(conversation.as_deref(), &mailbox, &text, disclose)
+            .map_err(Into::into)
+    }
+    /// # Errors
+    /// Invalid conversation, unresolved work or unknown/refused outcome.
+    #[allow(clippy::needless_pass_by_value)] // UniFFI requires owned values at the language boundary.
+    pub fn control_external(
+        &self,
+        conversation: String,
+        action: ExternalAction,
+    ) -> Result<(), ClientError> {
+        self.0
+            .control_external(
+                &conversation,
+                match action {
+                    ExternalAction::Reject => core::ExternalAction::Reject,
+                    ExternalAction::WithdrawDisclosure => core::ExternalAction::WithdrawDisclosure,
+                    ExternalAction::GrantDisclosure => core::ExternalAction::GrantDisclosure,
+                },
+            )
             .map_err(Into::into)
     }
 }

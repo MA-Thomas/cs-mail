@@ -1,3 +1,38 @@
+## External email in the unified app — 13 October 2026
+
+Communications → External email opens the conversation reader and popup composer.
+Choose an external address and explicitly authorize plaintext disclosure to the
+relay and mailbox for that conversation. Only authored text is supported; native
+quotations, sharing and references are excluded. The development backend uses a
+local file relay, so no public email leaves this environment.
+
+Rust owns signed commands, ciphertext preparation, encrypted local journaling,
+exact-operation retry and canonical permission projections. Swift renders waiting,
+unknown handoff, relay acceptance and provider reports separately. Provider
+acceptance does not establish delivery. A lost response preserves the original
+command; replacing an unresolved send is refused. Known acknowledgement remains
+successful even if the subsequent view refresh fails.
+
+Authenticated replies appear in an unpaid pending invitation. Confirmed Accept,
+Reject, a seven-day express lane, Block and revocation use the existing relationship
+and external-conversation owners. Disclosure withdrawal cancels waiting work but
+cannot guarantee recall after dispatch begins; restoration does not revive cancelled
+messages. Paid guest requests remain their existing workflow.
+
+The agreed experiments challenge consent refusal, authenticated pending reply
+admission without a paid request, withdrawal/restoration, rejection, explicit new
+invitation, acceptance, lane, blocking, encrypted persistence, same-device reopening,
+and exact ciphertext replay after response loss. The native harness uses isolated
+accounts and the trusted synthetic receiver fixture, not a public authentication
+endpoint. The owner deployment was explicitly authorized for a local-relay cutover.
+Read-only preservation checks confirmed unchanged original Keychain entry/credential,
+account/persona/device-key associations and existing deployment keys. No schema change
+or account reenrollment was needed.
+
+Existing PostgreSQL suites challenge email authentication, consent/dispatch
+serialization and durable deduplication. Public SMTP/provider callbacks, full visual
+and accessibility checks and iOS runtime behavior remain outside this pass.
+
 # cs-mail Apple client
 
 SwiftUI presentation over `cs-mail-client::member`, exported through
@@ -8,6 +43,163 @@ Implemented: browser sign-in and first-device enrollment; encrypted device-state
 persistence; reopening the same device; inbox/request reading, standing acceptance, rejection and express-lane acceptance;
 durable decision and encrypted-send retry; native conversation reading and composing; explicit offline, denied-custody, review and expiry errors.
 The interface requires fresh synchronization before enabling decisions.
+
+## One unified application — 13 October 2026
+
+There is one member app, with no demo mode or separate preview/assessment app.
+Open `target/apple/CsMail-continuity-20261012.app` (display name **cs-mail Development**).
+It runs all implemented native workflows against the preserved local development
+account `marcus@csqd-mail.com`. The navigation rail, reactive lists, portal perimeter
+feedback, popup composer, request initiation/review, follow-ups, received-conversation
+replies, source reuse, contact controls, Directory, approach-page editor and recorded
+request finances are available in that app. Notes, annual finance interfaces,
+external-email composition, consent and reply review now use the portable Rust client; replacement-device recovery remains unimplemented.
+
+The transient fixture adapter, demo branches, startup flag and demo-packaging script
+are removed. `MemberModel` and `DirectoryModel` share one `ClientWorker`; every action
+uses the portable Rust client and canonical service. There are no fake decisions,
+transient demo publications, mode switches or substitute readers. Simulated bank
+and payment evidence and the persisted fictional participant accounts remain backend
+adapters in this development environment, independent of the application interface.
+
+Build and launch only this app:
+
+```sh
+DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
+  scripts/apple-build.sh
+open target/apple/CsMail-continuity-20261012.app
+```
+
+The build owns the original credential service, encrypted v3 store, service URL and
+bundle identity. It requires stable signing and refuses to replace an existing app
+with a different designated signing requirement. The redundant account-build wrapper
+and named review-build variants are removed. Existing app bundles were archived and
+verified byte-for-byte before separate demo/review/legacy bundles were retired.
+`target/apple` now contains exactly one app bundle. Rollback archives are in
+`target/apple-rollback-20261013`; restore a checkpoint only with its matching database,
+cache and service binary. Original account/identity databases and older caches are
+retained unchanged; the original schema-32 app is preserved in its verified archive.
+
+Validation: the full eight-check quality gate including PostgreSQL passed
+(`/tmp/cs-mail-unified-quality-gate.log`). The existing native journey passed against
+separate test databases (`/tmp/cs-mail-unified-native-checks.log`), covering quotes,
+reopening, funding/submission, follow-ups, multiple replies, acceptance, source reuse,
+policy controls, revoke/block/unblock, retry/refusal recovery, SQLite and isolated
+Keychain checks. No automated test cases were added. The final signed build passed
+(`/tmp/cs-mail-unified-install-build.log`). Read-only comparisons preserved the
+original Keychain persistent item identity and credential bytes, account/persona
+association, public-key records, original caches and signing requirement.
+
+The updated app reopened the original account without enrollment. Native inspection
+confirmed the original address and saved Daniel correspondence; New conversation
+opened the real composer and its retained-source picker. The empty verification
+composer was closed without sending. iOS execution, live providers and a comprehensive
+visual/accessibility audit remain outside this pass. Earlier references below to
+review apps and offline fixtures are historical validation records, superseded by
+this unified application cutover.
+
+## Navigation framework — 13 October 2026
+
+The member application now has an icon rail (Column A), a reactive navigation
+list (Column B), and the main communication space. The destinations are Home,
+Communications, Relationships, Express lanes, Economics and Notes. Home retains
+the membrane overview; Communications searches existing people and opens their
+correspondence. Relationships exposes incoming/outgoing request records, Directory,
+the member's approach page and the existing saved-request review sheet. Selecting
+a contact from a request or lane list keeps that area's rail selection.
+
+The lane list describes incoming permission only; outgoing authority remains
+separate in the contact controls. Economics reuses recorded request finances and
+Q&A. Annual-service/distribution interfaces and forecasts, drafts/sent overview,
+dedicated lane history/editing and a Notes editor are not implemented by this pass.
+Their absence is explicit; no synthetic financial estimate or note-save action
+is offered. On narrow layouts the rail becomes a row, with the same destinations.
+
+Main-space portals highlight their existing boundary on hover, leaving their
+interiors unchanged and preserving standing gaps and bounded-lane markers. The
+entire portal remains clickable. Contact-list, conversation, Directory and
+request-class rows retain whole-region shading and matching hit regions.
+The rail previews the same navigation component
+used in Column B, after a 250 ms initial pointer dwell; an already-open preview
+switches immediately when another icon is hovered. A 220 ms dismissal grace period
+allows movement into the scrollable preview. Pointer-opened previews stay open
+only while the pointer is over an icon or the visible popup. Explicitly
+keyboard-opened previews also retain the matching rail or popup focus.
+Tab reaches the rail; Right Arrow opens a preview,
+and Escape or Close dismisses it. Previewing does not change the selected area or
+main space. Activating a preview item performs ordinary navigation. Keyboard,
+accessibility actions and ordinary click navigation provide alternatives to hover.
+
+One typed Swift destination owns the selected area and detail route. Swift owns
+search, focus, preview and navigation state. Rust continues to provide permission,
+request, lane, financial and retry meaning; no domain rule, schema, client journal
+or credential operation changed. The correspondence view remains mounted while
+another destination is shown, preserving its reading and popup-composer context.
+Locking still removes the session and its transient readable content. Hover uses
+existing summaries and initiates no decryption, funding, grant or send.
+
+The agreed validation scope uses existing suites and native journeys, with no
+new automated test cases. All eight quality-gate checks passed, including isolated
+PostgreSQL suites (`/tmp/cs-mail-navigation-quality-gate.log`). The existing native
+journey passed against a separate fictional deployment
+(`/tmp/cs-mail-navigation-native-checks.log`), including exact request retries,
+same-device reopening, encrypted persistence and isolated Keychain checks. Signed
+macOS packaging passed (`/tmp/cs-mail-navigation-owner-build.log`). The earlier
+build/gate attempt failed because the compiler had no Apple SDK path; the successful
+runs supply `SDKROOT` explicitly and use Command Line Tools.
+
+The isolated demo established three-slice layout, conversation search, Directory
+routing, selected-contact/search retention, accessible previews, preview-item
+navigation and Escape dismissal. The final demo starts without an unsolicited
+preview. Tab followed by Right Arrow opened Communications' preview while Home
+remained selected; search within that preview retained keyboard focus, and Escape
+dismissed it without navigating. Pointer dwell/cross-gap timing was not established
+through the available native automation. iOS execution, interactive expiry,
+an exhaustive focus/clipboard/accessibility audit and composer retention under
+owner-account navigation are not established by the native harness.
+
+The temporary review bundles used for this pass have been retired. The unified
+application section above records the current app and preservation checks.
+
+### Hover correction — 13 October 2026
+
+Marcus reported that hovering Home could show Communications and that leaving
+the icon/popup did not dismiss it. Keyboard focus could overwrite the pointer's
+destination, while popup tracking included transparent padding across the rail.
+The correction gives pointer and keyboard previews distinct typed sessions and
+one owner. One pointer observation now selects from measured icon and visible-popup
+bounds in a shared coordinate space; transparent positioning padding is excluded.
+Incidental rail or text-field focus cannot pin or rename a pointer-opened preview.
+Previewing still performs no Rust operation or authority change.
+
+The two challenged claims were that Home's visible hover region selects Home
+regardless of earlier focus, and that leaving both icon and popup dismisses a
+pointer-opened preview. The corrected offline demo was rebuilt and reopened;
+Marcus confirmed both behaviors work. Exact dwell/cross-gap timing and all-icon
+stress traversal were not separately measured. No automated test cases were added.
+All eight quality-gate checks passed, including isolated PostgreSQL suites
+(`/tmp/cs-mail-hover-fix-quality-gate.log`). The signed macOS build passed
+(`/tmp/cs-mail-hover-fix-build.log`); candidate signing requirement and account
+configuration still match the preserved owner app. The running owner app was not
+closed or replaced, and iOS remains untested.
+
+### Portal perimeter feedback — 13 October 2026
+
+Main-space portal hover strengthens only the supplied membrane stroke. Its interior
+has no hover fill; standing openings and bounded-lane markers retain their existing
+shape. Home and the relationship/lane overview cards share this portal style.
+The full card remains clickable, while its decorative strokes ignore hit testing.
+Column A/B and ordinary list rows retain their region shading. No Rust, permission,
+operation or persistence behavior changed, and no automated test cases were added.
+
+The signed macOS build and all eight quality-gate checks passed, including isolated
+PostgreSQL suites (`/tmp/cs-mail-portal-perimeter-build.log` and
+`/tmp/cs-mail-portal-perimeter-quality-gate.log`). The refreshed offline demo opened;
+portal activation still opened the selected correspondence, and returning to Home
+restored the overview. Candidate signing/account configuration still matches the
+original owner app. Full light/dark hover and iOS audits were not performed. The
+owner app was not closed or replaced.
 
 ## Principles repair and received-conversation replies — 13 October 2026
 
@@ -362,19 +554,9 @@ activates frozen reverse-lane terms while preserving an existing custom lane.
 Rust owns all admission and settlement; Swift selects the conversation and
 presents the outcome. Paid request initiation uses the CLI; source reuse is available through Rust
 correspondence APIs. Those UI workflows are not implemented here.
-For a fresh backend launched with separate databases, state directory and ports,
-package its matching app with `CS_MAIL_APPLE_ENVIRONMENT_NAME=messaging-20261012`
-and `CS_MAIL_LOCAL_STATE_DIR` set to that backend's state directory when running
-`scripts/apple-account-app.sh`. The named build writes
-`target/apple/CsMail-messaging-20261012.app`, uses
-`com.csqd.member.development.messaging-20261012` for both its Application Support
-store and Keychain service, and leaves the saved `CsMail.app` and owner namespace
-in place. This is explicit development isolation, not credential reuse or a reader
-for old caches. Ordinary reopening of that fresh environment must retain the same
-name and backend state.
-
-The offline visual demo does not pretend to send live messages. Historical
-reopening observations below apply to the saved schema-32 checkpoint.
+This section describes a historical isolated backend experiment. Its named app
+bundles are retired. Use the single unified app described above for assessment;
+isolated service and CLI/native-harness experiments do not create another member app.
 
 Validation of this cutover: the complete Rust quality gate passed (112 workspace
 checks and 104 PostgreSQL experiments), along with the HTTP/CLI demonstration
@@ -420,7 +602,8 @@ one app and navigation model. The profile is currently listed with one introduct
 class; up to eight classes may be published per address. Standing contacts and
 express lanes are visually separate. Directory profiles have Back navigation,
 readable text supports native Copy/Paste, and clicking the selected request class
-clears its selection. The optional offline demo stays separate from account data.
+clears its selection. The earlier offline fixture mode was retired in the unified
+application cutover; current screens use account data.
 
 The preserved personal environment contains six enrolled accounts: the owner and
 five independently credentialed fictional participants. Maya was left awaiting a
@@ -638,24 +821,24 @@ Select an existing code-signing identity once, then build:
 
 ```sh
 scripts/apple-signing-setup.sh
-scripts/apple-account-app.sh
+scripts/apple-build.sh
 ```
 
 The selection script reads existing valid identities in Keychain and records only
 the selected certificate fingerprint. It changes no certificate trust. Set
 `CS_MAIL_APPLE_SIGNING_IDENTITY` when more than one identity is available.
 Account packaging refuses ad hoc signing. The bundle is signed and verified before
-replacing the previous bundle. The app's enrollment service URL comes from the
-persistent environment manifest, or an explicit loopback
-`CS_MAIL_DEVELOPMENT_SERVICE_URL`. No device credential is imported by these scripts.
+replacing the previous bundle. The app uses the preserved development service at
+`http://127.0.0.1:9693`. The build keeps the original account configuration;
+it does not import or replace a device credential.
 
 The selected signer on this Mac is the existing Apple Development identity. The
 signed app automatically reopens saved device state and synchronizes; offline
 failure preserves a visibly dated snapshot. Unfinished enrollment reconciles its
 existing operation. Custody failures never replace the stored credential or make
 another account. Browser cancellation fences callbacks from an older ceremony.
-All connected screens show that banking and payments are simulated. The same app
-retains Explore demo for offline review.
+The app shows that banking and payments are simulated. It has one account-backed
+execution path and no separate demo mode.
 
 The persistent owner account is enrolled and has claimed `marcus@csqd-mail.com`
 through the ordinary signed address publication workflow. Its public name is
@@ -726,18 +909,6 @@ sheet opening/dismissal, and absence on a pending request. The full quality gate
 passed, including PostgreSQL. No tests were added;
 live settlement, iOS and a full accessibility audit were not repeated for this
 explanatory presentation change.
-
-For visual review, package the same member executable in explicit demo mode:
-
-```sh
-bash scripts/apple-demo-app.sh
-open target/apple/CsMailLocalDemo.app
-```
-
-This opens populated fictional correspondence immediately. It uses no Keychain,
-SQLite store, account enrollment or network service. The ordinary application also
-has an **Explore demo** entry on its welcome screen. **Exit demo** returns to that
-screen; **Open account** explicitly starts the connected account workflow.
 
 ## Existing identity model and browser configuration
 
@@ -896,60 +1067,12 @@ address/device management, cross-page snapshot consistency or sending a paid req
 from the directory. This slice publishes and reviews approaches; it adds no new
 payment authority, public hosting, bank connector or external mail sending.
 
-## Unified visual demo — 11 October 2026
+## Historical visual validation — October 2026
 
-One member executable and shared screens serve two explicit modes. Visual demo mode
-uses a transient `DemoSession` fixture adapter and never constructs a `ClientWorker`,
-Rust client, SQLite store or credential vault. Connected mode retains the existing
-Rust workflows and Keychain custody. Entering a demo never opens an account, and
-exiting it returns to the account welcome screen without accessing credentials.
-
-The sidebar navigates among Communication space, Directory and My approach page.
-The communication space includes Maya and an external-email request, Daniel's
-standing contact, Elena's express lane, Jules's rejected approach and Noah's revoked
-permission. Directory fixtures include listed recipients and unavailable requests.
-The address editor supports a name, description, image, listed/unlisted visibility
-and up to eight classes. Saving changes updates the demo session; unlisting removes
-Alice from demo search while exact address/shared-link lookup still finds her.
-Use `alice@demo.example` or `https://demo.example/r/alice`. All addresses and links
-are fictional. Reset demo restores the initial fixtures. Edits reset on quit or when exiting demo mode.
-
-Acceptance and rejection show consequence explanations and explicitly record no
-decision, permission, settlement or payment. Default class totals are fixed example
-terms. Editing amounts does not calculate or issue new quotes. No demo result is
-server validation or financial evidence, and demo data is never merged into an
-account cache. The old automatic enrollment/CLI population demo path and its unused
-portable lane bridge have been removed. Previously created accounts and encrypted
-stores remain untouched. The standalone preview executable source remains retired.
-
-Validation scope is unchanged: build, existing full quality gate, visual navigation,
-editing and quit/reopen; no new automated tests. iOS runtime and a complete
-accessibility audit remain outside this pass.
-
-Observed in the final macOS build: launch opened the populated communication space
-without a Keychain prompt; shared-sidebar navigation opened Directory and My approach
-page; search found Elena; profile/name/class-description edits saved in memory;
-unlisting excluded Alice from browsing while her fictional shared link still opened
-her edited profile. Class selection displayed fixed example terms with no payment
-action. The editor reached eight rows and removed its Add control; eight completed
-classes saved in the demo session. Maya's decision explanation explicitly recorded
-no decision or payment and left the pending request unchanged. Exit/re-enter worked
-in the same executable without opening an account. Same-binary quit/reopen restored
-all six contacts, Alice's listed profile and three initial classes with no credential
-prompt. The app was left open on the populated communication space.
-
-The final native build passed (`/tmp/cs-mail-offline-demo-final-build.log`) and all
-eight existing quality-gate checks passed, including PostgreSQL suites
-(`/tmp/cs-mail-offline-demo-gate.log`). No automated test was added in this pass.
-The image file chooser, iOS runtime and a full accessibility audit were not assessed.
-Connected account workflows were not re-exercised in this visual-demo pass.
-
-Directory recipient profiles now include an explicit **Back to Directory** control.
-Opening a profile preserves the current results, search text and page; returning
-restores that view without issuing another search. This applies to both search
-results and exact-address/shared-link lookups. The Directory toolbar refreshes the
-visible profile or current results; the communication-space refresh is shown only
-in the communication space.
+The offline visual fixture mode used in the October 11 navigation experiment has
+been removed. Those observations did not establish canonical service outcomes.
+The current application has one account-backed execution path. The subsequent
+presentation observations below retain their original validation scope.
 
 The navigation correction was checked in the rebuilt offline macOS demo: search
 for Daniel, open his profile, refresh it, return to the same filtered results,

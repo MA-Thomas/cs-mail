@@ -7,119 +7,135 @@ public struct EditorialConversationSummary: Identifiable {
     public let external: Bool
     public let awaitingDecision: Bool
     public let route: EditorialRoute
-    public init(id: SenderReference, title: String, subtitle: String, external: Bool, awaitingDecision: Bool, route: EditorialRoute) {
+    public let hasReceivedRequests: Bool
+    public let hasSentRequests: Bool
+    public init(id: SenderReference, title: String, subtitle: String, external: Bool, awaitingDecision: Bool, route: EditorialRoute, hasReceivedRequests: Bool, hasSentRequests: Bool) {
         self.id = id; self.title = title; self.subtitle = subtitle; self.external = external
         self.awaitingDecision = awaitingDecision
         self.route = route
+        self.hasReceivedRequests = hasReceivedRequests; self.hasSentRequests = hasSentRequests
     }
 }
 
+/// Column B and hover previews share this one navigation projection.
 public struct EditorialInboxView<Status: View>: View {
     let conversations: [EditorialConversationSummary]
-    @Binding var selection: SenderReference?
-    let status: Status
-    let openSpace: () -> Void
-    let openDirectory: () -> Void
-    let editAddress: () -> Void
-    let openQuestions: () -> Void
+    let selection: SenderReference?
+    let area: MemberArea
     let destination: MemberDestination
+    let hasRequestWorkflow: Bool
+    let showsStatus: Bool
+    let navigate: (MemberDestination) -> Void
+    let select: (SenderReference, MemberArea) -> Void
+    let reviewSavedRequest: () -> Void
+    let previewFocusChanged: (Bool) -> Void
+    let status: Status
+    @State private var search = ""
+    @FocusState private var focusedItem: String?
     @Environment(\.colorScheme) private var scheme
-    public init(conversations: [EditorialConversationSummary], selection: Binding<SenderReference?>, destination: MemberDestination, openSpace: @escaping () -> Void, openDirectory: @escaping () -> Void, editAddress: @escaping () -> Void, openQuestions: @escaping () -> Void, @ViewBuilder status: () -> Status) {
-        self.conversations = conversations; self._selection = selection; self.status = status()
-        self.destination = destination; self.openSpace = openSpace; self.openDirectory = openDirectory; self.editAddress = editAddress; self.openQuestions = openQuestions
+    public init(conversations: [EditorialConversationSummary], selection: SenderReference?, area: MemberArea,
+                destination: MemberDestination, hasRequestWorkflow: Bool, showsStatus: Bool,
+                navigate: @escaping (MemberDestination) -> Void,
+                select: @escaping (SenderReference, MemberArea) -> Void,
+                reviewSavedRequest: @escaping () -> Void, previewFocusChanged: @escaping (Bool) -> Void = { _ in }, @ViewBuilder status: () -> Status) {
+        self.conversations = conversations; self.selection = selection; self.area = area
+        self.destination = destination; self.hasRequestWorkflow = hasRequestWorkflow
+        self.showsStatus = showsStatus
+        self.navigate = navigate; self.select = select; self.reviewSavedRequest = reviewSavedRequest
+        self.previewFocusChanged = previewFocusChanged
+        self.status = status()
+    }
+    private var visibleContacts: [EditorialConversationSummary] {
+        conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
     }
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("cs-mail").font(EditorialStyle.heading(23)).tracking(0.3).accessibilityAddTraits(.isHeader)
-                .padding(.horizontal, 26).padding(.top, 32).padding(.bottom, 30)
-            VStack(spacing: 0) {
-                navigation(.space) { selection = nil; openSpace() }
-                navigation(.directory, action: openDirectory)
-                navigation(.address, action: editAddress)
-                navigation(.questions, action: openQuestions)
-            }.padding(.bottom, 18)
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    if !conversations.isEmpty {
-                        VStack(spacing: 0) {
-                            sectionHeading("Requests")
-                            let pending = conversations.filter(\.awaitingDecision)
-                            if pending.isEmpty {
-                                Text("No requests awaiting a decision.").font(EditorialStyle.text(12))
-                                    .foregroundStyle(EditorialStyle.secondaryInk(scheme))
-                                    .padding(.horizontal, 26).padding(.vertical, 18)
-                            }
-                            ForEach(pending) { row($0) }
-                        }
-                        .padding(.vertical, 20)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(EditorialStyle.requestWash(scheme))
-                        .padding(.bottom, 12)
-                        VStack(spacing: 0) {
-                            let history = conversations.filter { !$0.awaitingDecision }
-                            Text("Who can contact you").font(EditorialStyle.text(12))
-                                .foregroundStyle(EditorialStyle.secondaryInk(scheme))
-                                .padding(.horizontal, 26).padding(.bottom, 18)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            sectionHeading("Standing contacts")
-                            ForEach(history.filter { $0.route == .standing }) { row($0) }
-                            sectionHeading("Express lanes")
-                            Text("Scope and validity apply.").font(EditorialStyle.text(12))
-                                .foregroundStyle(EditorialStyle.secondaryInk(scheme)).padding(.horizontal, 26).padding(.bottom, 12)
-                            ForEach(history.filter { $0.route == .bounded }) { row($0) }
-                            let closed = history.filter { $0.route == .closed }
-                            if !closed.isEmpty {
-                                sectionHeading("Other correspondence")
-                                ForEach(closed) { row($0) }
-                            }
-
-                        }
-                        .padding(.vertical, 20)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(EditorialStyle.relationshipWash(scheme))
-                    }
-                    if conversations.isEmpty {
-                        Text("Incoming requests will appear here.")
-                            .font(EditorialStyle.text(14)).foregroundStyle(EditorialStyle.secondaryInk(scheme))
-                            .padding(26).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
+            Text(area.title).font(EditorialStyle.heading(23)).accessibilityAddTraits(.isHeader)
+                .padding(22)
+            if area == .communications {
+                TextField("Find a conversation", text: $search).textFieldStyle(.roundedBorder)
+                    .focused($focusedItem, equals: "search")
+                    .padding(.horizontal, 18).padding(.bottom, 16)
             }
-            status.padding(26).frame(maxWidth: .infinity, alignment: .leading)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    switch area {
+                    case .home:
+                        navigation("Your communication space", icon: "square.dashed", target: .home)
+                        heading("Awaiting your decision")
+                        contacts(conversations.filter(\.awaitingDecision), empty: "No requests awaiting your decision.")
+                        navigation("Find someone", icon: "magnifyingglass", target: .directory)
+                        navigation("Charges and refunds explained", icon: "questionmark.circle", target: .questions)
+                    case .communications:
+                        navigation("External email", icon: "envelope", target: .externalEmails)
+                        heading("People and conversations")
+                        contacts(visibleContacts, empty: search.isEmpty ? "No correspondence yet." : "No matching conversations.")
+                        note("Select a person to read their conversations or compose. Sending permission is checked separately.")
+                    case .relationships:
+                        navigation("Directory", icon: "person.text.rectangle", target: .directory)
+                        navigation("My approach page", icon: "slider.horizontal.3", target: .address)
+                        heading("Incoming requests")
+                        contacts(conversations.filter(\.hasReceivedRequests), empty: "No received requests.")
+                        heading("Outgoing requests")
+                        contacts(conversations.filter(\.hasSentRequests), empty: "No sent requests.")
+                        if hasRequestWorkflow {
+                            Button(action: reviewSavedRequest) {
+                                Label("Review saved request", systemImage: "tray").frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                            }.buttonStyle(EditorialRegionButtonStyle()).focusable().focused($focusedItem, equals: "saved-request")
+                        }
+                    case .lanes:
+                        heading("Who can contact you")
+                        note("Incoming express lanes · scope and validity apply. Outgoing permission is separate in Manage contact.")
+                        contacts(conversations.filter { $0.route == .bounded }, empty: "No incoming express lanes in this view.")
+                        note("Opening a contact also shows retained conversations. Lane history and a dedicated lane editor are not available here yet.")
+                    case .economics:
+                        navigation("Request finances", icon: "receipt", target: .economics)
+                        heading("Request records by person")
+                        contacts(conversations.filter { $0.hasReceivedRequests || $0.hasSentRequests }, empty: "No request financial records.")
+                        navigation("Q&A", icon: "questionmark.circle", target: .questions)
+                        note("Annual service and member-distribution screens are coming later. No forecast is shown.")
+                    case .notes:
+                        note("A private writing space is planned. Notes cannot be created or saved yet.")
+                    }
+                }.padding(.horizontal, 12).padding(.bottom, 20)
+            }
+            if showsStatus {
+                Divider()
+                ScrollView { status.padding(18).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 220)
+            }
         }
         .foregroundStyle(EditorialStyle.ink(scheme)).background(EditorialStyle.canvas(scheme))
-        .navigationSplitViewColumnWidth(min: 250, ideal: 290, max: 360)
+        .onChange(of: focusedItem) { _, item in previewFocusChanged(item != nil) }
     }
-    private func navigation(_ target: MemberDestination, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(target.title, systemImage: target.icon).font(EditorialStyle.text(13))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 26).padding(.vertical, 12)
-                .background(destination == target ? EditorialStyle.ink(scheme).opacity(0.065) : Color.clear)
-        }.buttonStyle(.plain)
+    private func heading(_ title: String) -> some View {
+        Text(title).font(EditorialStyle.text(13)).foregroundStyle(EditorialStyle.secondaryInk(scheme))
+            .accessibilityAddTraits(.isHeader).padding(.horizontal, 14).padding(.top, 18).padding(.bottom, 8)
     }
-    private func sectionHeading(_ title: String) -> some View {
-        Text(title).font(EditorialStyle.heading(20)).accessibilityAddTraits(.isHeader)
-            .padding(.horizontal, 26).padding(.bottom, 20).frame(maxWidth: .infinity, alignment: .leading)
+    private func note(_ text: String) -> some View {
+        Text(text).font(EditorialStyle.text(12)).foregroundStyle(EditorialStyle.secondaryInk(scheme))
+            .padding(.horizontal, 14).padding(.vertical, 10)
     }
-    private func row(_ item: EditorialConversationSummary) -> some View {
-        Button { selection = item.id } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(item.title).font(EditorialStyle.text(15)).lineLimit(2)
-                if !item.awaitingDecision {
-                    Text(item.subtitle).font(EditorialStyle.text(12)).foregroundStyle(EditorialStyle.secondaryInk(scheme))
-                }
-                if item.external { Text("External email").font(EditorialStyle.text(12)).foregroundStyle(EditorialStyle.secondaryInk(scheme)) }
-            }
-            .padding(.horizontal, 26).padding(.vertical, 19)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selection == item.id ? EditorialStyle.ink(scheme).opacity(0.065) : Color.clear)
-            .overlay(alignment: .leading) {
-                if selection == item.id { Rectangle().fill(EditorialStyle.ink(scheme)).frame(width: 2).padding(.vertical, 18) }
-            }
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain).id("\(item.id):\(item.subtitle)")
-            .accessibilityAddTraits(selection == item.id ? .isSelected : [])
+    private func navigation(_ title: String, icon: String, target: MemberDestination) -> some View {
+        Button { navigate(target) } label: {
+            Label(title, systemImage: icon).font(EditorialStyle.text(13))
+                .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+        }.buttonStyle(EditorialRegionButtonStyle(selected: destination == target)).focusable().focused($focusedItem, equals: "navigation-\(title)")
+    }
+    @ViewBuilder private func contacts(_ items: [EditorialConversationSummary], empty: String) -> some View {
+        if items.isEmpty { note(empty) }
+        ForEach(items) { item in
+            Button { select(item.id, area) } label: {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(item.title).font(EditorialStyle.text(15)).lineLimit(2)
+                    if item.awaitingDecision { Text("Awaiting your decision").font(EditorialStyle.text(12)) }
+                    else { Text(item.subtitle).font(EditorialStyle.text(12)).foregroundStyle(EditorialStyle.secondaryInk(scheme)) }
+                    if item.external { Text("External email").font(EditorialStyle.text(12)).foregroundStyle(EditorialStyle.secondaryInk(scheme)) }
+                }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(EditorialRegionButtonStyle(selected: selection == item.id))
+                .focusable()
+                .focused($focusedItem, equals: "contact-\(item.id.value)")
+                .accessibilityAddTraits(selection == item.id ? .isSelected : [])
+        }
     }
 }
 

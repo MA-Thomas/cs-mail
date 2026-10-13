@@ -18,8 +18,6 @@ public struct MemberView: View {
     @AppStorage("csMailAppearance") private var appearance: Appearance = .system
     @StateObject private var model: MemberModel
     private let accountAccess: DevelopmentAccountAccess
-    private let openDemo: (() -> Void)?
-    private let exitDemo: (() -> Void)?
     @State private var policyConfirmation: PolicyConfirmation?
     private struct PolicyConfirmation { let conversation: String; let revision: UInt64; let action: PolicyAction; let title: String; let explanation: String }
     @State private var readingReference = false
@@ -33,7 +31,7 @@ public struct MemberView: View {
     @State private var reviewingRequest = false
     @State private var managingContact = false
     @State private var enrolling = false
-    @State private var destination: MemberDestination = .space
+    @State private var destination: MemberDestination = .home
     @State private var server = "http://127.0.0.1:8480"
     @State private var name = ""
     @State private var birthDate = ""
@@ -48,56 +46,29 @@ public struct MemberView: View {
     @State private var confirmation: DecisionConfirmation?
     @Environment(\.scenePhase) private var phase
     @Environment(\.colorScheme) private var scheme
-    public init(directory: URL? = nil, demo: Bool = false, accountAccess: DevelopmentAccountAccess = .available, serviceURL: String = "http://127.0.0.1:8480", openDemo: (() -> Void)? = nil, exitDemo: (() -> Void)? = nil, credentialService: String = "com.csqd.member.development", loginBrowserBundleID: String? = nil) {
+    public init(directory: URL? = nil, accountAccess: DevelopmentAccountAccess = .available, serviceURL: String = "http://127.0.0.1:8480", credentialService: String = "com.csqd.member.development", loginBrowserBundleID: String? = nil) {
         _server = State(initialValue: serviceURL)
         self.accountAccess = accountAccess
-        self.openDemo = openDemo; self.exitDemo = exitDemo
-        _model = StateObject(wrappedValue: MemberModel(directory: directory, demo: demo, credentialService: credentialService, loginBrowserBundleID: loginBrowserBundleID))
+        _model = StateObject(wrappedValue: MemberModel(directory: directory, credentialService: credentialService, loginBrowserBundleID: loginBrowserBundleID))
     }
     public var body: some View {
         Group {
             if let inbox = model.inbox {
-                NavigationSplitView {
-                    EditorialInboxView(conversations: model.presentationContacts.map {
-                        EditorialConversationSummary(id: SenderReference($0.sender), title: $0.title,
-                            subtitle: $0.requests.contains(where: \.awaitingDecision) ? "Awaiting your decision" : $0.permission,
-                            external: $0.external, awaitingDecision: $0.requests.contains(where: \.awaitingDecision), route: route($0.permissionRoute))
-                    }, selection: Binding(get: { model.selectedSender }, set: { model.chooseSender($0); destination = .space }),
-                        destination: destination, openSpace: { destination = .space },
-                        openDirectory: { destination = .directory }, editAddress: { destination = .address }, openQuestions: { destination = .questions }) { status }.disabled(model.busy)
-                } detail: {
-                    switch destination {
-                    case .directory: DirectoryView(model: model.directory, demo: model.isDemo, member: model, openCorrespondence: { sender in destination = .space; Task { await model.select(sender) } }, reviewRequest: { approach, requestClass in requestTarget = RequestTarget(other: SenderReference(approach.address), name: approach.displayName, requestClass: requestClass) })
-                    case .address: AddressEditor(model: model)
-                    case .questions: VStack(spacing: 0) { RequestFinancialStatusView(model: model); EditorialQuestionsView() }
-                    case .space:
-                    EditorialSpaceView(conversations: model.presentationContacts.map {
-                        EditorialConversationSummary(id: SenderReference($0.sender), title: $0.title, subtitle: $0.permission,
-                            external: $0.external, awaitingDecision: $0.requests.contains(where: \.awaitingDecision),
-                            route: route($0.permissionRoute))
-                    }, selection: Binding(get: { model.selectedSender }, set: { model.chooseSender($0) })) { person, space in
-                        EditorialPortalView(person: person.title, permission: "Contact from this person: " + person.subtitle,
-                            route: person.route, portalID: person.id, space: space,
-                            returnToSpace: { model.chooseSender(nil) }) {
-                            if let conversation = model.conversation, conversation.sender == person.id.value {
-                                ContactCorrespondenceView(model: model, conversation: conversation, inbox: inbox,
-                                    manageContact: { managingContact = true },
-                                    requestRelationship: {
-                                        Task {
-                                            await model.directory.open(AddressReference(conversation.sender))
-                                            destination = .directory
-                                        }
-                                    },
-                                    reviewPolicy: reviewPolicy,
-                                    resolve: { message, part in readingReference = true; Task { await model.resolveReference(message: message, part: part) } },
-                                    decide: { decision, request in confirm(decision, conversation: conversation, request: request) })
-                                    .id(conversation.sender)
-
-                            } else {
-                                EditorialEmptyView(title: "Opening correspondence…")
-                            }
+                EditorialNavigationShell(selected: destination.area, navigate: { destination = $0.destination }) { area, dismiss, focusChanged in
+                    navigationColumn(area: area, preview: true, dismiss: dismiss, focusChanged: focusChanged)
+                } content: {
+                    NavigationSplitView {
+                        navigationColumn(area: destination.area)
+                            .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 360)
+                    } detail: {
+                        ZStack {
+                            // Retain the reader and its popup composer across destination changes.
+                            correspondence(inbox: inbox)
+                                .opacity(showsCorrespondence ? 1 : 0)
+                                .allowsHitTesting(showsCorrespondence)
+                                .accessibilityHidden(!showsCorrespondence)
+                            destinationContent.disabled(model.busy)
                         }
-                    }.disabled(model.busy)
                     }
                 }
                 .onChange(of: model.selectedSender) { _, sender in
@@ -106,27 +77,21 @@ public struct MemberView: View {
                 }
                 .toolbar {
                     ToolbarItemGroup {
-                        if destination == .space {
+                        if destination != .notes {
                             Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } }.disabled(model.busy)
                         }
-                        if model.isDemo {
-                            Button("Reset demo") { confirmation = nil; destination = .space; model.resetDemo() }
-                            if let exitDemo { Button("Exit demo", action: exitDemo) }
-                        } else {
-                            Button("Lock", systemImage: "lock") { confirmation = nil; model.lock() }
-                        }
+                        Button("Lock", systemImage: "lock") { confirmation = nil; model.lock() }
                     }
                 }
             } else {
                 VStack(spacing: 22) {
                     Text("cs-mail").font(EditorialStyle.heading(23)).padding(.bottom, 24)
                     Text("Your conversations.\nYour permission.").font(EditorialStyle.heading(34)).multilineTextAlignment(.center)
-                    if let openDemo { Button("Explore demo", action: openDemo).buttonStyle(EditorialButtonStyle()) }
                     Button("Open account") { Task { await model.unlock() } }.buttonStyle(EditorialButtonStyle(prominent: true)).disabled(accountAccess != .available)
                     Button("Sign in and enroll…") { enrolling = true }.buttonStyle(EditorialButtonStyle()).disabled(accountAccess != .available)
                     Button("Check enrollment status") { Task { await model.resumeEnrollment() } }.disabled(accountAccess != .available)
-                    if accountAccess == .signingSetupRequired { Text("Persistent account setup needs stable app signing. Explore demo remains available.").font(.caption).multilineTextAlignment(.center) }
-                    Text("Credentials stay in Keychain. The local cache is encrypted.\nThis local preview uses a test login provider and simulated bank.")
+                    if accountAccess == .signingSetupRequired { Text("Account setup needs stable app signing.").font(.caption).multilineTextAlignment(.center) }
+                    Text("Credentials stay in Keychain. The local cache is encrypted.\nDevelopment uses a test login provider and simulated bank.")
                         .font(.caption).multilineTextAlignment(.center).foregroundStyle(.secondary)
                     status
                 }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity).disabled(model.busy)
@@ -142,7 +107,7 @@ public struct MemberView: View {
                 .help("Switch between light and dark appearance")
             }
         }
-        .task { if !model.isDemo && accountAccess == .available { await model.unlock() } }
+        .task { if accountAccess == .available { await model.unlock() } }
         .onOpenURL { model.receiveLogin($0) }
         .textSelection(.enabled)
         .foregroundStyle(EditorialStyle.ink(scheme))
@@ -157,7 +122,7 @@ public struct MemberView: View {
             }
         }
         .onChange(of: model.inbox == nil) { _, locked in
-            if locked { readingReference = false; requestTarget = nil; model.clearReference(); destination = .space }
+            if locked { readingReference = false; requestTarget = nil; model.clearReference(); destination = .home }
         }
         .confirmationDialog(policyConfirmation?.title ?? "Change reuse policy?", isPresented: Binding(get: { policyConfirmation != nil }, set: { if !$0 { policyConfirmation = nil } }), titleVisibility: .visible) {
             if let target = policyConfirmation { Button("Confirm") { policyConfirmation = nil; Task { await model.changePolicy(conversationID: target.conversation, revision: target.revision, action: target.action) } } }
@@ -236,12 +201,133 @@ public struct MemberView: View {
             }
             Button("Cancel", role: .cancel) { confirmation = nil }
         } message: {
-            Text((model.isDemo ? "Demo explanation only. No decision or payment will be recorded.\n\n" : "") + decisionExplanation)
+            Text(decisionExplanation)
         }
         .onChange(of: phase) { _, phase in
-            if phase == .background && !model.authenticating && !model.isDemo { confirmation = nil; model.lock() }
+            if phase == .background && !model.authenticating { confirmation = nil; model.lock() }
         }
         .onDisappear { model.lock() }
+    }
+    private var summaries: [EditorialConversationSummary] {
+        model.presentationContacts.map {
+            EditorialConversationSummary(id: SenderReference($0.sender), title: $0.title, subtitle: $0.permission,
+                external: $0.external, awaitingDecision: $0.requests.contains(where: \.awaitingDecision),
+                route: route($0.permissionRoute), hasReceivedRequests: !$0.requests.isEmpty, hasSentRequests: !$0.sentRequests.isEmpty)
+        }
+    }
+    private var showsCorrespondence: Bool {
+        switch destination {
+        case .communications, .correspondence: return true
+        default: return false
+        }
+    }
+    private func openContact(_ sender: SenderReference, area: MemberArea) {
+        guard !model.busy else { return }
+        if area != .economics, model.externalInbox?.threads.contains(where: { $0.guest == sender.value }) == true {
+            model.chooseSender(sender); destination = .externalEmails; return
+        }
+        destination = area == .economics ? .economics : .correspondence(area == .home ? .communications : area)
+        if model.selectedSender == sender { Task { await model.select(sender) } }
+        else { model.chooseSender(sender) }
+    }
+    private func navigationColumn(area: MemberArea, preview: Bool = false, dismiss: @escaping () -> Void = {},
+                                  focusChanged: @escaping (Bool) -> Void = { _ in }) -> some View {
+        EditorialInboxView(conversations: summaries, selection: model.selectedSender, area: area,
+            destination: destination, hasRequestWorkflow: model.inbox?.requestProgress != nil, showsStatus: !preview,
+            navigate: { target in dismiss(); destination = target },
+            select: { sender, origin in dismiss(); openContact(sender, area: origin) },
+            reviewSavedRequest: { dismiss(); reviewingRequest = true }, previewFocusChanged: focusChanged) {
+                if !preview { status }
+            }
+            .disabled(model.busy)
+    }
+    @ViewBuilder private var destinationContent: some View {
+        switch destination {
+        case .communications, .correspondence: EmptyView()
+        case .home:
+            EditorialMembraneView(conversations: summaries, selection: Binding(get: { nil }, set: { sender in
+                if let sender { openContact(sender, area: .communications) }
+            }))
+        case .externalEmails:
+            ExternalEmailView(model: model)
+        case .directory:
+            DirectoryView(model: model.directory, member: model,
+                openCorrespondence: { sender in openContact(sender, area: .relationships) },
+                reviewRequest: { approach, requestClass in
+                    requestTarget = RequestTarget(other: SenderReference(approach.address), name: approach.displayName, requestClass: requestClass)
+                })
+        case .address: AddressEditor(model: model)
+        case .questions: EditorialQuestionsView()
+        case .relationships:
+            overview(title: "Relationship requests", explanation: "Review incoming and outgoing requests, discover people, or edit your published approach page.",
+                contacts: summaries.filter { $0.hasReceivedRequests || $0.hasSentRequests }, area: .relationships)
+        case .lanes:
+            overview(title: "Express lanes", explanation: "These people have incoming express-lane permission to contact you. Scope and validity apply. Your permission to contact them is separate; review both directions in Manage contact.",
+                contacts: summaries.filter { $0.route == .bounded }, area: .lanes)
+        case .economics:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    Text("Economics").font(EditorialStyle.heading(28))
+                    Text("Request charges and refunds").font(.headline)
+                    Text("Select a person in the list to review their recorded request finances. Saved views can be out of date.").font(.callout).foregroundStyle(.secondary)
+                    RequestFinancialStatusView(model: model)
+                    Divider()
+                    Text("Annual service and member distributions").font(.headline)
+                    Text("These interfaces are not available yet. No expected disbursement or next-payment forecast is shown.").font(.callout).foregroundStyle(.secondary)
+                    Button("Read the Q&A") { destination = .questions }.buttonStyle(EditorialButtonStyle())
+                }.padding(32).frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity)
+            }.background(EditorialStyle.canvas(scheme))
+        case .notes:
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Notes").font(EditorialStyle.heading(28))
+                Text("A private space for writing is planned. Notes cannot be created or saved yet.").foregroundStyle(.secondary)
+            }.padding(40).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(EditorialStyle.canvas(scheme))
+        }
+    }
+    private func overview(title: String, explanation: String, contacts: [EditorialConversationSummary], area: MemberArea) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text(title).font(EditorialStyle.heading(28))
+                Text(explanation).font(.callout).foregroundStyle(.secondary)
+                if contacts.isEmpty { Text("No matching correspondence in this view.").foregroundStyle(.secondary) }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 18)], spacing: 18) {
+                    ForEach(contacts) { contact in
+                        Button { openContact(contact.id, area: area) } label: {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(contact.title).font(.headline)
+                                Text(contact.awaitingDecision ? "Awaiting your decision" : contact.subtitle).font(.caption).foregroundStyle(.secondary)
+                                Text("Open correspondence").font(.caption)
+                            }.padding(22).frame(maxWidth: .infinity, minHeight: 130, alignment: .leading)
+                                .overlay { EditorialBoundary(route: contact.route).stroke(EditorialStyle.ink(scheme).opacity(0.3)).allowsHitTesting(false) }
+                        }.buttonStyle(EditorialPortalButtonStyle(route: contact.route))
+                    }
+                }
+            }.padding(32).frame(maxWidth: 940, alignment: .leading).frame(maxWidth: .infinity)
+        }.background(EditorialStyle.canvas(scheme))
+    }
+    private func correspondence(inbox: Inbox) -> some View {
+        EditorialSpaceView(conversations: summaries,
+            selection: Binding(get: { model.selectedSender }, set: { sender in
+                if let sender { openContact(sender, area: destination.area) } else { model.chooseSender(nil) }
+            })) { person, space in
+            EditorialPortalView(person: person.title, permission: "Contact from this person: " + person.subtitle,
+                route: person.route, portalID: person.id, space: space, returnToSpace: { model.chooseSender(nil) }) {
+                if let conversation = model.conversation, conversation.sender == person.id.value {
+                    ContactCorrespondenceView(model: model, conversation: conversation, inbox: inbox,
+                        manageContact: { managingContact = true },
+                        requestRelationship: {
+                            Task {
+                                await model.directory.open(AddressReference(conversation.sender))
+                                destination = .directory
+                            }
+                        }, reviewPolicy: reviewPolicy,
+                        resolve: { message, part in readingReference = true; Task { await model.resolveReference(message: message, part: part) } },
+                        decide: { decision, request in confirm(decision, conversation: conversation, request: request) })
+                        .id(conversation.sender)
+                } else { EditorialEmptyView(title: "Opening correspondence…") }
+            }
+        }.disabled(model.busy)
     }
     private func reviewPolicy(_ id: String, _ policy: ConversationPolicy, _ action: PolicyAction) {
         let restricting = action == .restrict
@@ -291,20 +377,16 @@ public struct MemberView: View {
     }
     @ViewBuilder private var status: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if model.isDemo {
-                Text("Demo mode · fictional data\nEdits reset when you quit.").font(.caption).foregroundStyle(.secondary)
-            } else {
-                if let settings = model.addressSettings {
-                    Text(settings.displayName).font(.headline)
-                    if let mailbox = settings.mailbox { Text(mailbox).font(.caption).textSelection(.enabled) }
-                }
-                Text("Development account\nSimulated bank verification and payments").font(.caption).foregroundStyle(.secondary)
+            if let settings = model.addressSettings {
+                Text(settings.displayName).font(.headline)
+                if let mailbox = settings.mailbox { Text(mailbox).font(.caption).textSelection(.enabled) }
             }
+            Text("Development account\nSimulated bank verification and payments").font(.caption).foregroundStyle(.secondary)
             if let error = model.memberError { Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange) }
             if let inbox = model.inbox {
                 ForEach(inbox.conversations.filter { $0.controls.laneExpiryReminder != nil }, id: \.sender) { contact in
                     Button("Review expiring lane for \(contact.title)") {
-                        destination = .space
+                        destination = .correspondence(.lanes)
                         model.chooseSender(SenderReference(contact.sender))
                         Task { await model.select(SenderReference(contact.sender)) }
                     }.font(.caption)

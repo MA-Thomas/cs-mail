@@ -90,8 +90,8 @@ public struct EditorialMembraneView: View {
                 .contentShape(Rectangle())
                 .overlay {
                     EditorialBoundary(route: person.route).stroke(EditorialStyle.ink(scheme).opacity(0.3), lineWidth: 1)
-                        .modifier(EditorialPortalAnchor(id: person.id, space: space)).accessibilityHidden(true)
+                        .modifier(EditorialPortalAnchor(id: person.id, space: space)).allowsHitTesting(false).accessibilityHidden(true)
                 }
-        }.buttonStyle(.plain)
+        }.buttonStyle(EditorialPortalButtonStyle(route: person.route))
     }
 }

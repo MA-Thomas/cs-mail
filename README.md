@@ -7,6 +7,12 @@ published request class and authorizes one conditional charge. The recipient can
 accept with standing permission or an express lane, or reject; that decision
 determines both future permission and settlement.
 
+External email is now available under Communications in the unified app: authored-text
+composition, conversation-scoped disclosure consent, authenticated pending replies,
+acceptance/rejection/lanes, blocking, and exact saved-operation retry. The owner
+backend uses a local file relay; no public email is sent. See the
+[Apple runbook](apps/cs-mail-apple/README.md) for validation and remaining work.
+
 ## Start here
 
 Before changing code or design, read the **[Rust-domain design principles](docs/rust-domain-principles.md)**. They are binding for cs-mail and identity-model; new work must not regress them.
@@ -41,12 +47,14 @@ this documentation pass. `intro_doc.tex` is retained
 only as a superseded design-history document and must not be used as a current
 protocol reference.
 
-**Development paused (11 October 2026):** the persistent local owner-account slice
-is complete. The unified macOS app reopens `marcus@csqd-mail.com`, with fictional
-participants providing canonical requests, standing permission, an express lane
-and unavailable approaches. Identity evidence, banking and payments remain
-simulated. See the [current app state and restart runbook](apps/cs-mail-apple/README.md)
-for preserved storage, validation and limits. No production service is launched.
+**Development state (13 October 2026):** one unified macOS application reopens
+`marcus@csqd-mail.com` and includes the current navigation, portal perimeter feedback
+and implemented native member workflows. There is no demo mode or separate assessment
+app. Fictional participants supply persisted canonical requests, standing permission,
+express lanes and unavailable approaches through the local backend. Identity evidence,
+banking and payments remain simulated. The original Keychain entry and account
+association are preserved. See the [app state and restart runbook](apps/cs-mail-apple/README.md)
+for validation and limits. No production service is launched.
 
 **Direction when development resumes (agreed 8 October 2026):** build and validate the SwiftUI member
 application locally, shipping macOS first and designing for iPhone/iPad from the

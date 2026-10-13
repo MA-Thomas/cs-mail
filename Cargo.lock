@@ -710,6 +710,7 @@ dependencies = [
  "cs-mail-content",
  "cs-mail-correspondence",
  "cs-mail-finance",
+ "cs-mail-guests",
  "cs-mail-primitives",
  "cs-mail-privacy",
  "cs-mail-protocol",

@@ -803,12 +803,12 @@ discovery and reopening. Public-web behavior, external indexing and iOS runtime
 behavior remain outside this slice. The directory reuses Rust contracts; a future
 single web interface can consume the same API.
 
-The unified native application also provides an explicit offline visual-demo mode.
-It uses the same communication-space, directory and address-editor screens with
-transient fictional fixtures, without a credential store or service connection.
-Demo decisions are explanations only; edits reset when the demo session ends.
-This is visual-review evidence, separate from canonical account and settlement
-validation. The standalone preview and automatic-enrollment review path are retired.
+As confirmed on 13 October 2026, there is one unified native application and no
+demo mode. The transient fixture adapter, demo branches and separate review bundles
+are removed. All implemented native workflows and the current navigation/perimeter
+presentation use the original preserved account and canonical local service. Bank
+and payment simulation remains in backend development adapters. Earlier offline
+visual observations are historical presentation evidence only.
 
 The persistent-development groundwork preserves local deployment, evidence and
 OIDC signing keys across service restart, binds them to the PostgreSQL databases,
@@ -822,7 +822,7 @@ requests, a standing contact, an express lane, rejection and an uncovered public
 profile. Rebuilt-app reopening and an interrupted publication across offline
 reopening and service restart preserved the account, credentials and exact
 operation. Existing gate/recovery suites and native checks passed; no new test
-cases were added. External mail, live banking/value and replacement-device
+cases were added. Public external mail, live banking/value and replacement-device
 recovery remain separate work.
 
 
@@ -847,6 +847,15 @@ follow-up preferences, lanes, and blocks. Financial status shows request charges
 and refunds separately from annual service and distributions. Apple interface
 components are shared where appropriate across macOS and iOS. The guest request
 page shares terminology and design intent, with its own web implementation.
+
+The 13 October 2026 native external-email slice connects the existing Rust service
+through the portable client and Swift bindings. It adds encrypted operation
+journaling and exact replay, a popup authored-text composer, consent withdrawal and
+restoration, authenticated pending-reply reading and relationship decisions. The
+agreed local experiments challenge consent refusal, response loss without a new
+disclosure, uncharged replies, rejection, acceptance, lanes, blocking and reopening.
+Public SMTP/provider delivery, iOS runtime and replacement-device recovery remain
+separate exit work.
 
 The member can also compose to an external email address with explicit downgrade
 consent, read authenticated replies in a pending conversation, and choose
@@ -1097,6 +1106,29 @@ The existing native journey challenged incoming/outgoing classification, Directo
 consistency, terminal-state release and retained replies. It passed, as did the
 full gate and signed macOS build. Maya's actual pending notice, review path and
 Reply were inspected; iOS and interactive passage across expiry remain untested.
+
+\paragraph{Navigation framework, agreed 13 October 2026.}
+The bounded presentation pass adds Home, Communications, Relationships, Express
+lanes, Economics and Notes to an icon rail, with a reactive content list and main
+space. Home retains the membrane overview; communication and request entries reuse
+the existing correspondence, Directory and request-review workflows. Portal hover
+strengthens the membrane perimeter without filling the interior; the whole portal
+remains clickable. List-row highlighting and interactive previews use the same
+navigation component. Keyboard
+preview and dismissal supplement pointer interaction. The reader stays mounted
+across area changes; existing Rust authority, operations and retry journals remain
+the sole owners. Notes, annual financial interfaces, dedicated lane history and a
+drafts/sent overview are deferred. The existing full gate, native journey and signed
+macOS build passed. Demo inspection established search, routing, retained selection
+and keyboard/accessibility previews. The subsequent hover correction gives pointer
+and keyboard previews distinct typed sessions and selects from measured visible
+regions with one pointer observer. Marcus confirmed Home's matching preview and
+dismissal after leaving the icon/popup. Exact dwell timing and iOS remain unverified.
+The subsequent unified-app cutover installed these changes in the original account
+app and retired the separate review/demo bundles and mode. The original credential,
+Keychain item identity, account association, public keys, caches and signing requirement
+were checked unchanged. Existing native workflows and all eight gate checks passed.
+Earlier app checkpoints remain verified rollback archives.
 
 As agreed on 8 October 2026, proceed with Milestone~4: build the SwiftUI member
 application, shipping macOS first and establishing iOS targets from the outset.

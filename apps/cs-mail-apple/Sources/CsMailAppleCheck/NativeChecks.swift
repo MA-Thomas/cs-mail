@@ -132,7 +132,14 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         try require(try client!.directoryLookup(reference: afterReopen.link).displayName == publicName, "unlisted-shared-link")
         print("PASS native directory publish/image, discovery, unlisting, direct link and reopen")
         try await nativeWorkflows(bob: client!, bobDirectory: directory, server: server)
+        if ProcessInfo.processInfo.environment["CS_MAIL_APPLE_EXTERNAL_CONFIG"] != nil {
+            try await externalWorkflows(client: client!, server: server)
+            client = nil; client = try open()
+            _ = try client!.sync()
+            try require(try client!.externalInbox().threads.count == 3, "external-reopen-conversations")
+        }
         let disk = try Data(contentsOf: directory.appendingPathComponent("member.sqlite"))
+        try require(disk.range(of: Data("external-authored-private-canary".utf8)) == nil, "external-plaintext-in-sqlite")
         for canary in [secret, Data("Bob Apple Canary".utf8), Data("apple-native-test-bank".utf8)] { try require(disk.range(of: canary) == nil, "evidence-in-sqlite") }
         vault.denied = true
         try refuses { _ = try client!.cachedInbox() }
@@ -320,6 +327,64 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         }
         print("PASS native quote review, same-device reopen, funded submission, follow-up, multiple scoped answers, acceptance, quotation/share/reference, no-charge quote, two-party policy, revoke/block/unblock, lane regrant and refusal recovery")
     }
+    // Claims: conversation consent gates sends; authenticated pending replies are uncharged;
+    // reject/accept/lane decisions retain their distinct permission consequences on reopen.
+    private static func externalWorkflows(client: AppleClient, server: String) async throws {
+        let mailbox = "native-external@example.test"
+        try refuses { _ = try client.sendExternal(conversation: nil, mailbox: mailbox, text: "no-consent", disclose: false) }
+        try require(try client.externalInbox().threads.isEmpty, "external-no-consent-created-conversation")
+        let id = try client.sendExternal(conversation: nil, mailbox: mailbox, text: "external-authored-private-canary", disclose: true)
+        _ = try client.sync()
+        var thread = try unwrap(client.externalInbox().threads.first { $0.id == id }, "external-start")
+        try require(thread.pendingInvitation && thread.disclosure && thread.messages.count == 1, "external-pending-consent")
+        try await injectExternalReply(client: client, server: server, mailbox: mailbox, conversation: id)
+        _ = try client.sync()
+        thread = try unwrap(client.externalInbox().threads.first { $0.id == id }, "external-reply")
+        try require(thread.messages.contains { !$0.outgoing }, "external-authenticated-reply-missing")
+        try require(try client.conversation(sender: thread.guest).requests.isEmpty, "external-unpaid-reply-created-request")
+        try client.controlExternal(conversation: id, action: .withdrawDisclosure)
+        _ = try client.sync()
+        try require(try client.externalInbox().threads.first { $0.id == id }?.disclosure == false, "external-withdrawal")
+        try refuses { _ = try client.sendExternal(conversation: id, mailbox: mailbox, text: "withdrawn-must-not-send", disclose: false) }
+        try require(try client.externalInbox().pending == nil, "external-refusal-remained-pending")
+        try client.controlExternal(conversation: id, action: .grantDisclosure)
+        try client.controlExternal(conversation: id, action: .reject)
+        _ = try client.sync()
+        try require(try client.externalInbox().threads.first { $0.id == id }?.pendingInvitation == false, "external-reject-remained-pending")
+        let accepted = try client.sendExternal(conversation: nil, mailbox: mailbox, text: "new-explicit-invitation", disclose: true)
+        _ = try client.sync()
+        _ = try client.controlRelationship(sender: thread.guest, control: .grantStanding)
+        try require(try client.externalInbox().threads.first { $0.id == accepted }?.pendingInvitation == false, "external-accept-pending")
+        _ = try client.controlRelationship(sender: thread.guest, control: .revoke)
+        let lane = try client.sendExternal(conversation: nil, mailbox: mailbox, text: "explicit-lane-invitation", disclose: true)
+        _ = try client.sync()
+        _ = try client.controlRelationship(sender: thread.guest, control: .grantLane(lifetimeMs: 604800000))
+        try require(try client.externalInbox().threads.first { $0.id == lane }?.pendingInvitation == false, "external-lane-pending")
+        _ = try client.controlRelationship(sender: thread.guest, control: .block)
+        try refuses { _ = try client.sendExternal(conversation: lane, mailbox: mailbox, text: "blocked-must-not-dispatch", disclose: false) }
+        try require(try client.externalInbox().pending == nil, "external-block-refusal-pending")
+        print("PASS native external consent, authenticated pending reply, no paid request, withdrawal/restoration, rejection, explicit new invitation, acceptance, lane, block and reopen")
+    }
+    private static func injectExternalReply(client: AppleClient, server: String, mailbox: String, conversation: String) async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let config = try unwrap(environment["CS_MAIL_APPLE_EXTERNAL_CONFIG"], "external-config")
+        let executable = try unwrap(environment["CS_MAIL_APPLE_EXTERNAL_REPLY_BIN"], "external-reply-client")
+        let member = try client.cachedInbox().persona
+        var request = URLRequest(url: try unwrap(URL(string: server + "/v1/external/prepare"), "external-prepare-url"))
+        request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Protocol IDs are u128 JSON numbers, not strings.
+        request.httpBody = Data(("{\"member\":" + member + ",\"mailbox\":\"" + mailbox + "\"}").utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try require((response as? HTTPURLResponse)?.statusCode == 200, "external-prepare-refused")
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try data.write(to: file); try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        let process = Process(); process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = [config, file.path, member, mailbox, conversation, String(UInt64.random(in: 1...UInt64.max))]
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        try process.run(); process.waitUntilExit(); try require(process.terminationStatus == 0, "external-reply-refused")
+    }
+
     private static func simulatorCommand(_ json: String) throws {
         let environment = ProcessInfo.processInfo.environment
         let config = try unwrap(environment["CS_MAIL_APPLE_ADMIN_CONFIG"], "native-simulator-config")

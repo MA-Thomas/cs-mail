@@ -262,6 +262,7 @@ fn lost_decision_response_and_failed_local_commit_replay_exact_operation_after_r
             })
             .unwrap();
     let mut state = State {
+        external: None,
         format: 3,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
@@ -547,6 +548,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         .create_secret(&serde_json::to_vec(&keys).unwrap())
         .unwrap();
     let state = State {
+        external: None,
         format: 3,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
@@ -706,6 +708,7 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
         .create_secret(&serde_json::to_vec(&keys).unwrap())
         .unwrap();
     let state = State {
+        external: None,
         format: 3,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
@@ -789,5 +792,149 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
             .unwrap()
             .setup
             .is_none()
+    );
+}
+
+// Conjecture: losing an external command acknowledgement cannot create a second
+// disclosure on reopen. A different signed operation/ciphertext on retry falsifies it.
+struct ExternalNetwork {
+    native: ContentNetwork,
+    commands: Mutex<Vec<Vec<u8>>>,
+    lose: AtomicBool,
+    member_key: cs_mail_content::EndpointPublicKey,
+}
+impl Transport for ExternalNetwork {
+    fn request(&self, server: &str, route: &str, body: Option<&[u8]>) -> Result<Vec<u8>, Error> {
+        use cs_mail_application::correspondence::external::{
+            Command, Outcome, Response, SignedCommand,
+        };
+        if route == "v1/external/prepare" {
+            let input: Value = serde_json::from_slice(body.unwrap()).unwrap();
+            let mailbox =
+                cs_mail_guests::GuestMailbox::parse(input["mailbox"].as_str().unwrap()).unwrap();
+            let mut handle = self.native.view.handle;
+            handle.sender = mailbox.synthetic_protocol_identity(&[7; 32]);
+            return Ok(serde_json::to_vec(&json!({"relationship": handle, "member_key":self.member_key,"relay_key":deployment().custody_key})).unwrap());
+        }
+        if route == "v1/external/commands" {
+            let signed: SignedCommand = serde_json::from_slice(body.unwrap()).unwrap();
+            self.commands.lock().unwrap().push(body.unwrap().to_vec());
+            if self.lose.swap(false, Ordering::SeqCst) {
+                return Err(Error::Offline);
+            }
+            let Command::Start { message, .. } = signed.command else {
+                panic!("must replay original start");
+            };
+            return Ok(serde_json::to_vec(&Response::Outcome(Outcome::Queued(
+                message.manifest.message(),
+            )))
+            .unwrap());
+        }
+        self.native.request(server, route, body)
+    }
+    fn identity_request(&self, _: &str, _: Option<&[(&str, &str)]>) -> Result<Vec<u8>, Error> {
+        Err(Error::Offline)
+    }
+}
+#[test]
+fn external_response_loss_reopens_exact_ciphertext_and_blocks_replacement() {
+    let store = Arc::new(Store::default());
+    let keys = storage::Secrets {
+        device: [4; 32],
+        recipient: [5; 32],
+        content: [6; 32],
+        cache: [7; 32],
+        operation: "external-loss".into(),
+    };
+    store
+        .create_secret(&serde_json::to_vec(&keys).unwrap())
+        .unwrap();
+    let state = State {
+        external: None,
+        format: 3,
+        mailbox: super::correspondence::Mailbox::default(),
+        sending: None,
+        profile: Profile {
+            server: "http://127.0.0.1:8480".into(),
+            persona: p::ProtocolIdentity(2),
+            account: p::AccountId(17),
+            sender_key: p::OperationalKeyRef(7),
+            recipient_key: p::OperationalKeyRef(8),
+            content_key: p::ContentKeyRef(9),
+            deployment: deployment(),
+        },
+        synchronized_at: None,
+        inbox: vec![],
+        pending: None,
+        content: std::collections::BTreeMap::new(),
+        last_decision: None,
+        last_send: None,
+        editing_conversation: None,
+        requesting: None,
+        last_request: None,
+        setup: None,
+    };
+    storage::save(store.as_ref(), &keys, &state).unwrap();
+    let network = Arc::new(ExternalNetwork {
+        native: content_fixture(&keys, store.clone()),
+        commands: Mutex::new(vec![]),
+        lose: AtomicBool::new(true),
+        member_key: super::correspondence::own_keys(&state.profile, &keys)
+            .unwrap()
+            .1,
+    });
+    let first = MemberClient::new(
+        store.clone(),
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(100)),
+    );
+    assert!(matches!(
+        first.send_external(
+            None,
+            "guest@example.test",
+            "external-loss-private-canary",
+            true
+        ),
+        Err(Error::Offline)
+    ));
+    let original = first.external_inbox().unwrap().pending.unwrap();
+    drop(first);
+    let reopened = MemberClient::new(
+        store.clone(),
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(110)),
+    );
+    assert_eq!(
+        reopened.external_inbox().unwrap().pending.as_deref(),
+        Some(original.as_str())
+    );
+    assert!(matches!(
+        reopened.send_external(None, "other@example.test", "changed", true),
+        Err(Error::ExternalPending)
+    ));
+    reopened.retry().unwrap();
+    assert!(reopened.external_inbox().unwrap().pending.is_none());
+    {
+        let calls = network.commands.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], calls[1]);
+    }
+    // A known queue acknowledgement must survive a later inability to refresh views.
+    network.native.offline.store(true, Ordering::SeqCst);
+    let acknowledged = reopened
+        .send_external(None, "guest@example.test", "acknowledged", true)
+        .unwrap();
+    assert_ne!(acknowledged, original);
+    assert!(matches!(reopened.sync(), Err(Error::Offline)));
+    assert!(reopened.external_inbox().unwrap().pending.is_none());
+    assert!(
+        !store
+            .cache
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .windows(b"external-loss-private-canary".len())
+            .any(|w| w == b"external-loss-private-canary")
     );
 }

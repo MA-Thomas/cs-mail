@@ -116,7 +116,7 @@ struct ContactCorrespondenceView: View {
                                     }
                                 }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
                                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-                            }.buttonStyle(.plain)
+                            }.buttonStyle(EditorialRegionButtonStyle())
                         }
                     }.padding(24)
                 }

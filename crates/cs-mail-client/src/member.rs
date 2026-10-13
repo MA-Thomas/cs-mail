@@ -3,6 +3,8 @@
 mod correspondence;
 mod directory;
 pub use correspondence::{ConversationSummary, ReplyRoute};
+mod external;
+pub use external::{ExternalAction, ExternalInbox, ExternalMessage, ExternalThread};
 mod enrollment;
 mod login;
 mod onboarding;
@@ -54,6 +56,8 @@ pub enum Error {
     Offline,
     Unauthorized,
     Unavailable,
+    ExternalPending,
+    ExternalRefused,
     DecisionPending,
     SendPending,
     SendRefused,
@@ -159,6 +163,7 @@ impl PendingCommand {
 }
 #[derive(Deserialize, Serialize)]
 struct State {
+    external: Option<external::Workspace>,
     requesting: Option<requests::RequestJourney>,
     last_request: Option<requests::RequestResult>,
     editing_conversation: Option<cs_mail_application::correspondence::SignedRequest>,
@@ -280,6 +285,7 @@ impl MemberClient {
         state.profile.deployment = deployment;
         state.inbox = inbox;
         self.sync_mailbox(state, keys)?;
+        self.sync_external(state, keys)?;
         state.synchronized_at = Some((self.clock)());
         storage::save(self.store.as_ref(), keys, state)
     }
@@ -307,6 +313,7 @@ impl MemberClient {
                 Err(error) => return Err(error),
             }
         }
+        self.transmit_external(&mut state, &keys)?;
         self.synchronize(&mut state, &keys)?;
         views::inbox(&state)
     }
@@ -372,6 +379,7 @@ impl MemberClient {
         if state.setup.is_some() {
             return Err(Error::SetupPending);
         }
+        require_idle(&state)?;
         self.synchronize(&mut state, &keys)?;
         let sender = parse_sender(sender)?;
         let view = state
@@ -468,6 +476,7 @@ impl MemberClient {
                 Err(error) => return Err(error),
             }
         }
+        self.transmit_external(&mut state, &keys)?;
         if state.pending.is_some() {
             self.send_pending(&mut state, &keys)?;
         }
@@ -638,6 +647,7 @@ impl MemberClient {
         if state.setup.is_some() {
             return Err(Error::SetupPending);
         }
+        require_idle(&state)?;
         self.synchronize(&mut state, &keys)?;
         let other = parse_sender(other)?;
         state.last_send = None;
@@ -651,6 +661,9 @@ impl MemberClient {
 }
 
 fn require_idle(state: &State) -> Result<(), Error> {
+    if state.external.as_ref().is_some_and(|w| w.pending.is_some()) {
+        return Err(Error::ExternalPending);
+    }
     if state.requesting.is_some() {
         return Err(Error::RequestPending);
     }

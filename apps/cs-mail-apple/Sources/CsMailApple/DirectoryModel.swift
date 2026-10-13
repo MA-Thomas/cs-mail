@@ -2,10 +2,7 @@ import SwiftUI
 import CsMailRust
 import CsMailPresentation
 
-@MainActor enum MemberBackend {
-    case live(ClientWorker)
-    case demo(DemoSession)
-}
+
 
 /// Owns directory navigation and the exact result context to which a profile returns.
 @MainActor final class DirectoryModel: ObservableObject {
@@ -34,11 +31,11 @@ import CsMailPresentation
     var error: String? { failure.map(MemberModel.explanation) }
     @Published var query = ""
     @Published var reference = ""
-    private let backend: MemberBackend
+    private let worker: ClientWorker
     private var generation = 0
     private var lifetime = PresentationLifetime()
     var busy: Bool { if case .idle = operation { return false }; return true }
-    init(backend: MemberBackend) { self.backend = backend }
+    init(worker: ClientWorker) { self.worker = worker }
     func clear() {
         lifetime.invalidate()
         lifetime = PresentationLifetime()
@@ -64,24 +61,14 @@ import CsMailPresentation
     func openReference() async { await open(AddressReference(reference)) }
     private func search(query: String, offset: UInt32) async {
         await perform(.searching) {
-            let page: DirectoryPage
-            switch self.backend {
-            case .demo(let session): page = session.search(query, offset: offset)
-            case .live(let worker): page = try await worker.run(lifetime: self.lifetime) { try $0.directorySearch(text: query, offset: offset) }
-            }
+            let page = try await self.worker.run(lifetime: self.lifetime) { try $0.directorySearch(text: query, offset: offset) }
             return .results(Results(query: query, offset: offset, page: page))
         }
     }
     func open(_ reference: AddressReference) async {
         let results = screen.results
         await perform(.opening) {
-            let approach: Approach
-            switch self.backend {
-            case .demo(let session):
-                guard let found = session.lookup(reference.value) else { throw ClientError.AddressUnavailable }
-                approach = found
-            case .live(let worker): approach = try await worker.run(lifetime: self.lifetime) { try $0.directoryLookup(reference: reference.value) }
-            }
+            let approach = try await self.worker.run(lifetime: self.lifetime) { try $0.directoryLookup(reference: reference.value) }
             return .profile(approach, returnTo: results)
         }
     }

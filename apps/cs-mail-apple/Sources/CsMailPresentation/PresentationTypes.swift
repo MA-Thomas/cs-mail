@@ -21,22 +21,56 @@ public struct AddressReference: Hashable, Sendable {
     public let value: String
     public init(_ value: String) { self.value = value }
 }
-public enum MemberDestination: CaseIterable, Sendable {
-    case space, directory, address, questions
+public enum MemberArea: String, CaseIterable, Identifiable, Sendable {
+    case home, communications, relationships, lanes, economics, notes
+    public var id: Self { self }
     public var title: String {
         switch self {
-        case .space: return "Communication space"
-        case .directory: return "Directory"
-        case .address: return "My approach page"
-        case .questions: return "Q&A"
+        case .home: return "Home"
+        case .communications: return "Communications"
+        case .relationships: return "Relationships"
+        case .lanes: return "Express lanes"
+        case .economics: return "Economics"
+        case .notes: return "Notes"
         }
     }
     public var icon: String {
         switch self {
-        case .space: return "square.dashed"
-        case .directory: return "person.text.rectangle"
-        case .address: return "slider.horizontal.3"
-        case .questions: return "questionmark.circle"
+        case .home: return "house"
+        case .communications: return "bubble.left.and.bubble.right"
+        case .relationships: return "person.2"
+        case .lanes: return "arrow.up.right"
+        case .economics: return "chart.bar"
+        case .notes: return "note.text"
+        }
+    }
+    public var destination: MemberDestination {
+        switch self {
+        case .home: return .home
+        case .communications: return .communications
+        case .relationships: return .relationships
+        case .lanes: return .lanes
+        case .economics: return .economics
+        case .notes: return .notes
+        }
+    }
+}
+
+/// One route owns the selected area and its main-space destination.
+/// Selecting a route establishes no communication or disclosure authority.
+public enum MemberDestination: Equatable, Sendable {
+    case home, communications, relationships, lanes, economics, notes
+    case directory, address, questions, externalEmails
+    case correspondence(MemberArea)
+    public var area: MemberArea {
+        switch self {
+        case .home: return .home
+        case .communications, .externalEmails: return .communications
+        case .relationships, .directory, .address: return .relationships
+        case .lanes: return .lanes
+        case .economics, .questions: return .economics
+        case .notes: return .notes
+        case .correspondence(let area): return area
         }
     }
 }

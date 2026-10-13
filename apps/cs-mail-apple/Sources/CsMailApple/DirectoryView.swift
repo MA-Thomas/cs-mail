@@ -16,7 +16,6 @@ private struct PublicImage: View {
 
 struct DirectoryView: View {
     @ObservedObject var model: DirectoryModel
-    let demo: Bool
     @ObservedObject var member: MemberModel
     let openCorrespondence: (SenderReference) -> Void
     let reviewRequest: (Approach, RequestClassID) -> Void
@@ -24,13 +23,12 @@ struct DirectoryView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if demo { Text("Demo directory · all profiles are fictional.").font(.caption).foregroundStyle(.secondary) }
                     if let approach = model.screen.approach {
                         Button("Back to Directory", systemImage: "chevron.left") {
                             model.returnToResults()
                         }
                         if let error = model.error { Text(error).foregroundStyle(.orange) }
-                        ApproachDetail(approach: approach, demo: demo, member: member, openCorrespondence: openCorrespondence, reviewRequest: reviewRequest).id(approach.address)
+                        ApproachDetail(approach: approach, member: member, openCorrespondence: openCorrespondence, reviewRequest: reviewRequest).id(approach.address)
                     } else {
                         Text("Find someone and see the approaches they welcome.").foregroundStyle(.secondary)
                         HStack {
@@ -58,7 +56,7 @@ struct DirectoryView: View {
                                         Spacer()
                                         Image(systemName: "chevron.right")
                                     }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-                                }.buttonStyle(.plain).background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+                                }.buttonStyle(EditorialRegionButtonStyle()).background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
                             }
                             if page.nextOffset != nil { Button("Next page") { Task { await model.nextPage() } } }
                         }
@@ -85,7 +83,6 @@ struct DirectoryView: View {
 
 private struct ApproachDetail: View {
     let approach: Approach
-    let demo: Bool
     @ObservedObject var member: MemberModel
     let openCorrespondence: (SenderReference) -> Void
     let reviewRequest: (Approach, RequestClassID) -> Void
@@ -95,7 +92,6 @@ private struct ApproachDetail: View {
             HStack { PublicImage(bytes: approach.image); Text(approach.displayName).font(.title2) }
             Text(approach.description)
             Text("Address: \(approach.mailbox ?? approach.address)").font(.caption).textSelection(.enabled)
-            if demo { Text("Fictional profile · example terms only. No quote or payment is created.").font(.caption).foregroundStyle(.secondary) }
             Button("Open correspondence") { openCorrespondence(SenderReference(approach.address)) }
             switch approach.requestEntry {
             case .ownAddress: Text("Your own approach page.").font(.caption)
@@ -117,9 +113,8 @@ private struct ApproachDetail: View {
                         Spacer()
                         Text("Collateral \(requestClass.collateralMinorUnits)")
                     }.padding(12)
-                }.buttonStyle(.plain).disabled(!approach.covered || (!demo && requestClass.conditionalMinorUnits == nil))
+                }.buttonStyle(EditorialRegionButtonStyle(selected: selected == RequestClassID(requestClass.id))).disabled(!approach.covered || requestClass.conditionalMinorUnits == nil)
             }
-            if demo, selected != nil { Text("Demo class selected. Edited amounts have no quoted financial terms.").font(.caption).foregroundStyle(.secondary) }
             if approach.requestEntry == .reviewApproaches, let selected, let requestClass = approach.classes.first(where: { RequestClassID($0.id) == selected }),
                let processing = approach.processingMinorUnits, let total = requestClass.conditionalMinorUnits {
                 VStack(alignment: .leading, spacing: 8) {
@@ -127,8 +122,7 @@ private struct ApproachDetail: View {
                     Text("Conditional charge: \(total) minor units; processing \(processing), collateral \(requestClass.collateralMinorUnits).")
                     Text("Acceptance owes a full refund. Rejection retains processing and sends collateral into the member pool. Expiry returns collateral; cancellation before submission returns the full charge.").font(.callout)
                     Text("Selecting a class grants no permission. No charge has been authorized.").font(.caption).foregroundStyle(.secondary)
-                    Button("Start request · review signed quote") { reviewRequest(approach, selected) }.disabled(demo || member.busy || member.inbox?.pendingRequest == true)
-                    if demo { Text("Demo explanation only. No request or charge will be created.").font(.caption) }
+                    Button("Start request · review signed quote") { reviewRequest(approach, selected) }.disabled(member.busy || member.inbox?.pendingRequest == true)
                 }.padding().background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
             }
         }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
@@ -156,24 +150,19 @@ struct AddressEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                if model.isDemo { Text("Demo editor · changes stay in this session and reset on quit. Nothing is published.").font(.caption) }
                 if let settings = model.addressSettings {
                     Section("Address") {
-                        if !model.isDemo {
-                            TextField("Development address · @csqd-mail.com", text: $mailbox)
-                                .disabled(settings.mailbox != nil)
-                            Text("Claiming an address is permanent in this development environment. It does not enable external email delivery.").font(.caption)
-                        }
+                        TextField("Development address · @csqd-mail.com", text: $mailbox)
+                            .disabled(settings.mailbox != nil)
+                        Text("Claiming an address is permanent in this development environment. It does not enable external email delivery.").font(.caption)
                         Text(settings.mailbox ?? settings.address).font(.caption.monospaced()).textSelection(.enabled)
                         ShareLink("Share request link", item: settings.link)
                         Text("This publication belongs to this address. Other addresses have independent classes and visibility.").font(.caption).fixedSize(horizontal: false, vertical: true)
                     }
-                    if !model.isDemo {
-                        Section("Simulated annual service") {
-                            Text("Development offer 1: 12,000 minor units for the fixed 2026 service period. No real payment is taken.").font(.caption)
-                            if settings.covered { Text("Simulated service coverage is active.").font(.caption) }
-                            else { Button("Activate simulated service") { Task { await model.purchaseDevelopmentService() } } }
-                        }
+                    Section("Simulated annual service") {
+                        Text("Development offer 1: 12,000 minor units for the fixed 2026 service period. No real payment is taken.").font(.caption)
+                        if settings.covered { Text("Simulated service coverage is active.").font(.caption) }
+                        else { Button("Activate simulated service") { Task { await model.purchaseDevelopmentService() } } }
                     }
                     Section("Public profile") {
                         TextField("Display name", text: $name)
@@ -206,7 +195,7 @@ struct AddressEditor: View {
                         }
                     }
                     Section {
-                        Button(model.isDemo ? "Save demo changes" : (settings.revision == 0 ? "Publish approach page" : "Save publication")) { save() }
+                        Button(settings.revision == 0 ? "Publish approach page" : "Save publication") { save() }
                             .disabled(loadedRevision == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || classes.contains { $0.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || UInt64($0.collateral) == nil })
                         Button("Reload current publication") { Task { await model.loadAddressSettings(); loadDraft() } }
                         Button("Retry interrupted publication") { Task { await model.retry(); await model.loadAddressSettings(); loadDraft() } }

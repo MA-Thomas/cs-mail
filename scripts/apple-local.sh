@@ -129,6 +129,13 @@ cat > "$work/bootstrap.json" <<EOF
  "identity": {"issuer": "$identity_issuer", "product": "$product",
               "decision_key": $(public identity-decision)}}
 EOF
+if [[ ! -f "$work/external-content.key" ]]; then
+  if [[ -f "$work/maild.json" ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("external") else 1)' "$work/maild.json"; then
+    echo "The configured relay key is missing. Refusing to replace it." >&2
+    exit 1
+  fi
+  "$admin" keygen --out "$work/external-content.key" > "$work/external-content.pub"
+fi
 cat > "$work/maild.json" <<EOF
 {"database_url": "$CS_MAIL_DEMO_DATABASE_URL", "directory_domain": "csqd-mail.com", "listen": "127.0.0.1:$port",
  "browser_login": {"issuer": "$oidc_issuer", "client_id": "cs-mail-apple", "redirect_uri": "com.csqd.member.development:/oauth/callback"},
@@ -138,6 +145,8 @@ cat > "$work/maild.json" <<EOF
  "members": {"custody_key_ref":900,"custody_secret_file":"$work/custody.key","provider_secret_file": "$work/provider.key",
              "relationship_secret_file": "$work/relationships.key",
              "principal_secret_file": "$work/principals.key"},
+ "external": {"content_secret_file":"$work/external-content.key", "mail_domain":"csqd-mail.com",
+              "delivery":{"kind":"development", "directory":"$work/external-outbox"}, "feedback":{"kind":"disabled"}},
  "simulation": {"processor_secret_file": "$work/processor.key",
                 "bank_authority_secret_file": "$work/bank-authority.key",
                 "bank_ownership_secret_file": "$work/bank-ownership.key"}}
