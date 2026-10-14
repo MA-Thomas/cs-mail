@@ -28,18 +28,18 @@ struct RequestComposerView: View {
                         if let quote = progress.quote, progress.status == .review {
                             quoteReview(quote)
                             TextEditor(text: $text).frame(minHeight: 160).disableAutocorrection(true).privacySensitive()
-                            Text("Only this authored message is included. Sources from other conversations are not attached to a first request.").font(.caption)
+                            EditorialReadingView("Only this authored message is included. Sources from other conversations are not attached to a first request.", style: .caption)
                             Button("Authorize charge and send request") { confirming = true }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy || !model.connected)
                         } else {
-                            Text("The original encrypted message and operation identities are saved. A retry does not authorize another charge or replace the message.").font(.caption)
+                            EditorialReadingView("The original encrypted message and operation identities are saved. A retry does not authorize another charge or replace the message.", style: .caption)
                             Button("Resume original workflow") { Task { await model.retry() } }.disabled(model.busy)
                         }
                         Button(progress.status == .review || progress.status == .quoting ? "Discard uncharged quote" : "Cancel unsubmitted request", role: .destructive) {
                             Task { await model.cancelRequest() }
                         }.disabled(model.busy)
-                        Text("Cancellation first reconciles a submission whose outcome is unknown. A request already submitted cannot be cancelled. Recorded refunds remain owed until confirmed.").font(.caption)
+                        EditorialReadingView("Cancellation first reconciles a submission whose outcome is unknown. A request already submitted cannot be cancelled. Recorded refunds remain owed until confirmed.", style: .caption)
                     } else if let requestClass {
                         Button("Review a new quote") { Task { await model.quoteRequest(other: other, requestClass: requestClass) } }.disabled(model.busy)
                     }
@@ -70,18 +70,18 @@ struct RequestComposerView: View {
         }
     }
     private func quoteReview(_ quote: RequestQuote) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(quote.className).font(.headline)
-            Text("Conditional charge: \(quote.total) minor units · simulated payment")
-            Text("Processing: \(quote.processing) · collateral: \(quote.collateral)").font(.caption)
-            Text("Quote expires \(Date(timeIntervalSince1970: Double(quote.expiresAt) / 1000).formatted())").font(.caption)
-            Text("Submission window: \(duration(quote.submissionWindowMs)). Recipient decision window: \(duration(quote.decisionWindowMs)).").font(.caption)
-            Text("Acceptance owes a full refund. Rejection retains processing and moves collateral into the member pool. Expiry returns collateral; cancellation before submission returns the full charge.").font(.callout)
-            Text("Agreed reverse permission").font(.headline)
-            Text("On acceptance, allow the recipient \(quote.replyPurpose) contact across your pair’s conversations for \(duration(quote.replyLifetimeMs)), up to \(quote.replyMaxMessages) messages per \(duration(quote.replyIntervalMs)). An existing standing permission or current custom lane is preserved. You may revoke or block this direction.").font(.callout)
-            Text("Before acceptance, the recipient may answer in this request’s conversation. This confined answer permission survives rejection and expiry until you revoke or block it. Reuse begins restricted to this pair.").font(.caption)
-            Text("Reviewing this quote has authorized no charge.").font(.caption.bold())
-        }
+        EditorialReadingView(blocks: [
+            EditorialReadingBlock(quote.className, style: .heading),
+            EditorialReadingBlock("Conditional charge: \(quote.total) minor units · simulated payment"),
+            EditorialReadingBlock("Processing: \(quote.processing) · collateral: \(quote.collateral)", style: .caption),
+            EditorialReadingBlock("Quote expires \(Date(timeIntervalSince1970: Double(quote.expiresAt) / 1000).formatted())", style: .caption),
+            EditorialReadingBlock("Submission window: \(duration(quote.submissionWindowMs)). Recipient decision window: \(duration(quote.decisionWindowMs)).", style: .caption),
+            EditorialReadingBlock("Acceptance owes a full refund. Rejection retains processing and moves collateral into the member pool. Expiry returns collateral; cancellation before submission returns the full charge."),
+            EditorialReadingBlock("Agreed reverse permission", style: .heading),
+            EditorialReadingBlock("On acceptance, allow the recipient \(quote.replyPurpose) contact across your pair’s conversations for \(duration(quote.replyLifetimeMs)), up to \(quote.replyMaxMessages) messages per \(duration(quote.replyIntervalMs)). An existing standing permission or current custom lane is preserved. You may revoke or block this direction."),
+            EditorialReadingBlock("Before acceptance, the recipient may answer in this request’s conversation. This confined answer permission survives rejection and expiry until you revoke or block it. Reuse begins restricted to this pair.", style: .caption),
+            EditorialReadingBlock("Reviewing this quote has authorized no charge.", style: .caption)
+        ])
     }
     private func duration(_ milliseconds: UInt64) -> String {
         Duration.milliseconds(Int64(clamping: milliseconds)).formatted(.units(allowed: [.days, .hours, .minutes, .seconds], width: .wide))

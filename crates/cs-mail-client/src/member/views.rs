@@ -213,16 +213,19 @@ fn lane_expiry_reminder(
     (expires_at.0.checked_sub(now.0)? <= window.0).then_some(LaneExpiryReminder { expires_at })
 }
 
-pub(super) fn summary(
-    view: &RelationshipView,
+/// One time-scoped presentation rule for native and external directional permission.
+pub(super) fn permission(
+    state: RelationshipState,
+    lane: Option<&cs_mail_capabilities::Lane>,
     now: Option<cs_mail_primitives::CanonicalTime>,
-) -> Conversation {
-    let (permission, permission_route) = match view.state {
+) -> (&'static str, PermissionRoute) {
+    match state {
         RelationshipState::Unknown => ("No standing permission", PermissionRoute::Closed),
         RelationshipState::Accepted => ("Standing permission", PermissionRoute::Standing),
-        RelationshipState::ExpressLane(_)
-            if now
-                .is_some_and(|now| view.lane.as_ref().is_some_and(|lane| lane.is_current(now))) =>
+        RelationshipState::ExpressLane(id)
+            if now.is_some_and(|now| {
+                lane.is_some_and(|lane| lane.grant().id == id && lane.is_current(now))
+            }) =>
         {
             (
                 "Express lane — scope and validity apply",
@@ -233,7 +236,14 @@ pub(super) fn summary(
         RelationshipState::Rejected => ("Rejected", PermissionRoute::Closed),
         RelationshipState::Revoked => ("Permission revoked", PermissionRoute::Closed),
         RelationshipState::Blocked => ("Blocked", PermissionRoute::Closed),
-    };
+    }
+}
+
+pub(super) fn summary(
+    view: &RelationshipView,
+    now: Option<cs_mail_primitives::CanonicalTime>,
+) -> Conversation {
+    let (permission, permission_route) = permission(view.state, view.lane.as_ref(), now);
     Conversation {
         sent_requests: Vec::new(),
         request_entry: RequestEntry::Unverified,

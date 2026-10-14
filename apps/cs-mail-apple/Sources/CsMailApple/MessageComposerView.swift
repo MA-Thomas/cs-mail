@@ -1,6 +1,7 @@
 import SwiftUI
 import ImageIO
 import CsMailRust
+import CsMailPresentation
 #if os(macOS)
 import AppKit
 #else
@@ -194,9 +195,10 @@ struct MessageComposerView: View {
                                     Spacer()
                                     Button("Remove", systemImage: "xmark") { inclusions.removeAll { $0.id == inclusion.id } }.labelStyle(.iconOnly).help("Remove included selection")
                                 }
-                                Text(inclusion.attribution).font(.caption).foregroundStyle(.secondary)
-                                if let image = inclusion.image { SourceImage(bytes: image) } else { Text(inclusion.preview).textSelection(.enabled) }
-                                if inclusion.draft.mode == .reference { Text("Points to this selection. The recipient still needs access to open it.").font(.caption).foregroundStyle(.secondary) }
+                                EditorialReadingView(blocks: [EditorialReadingBlock(inclusion.attribution, style: .caption)] +
+                                    (inclusion.image == nil ? [EditorialReadingBlock(inclusion.preview)] : []) +
+                                    (inclusion.draft.mode == .reference ? [EditorialReadingBlock("Points to this selection. The recipient still needs access to open it.", style: .caption)] : []))
+                                if let image = inclusion.image { SourceImage(bytes: image) }
                             }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                         }
                     }
@@ -255,13 +257,13 @@ struct MessageComposerView: View {
                                 sourceTitle = person.title + (message.outgoing ? " · sent by you" : " · received") + " · " + (person.threads.first { $0.id == message.conversation }?.label ?? "Retained message")
                                 resetSelection()
                                 Task { await model.openSource(message.id) }
-                            } label: { Text((message.outgoing ? "You: " : "") + message.text).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain)
+                            } label: { Text((message.outgoing ? "You: " : "") + message.text).lineLimit(3).frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).textSelection(.disabled)
                         }
                     } else if model.busy { ProgressView("Opening retained messages…") }
                     else { Text(model.memberError ?? "These messages are unavailable.").foregroundStyle(.orange) }
                 } else {
                     List(model.presentationContacts.filter { !$0.external }, id: \.sender) { person in
-                        Button(person.title) { sourceContactID = person.sender; Task { await model.openSourceContact(person.sender) } }.buttonStyle(.plain)
+                        Button(person.title) { sourceContactID = person.sender; Task { await model.openSourceContact(person.sender) } }.buttonStyle(.plain).textSelection(.disabled)
                     }
                 }
 

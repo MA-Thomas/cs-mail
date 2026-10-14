@@ -1098,6 +1098,26 @@ fn three_messages_are_one_request_one_solicitation_and_one_refund() {
 fn domain_snapshots_round_trip_without_embedding_shared_or_financial_owners() {
     let mut f = Fixture::new();
     f.create(1, 1);
+    // Conjecture: restoration cannot admit two unresolved requests or a foreign owner.
+    // Either would allow a relationship decision to settle only part of its obligations.
+    let mut malformed = f.engine.snapshot().unwrap().state;
+    let mut second = malformed.requests[&RequestId(1)].clone();
+    second.id = RequestId(2);
+    malformed.requests.insert(second.id, second);
+    assert_eq!(malformed.validate(), Err(ProtocolError::InvalidState));
+    assert!(
+        serde_json::from_value::<ProtocolState>(serde_json::to_value(&malformed).unwrap()).is_err()
+    );
+    malformed.requests.remove(&RequestId(2));
+    malformed
+        .requests
+        .get_mut(&RequestId(1))
+        .unwrap()
+        .terms
+        .recipient = ProtocolIdentity(999);
+    assert!(
+        serde_json::from_value::<ProtocolState>(serde_json::to_value(&malformed).unwrap()).is_err()
+    );
     let mut snapshots = vec![f.engine.snapshot().unwrap()];
     f.payment(1, false, 2);
     f.submit(1, 3).unwrap();

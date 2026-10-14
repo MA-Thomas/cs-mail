@@ -478,13 +478,17 @@ impl<C: CanonicalClock> IngressService<C> {
         authentication: SmtpAuthenticationRequest<'_>,
         request: &LegacyBondFreeAdmission,
     ) -> Result<ServiceOutcome, ServiceError> {
+        let at = authentication.received_at;
+        let evidence = verifier
+            .verify(authentication)
+            .await
+            .map_err(ServiceError::Dmarc)?;
         let proof = cs_mail_capabilities::verify_legacy_admission(
-            verifier,
-            authentication,
+            evidence,
+            at,
             request,
             self.policy.legacy_identity_mapping_version,
         )
-        .await
         .map_err(StorageError::from)?;
         let handle = self.engine.receive_legacy(
             &proof,

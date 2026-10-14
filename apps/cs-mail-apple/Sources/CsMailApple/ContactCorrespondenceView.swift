@@ -7,6 +7,7 @@ struct ContactCorrespondenceView: View {
     @ObservedObject var model: MemberModel
     let conversation: Conversation
     let inbox: Inbox
+    var selectedRequest: SidebarRequestSelection? = nil
     let manageContact: () -> Void
     let requestRelationship: () -> Void
     let reviewPolicy: (String, ConversationPolicy, PolicyAction) -> Void
@@ -44,7 +45,7 @@ struct ContactCorrespondenceView: View {
                             Button("Let it expire") { acknowledgedExpiry = reminder.expiresAt }
                         }
                     } else {
-                        Text("The lane will keep its scheduled expiry. You can still upgrade through Manage contact.").font(.caption)
+                        EditorialReadingView("The lane will keep its scheduled expiry. You can still upgrade through Manage contact.", style: .caption)
                     }
                 }.padding(.horizontal, 24)
             }
@@ -73,7 +74,7 @@ struct ContactCorrespondenceView: View {
                         if !broadPermission { Text("Replying here grants no permission to start a different conversation.").font(.caption) }
                     }.padding(24)
                 } else {
-                    Text("You can read this conversation, but you currently don’t have permission to reply.").font(.callout).foregroundStyle(.secondary).padding(24)
+                    EditorialReadingView("You can read this conversation, but you currently don’t have permission to reply.", style: .body).padding(24)
                 }
             } else {
                 ScrollView {
@@ -117,9 +118,17 @@ struct ContactCorrespondenceView: View {
                                 }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
                                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
                             }.buttonStyle(EditorialRegionButtonStyle())
+                                .editorialCopyableLabel(thread.label)
                         }
                     }.padding(24)
                 }
+            }
+        }
+        .task(id: selectedRequest) {
+            if let selectedRequest {
+                opened = conversation.threads.first {
+                    (selectedRequest.direction == .incoming ? $0.request : $0.sentRequest) == selectedRequest.id
+                }?.id
             }
         }
         .sheet(item: $composing, onDismiss: { model.clearSource() }) { target in

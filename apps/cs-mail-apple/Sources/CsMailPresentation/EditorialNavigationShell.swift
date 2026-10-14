@@ -65,7 +65,7 @@ public struct EditorialNavigationShell<Content: View, Preview: View>: View {
                         Divider()
                         preview(area, dismissPreview) { popupFocused = $0 }
                     }
-                    .frame(width: min(320, geometry.size.width - (compact ? 24 : 104)), height: min(560, geometry.size.height - (compact ? 96 : 32)))
+                    .frame(width: min(320, geometry.size.width - (compact ? 24 : 104)), height: min(area == .home || area == .notes ? 120 : 560, geometry.size.height - (compact ? 96 : 32)))
                     .background(EditorialStyle.canvas(scheme), in: RoundedRectangle(cornerRadius: 14))
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(EditorialStyle.ink(scheme).opacity(0.2)).allowsHitTesting(false) }

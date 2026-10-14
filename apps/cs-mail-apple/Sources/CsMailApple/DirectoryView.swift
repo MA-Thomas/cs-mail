@@ -44,6 +44,7 @@ struct DirectoryView: View {
                         if let page = model.screen.results.page {
                             if page.entries.isEmpty { Text("No listed addresses match this search.").foregroundStyle(.secondary) }
                             ForEach(page.entries, id: \.address) { entry in
+                                let copyLabel = [entry.displayName, entry.mailbox ?? entry.address, entry.description].joined(separator: "\n")
                                 Button { Task { await model.open(AddressReference(entry.address)) } } label: {
                                     HStack(alignment: .top, spacing: 16) {
                                         PublicImage(bytes: entry.image)
@@ -57,6 +58,7 @@ struct DirectoryView: View {
                                         Image(systemName: "chevron.right")
                                     }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
                                 }.buttonStyle(EditorialRegionButtonStyle()).background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+                                    .editorialCopyableLabel(copyLabel)
                             }
                             if page.nextOffset != nil { Button("Next page") { Task { await model.nextPage() } } }
                         }
@@ -89,15 +91,18 @@ private struct ApproachDetail: View {
     @State private var selected: RequestClassID?
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack { PublicImage(bytes: approach.image); Text(approach.displayName).font(.title2) }
-            Text(approach.description)
-            Text("Address: \(approach.mailbox ?? approach.address)").font(.caption).textSelection(.enabled)
+            PublicImage(bytes: approach.image)
+            EditorialReadingView(blocks: [
+                EditorialReadingBlock(approach.displayName, style: .title),
+                EditorialReadingBlock(approach.description),
+                EditorialReadingBlock("Address: \(approach.mailbox ?? approach.address)", style: .caption)
+            ])
             Button("Open correspondence") { openCorrespondence(SenderReference(approach.address)) }
             switch approach.requestEntry {
             case .ownAddress: Text("Your own approach page.").font(.caption)
-            case .incomingPending: Text("This person’s request is awaiting your decision. Open correspondence to review it.").font(.callout)
-            case .outgoingPending: Text("Your relationship request is pending. Open correspondence to review it.").font(.callout)
-            case .alreadyPermitted: Text("You already have permission to start conversations. Open correspondence to compose.").font(.caption)
+            case .incomingPending: EditorialReadingView("This person’s request is awaiting your decision. Open correspondence to review it.", style: .body)
+            case .outgoingPending: EditorialReadingView("Your relationship request is pending. Open correspondence to review it.", style: .body)
+            case .alreadyPermitted: EditorialReadingView("You already have permission to start conversations. Open correspondence to compose.", style: .caption)
             case .unavailable: Text("A relationship request is currently unavailable.").font(.caption)
             case .unverified: Text("Refresh this profile to check the current request state.").font(.caption)
             case .reviewApproaches: EmptyView()
@@ -114,14 +119,17 @@ private struct ApproachDetail: View {
                         Text("Collateral \(requestClass.collateralMinorUnits)")
                     }.padding(12)
                 }.buttonStyle(EditorialRegionButtonStyle(selected: selected == RequestClassID(requestClass.id))).disabled(!approach.covered || requestClass.conditionalMinorUnits == nil)
+                    .editorialCopyableLabel(requestClass.description + "\nCollateral \(requestClass.collateralMinorUnits)")
             }
             if approach.requestEntry == .reviewApproaches, let selected, let requestClass = approach.classes.first(where: { RequestClassID($0.id) == selected }),
                let processing = approach.processingMinorUnits, let total = requestClass.conditionalMinorUnits {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("\(requestClass.description)").font(.headline)
-                    Text("Conditional charge: \(total) minor units; processing \(processing), collateral \(requestClass.collateralMinorUnits).")
-                    Text("Acceptance owes a full refund. Rejection retains processing and sends collateral into the member pool. Expiry returns collateral; cancellation before submission returns the full charge.").font(.callout)
-                    Text("Selecting a class grants no permission. No charge has been authorized.").font(.caption).foregroundStyle(.secondary)
+                    EditorialReadingView(blocks: [
+                        EditorialReadingBlock(requestClass.description, style: .heading),
+                        EditorialReadingBlock("Conditional charge: \(total) minor units; processing \(processing), collateral \(requestClass.collateralMinorUnits)."),
+                        EditorialReadingBlock("Acceptance owes a full refund. Rejection retains processing and sends collateral into the member pool. Expiry returns collateral; cancellation before submission returns the full charge."),
+                        EditorialReadingBlock("Selecting a class grants no permission. No charge has been authorized.", style: .caption)
+                    ])
                     Button("Start request · review signed quote") { reviewRequest(approach, selected) }.disabled(member.busy || member.inbox?.pendingRequest == true)
                 }.padding().background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
             }
@@ -154,13 +162,15 @@ struct AddressEditor: View {
                     Section("Address") {
                         TextField("Development address · @csqd-mail.com", text: $mailbox)
                             .disabled(settings.mailbox != nil)
-                        Text("Claiming an address is permanent in this development environment. It does not enable external email delivery.").font(.caption)
-                        Text(settings.mailbox ?? settings.address).font(.caption.monospaced()).textSelection(.enabled)
+                        EditorialReadingView(blocks: [
+                            EditorialReadingBlock("Claiming an address is permanent in this development environment. It does not enable external email delivery.", style: .caption),
+                            EditorialReadingBlock(settings.mailbox ?? settings.address, style: .caption)
+                        ])
                         ShareLink("Share request link", item: settings.link)
-                        Text("This publication belongs to this address. Other addresses have independent classes and visibility.").font(.caption).fixedSize(horizontal: false, vertical: true)
+                        EditorialReadingView("This publication belongs to this address. Other addresses have independent classes and visibility.", style: .caption)
                     }
                     Section("Simulated annual service") {
-                        Text("Development offer 1: 12,000 minor units for the fixed 2026 service period. No real payment is taken.").font(.caption)
+                        EditorialReadingView("Development offer 1: 12,000 minor units for the fixed 2026 service period. No real payment is taken.", style: .caption)
                         if settings.covered { Text("Simulated service coverage is active.").font(.caption) }
                         else { Button("Activate simulated service") { Task { await model.purchaseDevelopmentService() } } }
                     }
@@ -171,14 +181,14 @@ struct AddressEditor: View {
                         Button("Choose profile image…") { importingImage = true }
                         if image != nil { Button("Remove image") { image = nil } }
                         if let imageError { Text(imageError).foregroundStyle(.orange) }
-                        Text("These details are your public statements, separate from enrollment evidence.").font(.caption).fixedSize(horizontal: false, vertical: true)
+                        EditorialReadingView("These details are your public statements, separate from enrollment evidence.", style: .caption)
                     }
                     Section("Directory visibility") {
                         Toggle("Include this address in directory searches", isOn: $listed)
                         Text(listed ? "Publishing will include this profile in name, address and description searches." : "Anyone with the exact address or shared link can still view your publication. It will be absent from searches and browsing.").font(.caption).fixedSize(horizontal: false, vertical: true)
                     }
                     Section("Ways to approach me · up to eight") {
-                        if classes.isEmpty { Text("No paid request route will be offered. You can publish a profile without classes.").font(.caption) }
+                        if classes.isEmpty { EditorialReadingView("No paid request route will be offered. You can publish a profile without classes.", style: .caption) }
                         ForEach($classes) { $row in
                             VStack(alignment: .leading) {
                                 TextField("Approach description", text: $row.description)

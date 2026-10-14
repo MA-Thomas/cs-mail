@@ -994,20 +994,16 @@ impl VerifiedLegacyAdmission {
         &self.admission
     }
 }
-/// Authenticates legacy origin and binds its declared sender to the selected domain.
+/// Interprets trusted gateway authentication evidence and binds the sender to its domain.
+/// Evidence acquisition and temporary verification failures belong to the gateway.
 /// # Errors
 /// Refuses DMARC failure, inconsistent evidence time or mismatched sender identity.
-pub async fn verify_legacy_admission<V: cs_mail_adapters::DmarcVerifier>(
-    verifier: &V,
-    authentication: cs_mail_adapters::SmtpAuthenticationRequest<'_>,
+pub fn verify_legacy_admission(
+    evidence: cs_mail_adapters::VerifiedDomain,
+    at: CanonicalTime,
     request: &LegacyBondFreeAdmission,
     mapping_version: u16,
 ) -> Result<VerifiedLegacyAdmission, CapabilityError> {
-    let at = authentication.received_at;
-    let evidence = verifier
-        .verify(authentication)
-        .await
-        .map_err(|_| CapabilityError::NotAuthorized)?;
     if evidence.evaluated_at != at
         || request
             .sender_domain

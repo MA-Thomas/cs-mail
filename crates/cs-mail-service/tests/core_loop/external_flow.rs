@@ -234,7 +234,38 @@ fn pending_replies_rejection_and_block_have_distinct_authority() {
         203,
     );
     assert!(repo.incoming().receive(&f.reply(201, 204)).is_err());
-    assert!(app::Service(&repo).handle(&f.start_command(205)).is_err());
+    let refused = f.start_command(205);
+    let response = app::Service(&repo).handle(&refused).unwrap();
+    assert!(
+        matches!(&response, app::Response::Outcome(a) if matches!(a.receipt.outcome, app::Outcome::Refused(_)))
+    );
+    assert_eq!(response, app::Service(&repo).handle(&refused).unwrap());
+    assert_eq!(
+        postgres::Client::connect(&f.base.url, postgres::NoTls)
+            .unwrap()
+            .query_one("SELECT count(*) FROM cs_external_conversations", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        2
+    );
+    f.contact(
+        ProtocolCommand::UnblockRelationship {
+            expected_version: f.read(201).0.version.into(),
+        },
+        206,
+    );
+    assert_eq!(
+        response,
+        app::Service(&repo).handle(&refused).unwrap(),
+        "unblocking cannot reinterpret an original refusal"
+    );
+    let mut altered = refused.clone();
+    altered.command = app::Command::Reject;
+    assert!(
+        app::Service(&repo)
+            .handle(&altered.sign(&[21; 32]).unwrap())
+            .is_err()
+    );
 }
 
 #[test]
@@ -256,7 +287,7 @@ fn acceptance_and_lane_reuse_existing_permission_without_reopening_pending_acces
     assert!(
         app::Service(&f.repository())
             .handle(&f.command(300, 309, app::Command::Reject))
-            .is_err(),
+            .is_ok_and(|r| matches!(r, app::Response::Outcome(a) if matches!(a.receipt.outcome, app::Outcome::Refused(_)))),
         "reject must not pretend to close standing access"
     );
     let accepted = f.read(300).0;
@@ -424,6 +455,25 @@ fn failed_atomic_start_and_lost_response_retries_do_not_duplicate_delivery() {
     assert_eq!(
         first,
         app::Service(&f.repository()).handle(&signed).unwrap()
+    );
+    // An actual host signature binds the recorded command and outcome; a substituted
+    // body must not resolve a client's original journal even with that signature.
+    let host = cs_mail_service::external::ExternalGateway::new(
+        Arc::new(gateway(&f.base.url, &f.base.clock)),
+        [60; 32],
+    );
+    let app::Response::Outcome(acknowledgement) = host.external_command(&signed).unwrap() else {
+        panic!("expected acknowledgement");
+    };
+    acknowledgement
+        .verify(&signed, &f.base.gateway.signer().verifying_key_bytes())
+        .unwrap();
+    let mut substituted = acknowledgement;
+    substituted.receipt.outcome = app::Outcome::DisclosureGranted;
+    assert!(
+        substituted
+            .verify(&signed, &f.base.gateway.signer().verifying_key_bytes())
+            .is_err()
     );
     assert_eq!(f.read(500).1.len(), 1);
     let mut altered = signed.clone();

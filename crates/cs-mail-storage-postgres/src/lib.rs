@@ -95,6 +95,7 @@ const MIGRATION_4: &str = include_str!("../migrations/0004_express_lanes.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_protocol_foundations.sql");
 const MIGRATION_6: &str = include_str!("../migrations/0006_authenticated_message_envelopes.sql");
 const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 11;
+const MIGRATION_37: &str = include_str!("../migrations/0037_external_refusal_receipts.sql");
 const MIGRATION_36: &str = include_str!("../migrations/0036_received_conversation_replies.sql");
 const MIGRATION_35: &str = include_str!("../migrations/0035_billing_refusals.sql");
 const MIGRATION_34: &str = include_str!("../migrations/0034_native_request_documents.sql");
@@ -155,6 +156,7 @@ pub enum StorageError {
     BondFreeNotAuthorized,
     InvalidScheduleClaim,
     UnsupportedStoredProtocolFormat(i16),
+    InvalidStoredProtocolState,
     UnsupportedStoredFinancialFormat(i16),
     Guest(cs_mail_guests::GuestError),
     /// The protocol identity already belongs to another sender subject.
@@ -211,6 +213,9 @@ impl fmt::Display for StorageError {
                 .write_str("no accepted relationship or valid express lane authorizes delivery"),
             Self::InvalidScheduleClaim => {
                 formatter.write_str("scheduled work was not claimed from this aggregate")
+            }
+            Self::InvalidStoredProtocolState => {
+                formatter.write_str("stored protocol state violates its owner invariants")
             }
             Self::UnsupportedStoredProtocolFormat(version) => write!(
                 formatter,
@@ -1034,6 +1039,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (34_i64, MIGRATION_34),
     (35_i64, MIGRATION_35),
     (36_i64, MIGRATION_36),
+    (37_i64, MIGRATION_37),
 ];
 
 fn migrate(client: &mut Client) -> Result<(), StorageError> {
@@ -1368,7 +1374,7 @@ fn aggregate_from_row(row: &postgres::Row) -> Result<Aggregate, StorageError> {
         ledger_revision: to_u64(row.get("ledger_revision"))?,
         unit: SettlementUnit(u32::try_from(unit).map_err(|_| StorageError::NumericRange)?),
         state: row
-            .get::<_, Json<domain::RelationshipRecord>>("relationship_state")
+            .try_get::<_, Json<domain::RelationshipRecord>>("relationship_state")?
             .0
             .into_state(),
     })

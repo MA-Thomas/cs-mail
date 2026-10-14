@@ -65,12 +65,15 @@ actor ClientWorker {
     @Published private(set) var reference: ReferenceContent?
     @Published package private(set) var conversation: Conversation?
     @Published private(set) var selectedSender: SenderReference?
+    @Published private(set) var navigationContacts: [NavigationContact]?
+    @Published private(set) var navigationError: String?
     var presentationContacts: [Conversation] {
         guard let inbox else { return [] }
         var contacts = inbox.conversations
-        if let conversation, conversation.sender == selectedSender?.value,
-           !contacts.contains(where: { $0.sender == conversation.sender }) {
-            contacts.append(conversation)
+        if let conversation, conversation.sender == selectedSender?.value {
+            if let index = contacts.firstIndex(where: { $0.sender == conversation.sender }) {
+                contacts[index] = conversation
+            } else { contacts.append(conversation) }
         }
         return contacts
     }
@@ -122,6 +125,7 @@ actor ClientWorker {
             Task { try? await worker.cancelLogin(ceremony: ceremony) }
         }
         browserCeremony = nil
+        navigationContacts = nil; navigationError = nil
         addressSettings = nil; directory.clear()
         clearSourceContact(); reference = nil; externalInbox = nil; sentExternalConversation = nil; inbox = nil; conversation = nil; selectedSender = nil
         connected = false; failure = nil; notice = nil; operation = .idle
@@ -397,7 +401,18 @@ actor ClientWorker {
         guard !busy, !Task.isCancelled else { return }
         let started = generation
         operation = .working(work); failure = nil
-        do { try await action() }
+        do {
+            try await action()
+            if generation == started, inbox != nil, connected {
+                do {
+                    navigationContacts = try await call { try $0.navigation() }
+                    navigationError = nil
+                } catch {
+                    navigationContacts = nil
+                    navigationError = "Couldn’t refresh the navigation list. Try Refresh."
+                }
+            }
+        }
         catch is CancellationError {
             if generation == started {
                 // A submitted operation may still have completed or remain journaled.

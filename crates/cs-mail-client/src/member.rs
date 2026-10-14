@@ -18,11 +18,13 @@ pub use reuse::{
     ConversationPolicy, ReferenceContent, Relaxation, ReuseMode, SourceBlock, SourceDraft,
     SourceMessage,
 };
+mod navigation;
 mod storage;
 mod transport;
 mod views;
 pub use enrollment::{EnrollmentDetails, EnrollmentStatus, LoginStart};
 pub use login::Authorization;
+pub use navigation::{NavigationContact, NavigationLane, NavigationRequest};
 pub use storage::DeviceStore;
 pub use transport::{HttpTransport, Transport};
 pub use views::{

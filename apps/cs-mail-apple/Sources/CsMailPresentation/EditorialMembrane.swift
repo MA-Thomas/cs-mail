@@ -93,5 +93,6 @@ public struct EditorialMembraneView: View {
                         .modifier(EditorialPortalAnchor(id: person.id, space: space)).allowsHitTesting(false).accessibilityHidden(true)
                 }
         }.buttonStyle(EditorialPortalButtonStyle(route: person.route))
+            .editorialCopyableLabel(person.title + "\n" + person.subtitle)
     }
 }

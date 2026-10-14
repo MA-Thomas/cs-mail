@@ -77,6 +77,8 @@ pub enum MemberRead {
     AsRecipient { sender: ProtocolIdentity },
     /// Every relationship in which someone writes to `persona`.
     Inbox,
+    /// Every relationship in which `persona` writes to someone else.
+    Outbox,
 }
 
 /// A read signed by an active key of `persona`, valid briefly after `issued_at`.

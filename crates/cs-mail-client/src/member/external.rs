@@ -42,6 +42,7 @@ pub struct ExternalThread {
     pub mailbox: String,
     pub guest: String,
     pub permission: String,
+    pub permission_route: super::PermissionRoute,
     pub pending_invitation: bool,
     pub disclosure: bool,
     pub blocked: bool,
@@ -109,7 +110,16 @@ impl MemberClient {
         };
         let response = self.external_call(&state.profile, pending);
         match response {
-            Ok(Response::Outcome(outcome)) => {
+            Ok(Response::Outcome(acknowledgement)) => {
+                acknowledgement
+                    .verify(pending, &state.profile.deployment.provider_key)
+                    .map_err(|_| Error::InvalidData)?;
+                let outcome = acknowledgement.receipt.outcome;
+                if matches!(outcome, Outcome::Refused(_)) {
+                    state.external.as_mut().ok_or(Error::InvalidData)?.pending = None;
+                    storage::save(self.store.as_ref(), keys, state)?;
+                    return Err(Error::ExternalRefused);
+                }
                 let matched = match (&pending.command, &outcome) {
                     (
                         Command::Start { message, .. } | Command::Send(message),
@@ -123,11 +133,6 @@ impl MemberClient {
                 if !matched {
                     return Err(Error::InvalidData);
                 }
-            }
-            Err(Error::ExternalRefused) => {
-                state.external.as_mut().ok_or(Error::InvalidData)?.pending = None;
-                storage::save(self.store.as_ref(), keys, state)?;
-                return Err(Error::ExternalRefused);
             }
             Err(error) => return Err(error),
             _ => return Err(Error::InvalidData),
@@ -178,7 +183,7 @@ impl MemberClient {
                     .validate(&conversation, &relationship)
                     .map_err(|_| Error::InvalidData)?;
             }
-            if page.is_empty() {
+            if page.is_empty() && next_after == after {
                 break Record {
                     conversation: *conversation,
                     relationship: *relationship,
@@ -214,13 +219,14 @@ impl MemberClient {
         let state = storage::open(self.store.as_ref(), &keys)?;
         let (secret, _) = super::correspondence::own_keys(&state.profile, &keys)?;
         let mut threads = Vec::new();
+        let now = (self.clock)();
         if let Some(workspace) = &state.external {
             for record in workspace.records.values() {
                 let c = &record.conversation;
                 let r = &record.relationship;
                 let mut messages = Vec::new();
                 for entry in &record.messages {
-                    if entry.message.member_copy.expires_at <= (self.clock)() {
+                    if entry.message.member_copy.expires_at <= now {
                         continue;
                     }
                     entry
@@ -273,11 +279,18 @@ impl MemberClient {
                     });
                 }
                 let pending = c.pending_access(r);
+                let (permission, permission_route) = permission_for(record, &state.inbox, now);
                 threads.push(ExternalThread {
                     id: c.id().value().to_string(),
                     mailbox: c.mailbox().address(),
                     guest: c.guest().0.to_string(),
-                    permission: permission_label(pending, r.state).into(),
+                    permission: if pending {
+                        "Pending invitation · replies only in this conversation"
+                    } else {
+                        permission
+                    }
+                    .into(),
+                    permission_route,
                     pending_invitation: pending,
                     disclosure: c.disclosure().permits_dispatch(),
                     blocked: r.state == cs_mail_protocol::RelationshipState::Blocked,
@@ -451,20 +464,22 @@ impl MemberClient {
     }
 }
 
-fn permission_label(pending: bool, state: cs_mail_protocol::RelationshipState) -> &'static str {
-    if pending {
-        return "Pending invitation · replies only in this conversation";
-    }
-    match state {
-        cs_mail_protocol::RelationshipState::Accepted => "Standing incoming permission",
-        cs_mail_protocol::RelationshipState::ExpressLane(_) => {
-            "Express lane · scope and validity apply"
-        }
-        cs_mail_protocol::RelationshipState::Blocked => "Blocked",
-        cs_mail_protocol::RelationshipState::Revoked => "Incoming permission revoked",
-        cs_mail_protocol::RelationshipState::Rejected => "No standing incoming permission",
-        cs_mail_protocol::RelationshipState::Unknown => {
-            "Invitation closed · no standing incoming permission"
-        }
-    }
+fn permission_for(
+    record: &Record,
+    views: &[cs_mail_application::members::RelationshipView],
+    now: cs_mail_primitives::CanonicalTime,
+) -> (&'static str, super::PermissionRoute) {
+    let c = &record.conversation;
+    let r = &record.relationship;
+    let lane = views
+        .iter()
+        .find(|view| {
+            view.handle.sender == c.guest()
+                && view.handle.recipient == c.member()
+                && view.version == r.version
+                && view.state == r.state
+        })
+        .and_then(|view| view.lane.as_ref());
+    let (permission, permission_route) = super::views::permission(r.state, lane, Some(now));
+    (permission, permission_route)
 }

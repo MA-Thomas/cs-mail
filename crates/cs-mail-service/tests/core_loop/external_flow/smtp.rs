@@ -612,11 +612,23 @@ fn member_address_lane_admission_is_atomic_and_member_reply_requires_consent() {
         f.base.clock.now(),
     );
     let send = f.command(id, 1302, app::Command::Send(Box::new(package)));
-    assert!(app::Service(&f.repository()).handle(&send).is_err());
+    let refused = app::Service(&f.repository()).handle(&send).unwrap();
+    assert!(
+        matches!(&refused, app::Response::Outcome(a) if matches!(a.receipt.outcome, app::Outcome::Refused(_)))
+    );
     app::Service(&f.repository())
         .handle(&f.command(id, 1303, app::Command::GrantDisclosure))
         .unwrap();
-    app::Service(&f.repository()).handle(&send).unwrap();
+    assert_eq!(
+        refused,
+        app::Service(&f.repository()).handle(&send).unwrap(),
+        "consent restoration cannot reopen a terminal refusal"
+    );
+    let mut replacement = send.clone();
+    replacement.operation = IdempotencyKey(1307);
+    app::Service(&f.repository())
+        .handle(&replacement.sign(&[21; 32]).unwrap())
+        .unwrap();
     let carrier = support::smtp2go::Carrier::new();
     carrier.push(support::smtp2go::accepted("consented-inbound-reply"));
     let mut transport = cs_mail_service::external::Smtp2goTransport {

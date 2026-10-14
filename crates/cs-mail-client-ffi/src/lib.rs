@@ -203,6 +203,63 @@ pub struct Conversation {
     pub requests: Vec<Request>,
     pub messages: Vec<Message>,
 }
+#[derive(uniffi::Record)]
+pub struct NavigationLane {
+    pub id: String,
+    pub expires_at: u64,
+    pub scope: String,
+    pub max_messages: u32,
+    pub interval_ms: u64,
+}
+#[derive(uniffi::Record)]
+pub struct NavigationContact {
+    pub sender: String,
+    pub title: String,
+    pub external: bool,
+    pub requests: Vec<NavigationRequest>,
+    pub sent_requests: Vec<NavigationRequest>,
+    pub incoming_lane: Option<NavigationLane>,
+    pub outgoing_lane: Option<NavigationLane>,
+}
+#[derive(uniffi::Record)]
+pub struct NavigationRequest {
+    pub record: Request,
+    pub issued_at: u64,
+    pub financial_summary: String,
+}
+impl From<core::NavigationRequest> for NavigationRequest {
+    fn from(value: core::NavigationRequest) -> Self {
+        Self {
+            record: request_record(value.record),
+            issued_at: value.issued_at,
+            financial_summary: value.financial_summary,
+        }
+    }
+}
+impl From<core::NavigationLane> for NavigationLane {
+    fn from(value: core::NavigationLane) -> Self {
+        Self {
+            id: value.id,
+            expires_at: value.expires_at,
+            scope: value.scope,
+            max_messages: value.max_messages,
+            interval_ms: value.interval_ms,
+        }
+    }
+}
+impl From<core::NavigationContact> for NavigationContact {
+    fn from(value: core::NavigationContact) -> Self {
+        Self {
+            sender: value.sender,
+            title: value.title,
+            external: value.external,
+            requests: value.requests.into_iter().map(Into::into).collect(),
+            sent_requests: value.sent_requests.into_iter().map(Into::into).collect(),
+            incoming_lane: value.incoming_lane.map(Into::into),
+            outgoing_lane: value.outgoing_lane.map(Into::into),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, uniffi::Enum)]
 pub enum RequestEntry {
     Unverified,
@@ -428,6 +485,14 @@ impl AppleClient {
     /// Network, authorization or durable cache replacement failed.
     pub fn sync(&self) -> Result<Inbox, ClientError> {
         self.0.sync().map(Into::into).map_err(Into::into)
+    }
+    /// # Errors
+    /// Custody, authentication, transport or navigation record binding failed.
+    pub fn navigation(&self) -> Result<Vec<NavigationContact>, ClientError> {
+        self.0
+            .navigation()
+            .map(|contacts| contacts.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
     }
     /// # Errors
     /// A different setup is unresolved, or signing, authority or transport fails.
@@ -1254,6 +1319,7 @@ pub struct ExternalThread {
     pub mailbox: String,
     pub guest: String,
     pub permission: String,
+    pub permission_route: PermissionRoute,
     pub pending_invitation: bool,
     pub disclosure: bool,
     pub blocked: bool,
@@ -1289,6 +1355,7 @@ impl AppleClient {
                         mailbox: t.mailbox,
                         guest: t.guest,
                         permission: t.permission,
+                        permission_route: t.permission_route.into(),
                         pending_invitation: t.pending_invitation,
                         disclosure: t.disclosure,
                         blocked: t.blocked,

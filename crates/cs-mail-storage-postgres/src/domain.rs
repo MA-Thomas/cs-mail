@@ -41,13 +41,13 @@ pub(super) fn load_request_records(
     target: Option<RequestId>,
 ) -> Result<(), StorageError> {
     for row in tx.query("SELECT request FROM cs_requests WHERE aggregate_key=$1 AND ($2 OR closed_at IS NULL OR request_id=$3)",&[&key,&all,&target.map(|id|id.0.to_string())])? {
-        let request=row.get::<_,Json<cs_mail_protocol::RelationshipRequest>>(0).0;state.requests.insert(request.id,request);
+        let request=row.try_get::<_,Json<cs_mail_protocol::RelationshipRequest>>(0)?.0;state.requests.insert(request.id,request);
     }
     for row in tx.query(
         "SELECT terms,used FROM cs_contact_quotes WHERE aggregate_key=$1",
         &[&key],
     )? {
-        let terms = row.get::<_, Json<cs_mail_protocol::RequestTerms>>(0).0;
+        let terms = row.try_get::<_, Json<cs_mail_protocol::RequestTerms>>(0)?.0;
         if row.get::<_, bool>(1) {
             state.used_quotes.insert(terms.quote_id);
         }
@@ -63,6 +63,9 @@ pub(super) fn load_request_records(
                 .map_err(|_| StorageError::NumericRange)?,
         ));
     }
+    state
+        .validate()
+        .map_err(|_| StorageError::InvalidStoredProtocolState)?;
     Ok(())
 }
 
@@ -84,7 +87,7 @@ pub(super) fn load_domain_records(
             "SELECT history_state FROM cs_request_histories WHERE request_history=$1",
             &[&reference],
         )?
-        .get::<_, Json<RequestHistory>>(0)
+        .try_get::<_, Json<RequestHistory>>(0)?
         .0;
     let mut ids: Vec<_> = state.requests.keys().map(|id| id.0.to_string()).collect();
     if let Some(id) = target {
@@ -98,7 +101,7 @@ pub(super) fn load_domain_records(
         let id: String = row.get(0);
         payments.insert(
             RequestId(id.parse().map_err(|_| StorageError::NumericRange)?),
-            row.get::<_, Json<cs_mail_finance::RequestFinancials>>(1).0,
+            row.try_get::<_, Json<cs_mail_finance::RequestFinancials>>(1)?.0,
         );
     }
     let mut messages = BTreeMap::new();
@@ -106,7 +109,7 @@ pub(super) fn load_domain_records(
         "SELECT message FROM cs_messages WHERE aggregate_key=$1 AND ($2 OR COALESCE(message#>>'{basis,InitialRequest,request}',message#>>'{basis,RequestFollowup,request}')=ANY($3))",
         &[&key,&all,&ids],
     )? {
-        let message = row.get::<_, Json<Message>>(0).0;
+        let message = row.try_get::<_, Json<Message>>(0)?.0;
         messages.insert(message.id, message);
     }
     Ok((history, payments, messages))

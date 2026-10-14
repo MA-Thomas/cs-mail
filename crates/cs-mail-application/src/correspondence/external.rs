@@ -62,7 +62,9 @@ impl SignedCommand {
         if receipt.digest != self.digest()? || receipt.key != self.key {
             return Err(Error::Conflict);
         }
-        Ok(Response::Outcome(receipt.outcome.clone()))
+        Ok(Response::Outcome(Acknowledgement::recorded(
+            receipt.clone(),
+        )))
     }
     fn bytes(&self) -> Result<Vec<u8>, Error> {
         if self.operation.0 == 0
@@ -149,10 +151,11 @@ pub enum Outcome {
     Rejected,
     DisclosureWithdrawn,
     DisclosureGranted,
+    Refused(Error),
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Response {
-    Outcome(Outcome),
+    Outcome(Acknowledgement),
     Conversation {
         conversation: Box<ExternalConversation>,
         relationship: Box<Relationship>,
@@ -168,6 +171,52 @@ pub struct Receipt {
     pub at: CanonicalTime,
     pub outcome: Outcome,
 }
+/// Provider-authenticated commitment to the durable result of this exact command.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Acknowledgement {
+    pub receipt: Receipt,
+    pub signature: Vec<u8>,
+}
+impl Acknowledgement {
+    fn recorded(receipt: Receipt) -> Self {
+        Self {
+            receipt,
+            signature: Vec::new(),
+        }
+    }
+    fn bytes(&self) -> Result<Vec<u8>, Error> {
+        let mut bytes = b"cs-mail/external-acknowledgement/v1".to_vec();
+        bytes.extend(serde_json::to_vec(&self.receipt).map_err(|_| Error::Invalid)?);
+        Ok(bytes)
+    }
+    /// # Errors
+    /// Refuses invalid serialization before signing the recorded outcome.
+    pub fn sign(mut self, provider: &[u8; 32]) -> Result<Self, Error> {
+        self.signature = SigningKey::from_bytes(provider)
+            .sign(&self.bytes()?)
+            .to_bytes()
+            .to_vec();
+        Ok(self)
+    }
+    /// # Errors
+    /// Rejects altered commands, outcomes, signatures or provider authority.
+    pub fn verify(&self, request: &SignedCommand, provider: &[u8; 32]) -> Result<(), Error> {
+        if self.receipt.digest != request.digest()?
+            || self.receipt.key != request.key
+            || self.receipt.signature != request.signature
+        {
+            return Err(Error::Invalid);
+        }
+        VerifyingKey::from_bytes(provider)
+            .map_err(|_| Error::Invalid)?
+            .verify_strict(
+                &self.bytes()?,
+                &Signature::from_slice(&self.signature).map_err(|_| Error::Invalid)?,
+            )
+            .map_err(|_| Error::Invalid)
+    }
+}
 pub struct Context {
     pub scope: RecipientSigningScope,
     pub authority: AccountState,
@@ -180,10 +229,13 @@ pub struct Context {
     pub messages: Vec<MessageView>,
 }
 pub struct Effects {
+    pub changes: Option<Changes>,
+    pub receipt: Receipt,
+}
+pub struct Changes {
     pub conversation: ExternalConversation,
     pub delivery: Option<Box<PreparedText>>,
     pub cancel_waiting: bool,
-    pub receipt: Receipt,
 }
 pub struct Decision {
     pub response: Response,
@@ -320,7 +372,6 @@ fn validate_message(
 #[allow(clippy::too_many_lines)] // One signed command decision and its complete effects.
 fn decide(request: &SignedCommand, c: Context, now: CanonicalTime) -> Result<Decision, Error> {
     request.authenticate(&c.authority, c.scope, now)?;
-    let digest = request.digest()?;
     if let Some(prior) = c.prior {
         return Ok(Decision {
             response: request.replay(&prior)?,
@@ -353,6 +404,29 @@ fn decide(request: &SignedCommand, c: Context, now: CanonicalTime) -> Result<Dec
             effects: None,
         });
     }
+    let (changes, outcome) = match mutation(request, c, now) {
+        Ok((changes, outcome)) => (Some(changes), outcome),
+        // Missing facts and unresolved policy cannot establish a terminal refusal.
+        Err(error @ (Error::Unavailable | Error::PolicyUnresolved)) => return Err(error),
+        Err(error) => (None, Outcome::Refused(error)),
+    };
+    let receipt = Receipt {
+        digest: request.digest()?,
+        key: request.key,
+        signature: request.signature.clone(),
+        at: now,
+        outcome,
+    };
+    Ok(Decision {
+        response: Response::Outcome(Acknowledgement::recorded(receipt.clone())),
+        effects: Some(Effects { changes, receipt }),
+    })
+}
+fn mutation(
+    request: &SignedCommand,
+    c: Context,
+    now: CanonicalTime,
+) -> Result<(Changes, Outcome), Error> {
     let (conversation, delivery, cancel_waiting, outcome) = match &request.command {
         Command::Start {
             mailbox,
@@ -429,22 +503,14 @@ fn decide(request: &SignedCommand, c: Context, now: CanonicalTime) -> Result<Dec
         }
         Command::Read { .. } => unreachable!(),
     };
-    let receipt = Receipt {
-        digest,
-        key: request.key,
-        signature: request.signature.clone(),
-        at: now,
-        outcome: outcome.clone(),
-    };
-    Ok(Decision {
-        response: Response::Outcome(outcome),
-        effects: Some(Effects {
+    Ok((
+        Changes {
             conversation,
             delivery,
             cancel_waiting,
-            receipt,
-        }),
-    })
+        },
+        outcome,
+    ))
 }
 
 /// Recorded provenance is evidence, not an authorization credential.

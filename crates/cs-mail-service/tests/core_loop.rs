@@ -692,6 +692,7 @@ fn acceptance_commits_permission_and_the_full_refund_together_or_not_at_all() {
             !lane
         );
         assert_eq!(snapshot.lane.is_some(), lane);
+        challenge_navigation_ownership(f);
         let refund = snapshot.payments[&RequestId(1)]
             .refund()
             .operation()
@@ -762,6 +763,48 @@ fn acceptance_commits_permission_and_the_full_refund_together_or_not_at_all() {
     accepted(&f, true);
 }
 
+// The navigation read must expose each direction only to its owner, without
+// treating the recipient's view of a request as a request they sent.
+fn challenge_navigation_ownership(f: &Loop) {
+    use cs_mail_application::members::MemberAnswer;
+    use cs_mail_security::{MemberRead, SignedMemberRead};
+    let read = |persona, key, seed| {
+        SignedMemberRead::sign(
+            f.gateway.scope(),
+            persona,
+            key,
+            f.clock.now(),
+            MemberRead::Outbox,
+            &seed,
+        )
+        .unwrap()
+    };
+    let MemberAnswer::Outbox(alice) = f.gateway.read(&read(ALICE, ALICE_KEY, [11; 32])).unwrap()
+    else {
+        panic!()
+    };
+    assert!(
+        alice
+            .iter()
+            .all(|view| view.relationship.handle.sender == ALICE)
+    );
+    assert!(alice.iter().any(|view| {
+        view.relationship.handle.recipient == BOB
+            && view
+                .relationship
+                .requests
+                .iter()
+                .any(|request| request.id == RequestId(1))
+    }));
+    let MemberAnswer::Outbox(bob) = f.gateway.read(&read(BOB, BOB_KEY, [21; 32])).unwrap() else {
+        panic!()
+    };
+    assert!(bob.iter().all(
+        |view| view.relationship.handle.sender == BOB && view.relationship.requests.is_empty()
+    ));
+    assert!(f.gateway.read(&read(BOB, ALICE_KEY, [11; 32])).is_err());
+}
+
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 fn altered_retries_under_an_existing_operation_identity_are_rejected() {
@@ -825,6 +868,7 @@ fn admission_policy_survives_reopening_and_is_checked_at_content_commit() {
         .existing_relationship(address.aggregate_key())
         .unwrap()
         .unwrap();
+    challenge_temporary_verification(&f, address.aggregate_key());
     let schema = NamespacedIdentifier::new("com.example", "checked", 1).unwrap();
     engine
         .configure_admission_policy(&AdmissionPolicy {
@@ -944,4 +988,66 @@ fn admission_policy_survives_reopening_and_is_checked_at_content_commit() {
         .unwrap()
         .is_none()
     );
+}
+
+fn challenge_temporary_verification(f: &Loop, key: &str) {
+    // Conjecture: temporary evidence acquisition failure is retryable and cannot admit mail.
+    // A permanent denial or a canonical write would falsify it and lose valid delivery.
+    use cs_mail_adapters::{
+        DmarcError, DmarcErrorKind, DmarcVerificationFuture, DmarcVerifier, DomainIdentity,
+        SmtpAuthenticationRequest,
+    };
+    struct Temporary;
+    impl DmarcVerifier for Temporary {
+        fn verify<'a>(&'a self, _: SmtpAuthenticationRequest<'a>) -> DmarcVerificationFuture<'a> {
+            Box::pin(async {
+                Err(DmarcError::new(
+                    DmarcErrorKind::Temporary,
+                    "fixture lookup unavailable",
+                ))
+            })
+        }
+    }
+    let domain = DomainIdentity::parse_ascii("example.test").unwrap();
+    let request = cs_mail_capabilities::LegacyBondFreeAdmission {
+        sender: domain.synthetic_protocol_identity(&[7; 32], 1),
+        recipient: BOB,
+        message_id: MessageId(900),
+        content_ref: ContentRef(900),
+        delivery_intent_ref: DeliveryIntentRef(900),
+        purpose: DeclaredPurpose::Known(KnownPurpose::Transactional),
+        payload_schema: None,
+        message_valid_until: MessageValidityUntil(CanonicalTime(f.clock.now().0 + 1000)),
+        capability: None,
+        idempotency_key: IdempotencyKey(900),
+        protocol_version: ProtocolVersion(2),
+        deployment_domain: [7; 32],
+        intended_provider: ProviderRef(30),
+        sender_domain: domain,
+    };
+    let ingress = f.gateway.existing(key).unwrap().unwrap();
+    let engine = f
+        .gateway
+        .deployment()
+        .existing_relationship(key)
+        .unwrap()
+        .unwrap();
+    let before = engine.snapshot().unwrap();
+    let authentication = SmtpAuthenticationRequest {
+        raw_message: b"From: sender@example.test\r\n\r\nfixture",
+        remote_ip: "192.0.2.1".parse().unwrap(),
+        helo_identity: "example.test",
+        mail_from: Some("sender@example.test"),
+        receiver_hostname: "mail.example.test",
+        received_at: f.clock.now(),
+    };
+    let mut future = Box::pin(ingress.admit_legacy_bond_free(&Temporary, authentication, &request));
+    let result = std::future::Future::poll(
+        future.as_mut(),
+        &mut std::task::Context::from_waker(std::task::Waker::noop()),
+    );
+    assert!(
+        matches!(result, std::task::Poll::Ready(Err(ServiceError::Dmarc(e))) if e.is_temporary())
+    );
+    assert_eq!(engine.snapshot().unwrap(), before);
 }

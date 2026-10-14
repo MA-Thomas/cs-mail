@@ -385,6 +385,12 @@ pub enum MemberAnswer {
         content: Vec<GuestDeliveredContent>,
     },
     Inbox(Vec<RelationshipView>),
+    Outbox(Vec<OutgoingRelationshipView>),
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OutgoingRelationshipView {
+    pub relationship: RelationshipView,
+    pub recipient_name: Option<String>,
 }
 /// One ciphertext and the sender certificate it is bound to.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

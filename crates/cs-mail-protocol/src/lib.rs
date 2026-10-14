@@ -504,6 +504,7 @@ fn validate_snapshot(
     if context.protocol_version != context.policy.protocol_version {
         return Err(ProtocolError::ProtocolVersionMismatch);
     }
+    snapshot.state.validate()?;
     context.policy.validate()?;
     if snapshot.ledger.unit != context.policy.unit {
         return Err(ProtocolError::AmountMismatch);

@@ -203,6 +203,35 @@ impl PostgresDeployment {
             })
             .collect()
     }
+    /// Every stored relationship owned by this sending address.
+    /// # Errors
+    /// Database or decoding failures.
+    pub fn relationships_from(
+        &self,
+        sender: ProtocolIdentity,
+    ) -> Result<Vec<StoredRelationship>, StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        client
+            .query(
+                "SELECT aggregate_key, relationship_state#>>'{relationship,key,recipient}' \
+             FROM cs_relationship_aggregates \
+             WHERE relationship_state#>>'{relationship,key,sender}'=$1 ORDER BY aggregate_key",
+                &[&sender.0.to_string()],
+            )?
+            .into_iter()
+            .map(|row| {
+                Ok(StoredRelationship {
+                    aggregate_key: row.try_get(0)?,
+                    sender,
+                    recipient: ProtocolIdentity(
+                        row.try_get::<_, String>(1)?
+                            .parse()
+                            .map_err(|_| StorageError::NumericRange)?,
+                    ),
+                })
+            })
+            .collect()
+    }
     /// Relationships with work a worker could do now: ready or expired-lease relationship
     /// work, or due schedules. Received commands are processed globally in receipt order.
     /// # Errors

@@ -43,6 +43,7 @@ public struct EditorialButtonStyle: ButtonStyle {
     public init(prominent: Bool = false) { self.prominent = prominent }
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .textSelection(.disabled)
             .font(EditorialStyle.text(13))
             .padding(.horizontal, 18).padding(.vertical, 11)
             .foregroundStyle(prominent ? EditorialStyle.canvas(scheme) : EditorialStyle.ink(scheme))
@@ -82,6 +83,7 @@ public struct EditorialRegionButtonStyle: ButtonStyle {
         @Environment(\.isEnabled) private var enabled
         var body: some View {
             label
+                .textSelection(.disabled)
                 .background(EditorialStyle.ink(scheme).opacity(enabled && (hovered || pressed || selected) ? 0.09 : 0), in: RoundedRectangle(cornerRadius: 10))
                 .contentShape(Rectangle())
                 .onHover { hovered = $0 }
@@ -106,6 +108,7 @@ public struct EditorialPortalButtonStyle: ButtonStyle {
         @Environment(\.isEnabled) private var enabled
         var body: some View {
             label
+                .textSelection(.disabled)
                 .overlay {
                     EditorialBoundary(route: route)
                         .stroke(EditorialStyle.ink(scheme).opacity(enabled && (hovered || pressed) ? 0.85 : 0), lineWidth: pressed ? 2.5 : 2)

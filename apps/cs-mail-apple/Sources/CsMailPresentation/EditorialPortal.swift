@@ -23,7 +23,7 @@ public struct EditorialPortalView<Content: View>: View {
                 Text(person).lineLimit(1)
             }.font(EditorialStyle.text(13)).foregroundStyle(EditorialStyle.secondaryInk(scheme))
             VStack(alignment: .leading, spacing: 12) {
-                Text(permission).font(EditorialStyle.text(13)).foregroundStyle(EditorialStyle.secondaryInk(scheme)).padding(.horizontal, 24).padding(.top, 20)
+                EditorialReadingView(permission, style: .caption).padding(.horizontal, 16).padding(.top, 12)
                 content
             }
             .background(EditorialStyle.ink(scheme).opacity(0.015), in: RoundedRectangle(cornerRadius: 24))

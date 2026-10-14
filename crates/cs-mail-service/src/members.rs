@@ -196,6 +196,17 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
             &AdmissionPolicy::default(),
         )
     }
+    /// # Errors
+    /// Refuses signing an invalid external acknowledgement.
+    pub(crate) fn sign_external_acknowledgement(
+        &self,
+        acknowledgement: cs_mail_application::correspondence::external::Acknowledgement,
+    ) -> Result<cs_mail_application::correspondence::external::Acknowledgement, ServiceError> {
+        acknowledgement
+            .sign(&self.secrets.provider_seed)
+            .map_err(StorageError::from)
+            .map_err(Into::into)
+    }
     /// The provider signer for receipts and quotes.
     pub fn signer(&self) -> ProviderSigner {
         ProviderSigner::from_secret_bytes(
@@ -392,6 +403,7 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
                     content,
                 }
             }
+            MemberRead::Outbox => MemberAnswer::Outbox(self.outbox(signed.persona)?),
             MemberRead::Inbox => {
                 let mut views = Vec::new();
                 for stored in self.deployment.relationships_to(signed.persona)? {
@@ -412,6 +424,29 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
                 MemberAnswer::Inbox(views)
             }
         })
+    }
+    fn outbox(
+        &self,
+        persona: ProtocolIdentity,
+    ) -> Result<Vec<cs_mail_application::members::OutgoingRelationshipView>, ServiceError> {
+        let mut views = Vec::new();
+        for stored in self.deployment.relationships_from(persona)? {
+            let address = self.address(stored.sender, stored.recipient)?;
+            if let Some(view) = self.view(&address)? {
+                let recipient_name = self
+                    .deployment
+                    .directory_lookup(
+                        cs_mail_accounts::directory::DirectoryReference::Protocol(stored.recipient),
+                        || self.clock.now(),
+                    )?
+                    .map(|p| p.entry.profile().display_name().to_owned());
+                views.push(cs_mail_application::members::OutgoingRelationshipView {
+                    relationship: view,
+                    recipient_name,
+                });
+            }
+        }
+        Ok(views)
     }
     pub(crate) fn view(
         &self,

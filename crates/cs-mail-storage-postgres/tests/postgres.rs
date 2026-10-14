@@ -2219,6 +2219,7 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
         .unwrap()
         .get(0);
     assert_eq!(work, 1);
+    challenge_corrupt_restore(&engine, &mut db, &key);
 }
 
 #[test]
@@ -2967,4 +2968,71 @@ fn native_send_packet(
         Command::Send(Box::new(packet)),
         at,
     )
+}
+
+fn challenge_corrupt_restore(engine: &PostgresEngine, db: &mut postgres::Client, key: &str) {
+    // Conjecture: corrupt restoration cannot become a permanent refusal of valid received work.
+    // A recorded refusal would prevent reconciliation after the original facts are repaired.
+    let original = db
+        .query_one(
+            "SELECT request FROM cs_requests WHERE aggregate_key=$1 AND request_id='1'",
+            &[&key],
+        )
+        .unwrap()
+        .get::<_, postgres::types::Json<cs_mail_protocol::RelationshipRequest>>(0)
+        .0;
+    let handle = engine
+        .receive_signed(
+            &sender(
+                ProtocolCommand::CancelRequestSubmission {
+                    request_id: RequestId(1),
+                    expected_request_version: original.version.into(),
+                    reason: cs_mail_protocol::CancellationReason::SenderRequested,
+                },
+                3,
+            ),
+            DEPLOYMENT_DOMAIN,
+            || test_time(3),
+            policy(),
+        )
+        .unwrap();
+    let mut corrupt = original.clone();
+    corrupt.terms.recipient = ProtocolIdentity(999);
+    db.execute(
+        "UPDATE cs_requests SET request=$2 WHERE aggregate_key=$1 AND request_id='1'",
+        &[&key, &postgres::types::Json(corrupt)],
+    )
+    .unwrap();
+    assert!(matches!(
+        engine.snapshot(),
+        Err(StorageError::InvalidStoredProtocolState)
+    ));
+    assert!(matches!(
+        engine.process_received(&handle),
+        Err(StorageError::InvalidStoredProtocolState)
+    ));
+    db.execute("UPDATE cs_requests SET request=jsonb_set(request,'{id}','false') WHERE aggregate_key=$1 AND request_id='1'", &[&key]).unwrap();
+    assert!(matches!(engine.snapshot(), Err(StorageError::Database(_))));
+    assert!(matches!(
+        engine.process_received(&handle),
+        Err(StorageError::Database(_))
+    ));
+    assert_eq!(
+        db.query_one(
+            "SELECT count(*) FROM cs_received_commands WHERE aggregate_key=$1 AND outcome IS NULL",
+            &[&key]
+        )
+        .unwrap()
+        .get::<_, i64>(0),
+        1
+    );
+    db.execute(
+        "UPDATE cs_requests SET request=$2 WHERE aggregate_key=$1 AND request_id='1'",
+        &[&key, &postgres::types::Json(original)],
+    )
+    .unwrap();
+    assert!(matches!(
+        engine.process_received(&handle).unwrap(),
+        cs_mail_application::receipts::ReceivedOutcome::Protocol(_)
+    ));
 }

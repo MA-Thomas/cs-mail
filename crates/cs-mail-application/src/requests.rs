@@ -77,6 +77,7 @@ impl RequestDecision {
         };
         if let Some(opposite) = opposite {
             let opposite = &opposite.snapshot;
+            opposite.state.validate()?;
             let forward = snapshot.state.relationship.key;
             let reverse = opposite.state.relationship.key;
             if reverse.sender != forward.recipient || reverse.recipient != forward.sender {

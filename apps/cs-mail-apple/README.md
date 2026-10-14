@@ -1,3 +1,131 @@
+## Neutral contact focus in column B — 13 October 2026
+
+Sidebar rows suppress the system's blue focus effect and draw a neutral outline
+for focus, retaining the existing neutral selection wash and large click regions.
+This applies to the shared contact/request/lane/financial rows and sidebar destinations.
+The canonical signed build was installed and reopened. Pointer selection in the
+active Communications screen and Tab focus were inspected; focus remains visible
+without blue highlighting. Build evidence: `/tmp/cs-mail-contact-focus-build.log`.
+No tests were added or unrelated Rust/database suites run. iOS was not inspected.
+
+## Area-specific selection in column B — 13 October 2026
+
+Column A selects an area; B selects an item; C opens that item's contents. Home and
+Notes have no sidebar. Communications has one searchable correspondence list,
+including external mailboxes, and email composition is a toolbar action. External
+reading no longer introduces another mailbox list; multiple conversations for the
+same selected mailbox use a conversation picker.
+
+Relationships retains Directory and My approach page, with Incoming/Outgoing request
+filters. Each request has its own identity, status and recorded terms-issuance date;
+direction is retained when opening its conversation. Express lanes lists current
+incoming and outgoing grants, with expiry in the row and scope/rate in the detail.
+Economics lists financial records with concise payment/refund summaries and issuance
+dates, and opens one selected record. Q&A has one destination. The duplicate global
+relationship/lane cards, self-links, permission subtitles in unrelated lists and
+sidebar implementation explanations are removed.
+
+The portable client obtains owned incoming and outgoing records through authenticated
+member reads and projects lanes for an explicit time. The new Outbox read is restricted
+to the signed address; recipient names have their own outgoing-view field. Navigation
+does not change the encrypted cache format, create relationships, grant permission,
+authorize charges or record sending consent. Its read failure is shown as a refresh
+error rather than an empty-list claim.
+
+The current owner launcher is `target/column-b-navigation-20261013-8a4b/start.sh`.
+It uses the same `target/principles-alignment-20261013/owner-ready/maild.json`, verified
+owner database, deployment keys and device credential. The prior pinned backend is
+retained; there is no schema migration or reenrollment for this update.
+
+Relevant validation: existing client tests, lint checks for the affected Rust crates,
+the PostgreSQL acceptance scenario extended with owned-Outbox and other-persona signing-key refusal
+checks, and the existing native journey extended with lane identity/direction/expiry
+assertions. No test cases were added. The initial native run stopped in the optional
+failed-payment experiment; its log is retained. The scoped final native journey passed
+without that unrelated optional branch, including external consent/reply/permission
+workflows. Evidence: `/tmp/cs-mail-column-b-client-tests.log`,
+`/tmp/cs-mail-column-b-clippy.log`, `/tmp/cs-mail-column-b-service-tests.log`,
+`/tmp/cs-mail-column-b-native-checks-final.log` and `/tmp/cs-mail-column-b-build.log`.
+The installed owner app was inspected for list/detail selection, request filters,
+historical record dates, both lane directions, full-width Home/Notes and the empty
+email composer. Its owner has no external threads, so the integrated external-mailbox
+list and multi-conversation picker remain unexercised interactively there. iOS,
+public-provider delivery and unrelated Rust/database suites were not checked.
+
+## Consistent reading and copying — 13 October 2026
+
+`EditorialReadingView` gives each reading region one native, read-only text surface.
+Conversations, external-message transcripts, Q&A, profile descriptions, request terms,
+financial records, referenced text and account status support selection across their
+paragraphs and blocks. Controls and editable fields remain separate. Navigation rows
+and contact/profile cards expose a context-menu Copy command; their labels do not
+compete with clicking through text-selection gestures. The source-selection editor
+retains its existing policy-aware selection mapping.
+
+The macOS view measures with a separate layout manager, so SwiftUI width probes cannot
+resize the displayed text. Unchanged document refreshes preserve selection; appearance
+changes preserve it when the text is unchanged. Text remains wrapped and scrolls in
+its existing reading container.
+
+Relevant validation: the canonical signed Apple build, actual dragging across Q&A
+paragraphs and two native messages, copying/pasting into an unsent composer, scrolling,
+Select All confined to the document, and a contact-card Copy command that leaves
+navigation unchanged. Verification drafts were cleared without
+sending. Original account and Keychain continuity are preserved. No tests were added
+and unrelated Rust/PostgreSQL suites were not run. Build evidence is
+`/tmp/cs-mail-reading-install.log`. iOS runtime, every secondary form and external
+transcripts with messages have not been interactively exercised in the owner app.
+
+## Audit repairs and preserved owner deployment — 13 October 2026
+
+External mutations now return provider-signed acknowledgements bound to the exact
+command digest, caller key/signature, recorded time and outcome. Authenticated
+semantic refusals commit a receipt without conversation, ciphertext or delivery
+changes. Replaying one after consent restoration or unblocking retains that original
+refusal; a new attempt requires a new operation. HTTP errors, unavailable facts,
+unresolved policy and altered acknowledgements retain the encrypted journal.
+
+External paging follows cursor progress through expired-only pages. Native and
+external contacts share one permission projection with explicit time and matching
+lane evidence. Swift renders standing, bounded and closed perimeters from that typed
+projection. Restored protocol records reject multiple unresolved requests and foreign
+owners. A malformed stored record is a storage fault, preserving received work for
+recovery instead of committing a permanent refusal. Legacy DMARC evidence acquisition
+is service-owned; temporary failures remain retryable. Older atomic storage
+orchestration is retained where this repair established no behavioral defect.
+
+Schema 37 separates external operation receipts from conversation existence, so a
+refused first invitation creates no conversation. It refuses populated predecessor
+environments. The offline `tools/development-continuity/external_receipts_upgrade.py`
+creates and verifies a fresh copy, including retained maintenance history and
+sequence positions, before it can be used. Runtime cache format 3 and original
+credentials are unchanged; there is no compatibility reader or reenrollment.
+
+The current owner backend uses the verified `cs_mail_principles_owner_ready_20261013`
+copy, with the same original account, personas, address, signing keys, service URL
+and Keychain item. Its launcher is `target/principles-alignment-20261013/start.sh`;
+its configuration and preservation record are under that directory's `owner-ready/`.
+The original `cs_mail_continuity_20261012` database and earlier configuration remain
+unchanged rollback evidence. Incomplete earlier copy attempts are retained and were
+never started. The canonical app remains
+`target/apple/CsMail-continuity-20261012.app` (**cs-mail Development**).
+
+Validation extends existing experiments without adding test cases: exact replay,
+transport/refusal distinction, acknowledgement substitution, expired-page traversal,
+restored-state corruption/recovery, and external permission routes. The complete gate
+and native member journey use isolated local PostgreSQL, fictional browser identities,
+simulated payments and the local relay. An initial native run stopped on an unavailable
+response; the failure record is retained alongside the successful fresh rerun.
+Final gate evidence: `/tmp/cs-mail-principles-finished-quality-gate.log` (all eight
+checks passed). Final native journey: `/tmp/cs-mail-principles-native-final-checks.log`.
+The maintenance copy and exact rerun matched 101 tables and nine sequences on an
+inactive check copy as well as the deployed preservation copy.
+The installed app reopened the original address and displayed the external reader
+and popup composer with unchecked disclosure consent and a disabled empty send.
+Keychain item identity and credential fingerprints matched before and after.
+Public/provider delivery, iOS, actual power-loss recovery and interactive external
+lane/blocked perimeter inspection remain unestablished by this pass.
+
 ## External email in the unified app — 13 October 2026
 
 Communications → External email opens the conversation reader and popup composer.
@@ -52,8 +180,9 @@ It runs all implemented native workflows against the preserved local development
 account `marcus@csqd-mail.com`. The navigation rail, reactive lists, portal perimeter
 feedback, popup composer, request initiation/review, follow-ups, received-conversation
 replies, source reuse, contact controls, Directory, approach-page editor and recorded
-request finances are available in that app. Notes, annual finance interfaces,
-external-email composition, consent and reply review now use the portable Rust client; replacement-device recovery remains unimplemented.
+request finances are available in that app. External-email composition, consent and
+reply review now use the portable Rust client. Notes, annual finance interfaces and
+replacement-device recovery remain unimplemented.
 
 The transient fixture adapter, demo branches, startup flag and demo-packaging script
 are removed. `MemberModel` and `DirectoryModel` share one `ClientWorker`; every action

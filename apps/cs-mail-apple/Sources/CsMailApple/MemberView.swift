@@ -31,7 +31,10 @@ public struct MemberView: View {
     @State private var reviewingRequest = false
     @State private var managingContact = false
     @State private var enrolling = false
+    @State private var externalComposeRequested = false
     @State private var destination: MemberDestination = .home
+    @State private var sidebarTarget: SidebarTarget?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var server = "http://127.0.0.1:8480"
     @State private var name = ""
     @State private var birthDate = ""
@@ -54,35 +57,7 @@ public struct MemberView: View {
     public var body: some View {
         Group {
             if let inbox = model.inbox {
-                EditorialNavigationShell(selected: destination.area, navigate: { destination = $0.destination }) { area, dismiss, focusChanged in
-                    navigationColumn(area: area, preview: true, dismiss: dismiss, focusChanged: focusChanged)
-                } content: {
-                    NavigationSplitView {
-                        navigationColumn(area: destination.area)
-                            .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 360)
-                    } detail: {
-                        ZStack {
-                            // Retain the reader and its popup composer across destination changes.
-                            correspondence(inbox: inbox)
-                                .opacity(showsCorrespondence ? 1 : 0)
-                                .allowsHitTesting(showsCorrespondence)
-                                .accessibilityHidden(!showsCorrespondence)
-                            destinationContent.disabled(model.busy)
-                        }
-                    }
-                }
-                .onChange(of: model.selectedSender) { _, sender in
-                    confirmation = nil; managingContact = false; reviewingRequest = false
-                    if let sender { Task { await model.select(sender) } }
-                }
-                .toolbar {
-                    ToolbarItemGroup {
-                        if destination != .notes {
-                            Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } }.disabled(model.busy)
-                        }
-                        Button("Lock", systemImage: "lock") { confirmation = nil; model.lock() }
-                    }
-                }
+                memberShell(inbox)
             } else {
                 VStack(spacing: 22) {
                     Text("cs-mail").font(EditorialStyle.heading(23)).padding(.bottom, 24)
@@ -132,7 +107,7 @@ public struct MemberView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack { Text("Referenced selection").font(.title2); Spacer(); Button("Done") { readingReference = false; model.clearReference() } }
                 switch model.reference {
-                case .readable(let text): ScrollView { Text(text).textSelection(.enabled).privacySensitive() }
+                case .readable(let text): ScrollView { EditorialReadingView(text).privacySensitive() }
                 case .unavailable: Text("The source is deleted, expired or otherwise unavailable.")
                 case .accessDenied: Text("You do not have access to the retained source. The reference grants no access.")
                 case nil: if let error = model.memberError { Text(error).foregroundStyle(.orange) } else { ProgressView() }
@@ -208,11 +183,72 @@ public struct MemberView: View {
         }
         .onDisappear { model.lock() }
     }
+    private func memberShell(_ inbox: Inbox) -> some View {
+        let shell = EditorialNavigationShell(selected: destination.area, navigate: navigateArea,
+            preview: navigationPreview, content: { memberWorkspace(inbox) })
+        return shell
+            .onChange(of: destination.area) { _, area in updateColumnVisibility(area) }
+            .onChange(of: model.selectedSender) { _, sender in selectedSenderChanged(sender) }
+            .toolbar { memberToolbar }
+    }
+    private func updateColumnVisibility(_ area: MemberArea) {
+        columnVisibility = area == .home || area == .notes ? .detailOnly : .all
+    }
+    private func selectedSenderChanged(_ sender: SenderReference?) {
+        confirmation = nil; managingContact = false; reviewingRequest = false
+        if let sender, destination != .externalEmails {
+            Task { await model.select(sender) }
+        }
+    }
+    private func navigateArea(_ area: MemberArea) {
+        if area == .communications, let sender = model.selectedSender {
+            let external = model.externalInbox?.threads.contains { $0.guest == sender.value } == true
+            sidebarTarget = external ? .external(sender.value) : .contact(sender.value)
+            destination = external ? .externalEmails : .communications
+        } else { destination = area.destination; sidebarTarget = nil }
+    }
+    private func navigationPreview(_ area: MemberArea, _ dismiss: @escaping () -> Void,
+                                   _ focusChanged: @escaping (Bool) -> Void) -> some View {
+        navigationColumn(area: area, preview: true, dismiss: dismiss, focusChanged: focusChanged)
+    }
+    @ToolbarContentBuilder private var memberToolbar: some ToolbarContent {
+        ToolbarItemGroup {
+            if destination.area == .communications {
+                Button("Write an email", systemImage: "square.and.pencil") {
+                    sidebarTarget = nil; model.chooseSender(nil)
+                    destination = .externalEmails; externalComposeRequested = true
+                }.disabled(model.busy || !model.connected || model.externalInbox?.pending != nil)
+            }
+            if destination != .notes {
+                Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } }.disabled(model.busy)
+            }
+            Button("Lock", systemImage: "lock") { confirmation = nil; model.lock() }
+        }
+
+    }
+    @ViewBuilder private func memberWorkspace(_ inbox: Inbox) -> some View {
+        if destination.area == .home || destination.area == .notes {
+            destinationContent.disabled(model.busy)
+        } else {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                navigationColumn(area: destination.area)
+                    .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 360)
+            } detail: {
+                ZStack {
+                    correspondence(inbox: inbox)
+                        .opacity(showsCorrespondence ? 1 : 0)
+                        .allowsHitTesting(showsCorrespondence)
+                        .accessibilityHidden(!showsCorrespondence)
+                    destinationContent.disabled(model.busy)
+                }
+            }
+        }
+    }
     private var summaries: [EditorialConversationSummary] {
         model.presentationContacts.map {
             EditorialConversationSummary(id: SenderReference($0.sender), title: $0.title, subtitle: $0.permission,
                 external: $0.external, awaitingDecision: $0.requests.contains(where: \.awaitingDecision),
-                route: route($0.permissionRoute), hasReceivedRequests: !$0.requests.isEmpty, hasSentRequests: !$0.sentRequests.isEmpty)
+                route: route($0.permissionRoute))
         }
     }
     private var showsCorrespondence: Bool {
@@ -223,23 +259,61 @@ public struct MemberView: View {
     }
     private func openContact(_ sender: SenderReference, area: MemberArea) {
         guard !model.busy else { return }
+        sidebarTarget = .contact(sender.value)
         if area != .economics, model.externalInbox?.threads.contains(where: { $0.guest == sender.value }) == true {
+            sidebarTarget = .external(sender.value)
             model.chooseSender(sender); destination = .externalEmails; return
         }
         destination = area == .economics ? .economics : .correspondence(area == .home ? .communications : area)
         if model.selectedSender == sender { Task { await model.select(sender) } }
         else { model.chooseSender(sender) }
     }
-    private func navigationColumn(area: MemberArea, preview: Bool = false, dismiss: @escaping () -> Void = {},
+    private func sidebarEntries(_ area: MemberArea) -> [SidebarEntry] {
+        SidebarProjection.entries(area: area, contacts: model.navigationContacts ?? [],
+            external: model.externalInbox?.threads ?? [], conversations: model.presentationContacts)
+    }
+    @ViewBuilder private func navigationColumn(area: MemberArea, preview: Bool = false, dismiss: @escaping () -> Void = {},
                                   focusChanged: @escaping (Bool) -> Void = { _ in }) -> some View {
-        EditorialInboxView(conversations: summaries, selection: model.selectedSender, area: area,
-            destination: destination, hasRequestWorkflow: model.inbox?.requestProgress != nil, showsStatus: !preview,
-            navigate: { target in dismiss(); destination = target },
-            select: { sender, origin in dismiss(); openContact(sender, area: origin) },
-            reviewSavedRequest: { dismiss(); reviewingRequest = true }, previewFocusChanged: focusChanged) {
-                if !preview { status }
-            }
-            .disabled(model.busy)
+        if area == .home || area == .notes {
+            // These areas have no item list; keep their hover preview compact.
+            Text(area.title).font(EditorialStyle.heading(23)).padding(22)
+        } else {
+            let entries = sidebarEntries(area)
+            EditorialInboxView(items: entries.map(\.item), selection: sidebarTarget?.id ?? (destination == .externalEmails ? model.selectedSender.map { SidebarTarget.external($0.value).id } : nil), area: area,
+                destination: destination, hasRequestWorkflow: model.inbox?.pendingRequest == true,
+                showsStatus: !preview && hasSidebarStatus, loading: model.navigationContacts == nil && model.navigationError == nil,
+                error: model.navigationError, navigate: { target in dismiss(); sidebarTarget = nil; destination = target },
+                select: { id in
+                    if let id, let entry = entries.first(where: { $0.target.id == id }) {
+                        dismiss(); selectSidebar(entry.target, area: area)
+                    } else if !preview { sidebarTarget = nil; destination = area.destination }
+                }, reviewSavedRequest: { dismiss(); reviewingRequest = true }, previewFocusChanged: focusChanged) {
+                    if !preview { status }
+                }.id(area).disabled(model.busy)
+        }
+    }
+    private func selectSidebar(_ target: SidebarTarget, area: MemberArea) {
+        guard !model.busy else { return }
+        sidebarTarget = target
+        switch target {
+        case .external:
+            model.chooseSender(SenderReference(target.sender)); destination = .externalEmails
+        case .financial: destination = .economics
+        case .lane:
+            destination = .lanes
+            chooseSidebarSender(target.sender)
+        case .request:
+            destination = .correspondence(.relationships)
+            chooseSidebarSender(target.sender)
+        case .contact:
+            destination = .correspondence(area)
+            chooseSidebarSender(target.sender)
+        }
+    }
+    private func chooseSidebarSender(_ value: String) {
+        let sender = SenderReference(value)
+        if model.selectedSender == sender { Task { await model.select(sender) } }
+        else { model.chooseSender(sender) }
     }
     @ViewBuilder private var destinationContent: some View {
         switch destination {
@@ -249,7 +323,7 @@ public struct MemberView: View {
                 if let sender { openContact(sender, area: .communications) }
             }))
         case .externalEmails:
-            ExternalEmailView(model: model)
+            ExternalEmailView(model: model, composeNew: $externalComposeRequested)
         case .directory:
             DirectoryView(model: model.directory, member: model,
                 openCorrespondence: { sender in openContact(sender, area: .relationships) },
@@ -259,75 +333,53 @@ public struct MemberView: View {
         case .address: AddressEditor(model: model)
         case .questions: EditorialQuestionsView()
         case .relationships:
-            overview(title: "Relationship requests", explanation: "Review incoming and outgoing requests, discover people, or edit your published approach page.",
-                contacts: summaries.filter { $0.hasReceivedRequests || $0.hasSentRequests }, area: .relationships)
+            EditorialEmptyView(title: "Choose a request")
         case .lanes:
-            overview(title: "Express lanes", explanation: "These people have incoming express-lane permission to contact you. Scope and validity apply. Your permission to contact them is separate; review both directions in Manage contact.",
-                contacts: summaries.filter { $0.route == .bounded }, area: .lanes)
+            if case .lane(let sender, let direction) = sidebarTarget,
+               let contact = model.navigationContacts?.first(where: { $0.sender == sender }) {
+                LaneDetailView(contact: contact, direction: direction,
+                    manage: { managingContact = true }, openCorrespondence: { openContact(SenderReference(sender), area: .communications) })
+            } else { EditorialEmptyView(title: "Choose an express lane") }
         case .economics:
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    Text("Economics").font(EditorialStyle.heading(28))
-                    Text("Request charges and refunds").font(.headline)
-                    Text("Select a person in the list to review their recorded request finances. Saved views can be out of date.").font(.callout).foregroundStyle(.secondary)
-                    RequestFinancialStatusView(model: model)
-                    Divider()
-                    Text("Annual service and member distributions").font(.headline)
-                    Text("These interfaces are not available yet. No expected disbursement or next-payment forecast is shown.").font(.callout).foregroundStyle(.secondary)
-                    Button("Read the Q&A") { destination = .questions }.buttonStyle(EditorialButtonStyle())
-                }.padding(32).frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity)
-            }.background(EditorialStyle.canvas(scheme))
+            if case .financial(let sender, let request, let direction) = sidebarTarget,
+               let contact = model.navigationContacts?.first(where: { $0.sender == sender }),
+               let record = (direction == .incoming ? contact.requests : contact.sentRequests).first(where: { $0.record.id == request }) {
+                RequestFinancialStatusView(title: contact.title, request: record.record, direction: direction)
+            } else { EditorialEmptyView(title: "Choose a financial record") }
         case .notes:
             VStack(alignment: .leading, spacing: 18) {
-                Text("Notes").font(EditorialStyle.heading(28))
-                Text("A private space for writing is planned. Notes cannot be created or saved yet.").foregroundStyle(.secondary)
+                EditorialReadingView(blocks: [EditorialReadingBlock("Notes", style: .title),
+                    EditorialReadingBlock("A private space for writing is planned. Notes cannot be created or saved yet.")])
             }.padding(40).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(EditorialStyle.canvas(scheme))
         }
     }
-    private func overview(title: String, explanation: String, contacts: [EditorialConversationSummary], area: MemberArea) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Text(title).font(EditorialStyle.heading(28))
-                Text(explanation).font(.callout).foregroundStyle(.secondary)
-                if contacts.isEmpty { Text("No matching correspondence in this view.").foregroundStyle(.secondary) }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 18)], spacing: 18) {
-                    ForEach(contacts) { contact in
-                        Button { openContact(contact.id, area: area) } label: {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text(contact.title).font(.headline)
-                                Text(contact.awaitingDecision ? "Awaiting your decision" : contact.subtitle).font(.caption).foregroundStyle(.secondary)
-                                Text("Open correspondence").font(.caption)
-                            }.padding(22).frame(maxWidth: .infinity, minHeight: 130, alignment: .leading)
-                                .overlay { EditorialBoundary(route: contact.route).stroke(EditorialStyle.ink(scheme).opacity(0.3)).allowsHitTesting(false) }
-                        }.buttonStyle(EditorialPortalButtonStyle(route: contact.route))
-                    }
-                }
-            }.padding(32).frame(maxWidth: 940, alignment: .leading).frame(maxWidth: .infinity)
-        }.background(EditorialStyle.canvas(scheme))
-    }
     private func correspondence(inbox: Inbox) -> some View {
-        EditorialSpaceView(conversations: summaries,
-            selection: Binding(get: { model.selectedSender }, set: { sender in
-                if let sender { openContact(sender, area: destination.area) } else { model.chooseSender(nil) }
-            })) { person, space in
-            EditorialPortalView(person: person.title, permission: "Contact from this person: " + person.subtitle,
-                route: person.route, portalID: person.id, space: space, returnToSpace: { model.chooseSender(nil) }) {
-                if let conversation = model.conversation, conversation.sender == person.id.value {
+        Group {
+            if let conversation = model.conversation, conversation.sender == model.selectedSender?.value {
+                EditorialPortalView(person: conversation.title, permission: "Contact from this person: " + conversation.permission,
+                    route: route(conversation.permissionRoute), returnToSpace: { destination = .home; sidebarTarget = nil }) {
                     ContactCorrespondenceView(model: model, conversation: conversation, inbox: inbox,
+                        selectedRequest: selectedRequest,
                         manageContact: { managingContact = true },
                         requestRelationship: {
                             Task {
                                 await model.directory.open(AddressReference(conversation.sender))
-                                destination = .directory
+                                sidebarTarget = nil; destination = .directory
                             }
                         }, reviewPolicy: reviewPolicy,
                         resolve: { message, part in readingReference = true; Task { await model.resolveReference(message: message, part: part) } },
                         decide: { decision, request in confirm(decision, conversation: conversation, request: request) })
                         .id(conversation.sender)
-                } else { EditorialEmptyView(title: "Opening correspondence…") }
-            }
+                }
+            } else { EditorialEmptyView(title: model.selectedSender == nil ? "Choose a conversation" : "Opening correspondence…") }
         }.disabled(model.busy)
+    }
+    private var selectedRequest: SidebarRequestSelection? {
+        if case .request(_, let request, let direction) = sidebarTarget {
+            return SidebarRequestSelection(id: request, direction: direction)
+        }
+        return nil
     }
     private func reviewPolicy(_ id: String, _ policy: ConversationPolicy, _ action: PolicyAction) {
         let restricting = action == .restrict
@@ -375,14 +427,25 @@ public struct MemberView: View {
         case .directoryPublication: return "A profile publication has an unresolved outcome. Resume its original operation."
         }
     }
+    private var statusBlocks: [EditorialReadingBlock] {
+        var blocks: [EditorialReadingBlock] = []
+        if let error = model.memberError { blocks.append(EditorialReadingBlock(error, style: .warning)) }
+        if let inbox = model.inbox {
+            if inbox.pendingPolicy { blocks.append(EditorialReadingBlock("A conversation-policy change has an unresolved outcome.", style: .caption)) }
+            if inbox.pendingSend != nil { blocks.append(EditorialReadingBlock("A message has an unresolved outcome.", style: .caption)) }
+            if inbox.pendingSender != nil { blocks.append(EditorialReadingBlock("Permission operation unresolved. A retry sends the original operation.")) }
+            if let setup = inbox.pendingSetup { blocks.append(EditorialReadingBlock(pendingSetupExplanation(setup))) }
+        }
+        return blocks
+    }
+    private var hasSidebarStatus: Bool {
+        if !statusBlocks.isEmpty { return true }
+        guard let inbox = model.inbox else { return false }
+        return inbox.requestProgress != nil || inbox.conversations.contains { $0.controls.laneExpiryReminder != nil }
+    }
     @ViewBuilder private var status: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let settings = model.addressSettings {
-                Text(settings.displayName).font(.headline)
-                if let mailbox = settings.mailbox { Text(mailbox).font(.caption).textSelection(.enabled) }
-            }
-            Text("Development account\nSimulated bank verification and payments").font(.caption).foregroundStyle(.secondary)
-            if let error = model.memberError { Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange) }
+            if !statusBlocks.isEmpty { EditorialReadingView(blocks: statusBlocks) }
             if let inbox = model.inbox {
                 ForEach(inbox.conversations.filter { $0.controls.laneExpiryReminder != nil }, id: \.sender) { contact in
                     Button("Review expiring lane for \(contact.title)") {
@@ -391,25 +454,16 @@ public struct MemberView: View {
                         Task { await model.select(SenderReference(contact.sender)) }
                     }.font(.caption)
                 }
-                if let date = inbox.synchronizedAt {
-                    Text("\(model.connected ? "Synchronized" : "Saved snapshot") \(Date(timeIntervalSince1970: Double(date) / 1000).formatted())")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
                 if inbox.requestProgress != nil { Button(inbox.pendingRequest ? "Review saved request workflow" : "View last request outcome") { reviewingRequest = true }.disabled(model.busy) }
-                if inbox.pendingPolicy { Text("A conversation-policy change has an unresolved outcome.").font(.caption); Button("Retry original policy change") { Task { await model.retry() } }.disabled(model.busy) }
-                if inbox.pendingSend != nil { Text("A message has an unresolved outcome.").font(.caption); Button("Retry original send") { Task { await model.retry() } }.disabled(model.busy) }
+                if inbox.pendingPolicy { Button("Retry original policy change") { Task { await model.retry() } }.disabled(model.busy) }
+                if inbox.pendingSend != nil { Button("Retry original send") { Task { await model.retry() } }.disabled(model.busy) }
                 if inbox.pendingSender != nil {
-                    Text("Permission operation unresolved. A retry sends the original operation.").font(.callout)
                     Button("Retry original permission operation") { Task { await model.retry() } }.disabled(model.busy)
                 }
-                if let setup = inbox.pendingSetup {
-                    Text(pendingSetupExplanation(setup)).font(.callout)
+                if inbox.pendingSetup != nil {
                     Button("Resume saved operation") { Task { await model.retry() } }.disabled(model.busy)
                 }
-                if case .refused = inbox.lastSend { Text("The last message was refused. Its original operation is resolved; it will not be delivered later.").font(.caption) }
-                if let decision = inbox.lastDecision { Text(decision).font(.caption).foregroundStyle(.secondary) }
             }
-            if let notice = model.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
         }
     }
 }

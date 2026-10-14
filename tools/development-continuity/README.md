@@ -99,3 +99,32 @@ acknowledgement check applied Daniel once and replayed him before applying Elena
 The original environment now has both corrections, with unchanged identity, key,
 request and financial records. Prepared files and backups are retained under
 `target/acceptance-alignment-20261013`. The runtime needs no historical reader.
+
+## Schema 37 external-receipt copy — 13 October 2026
+
+`external_receipts_upgrade.py` is an offline copy tool, not a runtime migration or
+credential reader. Stop the source's app/backend first. Supply its existing
+configuration, a distinct freshly created local database, a new artifact directory,
+and a pinned simulation-enabled cs-maild binary. The quality gate builds production
+binaries too, so do not rely on a shared build-output path during a cutover.
+
+The tool backs up schema and data, migrates the empty destination, preserves the
+explicit retained maintenance archive, and restores data in one transaction. Only
+fresh migration seed rows are replaced. It compares every table and sequence with
+the source, rechecks configured key files, and writes `verified.json` only after
+all comparisons pass. Original identity/account databases and Keychain credentials
+are never rewritten. Check Keychain item/credential continuity separately with the
+existing signed read-only helper; copying database rows does not establish it.
+
+If the final verification acknowledgement was lost, rerunning the same arguments
+can verify an exact complete copy. An incomplete or subsequently changed copy is
+refused and retained; use another fresh database, never reset or start the uncertain
+copy. A verification record establishes preservation before startup, not that later
+legitimate application activity leaves every row unchanged. Fresh-copy preservation and exact-rerun recovery were challenged on an inactive
+copy, matching 101 tables and nine sequences. Power-loss durability of the
+maintenance artifacts was not challenged.
+
+The verified owner copy is `cs_mail_principles_owner_ready_20261013`; original source
+`cs_mail_continuity_20261012` remains unchanged. Its preservation artifacts and current
+launcher are under `target/principles-alignment-20261013`. The original encrypted
+cache was backed up and reopened using the original Keychain item and account.

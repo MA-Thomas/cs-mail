@@ -43,7 +43,14 @@ impl<C: CanonicalClock + Clone + 'static> ExternalGateway<C> {
     /// # Errors
     /// Signed command authorization, domain or persistence failures.
     pub fn external_command(&self, request: &SignedCommand) -> Result<Response, ServiceError> {
-        Ok(Service(&self.external_repository()?).handle(request)?)
+        let response = Service(&self.external_repository()?).handle(request)?;
+        Ok(match response {
+            Response::Outcome(acknowledgement) => Response::Outcome(
+                self.members
+                    .sign_external_acknowledgement(acknowledgement)?,
+            ),
+            conversation @ Response::Conversation { .. } => conversation,
+        })
     }
     /// Dispatches a single queued message. Transport I/O occurs after commit.
     /// # Errors

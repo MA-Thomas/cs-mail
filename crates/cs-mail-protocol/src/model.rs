@@ -385,6 +385,7 @@ impl Default for FollowupPolicy {
     }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "StoredProtocolState", into = "StoredProtocolState")]
 pub struct ProtocolState {
     pub followup_policy: FollowupPolicy,
     pub quotes: BTreeMap<QuoteId, RequestTerms>,
@@ -393,7 +394,64 @@ pub struct ProtocolState {
     pub requests: BTreeMap<RequestId, RelationshipRequest>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StoredProtocolState {
+    followup_policy: FollowupPolicy,
+    quotes: BTreeMap<QuoteId, RequestTerms>,
+    used_quotes: BTreeSet<QuoteId>,
+    relationship: Relationship,
+    requests: BTreeMap<RequestId, RelationshipRequest>,
+}
+impl TryFrom<StoredProtocolState> for ProtocolState {
+    type Error = &'static str;
+    fn try_from(v: StoredProtocolState) -> Result<Self, Self::Error> {
+        let state = Self {
+            followup_policy: v.followup_policy,
+            quotes: v.quotes,
+            used_quotes: v.used_quotes,
+            relationship: v.relationship,
+            requests: v.requests,
+        };
+        state.validate().map_err(|_| "invalid protocol state")?;
+        Ok(state)
+    }
+}
+impl From<ProtocolState> for StoredProtocolState {
+    fn from(v: ProtocolState) -> Self {
+        Self {
+            followup_policy: v.followup_policy,
+            quotes: v.quotes,
+            used_quotes: v.used_quotes,
+            relationship: v.relationship,
+            requests: v.requests,
+        }
+    }
+}
 impl ProtocolState {
+    /// # Errors
+    /// Rejects multiple unresolved requests or records belonging to another owner.
+    /// Applied to restored records and manually assembled transition snapshots alike.
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self
+            .requests
+            .values()
+            .filter(|r| !r.lifecycle.is_terminal())
+            .count()
+            > 1
+            || self.requests.iter().any(|(id, r)| {
+                *id != r.id
+                    || r.id.0 == 0
+                    || r.terms.relationship != self.relationship.key.reference
+                    || r.terms.sender != self.relationship.key.sender
+                    || r.terms.recipient != self.relationship.key.recipient
+            })
+        {
+            return Err(ProtocolError::InvalidState);
+        }
+        Ok(())
+    }
+
     /// The active solicitation is a projection of the one unresolved request.
     pub fn active_request(&self) -> Option<&RelationshipRequest> {
         self.requests.values().find(|r| !r.lifecycle.is_terminal())

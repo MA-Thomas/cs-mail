@@ -416,6 +416,7 @@ impl Transport for ContentNetwork {
                     }
                 }
                 cs_mail_security::MemberRead::Inbox => MemberAnswer::Inbox(vec![self.view.clone()]),
+                cs_mail_security::MemberRead::Outbox => MemberAnswer::Outbox(Vec::new()),
                 cs_mail_security::MemberRead::Account => {
                     MemberAnswer::Account(cs_mail_application::members::AccountView {
                         account: p::AccountId(17),
@@ -583,6 +584,22 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         client.conversation("1").unwrap().messages[0].text,
         "private-message-canary"
     );
+    // Navigation exposes owned metadata without decrypting or replacing the cache.
+    let before = store.load_cache().unwrap();
+    let navigation = client.navigation().unwrap();
+    assert_eq!(navigation.len(), 1);
+    assert_eq!(navigation[0].sender, "1");
+    assert!(navigation[0].sent_requests.is_empty());
+    assert_eq!(store.load_cache().unwrap(), before);
+    assert!(matches!(
+        super::navigation::project(
+            p::ProtocolIdentity(3),
+            &[network.view.clone()],
+            &[],
+            p::CanonicalTime(100)
+        ),
+        Err(Error::InvalidData)
+    ));
     // A lost send response leaves only the exact ciphertext packet on disk; reopening
     // and retrying cannot allocate a new operation or persist its readable text.
     let mut state = storage::open(store.as_ref(), &keys).unwrap();
@@ -802,11 +819,15 @@ struct ExternalNetwork {
     commands: Mutex<Vec<Vec<u8>>>,
     lose: AtomicBool,
     member_key: cs_mail_content::EndpointPublicKey,
+    fault: Mutex<Option<Error>>,
+    tamper: AtomicBool,
+    refuse: AtomicBool,
+    pages: Mutex<Vec<u64>>,
 }
 impl Transport for ExternalNetwork {
     fn request(&self, server: &str, route: &str, body: Option<&[u8]>) -> Result<Vec<u8>, Error> {
         use cs_mail_application::correspondence::external::{
-            Command, Outcome, Response, SignedCommand,
+            Acknowledgement, Command, Outcome, Receipt, Response, SignedCommand,
         };
         if route == "v1/external/prepare" {
             let input: Value = serde_json::from_slice(body.unwrap()).unwrap();
@@ -818,17 +839,81 @@ impl Transport for ExternalNetwork {
         }
         if route == "v1/external/commands" {
             let signed: SignedCommand = serde_json::from_slice(body.unwrap()).unwrap();
+            if let Command::Read { after } = signed.command {
+                self.pages.lock().unwrap().push(after);
+                let calls = self.commands.lock().unwrap();
+                let start: SignedCommand = serde_json::from_slice(&calls[0]).unwrap();
+                let Command::Start {
+                    mailbox, message, ..
+                } = start.command
+                else {
+                    panic!("first command must start");
+                };
+                let relationship = cs_mail_protocol::ProtocolState::initial_scoped(
+                    message.member_copy.binding.relationship,
+                    p::RequestHistoryRef::from_u128_for_test(1),
+                    mailbox.synthetic_protocol_identity(&[7; 32]),
+                    start.persona,
+                    p::CanonicalTime(100),
+                )
+                .relationship;
+                let conversation = cs_mail_correspondence::external::ExternalConversation::start(
+                    start.conversation,
+                    start.persona,
+                    mailbox,
+                    [7; 32],
+                    &relationship,
+                    p::CanonicalTime(100),
+                )
+                .unwrap();
+                let page = if after == 7 {
+                    vec![cs_mail_application::correspondence::external::MessageView {
+                    sequence: 8, message: cs_mail_application::correspondence::external::Message {
+                        manifest: message.manifest, sender_key: message.sender_key, member_copy: message.member_copy,
+                        direction: cs_mail_application::correspondence::external::Direction::MemberToGuest,
+                        committed_at: p::CanonicalTime(100), }, delivery: None, provider_events: vec![] }]
+                } else {
+                    vec![]
+                };
+                return Ok(serde_json::to_vec(&Response::Conversation {
+                    conversation: Box::new(conversation),
+                    relationship: Box::new(relationship),
+                    messages: page,
+                    next_after: if after == 0 { 7 } else { 8 },
+                })
+                .unwrap());
+            }
             self.commands.lock().unwrap().push(body.unwrap().to_vec());
+            if let Some(error) = self.fault.lock().unwrap().take() {
+                return Err(error);
+            }
             if self.lose.swap(false, Ordering::SeqCst) {
                 return Err(Error::Offline);
             }
-            let Command::Start { message, .. } = signed.command else {
+            let Command::Start { message, .. } = &signed.command else {
                 panic!("must replay original start");
             };
-            return Ok(serde_json::to_vec(&Response::Outcome(Outcome::Queued(
-                message.manifest.message(),
-            )))
-            .unwrap());
+            let mut acknowledgement = Acknowledgement {
+                receipt: Receipt {
+                    digest: signed.digest().unwrap(),
+                    key: signed.key,
+                    signature: signed.signature.clone(),
+                    at: p::CanonicalTime(100),
+                    outcome: if self.refuse.swap(false, Ordering::SeqCst) {
+                        Outcome::Refused(cs_mail_correspondence::CorrespondenceError::Unauthorized)
+                    } else {
+                        Outcome::Queued(message.manifest.message())
+                    },
+                },
+                signature: vec![],
+            }
+            .sign(&[3; 32])
+            .unwrap();
+            if self.tamper.swap(false, Ordering::SeqCst) {
+                acknowledgement.receipt.outcome =
+                    Outcome::Refused(cs_mail_correspondence::CorrespondenceError::Conflict);
+            }
+            return Ok(serde_json::to_vec(&Response::Outcome(acknowledgement)).unwrap());
         }
         self.native.request(server, route, body)
     }
@@ -838,6 +923,138 @@ impl Transport for ExternalNetwork {
 }
 #[test]
 fn external_response_loss_reopens_exact_ciphertext_and_blocks_replacement() {
+    let (store, keys, state) = external_device();
+    let network = Arc::new(ExternalNetwork {
+        native: content_fixture(&keys, store.clone()),
+        commands: Mutex::new(vec![]),
+        lose: AtomicBool::new(true),
+        fault: Mutex::new(None),
+        tamper: AtomicBool::new(false),
+        refuse: AtomicBool::new(false),
+        pages: Mutex::new(vec![]),
+        member_key: super::correspondence::own_keys(&state.profile, &keys)
+            .unwrap()
+            .1,
+    });
+    let first = MemberClient::new(
+        store.clone(),
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(100)),
+    );
+    assert!(matches!(
+        first.send_external(
+            None,
+            "guest@example.test",
+            "external-loss-private-canary",
+            true
+        ),
+        Err(Error::Offline)
+    ));
+    let original = first.external_inbox().unwrap().pending.unwrap();
+    drop(first);
+    let reopened = MemberClient::new(
+        store.clone(),
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(110)),
+    );
+    assert_eq!(
+        reopened.external_inbox().unwrap().pending.as_deref(),
+        Some(original.as_str())
+    );
+    assert!(matches!(
+        reopened.send_external(None, "other@example.test", "changed", true),
+        Err(Error::ExternalPending)
+    ));
+    challenge_external_errors(&reopened, &network, &original);
+    reopened.retry().unwrap();
+    assert!(reopened.external_inbox().unwrap().pending.is_none());
+    {
+        let calls = network.commands.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        assert!(calls.iter().all(|c| *c == calls[0]));
+    }
+    challenge_external_pages(&reopened, &network, &store, &keys, &original);
+    // A known queue acknowledgement must survive a later inability to refresh views.
+    network.native.offline.store(true, Ordering::SeqCst);
+    let acknowledged = reopened
+        .send_external(None, "guest@example.test", "acknowledged", true)
+        .unwrap();
+    assert_ne!(acknowledged, original);
+    assert!(matches!(reopened.sync(), Err(Error::Offline)));
+    assert!(reopened.external_inbox().unwrap().pending.is_none());
+    assert!(
+        !store
+            .cache
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .windows(b"external-loss-private-canary".len())
+            .any(|w| w == b"external-loss-private-canary")
+    );
+}
+
+fn challenge_external_errors(client: &MemberClient, network: &ExternalNetwork, original: &str) {
+    // Even an error labelled refusal by a transport is not a durable acknowledgement.
+    *network.fault.lock().unwrap() = Some(Error::ExternalRefused);
+    assert!(matches!(client.retry(), Err(Error::ExternalRefused)));
+    assert_eq!(
+        client.external_inbox().unwrap().pending.as_deref(),
+        Some(original)
+    );
+    network.tamper.store(true, Ordering::SeqCst);
+    assert!(matches!(client.retry(), Err(Error::InvalidData)));
+    assert_eq!(
+        client.external_inbox().unwrap().pending.as_deref(),
+        Some(original)
+    );
+}
+fn challenge_external_pages(
+    client: &MemberClient,
+    network: &ExternalNetwork,
+    store: &Arc<Store>,
+    keys: &storage::Secrets,
+    original: &str,
+) {
+    // An expired-only page advances traversal; it must not hide the later live copy.
+    let mut restored = storage::open(store.as_ref(), keys).unwrap();
+    let mut view = network.native.view.clone();
+    view.external_conversations =
+        vec![cs_mail_correspondence::ConversationId::new(original.parse().unwrap()).unwrap()];
+    restored.inbox = vec![view];
+    client.sync_external(&mut restored, keys).unwrap();
+    assert_eq!(*network.pages.lock().unwrap(), vec![0, 7, 8]);
+    let inbox = client.external_inbox().unwrap();
+    assert_eq!(inbox.threads[0].messages.len(), 1);
+    assert_eq!(
+        inbox.threads[0].messages[0].text,
+        "external-loss-private-canary"
+    );
+    assert!(matches!(
+        inbox.threads[0].permission_route,
+        super::PermissionRoute::Closed
+    ));
+    // A label or historical lane identity alone cannot establish a current opening.
+    for state in [
+        cs_mail_protocol::RelationshipState::Blocked,
+        cs_mail_protocol::RelationshipState::Revoked,
+        cs_mail_protocol::RelationshipState::Rejected,
+        cs_mail_protocol::RelationshipState::ExpressLane(p::LaneId(1)),
+    ] {
+        assert!(matches!(
+            super::views::permission(state, None, Some(p::CanonicalTime(110))).1,
+            super::PermissionRoute::Closed
+        ));
+    }
+    network.refuse.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        client.send_external(None, "guest@example.test", "durably-refused", true),
+        Err(Error::ExternalRefused)
+    ));
+    assert!(client.external_inbox().unwrap().pending.is_none());
+}
+
+fn external_device() -> (Arc<Store>, storage::Secrets, State) {
     let store = Arc::new(Store::default());
     let keys = storage::Secrets {
         device: [4; 32],
@@ -875,66 +1092,5 @@ fn external_response_loss_reopens_exact_ciphertext_and_blocks_replacement() {
         setup: None,
     };
     storage::save(store.as_ref(), &keys, &state).unwrap();
-    let network = Arc::new(ExternalNetwork {
-        native: content_fixture(&keys, store.clone()),
-        commands: Mutex::new(vec![]),
-        lose: AtomicBool::new(true),
-        member_key: super::correspondence::own_keys(&state.profile, &keys)
-            .unwrap()
-            .1,
-    });
-    let first = MemberClient::new(
-        store.clone(),
-        network.clone(),
-        Arc::new(|| p::CanonicalTime(100)),
-    );
-    assert!(matches!(
-        first.send_external(
-            None,
-            "guest@example.test",
-            "external-loss-private-canary",
-            true
-        ),
-        Err(Error::Offline)
-    ));
-    let original = first.external_inbox().unwrap().pending.unwrap();
-    drop(first);
-    let reopened = MemberClient::new(
-        store.clone(),
-        network.clone(),
-        Arc::new(|| p::CanonicalTime(110)),
-    );
-    assert_eq!(
-        reopened.external_inbox().unwrap().pending.as_deref(),
-        Some(original.as_str())
-    );
-    assert!(matches!(
-        reopened.send_external(None, "other@example.test", "changed", true),
-        Err(Error::ExternalPending)
-    ));
-    reopened.retry().unwrap();
-    assert!(reopened.external_inbox().unwrap().pending.is_none());
-    {
-        let calls = network.commands.lock().unwrap();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0], calls[1]);
-    }
-    // A known queue acknowledgement must survive a later inability to refresh views.
-    network.native.offline.store(true, Ordering::SeqCst);
-    let acknowledged = reopened
-        .send_external(None, "guest@example.test", "acknowledged", true)
-        .unwrap();
-    assert_ne!(acknowledged, original);
-    assert!(matches!(reopened.sync(), Err(Error::Offline)));
-    assert!(reopened.external_inbox().unwrap().pending.is_none());
-    assert!(
-        !store
-            .cache
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .windows(b"external-loss-private-canary".len())
-            .any(|w| w == b"external-loss-private-canary")
-    );
+    (store, keys, state)
 }

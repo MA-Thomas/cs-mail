@@ -250,6 +250,7 @@ impl Store for Repository {
         if let Some(prior) = &prior {
             return Ok(request.replay(prior)?);
         }
+        tx.batch_execute("SAVEPOINT external_changes")?;
         let existing = conversation(&mut tx, request.conversation)?;
         let key = match &existing {
             Some((c, key, account))
@@ -292,33 +293,11 @@ impl Store for Repository {
         let Decision { response, effects } = decide(context, &*self.accounts.clock)?;
         if let Some(e) = effects {
             let id = request.conversation.value().to_string();
-            tx.execute("INSERT INTO cs_conversation_routes(id,route) VALUES($1,'external') ON CONFLICT(id) DO NOTHING", &[&id])?;
-            tx.execute("INSERT INTO cs_external_conversations(id,member,account,aggregate_key,record) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record",
-                &[&id,&request.persona.0.to_string(),&request.account.0.to_string(),&key,&Json(e.conversation)])?;
-            if let Some(p) = e.delivery {
-                let message = Message {
-                    manifest: p.manifest,
-                    sender_key: p.sender_key,
-                    member_copy: p.member_copy,
-                    direction: Direction::MemberToGuest,
-                    committed_at: e.receipt.at,
-                };
-                tx.execute(
-                    "INSERT INTO cs_external_messages(id,conversation,record) VALUES($1,$2,$3)",
-                    &[
-                        &message.manifest.message().0.to_string(),
-                        &id,
-                        &Json(&message),
-                    ],
-                )?;
-                tx.execute("INSERT INTO cs_external_deliveries(message,account,operational_key,relay_copy,state) VALUES($1,$2,$3,$4,$5)",
-                    &[&message.manifest.message().0.to_string(),&request.account.0.to_string(),&request.key.0.to_string(),&Json(p.relay_copy),&Json(DeliveryState::Waiting)])?;
-            }
-            if e.cancel_waiting {
-                for row in tx.query("SELECT d.message,d.state FROM cs_external_deliveries d JOIN cs_external_messages m ON m.id=d.message WHERE m.conversation=$1 FOR UPDATE OF d", &[&id])? {
-                    let old = row.try_get::<_, Json<DeliveryState>>(1)?.0;
-                    tx.execute("UPDATE cs_external_deliveries SET state=$2 WHERE message=$1", &[&row.try_get::<_, String>(0)?, &Json(old.cancel(e.receipt.at))])?;
-                }
+            if let Some(changes) = e.changes {
+                persist_changes(&mut tx, request, &key, changes, e.receipt.at)?;
+            } else {
+                // A refusal commits only its receipt, including for a never-created conversation.
+                tx.batch_execute("ROLLBACK TO SAVEPOINT external_changes")?;
             }
             tx.execute("INSERT INTO cs_external_receipts(account,operation,conversation,receipt) VALUES($1,$2,$3,$4)",
                 &[&request.account.0.to_string(),&request.operation.0.to_string(),&id,&Json(e.receipt)])?;
@@ -326,6 +305,45 @@ impl Store for Repository {
         tx.commit()?;
         Ok(response)
     }
+}
+
+fn persist_changes(
+    tx: &mut Transaction<'_>,
+    request: &SignedCommand,
+    key: &str,
+    changes: cs_mail_application::correspondence::external::Changes,
+    at: CanonicalTime,
+) -> Result<(), StorageError> {
+    let id = request.conversation.value().to_string();
+    tx.execute("INSERT INTO cs_conversation_routes(id,route) VALUES($1,'external') ON CONFLICT(id) DO NOTHING", &[&id])?;
+    tx.execute("INSERT INTO cs_external_conversations(id,member,account,aggregate_key,record) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record",
+                &[&id,&request.persona.0.to_string(),&request.account.0.to_string(),&key,&Json(changes.conversation)])?;
+    if let Some(p) = changes.delivery {
+        let message = Message {
+            manifest: p.manifest,
+            sender_key: p.sender_key,
+            member_copy: p.member_copy,
+            direction: Direction::MemberToGuest,
+            committed_at: at,
+        };
+        tx.execute(
+            "INSERT INTO cs_external_messages(id,conversation,record) VALUES($1,$2,$3)",
+            &[
+                &message.manifest.message().0.to_string(),
+                &id,
+                &Json(&message),
+            ],
+        )?;
+        tx.execute("INSERT INTO cs_external_deliveries(message,account,operational_key,relay_copy,state) VALUES($1,$2,$3,$4,$5)",
+                    &[&message.manifest.message().0.to_string(),&request.account.0.to_string(),&request.key.0.to_string(),&Json(p.relay_copy),&Json(DeliveryState::Waiting)])?;
+    }
+    if changes.cancel_waiting {
+        for row in tx.query("SELECT d.message,d.state FROM cs_external_deliveries d JOIN cs_external_messages m ON m.id=d.message WHERE m.conversation=$1 FOR UPDATE OF d", &[&id])? {
+                    let old = row.try_get::<_, Json<DeliveryState>>(1)?.0;
+                    tx.execute("UPDATE cs_external_deliveries SET state=$2 WHERE message=$1", &[&row.try_get::<_, String>(0)?, &Json(old.cancel(at))])?;
+                }
+    }
+    Ok(())
 }
 
 /// Incoming processing does not hold signing, relay-decryption, or derivation secrets.

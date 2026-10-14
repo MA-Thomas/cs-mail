@@ -27,8 +27,8 @@ struct ContactControlsView: View {
                     }
                 }
                 Section("Permission for contact from this person") {
-                    Text(conversation.permission)
-                    if let lane = conversation.controls.lane { Text(lane).font(.caption) }
+                    EditorialReadingView(blocks: [EditorialReadingBlock(conversation.permission)] +
+                        (conversation.controls.lane.map { [EditorialReadingBlock($0, style: .caption)] } ?? []))
                     if conversation.controls.state == .blocked {
                         Button("Unblock") { confirm("Unblock this person?", "This allows later approaches. It does not restore old lanes, standing permission or withdrawn conversation replies.", .unblock) }
                     } else {
@@ -44,7 +44,7 @@ struct ContactControlsView: View {
                     }
                 }
                 Section("Follow-ups to requests") {
-                    Text("Set the total permitted follow-ups and their rate. A total of zero disables follow-ups. These settings grant no standing permission.").font(.caption)
+                    EditorialReadingView("Set the total permitted follow-ups and their rate. A total of zero disables follow-ups. These settings grant no standing permission.", style: .caption)
                     TextField("Maximum follow-up messages", text: $maximum)
                     TextField("Maximum per interval", text: $perInterval)
                     TextField("Interval in seconds", text: $intervalSeconds)

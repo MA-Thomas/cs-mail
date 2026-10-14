@@ -210,3 +210,27 @@ collection and deployment integration. Trusted operator configuration and mainte
 APIs remain infrastructure entry points. The existing global receipt serialization
 and full billing snapshots remain explicit implementation constraints. Broader identity
 core API/constructor cleanup and real-provider acceptance remain separate work.
+
+## External outcome and restoration boundary — 13 October 2026
+
+An authenticated external mutation declares either conversation/delivery changes
+plus its receipt, or a receipt-only semantic refusal. Storage rolls back preparatory
+writes for a refusal and commits the declared result under the receipt-order lock.
+A first invitation may be refused without creating a conversation. Missing facts,
+unresolved policy, failed authentication and storage faults do not establish a
+terminal command result. Exact replay retains the historical receipt and still
+requires current caller authority.
+
+The host signs the recorded external acknowledgement; the client verifies its
+provider signature and exact command digest/key/signature before resolving its
+journal. Transport status alone cannot resolve it. Signature creation after commit
+is recoverable: replay signs the same recorded result without new work. An empty
+visible page is distinct from exhausted cursor traversal. Native and external
+permission presentation share explicit-time interpretation of matching lane facts.
+
+ProtocolState owns the single unresolved-request and request/pair consistency
+checks. Its checked deserialization and protected PostgreSQL restoration use that
+same rule. Invalid stored state or decoding failure stops processing without a
+permanent refusal; repaired records permit recovery of the original received work.
+This bounded repair does not move all older transactional orchestration or claim
+that every storage-owned domain call is itself a behavioral defect.
