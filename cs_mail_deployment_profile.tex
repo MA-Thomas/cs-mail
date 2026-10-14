@@ -20,7 +20,7 @@
 
 \title{\textit{cs-mail} Deployment and Migration Profile\\\large Request Payments and the C-SQD Member Program}
 \author{C-SQD}
-\date{Draft 0.8 --- September 2026}
+\date{Draft 0.9 --- 14 October 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -404,6 +404,18 @@ an invitation cannot silently remove it.
 
 \section{SMTP and Express-Lane Migration}
 
+\paragraph{Alias scope update (14 October 2026).}
+The \href{DOMAIN_MODEL.md}{domain model} adds private aliases with automatically
+established alias-scoped express lanes, with no bonded route, and public-facing
+aliases with existing sender-scoped permission and bonded requests. Alias
+infrastructure is agreed CS-MAIL scope awaiting implementation. The sequence
+below describes the existing sender-scoped/public request paths; it must not be
+used to redirect private-alias correspondence to payment. Unknown specialists
+given a private alias do not first require individual sender grants. Detailed
+alias admission, block interaction and lifecycle policy remain open in the domain
+model. This extension changes neither annual service charges nor pool allocation
+and distribution rules. See the \href{cs_mail_aliases_and_express_lanes.tex}{alias memo}.
+
 SMTP is a visibly identified compatibility route because its gateway may handle
 plaintext. A native message's end-to-end confidentiality must not be claimed for
 ordinary gateway-readable mail.
@@ -423,9 +435,9 @@ Outbound downgrade must be disclosed before the sender commits to that route.
 
 Express-lane messages carry no request charge or pool contribution. Acceptance
 with a lane settles its request; later lane changes do not reopen that outcome.
-A lane concerns the relationship and is usually not specific to one conversation.
-A separate lane-management grant also resolves a pending request with the full
-refund; terminal settlements remain fixed. Domain-authentication evidence
+A sender-scoped lane concerns the relationship and is usually not specific to
+one conversation. A separate sender-scoped lane-management grant also resolves a
+pending request with the full refund; terminal settlements remain fixed. Domain-authentication evidence
 supports the lane's sender scope, not the truth of its declared purpose or a
 member's active-use eligibility.
 

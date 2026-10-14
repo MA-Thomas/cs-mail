@@ -10,10 +10,17 @@ acceptance and settlement parts of that document are unchanged.
 
 ## Decisions
 
+Scope clarification, 2026-10-14: these rules govern addresses offering bonded
+requests. The [alias design](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+adds private aliases with automatic alias-scoped express lanes and no bonded
+route; public-facing aliases retain the existing request process. The alias
+infrastructure is not implemented. An empty class publication already means no
+paid route, but does not itself establish alias-scoped admission authority.
+
 - CSQD is the only provider. There is one request pricing policy for all of
   cs-mail.
 - The operator sets one processing component `C` for all of cs-mail.
-- Each protocol identity (email address) publishes its own set of up to eight
+- Each protocol identity offering the bonded route publishes its own set of up to eight
   request classes. Addresses belonging to the same account have independent sets.
 - Each class carries its own collateral `S`, which must lie within cs-mail-wide
   bounds `collateral_min <= S <= collateral_max`.

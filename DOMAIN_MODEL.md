@@ -2,7 +2,7 @@
 
 > **Design principles.** Before changing code or this design, read the [Rust-domain design principles](docs/rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
 
-Confirmed product rules, updated October 13, 2026. Start here when changing
+Confirmed product rules, updated October 14, 2026. Start here when changing
 the code or documentation. These rules record the user's confirmed clarifications.
 The [deployment profile](cs_mail_deployment_profile.tex) gives the detailed
 financial-program requirements; the [protocol specification](cs_mail_protocol_spec.tex)
@@ -63,6 +63,55 @@ not establish biological identity or satisfy Phoros's separate enrollment policy
 - Assume one configured payment-processing arrangement. A communication-service
   provider and a payment processor are different roles; federation terminology
   does not imply multiple payment processors.
+
+## Aliases and express-lane scope
+
+Agreed 2026-10-14; alias infrastructure and alias-scoped admission are product
+design awaiting implementation. Existing implemented lanes are **sender-scoped**.
+The [aliases and express lanes memo](cs_mail_aliases_and_express_lanes.tex)
+explains the motivation and examples; this section owns the confirmed rules.
+
+- CS-MAIL, operated by C-SQD, PBC, owns alias creation, routing, permissions,
+  lifecycle management and correspondence. These capabilities must work
+  independently of Phoros. Phoros Account, operated by Reservatory, PBC, will
+  later use them through a linked CS-MAIL account.
+- A person may use **private aliases** for healthcare organizations and
+  **public-facing aliases** for unsolicited approaches within the same account.
+  These are communication addresses, not additional accounts or login identities.
+- Creating a private alias automatically establishes an **alias-scoped express
+  lane**. It authorizes correspondence through that receiving alias, subject to
+  its admission policy, including from previously unknown departments, vendors
+  or specialists who have been given the address. Each such sender need not first
+  obtain a separate sender-scoped grant. There is **no bonded request route**
+  through the private alias.
+- Creating a public-facing alias does not automatically grant an express lane.
+  Existing standing permission, sender-scoped lanes and other existing invitation
+  rules apply. Approaches lacking permission use the existing bonded-request
+  process. Public-facing aliases are the primary route for these requests.
+- A **sender-scoped express lane** is explicitly granted to a particular sender
+  subject under its scope and validity rules, including through request
+  acceptance. An alias-scoped lane instead authorizes contact through its named
+  receiving alias. Standing acceptance remains a separate permission.
+- Permission through a private alias does not grant access through the account's
+  public-facing or other private aliases. Restricting, retiring or replacing a
+  private alias must not introduce a bonded fallback on that route.
+- The receiving alias identifies the route the user supplied, not proof of the
+  author's organizational identity or of who disclosed the address. Sender
+  authentication is separate evidence; privacy of an alias is not a guarantee
+  that nobody will forward or disclose it. External email retains its existing
+  plaintext/disclosure boundaries.
+- Linking Phoros does not itself grant access to correspondence, decryption or
+  healthcare records. Annual service, identity and member-distribution rules
+  remain separate; absence of a request charge does not waive annual service.
+
+Open decisions: alias-lane lifetime and renewal; restriction and block interaction;
+handling of authentication failures and suspicious or refused correspondence;
+replacement/retirement and continuity for portal login, recovery and notices;
+outbound address selection and reply continuity; and the mapping between aliases
+and protocol identities. Exact grant, storage and wire representations and
+milestone placement are not yet agreed. Do not inherit sender-lane expiry or
+domain-matching rules as alias-lane policy without an explicit decision. Creating
+an alias lane must not be assumed to settle a pending paid request.
 
 ## Annual service purchase
 
@@ -135,8 +184,8 @@ explanations of charges, refunds, expiry and the member pool belong in the app's
 separate Q&A section, as confirmed on 12 October 2026. This presentation choice
 does not change financial terms, settlement or recorded payment outcomes.
 
-Each protocol identity (email address) publishes its own set of up to eight
-user-defined request classes describing the approaches it welcomes. Addresses of
+For addresses offering the bonded route, each protocol identity publishes its own
+set of up to eight user-defined request classes describing the approaches it welcomes. Addresses of
 the same account have independent sets. Each class has its own collateral `S`,
 within cs-mail-wide bounds `collateral_min <= S <= collateral_max`. CSQD, the only
 provider, sets one processing component `C` for all of cs-mail; `C` and the bounds
@@ -153,10 +202,10 @@ recipient's behalf. A publication is authorized only by a key of the address it
 concerns and is independent of any relationship. See the
 [request pricing design](docs/request-pricing-design.md).
 
-The recipient may accept a request with standing directed permission or with an
-express lane. Both modes record a full `C + S` refund obligation and commit the
-granted permission with settlement. An express lane concerns the relationship;
-it may be scoped, for example by purpose, time, or volume, but is usually not
+The recipient may accept a request with standing directed permission or with a
+sender-scoped express lane. Both modes record a full `C + S` refund obligation and
+commit the granted permission with settlement. A sender-scoped express lane
+concerns the relationship; it may be scoped by purpose, time, or volume, but is usually not
 scoped to a particular conversation. A request class does not itself grant
 permission. Lane expiry or revocation does not reopen the settled request.
 
@@ -171,7 +220,8 @@ charge. These are real capture-linked refund obligations, unlike the reporting
 classification within an annual distribution. Follow-ups add no charge. Class
 switching cannot bypass pending-request limits or principal-recipient history.
 
-A lane grant also resolves a pending request when issued through lane management.
+A sender-scoped lane grant also resolves a pending request when issued through
+lane management.
 During preparation it cancels submission and voids or refunds the full charge;
 a submitted request still pending is accepted with the full refund, including
 after its decision deadline. Already-terminal financial settlements stay fixed.

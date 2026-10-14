@@ -17,9 +17,9 @@
     urlcolor=blue
 }
 
-\title{\textit{cs-mail}: Permissioned Communication\\\large One Relationship Request, One Conditional Charge}
+\title{\textit{cs-mail}: Permissioned Communication\\\large Private Aliases, Public Approaches, and Express Lanes}
 \author{C-SQD}
-\date{Draft 0.8 --- September 2026}
+\date{Draft 0.9 --- 14 October 2026}
 
 \usepackage{tabularx}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
@@ -30,7 +30,11 @@
 
 \begin{abstract}
 \textit{cs-mail} makes permission to communicate explicit. Accepted contacts
-write without protocol message charges under their providers' service terms. A sender without permission may submit
+write without protocol message charges under their providers' service terms.
+The agreed private-alias design automatically opens an alias-scoped express lane
+for an organization relationship, including unfamiliar correspondents given that
+address, without a bonded route. Public-facing aliases grant no automatic lane.
+A sender approaching the public route without permission may submit
 one relationship request, accompanied by a communication and a conditional
 charge under a recipient-defined request class. Acceptance grants standing
 permission or an express lane and produces a full refund; expiry retains the processing amount;
@@ -55,7 +59,7 @@ do not give the sender a clear account of whether an ongoing relationship exists
 of approach they welcome and can grant a particular public identity standing
 permission or a bounded express lane for communication in that direction.
 Accepted correspondence carries no protocol message charge. The exceptional
-event is a request to establish permission where it is absent.
+event on the public route is a request to establish permission where it is absent.
 
 The sender makes one conditional payment for that request. The initial message
 gives the recipient context; permitted follow-ups remain part of the same request.
@@ -91,9 +95,32 @@ service retroactively. Once coverage ends, new communication requires funded cov
 existing permission records, refunds, and finalized member obligations retain
 their separate lifecycles.
 
+\section{A Private Alias for a Healthcare Organization}
+
+A member creates a private alias for their hospital and supplies it during
+registration. Creation automatically establishes an \emph{alias-scoped express
+lane}. The hospital can write without a bonded request. A previously unknown
+specialist who receives the alias can also write through that route, subject to
+its admission policy, without first obtaining a separate sender-scoped grant.
+
+The route identifies which alias received the correspondence; it does not prove
+organizational identity or who shared the address. Sender authentication remains
+separate evidence. Permission through this alias does not grant access through
+other private aliases or the member's public-facing address. Restriction or
+retirement does not introduce a bonded fallback.
+
+This is agreed product design awaiting implementation. CS-MAIL owns the alias
+infrastructure independently of Phoros Account, which will later consume it
+through a linked account. Detailed lifecycle and admission policies remain open
+in the \href{DOMAIN_MODEL.md}{domain model}; the
+\href{cs_mail_aliases_and_express_lanes.tex}{aliases and express lanes memo}
+explains the motivation and boundaries. Annual service and external-email
+disclosure requirements remain separate.
+
 \section{Alice Requests a Relationship with Bob}
 
-Alice wants to propose research collaboration to Professor Bob, who has not
+Professor Bob publishes a public-facing alias; its creation grants no automatic
+lane. Alice wants to propose research collaboration to Bob, who has not
 accepted her. Bob publishes research, press, and other request classes, choosing
 lower collateral for research than press. Alice selects research and, in this example, sees a quote
 with processing component $0.50$ and collateral $5.00$, totaling $5.50$. She reviews the
@@ -249,7 +276,13 @@ The base request has only the processing and collateral components described
 above. Follow-up limits and new-request cooldowns govern persistence without
 adding another financial component.
 
-\section{Bounded Relationship Permission: Express Lanes}
+\section{Express Lanes: Alias-Scoped and Sender-Scoped}
+
+An alias-scoped lane authorizes correspondence through one private receiving
+alias. A sender-scoped lane explicitly authorizes a particular sender subject
+under its grant. Standing acceptance remains distinct. The existing bounded
+relationship lanes described below are sender-scoped; their expiry and domain
+binding rules do not automatically become policy for private aliases.
 
 Some wanted correspondence is narrower than standing personal acceptance. A
 member may want a bank's fraud alerts or an airline's itinerary notices without

@@ -20,7 +20,7 @@
 \title{\textit{cs-mail} Express Lanes --- Implementation Plan\\
 \large Recipient-Granted Relationship Permission}
 \author{C-SQD}
-\date{Draft 0.6 --- September 2026}
+\date{Draft 0.7 --- 14 October 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -52,6 +52,32 @@ senders in these examples are legacy senders or possible future native protocol
 participants; they do not imply organizational C-SQD accounts. The
 \href{DOMAIN_MODEL.md}{C-SQD domain model} controls that product distinction.
 
+\section{Scope Update: Alias-Scoped and Sender-Scoped Lanes}
+
+As agreed on 14 October 2026, private-alias creation automatically establishes an
+\emph{alias-scoped express lane}; public-alias creation grants no lane. The latter
+route retains existing standing permission, explicitly granted
+\emph{sender-scoped express lanes} and bonded requests for approaches lacking
+permission. An unfamiliar specialist given a hospital alias can use that private
+route without first obtaining an individual sender grant, subject to its policy.
+
+The implementation recorded below is \textbf{sender-scoped}. Alias infrastructure
+and alias-scoped admission are agreed CS-MAIL work awaiting implementation, with
+Phoros as a future consumer. The \href{DOMAIN_MODEL.md}{domain model} owns the
+confirmed rules and open decisions; the
+\href{cs_mail_aliases_and_express_lanes.tex}{alias memo} explains the product.
+Existing tests and implementation claims below do not establish alias behavior.
+
+The admission sequence below must be qualified by receiving-route policy when
+alias infrastructure is designed: an unknown sender through an active private
+alias is not automatically offered a paid request. A private route has no bonded
+fallback after restriction or retirement. Permission through it must not grant
+access through another alias. Its block interaction, authentication-failure
+handling, lifetime and identity mapping remain open; do not reuse sender-scoped
+domain binding or expiry defaults as implicit decisions. Alias creation must not
+inherit the pending-request settlement effects of sender-lane management.
+No schema, wire representation, API or build-order placement is selected here.
+
 \section{The Central Observation}
 
 A lane grants bounded communication permission without a relationship-request
@@ -70,7 +96,7 @@ transitions can change permission without a current charge. Annual billing suppl
 must be funded before new communication. That check does not make a lane a
 financial object or turn a lane message into a charged request.
 
-\section{Settled Design Decisions}
+\section{Settled Sender-Scoped Design Decisions}
 
 \begin{enumerate}[leftmargin=2em]
     \item \textbf{Lane admission at the edge.} A lane is evaluated at the
@@ -113,7 +139,7 @@ financial object or turn a lane message into a charged request.
     lane-management grant also resolves a pending request.
 \end{enumerate}
 
-\section{The Admission Decision}
+\section{The Existing Sender-Scoped Admission Decision}
 
 Before choosing a permission path, the host checks funded service coverage for
 the local recipient and any local sender. A remote sender's provider owns its

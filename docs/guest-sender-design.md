@@ -9,6 +9,18 @@ Both entry paths now join through the [local external-email journey](external-em
 
 ## Purpose
 
+**Alias scope update (2026-10-14; implementation pending).** The
+[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) now distinguishes
+private aliases with automatic alias-scoped express lanes from public-facing
+aliases governed by existing sender-scoped permissions and bonded requests.
+Previously unknown specialists given a private alias can correspond under its
+lane policy without a separate sender grant or bonded request. The paid-request
+entry and unknown-sender prompt described below apply to the existing public
+request path, not the proposed private-alias path. Its authentication-failure,
+block and lifecycle policies remain open. CS-MAIL owns the infrastructure;
+Phoros will use it later. This note does not change the historical implementation
+or validation claims below.
+
 A **guest** is a person using an external mailbox without a cs-mail account.
 There are two entry paths: a guest approaches a member through a paid request,
 or a member emails an external address first and reviews the initial reply

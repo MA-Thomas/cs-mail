@@ -7,6 +7,15 @@ published request class and authorizes one conditional charge. The recipient can
 accept with standing permission or an express lane, or reject; that decision
 determines both future permission and settlement.
 
+The agreed alias design adds two address uses. Creating a private alias for a
+healthcare organization automatically opens an **alias-scoped express lane**,
+including for unfamiliar specialists who receive that address, without a bonded
+route. Public-facing aliases do not automatically grant a lane: unknown senders
+without other permission use the existing bonded requests. Explicit
+**sender-scoped express lanes** continue to authorize particular senders.
+CS-MAIL owns this infrastructure; Phoros Account will later consume it through a
+linked account. Alias infrastructure is agreed product scope awaiting implementation.
+
 External email is now available under Communications in the unified app: authored-text
 composition, conversation-scoped disclosure consent, authenticated pending replies,
 acceptance/rejection/lanes, blocking, and exact saved-operation retry. The owner
@@ -22,28 +31,33 @@ product rules and deferred decisions for future implementation and documentation
 
 The documents have distinct roles:
 
-1. **[Whitepaper](cs_mail_whitepaper.pdf)** — the service, request experience,
+1. **[Whitepaper](cs_mail_whitepaper.tex)** — the service, request experience,
    annual member return, incentives, and privacy.
-2. **[Deployment and migration profile](cs_mail_deployment_profile.pdf)** —
+2. **[Deployment and migration profile](cs_mail_deployment_profile.tex)** —
    normative C-SQD billing and member-program rules, followed by operational
    guidance for payments, identity, and migration.
-3. **[Protocol specification](cs_mail_protocol_spec.pdf)** — normative request
+3. **[Protocol specification](cs_mail_protocol_spec.tex)** — normative request
    states, commands, ordering, obligations, and security invariants.
-4. **[Rust reference architecture](cs_mail_rust_reference_architecture.pdf)** —
+4. **[Rust reference architecture](cs_mail_rust_reference_architecture.tex)** —
    the implemented domain owners, pure transitions, durable transactions, and
    recoverable external work.
-5. **[Product build plan](cs_mail_build_plan.pdf)** — product milestones:
+5. **[Product build plan](cs_mail_build_plan.tex)** — product milestones:
    server and administration, the core request loop from a CLI, the guest
    sender request page, the macOS member application, recovery, the annual
    member cycle, and open enrollment.
-6. **[Express-lane memo](cs_mail_express_lanes.pdf)** — a worked introduction to
+6. **[Express-lane memo](cs_mail_express_lanes.tex)** — a worked introduction to
    bounded relationship permission for people and organizations.
-7. **[Express-lane implementation plan](cs_mail_express_lanes_implementation.pdf)** —
+7. **[Express-lane implementation plan](cs_mail_express_lanes_implementation.tex)** —
    lane authority, lifetime, domain authentication, and product integration.
+8. **[Aliases and express lanes](cs_mail_aliases_and_express_lanes.tex)** — the
+   motivation, private and public address journeys, two permission scopes,
+   CS-MAIL ownership and future Phoros use. This is agreed design, not an
+   implementation record.
 
-The matching `.tex` files are the editable sources. The build-plan source includes
-the 11 October pause checkpoint; the checked-in PDF has not been regenerated in
-this documentation pass. `intro_doc.tex` is retained
+These links point to the current `.tex` sources, available with PDF preview in
+the built-in editor. Checked-in PDF exports predate the 14 October alias update.
+The build-plan source also retains its 11 October pause checkpoint.
+`intro_doc.tex` is retained
 only as a superseded design-history document and must not be used as a current
 protocol reference.
 
@@ -91,15 +105,15 @@ durable login identity with multiple authentication methods. See the
 arrangement. See [shared identity integration](docs/shared-identity-contract.md)
 for the contract, migration behavior, service setup, and coordinated build.
 
-Each address (protocol identity) defines up to eight request classes of its own,
-each with collateral `S` within cs-mail-wide bounds; CSQD sets one processing
+Each protocol identity offering the bonded route defines up to eight request
+classes of its own, each with collateral `S` within cs-mail-wide bounds; CSQD sets one processing
 component `C` (see the [request pricing design](docs/request-pricing-design.md)).
 The sender's chosen class, `C`, and `S` are fixed for one request. Submission requires authenticated evidence that
 the request-specific funding of `C + S` has met the provider's finality policy.
 Cancellation before submission returns the full charge. Acceptance
 records a full refund obligation together with standing directed permission or
-an express lane. A lane concerns the relationship and may be scoped by purpose,
-time, or volume; it is usually not specific to a conversation. Rejection retains `C` as
+a sender-scoped express lane. Such a lane concerns the relationship and may be
+scoped by purpose, time, or volume; it is usually not specific to a conversation. Rejection retains `C` as
 processing revenue and sends `S` into pending forfeiture for the separate C-SQD
 member program. Expiry retains `C` and refunds `S`. Refund obligations remain
 outstanding until the payment processor confirms them.
@@ -128,6 +142,15 @@ text, and a separate current-format cache. The older app/database/cache remain
 the rollback checkpoint. See the [current owner-app runbook](apps/cs-mail-apple/README.md#current-owner-app--12-october-2026).
 
 ## Core vocabulary
+
+- **Private alias**: an address issued for an organization relationship; creation
+  automatically establishes an alias-scoped express lane, with no bonded route.
+- **Public-facing alias**: an address for public approaches; creation grants no
+  lane, and the existing permission and bonded-request rules apply.
+- **Alias-scoped express lane**: permission through one receiving alias, including
+  for previously unknown senders; its detailed admission/lifecycle policy is open.
+- **Sender-scoped express lane**: an explicit grant to a particular sender subject
+  under the grant's scope and validity rules; the currently implemented lane kind.
 
 - **Private principal**: the provider-local subject used for control, recovery,
   and request continuity across public aliases.

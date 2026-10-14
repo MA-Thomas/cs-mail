@@ -61,7 +61,7 @@
 
 \title{\textit{cs-mail} Rust Reference Architecture}
 \author{C-SQD}
-\date{Draft 0.11 --- 8 October 2026}
+\date{Draft 0.12 --- 14 October 2026}
 
 \usepackage{tabularx}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
@@ -91,6 +91,30 @@ are runnable; the SwiftUI member application and live payment adapter remain
 product work. Request classes and atomic lane acceptance are implemented,
 including native lane sends.
 The implementation notes describe the coordinated format cutover.
+
+\section{Agreed Alias Infrastructure: Implementation Pending}
+
+The 14 October 2026 product decision distinguishes alias-scoped and sender-scoped
+express lanes. Creating a private alias automatically opens its alias-scoped
+lane, allowing previously unknown senders given the address to correspond under
+its admission policy without a bonded request. Public-alias creation grants no
+lane and retains existing permission and bonded-request behavior. Permission
+through a private alias must not authorize another alias; restriction or retirement
+must not introduce a bonded fallback.
+
+CS-MAIL owns alias creation, routing, permissions, lifecycle and correspondence
+independently of Phoros, which will later consume those capabilities through a
+linked account. Domain/application owners must retain the decisions; SMTP and
+client adapters must not invent policy. The current grant and admission
+implementation described in this document is sender-scoped. It does not yet
+implement the alias design.
+
+The \href{DOMAIN_MODEL.md}{domain model} owns confirmed rules and open decisions;
+the \href{cs_mail_aliases_and_express_lanes.tex}{alias memo} explains the product.
+Alias-to-persona mapping, aggregate ownership, persistence contracts, wire formats
+and migration details await design. No new Rust type, table or completed boundary
+is asserted here. Existing sender-lane settlement and lifetime semantics must not
+be silently applied to private-alias creation or retirement.
 
 \section{Planned Apple Client Boundary}
 

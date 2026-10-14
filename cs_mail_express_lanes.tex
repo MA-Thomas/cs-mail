@@ -19,7 +19,7 @@
 \title{\textit{cs-mail}: Express Lanes for Bounded Communication\\
 \large A Pedagogical Memo}
 \author{C-SQD}
-\date{Draft 0.5 --- September 2026}
+\date{Draft 0.6 --- 14 October 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -43,6 +43,29 @@ senders in these examples are legacy senders or possible future native protocol
 participants; they do not imply organizational C-SQD accounts. The
 \href{DOMAIN_MODEL.md}{C-SQD domain model} controls that product distinction.
 
+\section{Two Forms of Express-Lane Permission}
+
+The product distinguishes \textbf{alias-scoped express lanes} from
+\textbf{sender-scoped express lanes}. Creating a private alias automatically
+opens a lane through that receiving address, with no bonded route. Creating a
+public-facing alias grants no automatic lane; existing standing permission,
+sender-scoped grants and bonded-request rules apply.
+
+For example, a member gives their hospital a private alias. A previously unknown
+specialist who receives it through that relationship can write through its lane,
+subject to admission policy, without a separate sender grant. That permission
+does not extend to the member's public-facing or other private aliases. The route
+and sender-authentication evidence remain separate: the address does not prove
+organizational identity or who disclosed it.
+
+Alias infrastructure is agreed design awaiting implementation. CS-MAIL owns it;
+Phoros Account will use it later. See the
+\href{cs_mail_aliases_and_express_lanes.tex}{aliases and express lanes memo} for
+motivation and the \href{DOMAIN_MODEL.md}{domain model} for rules and open decisions.
+The remaining sections explain the existing \emph{sender-scoped} model. Their
+domain matching, lifetime and issuance rules must not be assumed to govern
+alias-scoped lanes. Private-alias restriction or retirement has no bonded fallback.
+
 \section{A First Week with a New Bank Account}
 
 {\sloppy
@@ -56,8 +79,9 @@ urging you to confirm your login. The
 first three you wanted. The last is a phishing attempt. Every one of them arrived
 the same way: someone typed your address and pressed send.\par}
 
-In \textit{cs-mail}, a stranger selects a published request class and authorizes
-one conditional charge. You can accept with standing permission or a lane, or
+On a public-facing \textit{cs-mail} alias, a stranger without other permission
+selects a published request class and authorizes one conditional charge. You can
+accept with standing permission or a lane, or
 reject. Permitted follow-ups share the charge and deadline. Your bank needs a
 different invitation: you chose to hear from it for particular reasons, across
 many addresses. A bounded lane expresses that permission.
@@ -131,8 +155,9 @@ issuance, safety, and lifetime rules it needs to actually work.
 
 \section{The Solution: Express Lanes}
 
-An express lane is a recipient-granted, revocable path without a relationship-request charge for one sender
-you have chosen, bounded in purpose and time. It concerns the relationship and is
+A sender-scoped express lane is a recipient-granted, revocable path without a
+relationship-request charge for one sender you have chosen, bounded in purpose
+and time. It concerns the relationship and is
 usually not scoped to a particular conversation. Three properties make it useful.
 
 \paragraph{What it limits.}
@@ -205,7 +230,7 @@ DMARC dependency falls away, and the lane becomes fully private---the provider n
 longer needs to see \texttt{bank.com} to honor it. The bridge advertises its own
 obsolescence.
 
-\section{How You Get One: Issuance}
+\section{How You Get a Sender-Scoped Lane: Issuance}
 
 An express lane should feel like a consequence of a decision you already made,
 never a settings screen you must remember to visit. Three useful moments are:
@@ -236,7 +261,7 @@ the expectation from the website you were actually on turns ``which bank?'' into
 simple match, and lets you catch a look-alike domain at the very moment of
 granting.
 
-\section{How a Lane Ends: Lifetime and Renewal}
+\section{How a Sender-Scoped Lane Ends: Lifetime and Renewal}
 
 A lane's lifetime describes the permission you gave an organization. Your annual
 utility charge describes the service you purchased from C-SQD. A lane carries no

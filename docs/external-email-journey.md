@@ -8,6 +8,15 @@ SMTP2GO. No account, live email, payment, server or public DNS was changed in th
 
 ## Recipient control and disclosure
 
+**Later product decision (2026-10-14).** Private aliases will automatically open
+alias-scoped express lanes, including for unfamiliar senders given the address,
+without a bonded route. Public-facing aliases retain existing permission and
+bonded-request behavior. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+owns those agreed rules and open questions. This implementation record describes
+the existing sender-scoped paths; the unknown-sender prompt below is not the
+future private-alias policy. Alias infrastructure and its admission behavior
+remain unimplemented, and the experiments recorded here do not validate them.
+
 Mail to `member-<32 hexadecimal persona>@<mail_domain>` passes the existing automatic
 SMTP authentication and MIME checks. Standing acceptance or a valid mailbox lane
 allows a new conversation. The conversation, encrypted first message, provenance

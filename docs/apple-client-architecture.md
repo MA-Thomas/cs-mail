@@ -192,6 +192,15 @@ separate decision.
 
 ## First implementation slice and validation
 
+The [alias product decision](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+of 14 October 2026 adds CS-MAIL-owned private/public alias creation and management
+to member-application scope. Private creation automatically opens an alias-scoped
+lane; public creation grants no lane and retains existing sender-scoped permission
+and bonded requests. These workflows await design and implementation. Milestone
+placement, lifecycle handling and outbound address selection are not decided;
+the existing first-slice evidence below does not cover them. Phoros will consume
+the infrastructure later rather than own its creation or management rules.
+
 Start with one local member journey: browser sign-in and first-device enrollment, reopen it,
 synchronize a request, read its content, and accept or reject it through the
 existing authenticated service. Establish Keychain custody and encrypted local

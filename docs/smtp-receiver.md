@@ -15,6 +15,13 @@ mail remain later work. Unsupported content/authentication is explicitly refused
 
 ## Addresses and supported email
 
+The [2026-10-14 alias design](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+adds private aliases with automatic alias-scoped lanes and no bonded route;
+public-facing aliases retain the existing permission/request process. This is
+agreed product scope, not implemented receiver behavior. Its detailed admission
+and lifecycle policies remain open. The address forms, sender checks and
+request-page prompts documented here describe the current sender-scoped paths.
+
 A conversation's address is `reply+<32 lowercase hexadecimal conversation ID>@<mail_domain>`.
 For example, conversation 7001 uses
 `reply+00000000000000000000000000001b59@mail.example.net`.

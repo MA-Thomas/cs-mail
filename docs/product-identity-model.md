@@ -27,6 +27,16 @@ Product-scoped opaque references can differ while resolving to the same internal
 identity does not grant cross-product access or make one product's evidence satisfy
 another product's enrollment policy.
 
+## Communication aliases
+
+The [alias design](../DOMAIN_MODEL.md#aliases-and-express-lane-scope), agreed
+2026-10-14 and awaiting implementation, adds private and public-facing
+communication addresses within the existing CS-MAIL account. It creates no
+additional product login or shared subject. CS-MAIL owns the infrastructure;
+Phoros will later consume it through a linked account. That linkage does not
+itself authorize correspondence access, decryption or healthcare-record disclosure.
+The alias-to-protocol-identity mapping remains open.
+
 ## Enrollment
 
 Each product has its own enrollment evidence policy: the person evidence it requires

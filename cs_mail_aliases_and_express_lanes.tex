@@ -1,0 +1,160 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+\setlength{\emergencystretch}{1.5em}
+\setlist[itemize]{itemsep=0.25em,topsep=0.4em}
+\title{\textit{cs-mail}: Aliases and Two Forms of Express-Lane Permission}
+\author{C-SQD}
+\date{Product design memo --- 14 October 2026}
+\begin{document}
+\maketitle
+
+\paragraph{Status and authority.}
+This memo explains the alias design agreed on 14 October 2026. The
+\href{DOMAIN_MODEL.md}{C-SQD domain model} owns its confirmed product rules.
+Alias infrastructure and alias-scoped admission await implementation; current
+express lanes are sender-scoped. The \href{cs_mail_build_plan.tex}{build plan}
+owns sequencing, which remains undecided for this work. The
+\href{docs/rust-domain-principles.md}{Rust-domain principles} remain binding.
+
+\section{The Problem: One Address, Many Different Relationships}
+
+A person gives an email address to a hospital, an insurer, a pharmacy and many
+other organizations. Correspondence from all of them reaches the same entrance.
+When the address is circulated, the recipient has little context about which
+relationship supplied that route. Replacing it can disrupt unrelated contacts,
+portal access and account notices.
+
+Expected healthcare correspondence also comes from people the recipient has not
+contacted before. A hospital may pass contact details to a specialist, and its
+departments or service vendors may use different sending addresses. Requiring
+each correspondent to make a paid approach would put the request process in the
+way of an existing organizational relationship.
+
+A publicly listed address serves a different purpose. A professor may welcome
+new research proposals while needing control over unsolicited approaches. The
+existing bonded request gives a stranger an explicit way to ask for permission.
+Both uses belong in CS-MAIL, within the same person's account.
+
+\section{A Private Alias for a Hospital}
+
+The member creates a private alias for their hospital and gives it during
+registration. Creation automatically opens an \textbf{alias-scoped express lane}.
+The hospital can send ordinary email through it without a bonded request or
+adopting the CS-MAIL application.
+
+Later, a specialist whom the member has never contacted receives that alias
+through the hospital relationship. The specialist can write through the same
+lane, subject to its admission policy, without first receiving a separate
+sender-scoped grant. The member sees which alias received the correspondence
+alongside the available evidence about its author.
+
+The permission is confined to that receiving alias. Using the hospital alias
+does not establish permission through the member's insurer alias or public
+address. The same account can manage these routes without creating another
+account, product login or membership.
+
+There is no bonded route through the private alias. Restricting or retiring it
+does not turn an organization's next email into a payment invitation. What happens
+to affected correspondence, and how replacement preserves continuity, requires
+an explicit lifecycle policy before implementation.
+
+\section{A Public Address for Professor Bob}
+
+Professor Bob publishes an address for professional approaches. Creating this
+public-facing alias grants no express lane. Alice, who lacks permission, selects
+one of Bob's published request classes and authorizes its processing component
+and collateral under the existing protocol.
+
+Bob can accept with standing permission or explicitly grant a
+\textbf{sender-scoped express lane}. Either form of request acceptance records
+the full refund obligation. Rejection and expiry retain their existing financial
+consequences. Subsequent communication follows the permission granted; the lane
+does not charge for each message. Other existing permissions, including scoped
+member-initiated invitations, retain their own rules.
+
+Public-facing aliases are the primary entry point for bonded approaches. The
+private-alias design does not change request pricing, settlement, annual service
+charges or equal member distributions.
+
+\section{Two Bases for Express-Lane Permission}
+
+\paragraph{Alias-scoped.}
+The member authorizes a route by creating a private alias. Permission is bound
+to that receiving address and its active lane policy. It can accommodate a new
+sender who has been given the address without requiring individual approval first.
+
+\paragraph{Sender-scoped.}
+The member explicitly authorizes a sender subject under a grant's scope and
+validity. Existing lanes may bind to a native identity, an external mailbox or a
+recipient-selected legacy domain. The existing
+\href{cs_mail_express_lanes.tex}{express-lane memo} explains this model, and its
+\href{cs_mail_express_lanes_implementation.tex}{implementation plan} records the
+current sender-scoped machinery.
+
+An alias is a communication address and managed route; a lane is permission.
+The automatic association between a private alias and its lane does not make
+addresses interchangeable with accounts, sender identities or consent grants.
+Standing acceptance remains a distinct permission. The mapping between aliases
+and protocol identities is still open.
+
+\section{What the Route Tells the Member}
+
+The hospital alias identifies the entrance the member supplied for that
+relationship. It does not prove that every message was authored by the hospital,
+that every new sender is its authorized delegate, or that the hospital caused an
+address leak. A private alias can be forwarded or disclosed. Sender authentication
+supplies separate evidence about the message's origin.
+
+The design therefore distinguishes route, evidence and permission. A previously
+unknown sender is not automatically excluded merely for lacking a sender-scoped
+grant, but the handling of failed authentication, suspicious messages and other
+refusals still needs an agreed policy. This memo does not choose delivery,
+quarantine or rejection for those cases, nor promise that other clinical-data
+channels will compensate for a missed email.
+
+External email retains its existing privacy boundaries: receiving and relay
+services may handle plaintext. The alias does not confer endpoint-only
+confidentiality. Existing disclosure-consent requirements remain applicable;
+the alias design does not itself authorize outbound disclosure or managed decryption.
+
+\section{CS-MAIL Owns the Infrastructure; Phoros Uses It Later}
+
+CS-MAIL, operated by C-SQD, PBC, owns alias creation, routing, permissions,
+lifecycle management and correspondence. The member must be able to use these
+capabilities independently of Phoros.
+
+Phoros Account, operated by Reservatory, PBC, will later use the infrastructure
+through a linked CS-MAIL account. It can associate healthcare relationships with
+their communication routes without building a second alias system. Product
+linking does not itself grant access to messages, authorize decryption or disclose
+healthcare records. The \href{docs/product-identity-model.md}{product identity
+model} continues to distinguish product accounts, logins and shared subject
+association. No primary recovery email address is introduced by this design.
+
+\section{Decisions Still Required}
+
+The two permission scopes and CS-MAIL ownership are agreed. The following remain
+open and must not be filled in by borrowing defaults from sender-scoped lanes:
+\begin{itemize}
+  \item Lane lifetime, renewal and whether private routes expire automatically.
+  \item Restriction and block scope, including their interaction across aliases.
+  \item Authentication requirements and handling of suspicious or refused mail.
+  \item Replacement and retirement, including portal login, recovery messages,
+  notices and any transition or quarantine period.
+  \item Outbound address selection and continuity of replies and conversations.
+  \item Alias-to-protocol-identity mapping and the grant, storage and wire contracts.
+  \item Milestone placement, member-management flows and validation scope.
+\end{itemize}
+
+Creating an alias-scoped lane must not be assumed to settle an existing paid
+request. Existing sender-scoped grants and their settlement semantics remain
+unchanged. This document records product direction; it does not assert that the
+current SMTP receiver already admits correspondence through private aliases.
+
+\end{document}

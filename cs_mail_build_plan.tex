@@ -52,7 +52,7 @@
 \title{\textit{cs-mail} Product Build Plan\\
 \large Server, Administration, Apple Member Application, and Sender Request Page}
 \author{C-SQD}
-\date{Draft 0.12 --- 8 October 2026}
+\date{Draft 0.13 --- 14 October 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -74,6 +74,17 @@ redeemable value.
 \end{abstract}
 
 \medskip\noindent\fbox{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{\small\textbf{Design principles.} Before changing the implementation or this design, read the \href{docs/rust-domain-principles.md}{Rust-domain design principles} (\texttt{docs/rust-domain-principles.md}). They are binding for cs-mail and identity-model; new work must not regress them.}}\medskip
+
+\section{What Changed in Draft 0.13}
+
+CS-MAIL now owns agreed alias infrastructure: private aliases automatically open
+alias-scoped express lanes without a bonded route; public-facing aliases retain
+the existing permission and bonded-request process, including explicitly granted
+sender-scoped lanes. Phoros Account will later consume this infrastructure through
+a linked CS-MAIL account. This is product scope awaiting implementation, not work
+deferred to Phoros development. Milestone placement and delivery order remain
+undecided. See the \href{cs_mail_aliases_and_express_lanes.tex}{alias memo} and
+the \href{DOMAIN_MODEL.md}{domain model} for confirmed rules and open decisions.
 
 \section{What Changed in Draft 0.12}
 
@@ -175,6 +186,22 @@ reviewed cutover in the owning domain, not patched in an adapter.
 
 \section{The Product and Its Users}
 
+\paragraph{Aliases and permission scope (agreed; implementation pending).}
+The member creates private aliases for healthcare organizations. Each creation
+automatically opens an alias-scoped express lane, admitting correspondence under
+its policy even from unfamiliar specialists who have been given that address,
+without a separate sender grant or bonded request. Public-facing aliases grant
+no automatic lane: existing standing permission, sender-scoped lanes and other
+invitations apply, and approaches lacking permission use the bonded route.
+Permission through one private alias does not authorize another route; retiring
+or restricting it does not introduce a bonded fallback.
+
+CS-MAIL owns creation, routing, permissions, lifecycle management and
+correspondence independently of Phoros. Member-facing creation, recognition,
+reply-address handling and management belong in CS-MAIL's product scope.
+Their precise workflows, lifecycle policy and milestone placement remain open.
+The existing milestone exits below are not evidence that this work is implemented.
+
 \paragraph{Clients and their roles.}
 \begin{itemize}
     \item \textbf{Member application (SwiftUI; macOS first).} Holds endpoint keys, the
@@ -222,6 +249,8 @@ scenarios.
 general mailbox hosting (such as IMAP access or hosting external accounts), live
 payments, mobile releases, and multi-region operation. Member-initiated external
 conversations, guest-initiated conversations, and transactional notices are in scope.
+Receiving correspondence through CS-MAIL-owned aliases is also in scope; this
+does not require IMAP access or hosting accounts at external providers.
 
 \section{Architecture of the Product Layer}
 
@@ -983,10 +1012,18 @@ For Phoros, its enrollment ceremony adopts an existing cs-mail subject through
 verified account control, as the product identity model prescribes. Version the
 identity contract as a published interface once two products consume it. Design
 cross-product account linking on explicit, granular, revocable consent.
+Phoros will consume CS-MAIL's independently developed alias infrastructure for
+healthcare correspondence. Linking does not itself authorize access to messages,
+decryption or healthcare records. This later integration does not defer alias
+creation, routing or lifecycle ownership to Phoros.
 
 \section{Deferred and Open}
 
 \begin{itemize}
+    \item Alias infrastructure is agreed CS-MAIL scope with milestone placement
+    undecided. Its lifetime, restriction/block interaction, authentication-failure
+    handling, replacement continuity, outbound addressing and identity mapping
+    remain open in the domain model.
     \item Bank-account replacement, full account management, and detailed
     erasure policy.
     \item Independent-provider federation and general mailbox hosting (such as IMAP).

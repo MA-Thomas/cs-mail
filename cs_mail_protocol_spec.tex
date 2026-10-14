@@ -28,7 +28,7 @@
 
 \title{\textit{cs-mail} Protocol Specification\\\large Relationship Requests, Permission, and Financial Obligations}
 \author{C-SQD}
-\date{Draft 0.9 --- September 2026}
+\date{Draft 0.10 --- 14 October 2026}
 
 \setlength{\emergencystretch}{1.5em}
 
@@ -126,6 +126,31 @@ request history for the same recipient. Outside its identity authority, the
 principal \MUST{} be represented by purpose-limited scoped assertions, never a
 globally comparable identifier.
 
+\subsection{Alias-scoped and sender-scoped permission}
+
+The C-SQD product design agreed on 14 October 2026 distinguishes two lane scopes.
+Creating a private alias automatically establishes an \emph{alias-scoped express
+lane}. Correspondence through that receiving address may include previously
+unknown senders who have been given it, subject to admission policy, without a
+separate sender-scoped grant or bonded request. Permission through that route
+\MUSTNOT{} establish permission through another alias. Restriction or retirement
+\MUSTNOT{} introduce a bonded fallback on the private route.
+
+A public-facing alias has no automatic lane. Existing standing permission,
+\emph{sender-scoped express lanes} and other invitation rules remain applicable;
+approaches lacking permission use the existing bonded-request process. A
+sender-scoped lane explicitly binds a sender subject under its grant. Standing
+acceptance remains a separate permission.
+
+These are agreed product requirements awaiting alias implementation. The
+\href{DOMAIN_MODEL.md}{domain model} owns the rules and open decisions; see the
+\href{cs_mail_aliases_and_express_lanes.tex}{alias memo} for examples. Detailed
+alias proofs, wire formats, identity mapping, lifetime, block interaction and
+authentication-failure policy are not specified by this revision. The existing
+pair-based relationship and capability contracts below describe sender-scoped
+permission. Alias receipt supplies route context, not proof of organizational
+identity; sender authentication and disclosure consent remain distinct.
+
 \subsection{The enduring relationship}
 
 The relationship has state
@@ -143,8 +168,9 @@ Request classes describe proposed approaches, not enduring
 relationship types or automatic permission grants.
 
 Unknown, rejected, and revoked relationships may be eligible for a new request
-under recipient and anti-abuse policy. Thus a request is needed when standing
-permission and valid lane access are absent, not only when no relationship
+under recipient and anti-abuse policy on a route offering bonded requests. Thus
+a request is needed on that route when standing permission and valid lane access
+are absent, not only when no relationship
 record exists. Rejection
 declines a request; blocking prohibits further ordinary contact until removed.
 
@@ -560,8 +586,8 @@ unsupported critical extensions fail before admission. The envelope \MUSTNOT{}
 expose plaintext, legal identity evidence, unrelated identities, financial
 balances, or content-derived classifications unnecessary for the chosen path.
 
-The reference deployment supports express lanes as recipient-signed scoped
-capabilities. Each grant \MUST{} bind its subject and recipient, declared-purpose
+The reference deployment currently supports sender-scoped express lanes as
+recipient-signed scoped capabilities. Each grant \MUST{} bind its subject and recipient, declared-purpose
 constraint, optional origin constraint, acceptable declaration authority,
 hard validity interval, enforceable count or rate, version, and revocation rules.
 An opaque handle identifies the pair; it does not supply authority without the
@@ -579,11 +605,17 @@ more. The lane binds a recipient-selected canonical IDNA-ASCII domain scope,
 accepting the domain or its authorized subdomains under a consistent versioned
 mapping. A passing DKIM or SPF identifier cannot silently replace that scope.
 
-The admission order is blocked refusal, accepted permission, valid capability,
+For the existing sender-scoped paths on routes offering bonded requests,
+the admission order is blocked refusal, accepted permission, valid capability,
 permitted follow-up on the identified request awaiting a decision, then eligible new-request
 creation with explicit sender authorization. If a request already exists but a
 follow-up is refused, the last branch is unavailable. Capability mismatch never
 silently converts a message into a charged request.
+
+This sequence is not a private-alias admission contract. The agreed alias-scoped
+path must evaluate its receiving-route authority without requiring a separate
+sender grant and must not fall through to a bonded request. Detailed ordering
+with other controls remains an open design decision.
 
 Capability-authorized delivery creates no request, forfeiture, solicitation, or
 new-request history increment. Acceptance with a lane settles the request and

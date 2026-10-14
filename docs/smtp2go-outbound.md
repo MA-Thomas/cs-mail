@@ -65,6 +65,15 @@ the per-conversation `reply+<conversation>@<mail_domain>` address. General incom
 authority or queues a bounded request-page prompt. Reply-To retains conversation
 continuity. Human-readable aliases remain later work.
 
+The [2026-10-14 product decision](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+expands alias scope beyond readable address names: private aliases automatically
+open alias-scoped express lanes without a bonded route, while public-facing
+aliases retain existing permissions and bonded requests. CS-MAIL owns this
+infrastructure; Phoros will later consume it. It is not implemented by this
+adapter. Outbound alias selection, reply continuity and alias lifecycle remain
+open; the current routing and validation claims in this guide do not establish
+the new behavior.
+
 The outbound carrier and webhook adapter live in `cs-mail-smtp-gateway`; service
 orchestration is in `cs-mail-service`, deterministic feedback decisions in
 `cs-mail-application`, and atomic facts in PostgreSQL. `cs-maild` is a thin host.
