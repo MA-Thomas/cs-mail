@@ -65,14 +65,25 @@ the per-conversation `reply+<conversation>@<mail_domain>` address. General incom
 authority or queues a bounded request-page prompt. Reply-To retains conversation
 continuity. Human-readable aliases remain later work.
 
-The [2026-10-14 product decision](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
-expands alias scope beyond readable address names: private aliases automatically
-open alias-scoped express lanes without a bonded route, while public-facing
-aliases retain existing permissions and bonded requests. CS-MAIL owns this
-infrastructure; Phoros will later consume it. It is not implemented by this
-adapter. Outbound alias selection, reply continuity and alias lifecycle remain
-open; the current routing and validation claims in this guide do not establish
-the new behavior.
+An alias is a receiving address; express-lane permission is granted separately.
+Private-alias creation grants no lane. A healthcare alias may be explicitly paired
+with an alias-scoped lane; an Amazon alias may instead use sender-scoped permission
+for selected authenticated domains. Private aliases have no bonded route;
+unauthorized senders may use the public approach route. The
+[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) owns these rules.
+Alias management, receiving and explicit lane pairing are implemented locally.
+The earlier transport experiments below retain their stated scope; current
+permission-transition validation is recorded in the Apple runbook.
+
+**Further alias clarification (2026-10-14; implementation pending).** One
+participant protocol identity may control multiple alias routes without public
+linkage. Sender-identity blocks apply across all receiving aliases. Private routes
+have no automatic expiry and offer Restrict, Replace, Retire. Suspicious or
+insufficiently authenticated private-alias mail is held for review without ongoing
+permission or payment. SMTP envelope recipients and authenticated native targets
+establish receiving-route evidence. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+owns these rules and remaining delivery, transition, reply and held-message contracts;
+implementation and validation records below do not establish this cutover.
 
 The outbound carrier and webhook adapter live in `cs-mail-smtp-gateway`; service
 orchestration is in `cs-mail-service`, deterministic feedback decisions in

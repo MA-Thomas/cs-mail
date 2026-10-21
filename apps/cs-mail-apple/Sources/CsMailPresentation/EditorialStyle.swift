@@ -13,7 +13,7 @@ public extension EnvironmentValues {
 /// Presentation only. Server facts and client authority stay with their existing owners.
 public enum EditorialStyle {
     public static func canvas(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(red: 0.12, green: 0.12, blue: 0.11) : Color(red: 247 / 255.0, green: 246 / 255.0, blue: 239 / 255.0)
+        scheme == .dark ? Color(red: 0.12, green: 0.12, blue: 0.11) : Color(red: 247 / 255.0, green: 246 / 255.0, blue: 242 / 255.0)
     }
     public static func ink(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(red: 0.91, green: 0.89, blue: 0.85) : Color(red: 0.19, green: 0.20, blue: 0.18)
@@ -34,6 +34,27 @@ public enum EditorialStyle {
         .custom("HelveticaNeue", size: size, relativeTo: style)
     }
     public static let reading = text(16)
+}
+
+/// Shared native frosting for navigation surfaces, with an opaque accessibility fallback.
+public struct EditorialGlassSurface: View {
+    private let previewArea: MemberArea?
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    public init(previewArea: MemberArea? = nil) { self.previewArea = previewArea }
+    private var originalBackground: Color {
+        guard let previewArea else { return EditorialStyle.canvas(scheme) }
+        return EditorialAreaPalette.palette(for: previewArea)?.previewBackground(scheme)
+            ?? EditorialStyle.canvas(scheme == .dark ? .light : .dark)
+    }
+    public var body: some View {
+        if reduceTransparency {
+            originalBackground
+        } else {
+            Rectangle().fill(.regularMaterial)
+                .overlay { originalBackground.opacity(0.82) }
+        }
+    }
 }
 
 public struct EditorialButtonStyle: ButtonStyle {

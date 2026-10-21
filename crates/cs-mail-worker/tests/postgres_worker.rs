@@ -290,6 +290,14 @@ impl DeliverySink for TestSink {
 
 fn submit_request_to_recipient(engine: &PostgresEngine) {
     reserve(engine, 1);
+    support::fixture_inbox(
+        engine.deployment(),
+        RECIPIENT,
+        OperationalKeyRef(102),
+        &[102; 32],
+        test_time(0),
+    )
+    .unwrap();
     let mut provider = cs_mail_finance::SimulatedProcessor::new([7; 32]);
     cs_mail_worker::run_payment_batch(
         engine,

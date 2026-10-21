@@ -36,7 +36,7 @@ impl<C: CanonicalClock + Clone + 'static> ExternalGateway<C> {
         Ok(Repository {
             accounts: self.members.deployment().accounts(move || clock.now()),
             deployment: self.members.record().clone(),
-            deriver: self.members.deriver(),
+            deriver: self.members.deriver().into(),
             relay_key: self.external_key()?.1,
         })
     }

@@ -54,7 +54,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         deriver: cs_mail_privacy::PrivacyDeriver::new(
             key("relationship_secret_file")?,
             key("principal_secret_file")?,
-        ),
+        )
+        .into(),
         relay_key: preparation.relay_key,
     };
     let member = ProtocolIdentity(args[3].parse()?);

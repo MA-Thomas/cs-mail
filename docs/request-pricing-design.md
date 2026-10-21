@@ -10,18 +10,35 @@ acceptance and settlement parts of that document are unchanged.
 
 ## Decisions
 
-Scope clarification, 2026-10-14: these rules govern addresses offering bonded
-requests. The [alias design](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
-adds private aliases with automatic alias-scoped express lanes and no bonded
-route; public-facing aliases retain the existing request process. The alias
-infrastructure is not implemented. An empty class publication already means no
-paid route, but does not itself establish alias-scoped admission authority.
+An alias is a receiving address; express-lane permission is granted separately.
+Private-alias creation grants no lane. A healthcare alias may be explicitly paired
+with an alias-scoped lane; an Amazon alias may instead use sender-scoped permission
+for selected authenticated domains. Private aliases have no bonded route;
+unauthorized senders may use the public approach route. The
+[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) owns these rules.
+Alias management, receiving and explicit lane pairing are implemented locally.
+The earlier transport experiments below retain their stated scope; current
+permission-transition validation is recorded in the Apple runbook. Pricing rules
+apply only to published bonded-request routes. An empty class publication offers
+no paid route and does not itself grant express-lane permission.
+
+**Further alias clarification (2026-10-14; implementation pending).** One
+participant protocol identity may control multiple alias routes without public
+linkage. Sender-identity blocks apply across all receiving aliases. Private routes
+have no automatic expiry and offer Restrict, Replace, Retire. Suspicious or
+insufficiently authenticated private-alias mail is held for review without ongoing
+permission or payment. SMTP envelope recipients and authenticated native targets
+establish receiving-route evidence. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+owns these rules and remaining delivery, transition, reply and held-message contracts;
+implementation and validation records below do not establish this cutover.
 
 - CSQD is the only provider. There is one request pricing policy for all of
   cs-mail.
 - The operator sets one processing component `C` for all of cs-mail.
-- Each protocol identity offering the bonded route publishes its own set of up to eight
-  request classes. Addresses belonging to the same account have independent sets.
+- Each alias offering the bonded route has its own publication of up to eight
+  request classes. Aliases controlled by the same protocol identity have independent
+  sets, authorized by that identity for the named alias. The implemented per-persona
+  contract below requires an explicit alias-aware cutover.
 - Each class carries its own collateral `S`, which must lie within cs-mail-wide
   bounds `collateral_min <= S <= collateral_max`.
 - When the operator changes `C` or the bounds, quotes already issued keep their

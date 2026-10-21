@@ -138,7 +138,11 @@ fn replacement_device_recovers_only_after_fresh_scoped_consent() {
     let resumed = cs_mail_accounts::control::SignedAccountCommand {
         account: h.accounts[1],
         operational_key: OperationalKeyRef(12),
-        expected_revision: 1,
+        expected_revision: h
+            .repository
+            .account_control(h.accounts[1])
+            .unwrap()
+            .revision(),
         idempotency_key: IdempotencyKey(50000),
         product: "cs-mail/test".into(),
         command: cs_mail_accounts::control::AccountCommand::SetStatus(

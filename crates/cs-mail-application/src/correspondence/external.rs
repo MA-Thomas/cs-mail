@@ -29,6 +29,7 @@ pub struct PreparedText {
 #[serde(deny_unknown_fields)]
 pub enum Command {
     Start {
+        receiving_alias: cs_mail_primitives::AliasId,
         mailbox: GuestMailbox,
         message: Box<PreparedText>,
         disclose_to_external_mail: bool,
@@ -75,7 +76,7 @@ impl SignedCommand {
             return Err(Error::Invalid);
         }
         serde_json::to_vec(&(
-            "cs-mail/external-command/v1",
+            "cs-mail/external-command/v2",
             self.scope,
             &self.product,
             self.account,
@@ -128,15 +129,57 @@ impl SignedCommand {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Direction {
     MemberToGuest,
-    GuestToMember,
+    GuestToMember(Box<crate::aliases::DeliveredRoute>),
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Message {
+pub struct MessageFields {
     pub manifest: MessageManifest,
     pub sender_key: EndpointPublicKey,
     pub member_copy: EncryptedContentRecord,
     pub direction: Direction,
     pub committed_at: CanonicalTime,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "MessageFields", into = "MessageFields")]
+pub struct Message(MessageFields);
+impl Message {
+    /// # Errors
+    /// Rejects a received message without matching inbox, participant and time bindings.
+    pub fn new(fields: MessageFields) -> Result<Self, Error> {
+        let binding = &fields.member_copy.binding;
+        let valid = match &fields.direction {
+            Direction::MemberToGuest => binding.sender == binding.recipient,
+            Direction::GuestToMember(route) => {
+                route.transport() == crate::aliases::DeliveryTransport::External
+                    && route.message() == fields.manifest.message()
+                    && route.conversation() == fields.manifest.conversation()
+                    && route.sender() == binding.sender
+                    && route.recipient() == binding.recipient
+                    && route.at() == fields.committed_at
+            }
+        };
+        if !valid {
+            return Err(Error::Invalid);
+        }
+        Ok(Self(fields))
+    }
+}
+impl TryFrom<MessageFields> for Message {
+    type Error = Error;
+    fn try_from(fields: MessageFields) -> Result<Self, Error> {
+        Self::new(fields)
+    }
+}
+impl From<Message> for MessageFields {
+    fn from(message: Message) -> Self {
+        message.0
+    }
+}
+impl std::ops::Deref for Message {
+    type Target = MessageFields;
+    fn deref(&self) -> &MessageFields {
+        &self.0
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MessageView {
@@ -218,6 +261,7 @@ impl Acknowledgement {
     }
 }
 pub struct Context {
+    pub receiving_inbox: Option<cs_mail_accounts::aliases::Alias>,
     pub scope: RecipientSigningScope,
     pub authority: AccountState,
     pub billing: BillingAccount,
@@ -311,9 +355,9 @@ impl Message {
     /// Rejects a stored message bound to a different conversation or relationship.
     pub fn validate(&self, c: &ExternalConversation, r: &Relationship) -> Result<(), Error> {
         validate_copy(&self.manifest, self.sender_key, &self.member_copy)?;
-        let sender = match self.direction {
+        let sender = match &self.direction {
             Direction::MemberToGuest => c.member(),
-            Direction::GuestToMember => c.guest(),
+            Direction::GuestToMember(_) => c.guest(),
         };
         if self.manifest.conversation() != c.id()
             || r.key.sender != c.guest()
@@ -324,6 +368,17 @@ impl Message {
             || self.member_copy.created_at > self.committed_at
         {
             return Err(Error::Invalid);
+        }
+        if let Direction::GuestToMember(route) = &self.direction {
+            if route.transport() != crate::aliases::DeliveryTransport::External
+                || route.message() != self.manifest.message()
+                || route.conversation() != c.id()
+                || route.sender() != c.guest()
+                || route.recipient() != c.member()
+                || route.at() != self.committed_at
+            {
+                return Err(Error::Invalid);
+            }
         }
         Ok(())
     }
@@ -429,10 +484,19 @@ fn mutation(
 ) -> Result<(Changes, Outcome), Error> {
     let (conversation, delivery, cancel_waiting, outcome) = match &request.command {
         Command::Start {
+            receiving_alias,
             mailbox,
             message,
             disclose_to_external_mail,
         } => {
+            let inbox = c
+                .receiving_inbox
+                .as_ref()
+                .filter(|a| a.id() == *receiving_alias && a.owner() == request.persona)
+                .ok_or(Error::Unavailable)?;
+            inbox
+                .check_conversation(c.relationship.key.sender, request.conversation, now)
+                .map_err(|_| Error::Unauthorized)?;
             if !disclose_to_external_mail || !c.billing.covers(now) {
                 return Err(Error::Unauthorized);
             }
@@ -444,6 +508,7 @@ fn mutation(
                 ExternalConversation::start(
                     request.conversation,
                     request.persona,
+                    *receiving_alias,
                     mailbox.clone(),
                     c.scope.deployment_domain,
                     &c.relationship,
@@ -522,10 +587,16 @@ pub struct IncomingEvidence {
 }
 /// Admission input facts supplied by a trusted adapter, not an authentication proof.
 /// The durable receiver entry point requires the gateway's sealed authenticated reply.
+#[derive(Clone, Debug)]
+pub struct IncomingMessage {
+    pub manifest: MessageManifest,
+    pub sender_key: EndpointPublicKey,
+    pub member_copy: EncryptedContentRecord,
+}
 pub struct Reply {
     pub mailbox: GuestMailbox,
     pub conversation: ConversationId,
-    pub message: Message,
+    pub message: IncomingMessage,
     /// Stable keyed fingerprint of the logical email, independent of ciphertext and retry time.
     pub delivery_digest: [u8; 32],
     pub evidence: IncomingEvidence,
@@ -546,17 +617,21 @@ pub fn pending_or_standing(
         || r.state == RelationshipState::Blocked
         || reply.message.manifest.conversation() != c.id()
         || !reply.message.manifest.sources().is_empty()
-        || reply.message.direction != Direction::GuestToMember
     {
         return Err(Error::Unauthorized);
     }
     Ok(r.state == RelationshipState::Accepted || c.pending_access(r))
 }
 
+pub enum ReplyDestination<'a> {
+    Address(crate::aliases::ReceivingAuthorization),
+    Conversation(&'a cs_mail_accounts::aliases::Alias),
+}
 pub struct ReplyContext<'a> {
+    pub destination: ReplyDestination<'a>,
     pub conversation: &'a ExternalConversation,
     pub relationship: &'a Relationship,
-    pub lane: Option<cs_mail_capabilities::Lane>,
+    pub lane: Option<cs_mail_capabilities::SenderScopedLane>,
     pub member_key: EndpointPublicKey,
     pub billing: &'a BillingAccount,
     pub provider: cs_mail_primitives::ProviderRef,
@@ -588,12 +663,74 @@ pub fn new_mail_route(
 /// # Errors
 /// Checks exact mailbox, conversation and content binding. Consumes a lane only
 /// when neither standing nor pending access authorizes this message.
+/// A received external message has no representation without its inbox assignment.
+pub struct AdmittedReply {
+    message: IncomingMessage,
+    receiving: crate::aliases::DeliveredRoute,
+    lane: Option<cs_mail_capabilities::SenderScopedLane>,
+}
+impl AdmittedReply {
+    pub fn receiving(&self) -> &crate::aliases::DeliveredRoute {
+        &self.receiving
+    }
+    pub fn into_parts(self) -> (Message, Option<cs_mail_capabilities::SenderScopedLane>) {
+        (
+            Message(MessageFields {
+                manifest: self.message.manifest,
+                sender_key: self.message.sender_key,
+                member_copy: self.message.member_copy,
+                committed_at: self.receiving.at(),
+                direction: Direction::GuestToMember(Box::new(self.receiving)),
+            }),
+            self.lane,
+        )
+    }
+}
+/// # Errors
+/// Refuses incomplete destination evidence or permission; publishes only a complete delivery.
 pub fn admit_reply(
     context: ReplyContext<'_>,
     reply: &Reply,
     now: CanonicalTime,
-) -> Result<Option<cs_mail_capabilities::Lane>, Error> {
+) -> Result<AdmittedReply, Error> {
+    let lane = authorize_reply(&context, reply, now)?;
+    let receiving = match context.destination {
+        ReplyDestination::Address(route) => route.delivered(
+            reply.message.manifest.message(),
+            crate::aliases::DeliveryTransport::External,
+        )?,
+        ReplyDestination::Conversation(alias) => {
+            if alias.id() != context.conversation.receiving_alias()
+                || alias.owner() != context.conversation.member()
+            {
+                return Err(Error::Unauthorized);
+            }
+            alias
+                .check_conversation(context.conversation.guest(), context.conversation.id(), now)
+                .map_err(|_| Error::Unauthorized)?;
+            crate::aliases::DeliveredRoute::external_reply(
+                alias,
+                context.conversation.guest(),
+                context.conversation.id(),
+                reply.message.manifest.message(),
+                now,
+            )?
+        }
+    };
+    Ok(AdmittedReply {
+        message: reply.message.clone(),
+        receiving,
+        lane,
+    })
+}
+
+fn authorize_reply(
+    context: &ReplyContext<'_>,
+    reply: &Reply,
+    now: CanonicalTime,
+) -> Result<Option<cs_mail_capabilities::SenderScopedLane>, Error> {
     let ReplyContext {
+        destination,
         conversation: c,
         relationship: r,
         lane,
@@ -617,7 +754,7 @@ pub fn admit_reply(
         .declarations
         .origin
         .authority
-        != cs_mail_primitives::DeclarationAuthority::GuestSmtp(provider)
+        != cs_mail_primitives::DeclarationAuthority::GuestSmtp(*provider)
     {
         return Err(Error::Unauthorized);
     }
@@ -641,10 +778,28 @@ pub fn admit_reply(
     {
         return Err(Error::Invalid);
     }
-    if ordinary {
+    if let ReplyDestination::Address(route) = destination {
+        if route.sender() != c.guest()
+            || route.recipient() != c.member()
+            || route.conversation() != c.id()
+            || route.authorized_at() != now
+        {
+            return Err(Error::Unauthorized);
+        }
+        match route.basis() {
+            crate::aliases::RouteBasis::AliasLane { .. }
+            | crate::aliases::RouteBasis::Standing { .. } => return Ok(None),
+            crate::aliases::RouteBasis::PairedSender { .. } => {
+                return route
+                    .consume_paired(m.manifest.message(), &copy.binding.declarations)
+                    .map_err(|_| Error::Unauthorized);
+            }
+            crate::aliases::RouteBasis::SenderLane { .. } => (),
+        }
+    } else if ordinary {
         return Ok(None);
     }
-    let mut lane = lane.ok_or(Error::Unauthorized)?;
+    let mut lane = lane.clone().ok_or(Error::Unauthorized)?;
     let evidence = cs_mail_capabilities::LaneEvidence::GuestMailbox(c.guest());
     lane.authorizes(
         c.guest(),

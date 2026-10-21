@@ -10,16 +10,16 @@
 \setlist[itemize]{itemsep=0.25em,topsep=0.4em}
 \title{\textit{cs-mail}: Aliases and Two Forms of Express-Lane Permission}
 \author{C-SQD}
-\date{Product design memo --- 14 October 2026}
+\date{Product design memo --- 16 October 2026}
 \begin{document}
 \maketitle
 
 \paragraph{Status and authority.}
-This memo explains the alias design agreed on 14 October 2026. The
+This memo explains the current alias design. The
 \href{DOMAIN_MODEL.md}{C-SQD domain model} owns its confirmed product rules.
-Alias infrastructure and alias-scoped admission await implementation; current
-express lanes are sender-scoped. The \href{cs_mail_build_plan.tex}{build plan}
-owns sequencing, which remains undecided for this work. The
+Alias management, receiving inboxes and separate lane management are implemented
+locally through signed Rust commands and native controls. The
+\href{cs_mail_build_plan.tex}{build plan} owns sequencing. The
 \href{docs/rust-domain-principles.md}{Rust-domain principles} remain binding.
 
 \section{The Problem: One Address, Many Different Relationships}
@@ -43,8 +43,18 @@ Both uses belong in CS-MAIL, within the same person's account.
 
 \section{A Private Alias for a Hospital}
 
-The member creates a private alias for their hospital and gives it during
-registration. Creation automatically opens an \textbf{alias-scoped express lane}.
+Each member has one protocol identity, one current public-facing alias and
+multiple private aliases for providers, employers and other contexts. To create
+a private alias, the member enters its \textbf{purpose/description}, such as
+``Hospital''. CS-MAIL generates an unpredictable email address and presents it
+for copying. The purpose/description is owner-visible metadata, separate from
+the address, and is not disclosed unless explicitly shared by the owner.
+Generated addresses reduce guessability and avoid encoding contextual labels
+that could reveal sensitive information or connect aliases.
+
+The member creates a private alias for their hospital, explicitly pairs it with
+an \textbf{alias-scoped express lane}, and gives the address during registration.
+Creating the address alone grants no communication permission.
 The hospital can send ordinary email through it without a bonded request or
 adopting the CS-MAIL application.
 
@@ -64,12 +74,29 @@ does not turn an organization's next email into a payment invitation. What happe
 to affected correspondence, and how replacement preserves continuity, requires
 an explicit lifecycle policy before implementation.
 
+\section{A Private Alias for Amazon}
+
+The member creates a private alias for Amazon and explicitly pairs it with a
+\textbf{sender-scoped express lane}. The member selects authenticated legacy-domain
+subjects under the existing domain-matching rules. Only senders authorized by
+those subjects and the grant's receiving scope may use that lane. Possessing the
+alias alone supplies no permission, and similar domain names establish no common
+organizational ownership. Other senders can approach through the public bonded
+request route; the private alias itself offers no bonded fallback.
+
 \section{A Public Address for Professor Bob}
 
 Professor Bob publishes an address for professional approaches. Creating this
 public-facing alias grants no express lane. Alice, who lacks permission, selects
 one of Bob's published request classes and authorizes its processing component
 and collateral under the existing protocol.
+
+Bob chooses the public-facing alias's email address. There is one current
+public-facing alias per member; replacement is allowed under the agreed lifecycle.
+The previous alias remains permanently reserved and may complete its explicit
+transition, without counting as another current public alias. Address generation,
+purpose/description and this cardinality rule are implemented in signed management;
+local receiving is implemented, while alias-aware publication remains separate work.
 
 Bob can accept with standing permission or explicitly grant a
 \textbf{sender-scoped express lane}. Either form of request acceptance records
@@ -85,7 +112,7 @@ charges or equal member distributions.
 \section{Two Bases for Express-Lane Permission}
 
 \paragraph{Alias-scoped.}
-The member authorizes a route by creating a private alias. Permission is bound
+The member explicitly grants a lane for a named receiving alias. Permission is bound
 to that receiving address and its active lane policy. It can accommodate a new
 sender who has been given the address without requiring individual approval first.
 
@@ -98,10 +125,16 @@ recipient-selected legacy domain. The existing
 current sender-scoped machinery.
 
 An alias is a communication address and managed route; a lane is permission.
-The automatic association between a private alias and its lane does not make
-addresses interchangeable with accounts, sender identities or consent grants.
-Standing acceptance remains a distinct permission. The mapping between aliases
-and protocol identities is still open.
+Creation grants no lane; the member selects permission separately. A private
+alias can be paired with either lane scope. An active address supplies no authority
+without an applicable permission. Lane changes do not retire the address, and
+route restriction or retirement constrains every permission through it.
+Standing acceptance remains a distinct permission. A protocol identity identifies a participant; an alias is a separately identified
+route controlled by that participant. One protocol identity may control multiple
+aliases. Alias creation, replacement and retirement preserve that identity,
+account, login and shared subject. The association between aliases must not
+be automatically disclosed to correspondents. This supersedes the old
+address-equals-protocol-identity product assumption; implementation awaits cutover.
 
 \section{What the Route Tells the Member}
 
@@ -111,12 +144,19 @@ that every new sender is its authorized delegate, or that the hospital caused an
 address leak. A private alias can be forwarded or disclosed. Sender authentication
 supplies separate evidence about the message's origin.
 
-The design therefore distinguishes route, evidence and permission. A previously
-unknown sender is not automatically excluded merely for lacking a sender-scoped
-grant, but the handling of failed authentication, suspicious messages and other
-refusals still needs an agreed policy. This memo does not choose delivery,
-quarantine or rejection for those cases, nor promise that other clinical-data
-channels will compensate for a missed email.
+The design distinguishes route, evidence and permission. Previously unknown
+senders need no individual sender grant only when an applicable alias-scoped
+lane authorizes that receiving route. A private address alone is insufficient.
+Suspicious or insufficiently authenticated correspondence is held separately for
+explicit member review. Holding or releasing one message grants no ongoing
+permission and creates no payment invitation. A hold cannot bypass an established
+identity-level block; unresolved authentication cannot establish that a sender is
+unblocked. Detailed release, retention and refusal contracts remain open.
+
+SMTP establishes the receiving alias from the accepted envelope recipient, not
+the visible To header. Native commands authenticate the target alias. Every
+admitted message retains its receiving alias and permission basis through storage
+and replies; replacement must not rewrite the original route.
 
 External email retains its existing privacy boundaries: receiving and relay
 services may handle plaintext. The alias does not confer endpoint-only
@@ -137,24 +177,50 @@ healthcare records. The \href{docs/product-identity-model.md}{product identity
 model} continues to distinguish product accounts, logins and shared subject
 association. No primary recovery email address is introduced by this design.
 
+\section{Blocking and Restrict, Replace, Retire}
+
+A sender protocol-identity block overrides every permission path across all
+receiving aliases controlled by the recipient. An external mailbox identifies
+only what authentication establishes; two mailboxes are not automatically one
+person. Private aliases have no automatic expiry. Their controls are:
+\begin{description}
+  \item[Restrict.] Stop new correspondents while preserving authorized existing
+  conversations. Only exact conversations with admitted correspondence at restriction qualify; new conversations require explicit approval.
+  \item[Replace.] Create a new alias with an explicit transition for the old one.
+  Preserve identity, blocks, correspondence and original route history. Do not
+  automatically carry unknown-sender admission into the new route.
+  \item[Retire.] Stop all inbound delivery through the alias and preserve received
+  correspondence. Explain that notices and recovery messages will stop arriving.
+  Never reassign the retired address to another member.
+\end{description}
+None introduces a bonded fallback or settles a pending paid request. Replacement
+does not update an external portal automatically. A transition must explicitly
+address portal login, recovery and notices. Outbound composition identifies the
+selected alias; detailed reply continuity still requires design.
+
+\paragraph{Lane actions.}
+Restricting a broad lane preserves only exact already admitted conversations.
+Removing it withdraws its authority for subsequent messages, including existing
+conversations. Replacing it with sender-scoped permission commits withdrawal and
+the selected grants atomically, without grandfathering earlier senders. Other
+independently valid permission remains separate. These actions preserve the
+address, inbox and received copies; they differ from replacing or retiring the
+address. Reopening a lane is explicit and never releases refused or held mail.
+
 \section{Decisions Still Required}
 
-The two permission scopes and CS-MAIL ownership are agreed. The following remain
-open and must not be filled in by borrowing defaults from sender-scoped lanes:
+The participant/route distinction, identity-level blocking, no automatic private
+expiry, separate lane permission, lifecycle actions and held-message direction
+are agreed. Still open are:
 \begin{itemize}
-  \item Lane lifetime, renewal and whether private routes expire automatically.
-  \item Restriction and block scope, including their interaction across aliases.
-  \item Authentication requirements and handling of suspicious or refused mail.
-  \item Replacement and retirement, including portal login, recovery messages,
-  notices and any transition or quarantine period.
-  \item Outbound address selection and continuity of replies and conversations.
-  \item Alias-to-protocol-identity mapping and the grant, storage and wire contracts.
+  \item Replacement transition duration and portal, recovery and notice continuity.
+  \item Detailed outbound selection, reply routing and held-message review/retention.
+  \item Detailed scoped identity-reference and held-message contracts.
   \item Milestone placement, member-management flows and validation scope.
 \end{itemize}
-
-Creating an alias-scoped lane must not be assumed to settle an existing paid
-request. Existing sender-scoped grants and their settlement semantics remain
-unchanged. This document records product direction; it does not assert that the
-current SMTP receiver already admits correspondence through private aliases.
+Do not infer all-alias permission from a sender grant. Alias creation must not
+inherit the pending-request settlement effects of sender-lane management. Existing
+sender-scoped implementation and historical financial outcomes require an explicit
+preservation-checked cutover; validation scope is recorded in the Apple runbook.
 
 \end{document}

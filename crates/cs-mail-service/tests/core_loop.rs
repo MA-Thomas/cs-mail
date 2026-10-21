@@ -18,7 +18,8 @@ use std::sync::{Arc, Barrier};
 
 use cs_mail_application::receipts::ReceivedOutcome;
 use cs_mail_capabilities::{
-    DeclarationAuthorityConstraint, LaneGrant, LaneMode, LaneSubject, RateLimit, SignedLaneGrant,
+    DeclarationAuthorityConstraint, LaneMode, LaneSubject, RateLimit, SenderScopedGrant,
+    SignedLaneGrant,
 };
 use cs_mail_content::{
     ContentBinding, ContentKeyCertificate, EndpointSecretKey, content_key_certificate_digest,
@@ -192,6 +193,7 @@ fn enroll(
         at,
     )
     .unwrap();
+    support::fixture_inbox(deployment, persona, key, &[secret; 32], at).unwrap();
 }
 fn gateway(url: &str, clock: &Clock) -> MemberGateway<Clock> {
     let deployment = PostgresDeployment::connect(url).unwrap();
@@ -398,6 +400,17 @@ impl Loop {
         let document = cs_mail_client::correspondence::compose(vec![
             cs_mail_correspondence::DocumentPart::Text("Hello Bob".into()),
         ])
+        .map(|doc| {
+            doc.with_subject(
+                cs_mail_correspondence::ConversationSubject::new(
+                    "Fixture conversation",
+                    cs_mail_primitives::CanonicalTime(0),
+                    0,
+                    [19; 32],
+                )
+                .unwrap(),
+            )
+        })
         .unwrap();
         let package = cs_mail_client::correspondence::prepare(
             &cs_mail_client::correspondence::EndpointKeys {
@@ -430,6 +443,7 @@ impl Loop {
             RequestId(1),
             ContentRef(content),
             package,
+            cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
         )
         .unwrap();
         let signed = cs_mail_application::requests::documents::SignedRequestDocument {
@@ -496,7 +510,7 @@ impl Loop {
     fn lane(&self, lifetime: u64) -> SignedLaneGrant {
         let handle = self.gateway.address(ALICE, BOB).unwrap().public();
         let now = self.clock.now();
-        let grant = LaneGrant {
+        let grant = SenderScopedGrant {
             id: LaneId(90),
             subject: LaneSubject::Native(cs_mail_privacy::ScopedHandle(
                 *handle.relationship.as_bytes(),
@@ -909,6 +923,17 @@ fn admission_policy_survives_reopening_and_is_checked_at_content_commit() {
         let doc = cs_mail_client::correspondence::compose(vec![
             cs_mail_correspondence::DocumentPart::Text("checked policy".into()),
         ])
+        .map(|doc| {
+            doc.with_subject(
+                cs_mail_correspondence::ConversationSubject::new(
+                    "Fixture conversation",
+                    cs_mail_primitives::CanonicalTime(0),
+                    0,
+                    [19; 32],
+                )
+                .unwrap(),
+            )
+        })
         .unwrap();
         let package = cs_mail_client::correspondence::prepare(
             &cs_mail_client::correspondence::EndpointKeys {
@@ -941,6 +966,7 @@ fn admission_policy_survives_reopening_and_is_checked_at_content_commit() {
             RequestId(1),
             ContentRef(content),
             package,
+            cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
         )
         .unwrap();
         cs_mail_application::requests::documents::SignedRequestDocument {

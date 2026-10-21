@@ -6,6 +6,10 @@ replaces the planned Tauri shell; there is no implemented Tauri application to
 migrate or retain. The first native implementation now lives in
 `apps/cs-mail-apple`; its runbook and current evidence are in that directory’s README.
 
+The [Swift design principles](swift-design-principles.md) guide presentation and
+interaction. Keep routine loading and coordination behind the scenes; surface
+information when it helps a member understand or act.
+
 The [build plan](../cs_mail_build_plan.tex) owns sequencing and milestone exits.
 The [Rust-domain principles](rust-domain-principles.md) and existing product,
 identity, correspondence and consent contracts remain binding.
@@ -39,6 +43,17 @@ local persistence, transport, time and lifecycle services as needed. The exact
 adapter implementation language follows the platform requirement; domain rules
 do not move into Swift or get duplicated at the binding boundary.
 
+Express-lane and address metadata refreshes on entry, on returning to the active
+app, and periodically while those workspaces remain active. One toolbar Refresh
+action targets the current workspace. Routine observation timestamps and separate
+reload controls are not shown. Abandoning a read preserves the active session and
+committed navigation; cancellation of submitted work retains its original Rust
+journal and recovery path. Approach-page refresh preserves unsaved edits and
+requires an explicit choice to discard them if the saved revision has changed.
+Recovery actions appear only for unresolved work. Money remains in explicitly
+labelled simulated units until the contracts supply a currency and scale; Swift
+must not infer either from a numeric settlement-unit identifier.
+
 ## One application, one backend path — 13 October 2026
 
 The member application has no demo mode or parallel preview app. `MemberModel` and
@@ -56,6 +71,113 @@ archives, paired with their matching databases and caches. The original Keychain
 item identity, credential bytes, account/persona association and public keys were
 checked unchanged across the installed update. Swift navigation and all previously
 implemented native workflows now run together in this one account-backed app.
+
+## Personal mailbox — 15 October 2026
+
+The [19 October product decisions](../DOMAIN_MODEL.md#personal-reading-and-organization)
+are implemented by Rust's retained-mail owner. SQLite stores independently encrypted
+copies and per-message index records, addressed by opaque keyed identifiers. Each
+transaction commits affected records and a revision marker together; failure leaves
+durable state unchanged on rollback. Uncertain commit outcomes invalidate the cached
+index and reconcile through the next durable read. Receiving metadata has its own
+encrypted record and is not rewritten for each downloaded copy.
+
+The unlocked session builds an inverted word lookup from encrypted index records
+once, without reading message bodies. Queries select candidate IDs directly;
+paging reads only those copies, with phrase verification and current expiry/removal
+checks before snippets. Readers address individual copies and reuse the unlocked
+index. Swift loads further result pages as they come into view, preserving the
+query and loaded results on reader return. Lock drops the index and transient
+results; a late download cannot restore a locked session's index. No local index
+lock is held across network waits.
+
+The first engine remains a portable Rust word index. It supports case-insensitive
+words and quoted phrases without following references. The 64 MiB bound applies
+to each encrypted record, not the aggregate retained mailbox. Cold opening and
+memory use grow with the index; the separate account cache and receiving-metadata
+snapshots retain their existing bounds. A cloud index and the FTS5/SQLCipher
+comparison remain separate design work. Derived records grant no new authority.
+
+The portable member client owns a separately authenticated personal-mailbox record
+in the same SQLite store as the v4 device cache and v2 draft workspace. Absence means
+the member has not used personal organization on this device. There is one current
+reader, with checked account/persona association, distinct native/external thread
+keys, bounded read identities and checked outgoing command/evidence restoration.
+Format changes use an explicit preservation-checked development conversion; the
+runtime has one current reader and never replaces the credential. A submission transaction now
+commits all three ciphertext records or none; independent personal actions and
+draft saving use the same short local lock without waiting for network work.
+
+Read actions supply exact displayed message IDs. Inbox/Archive/Trash and flags
+are personal choices, with Trash retaining its previous folder for restoration.
+Neither organization nor reading changes communication permission or copy expiry.
+Permanent native copy removal uses the existing conversation-command journal and
+DeleteCopies service contract, retaining exact retry bytes on uncertainty. Swift
+clears open content/search selections when removal begins and reloads retained-copy
+availability; it offers no equivalent external permanent-deletion promise.
+
+Reading projections preserve commit time, stream sequence, access outcome and
+structured document parts. Endpoint search extracts only retained text from that
+same projection, with no reference traversal. A search captures message identities
+for stable bounded paging; its query/scope and Swift's transient results are cleared
+when the session locks. There is no persistent plaintext index. Refresh separates
+observation from mutation recovery and reports incomplete native/external refresh;
+foreground/periodic scheduling belongs to Swift.
+
+Outgoing records retain their exact signed native/external command, originating
+draft revision when present, preparation time and terminal evidence. They share the
+atomic draft/journal boundary. The existing execution journal remains the single
+owner of unresolved mutations. Committed native delivery and external queue
+acceptance have different typed outcomes; relay handoff and provider observations
+remain separate structured facts. Historical submissions before this record was
+introduced are not fabricated. Existing committed messages supply the Sent view.
+
+## Device-local drafts — 15 October 2026
+
+The portable member client owns a private draft workspace, separate from the
+protocol kernel and communication permission. Distinct draft IDs, revisions,
+targets and bodies distinguish native conversations/replies, external mail,
+initial requests and follow-ups. A deterministic workspace transition takes the
+current workspace, an explicit command and time, and returns its complete next
+state. Checked restoration rejects invalid IDs/revisions, mismatched target/body
+shapes, oversized writing and duplicate records. Drafts are device-local; they
+establish neither remote backup nor replacement-device recovery.
+
+The existing v3 encrypted account cache and original Keychain credential remain
+unchanged in format and association. A separate v1 authenticated ciphertext
+workspace uses the same credential's cache key with a distinct encryption context.
+The device-store port adds independent workspace read/replacement and an atomic
+cache/workspace submission transaction. SQLite stores opaque ciphertext in two
+rows/tables, serializes writes and rolls back both records if either write fails.
+There is no predecessor-workspace reader or account reenrollment.
+
+Local draft calls have a separate short Rust lock and bypass Swift's serialized
+network worker. Network snapshots write only the account-cache row, so they cannot
+overwrite later writing. Draft updates check an expected revision. Submission
+rechecks that exact revision after preparation and atomically moves the writing
+out of the editable set while storing the original signed operation. No provider
+I/O occurs inside that transaction. The submitted draft remains encrypted until
+the journal resolves: success removes it, a definite refusal restores a newer
+editable revision, and uncertainty retains the original operation. Request
+cancellation and funding reconciliation continue through their existing owner.
+Source selections retain exact version/coordinates/mode and are rechecked before
+submission; previews and unrelated opened sources never enter the outgoing
+package. Saving a draft never creates a charge or disclosure-consent grant.
+
+Swift presents automatic local saving, explicit save/close and discard, a Drafts
+list, save failures/retry, and Rust-projected address/text-limit issues. New
+external disclosure consent is requested afresh, rather than restored from a
+saved checkbox. Initial-request drafts are keyed to the selected approach class;
+charge authorization still names the exact reviewed signed request quote.
+The current cutover uses schema 43, device cache v4, workspace v2, document hash v3,
+correspondence-command v5, request-document v3 and external-command v2. Older populated deployments
+require explicit offline conversion; runtime fallback readers are absent.
+
+New native-conversation and initial-request drafts include a subject. Rust supplies
+a local date/time default for blank input, using the supplied timezone offset and an
+alphabetic month. The subject is carried inside every encrypted native document;
+a salted commitment binds creation, later messages and exact retries to the same
+subject. Replies and follow-ups inherit it. External mail remains separate.
 
 ## Swift presentation ownership
 
@@ -109,9 +231,27 @@ edited. iOS language settings are configuration, not device validation.
 The Swift presentation has six top-level areas, a reactive content list and a main
 space. `MemberDestination` owns both the area and its detail route; a correspondence
 route retains its originating area. `EditorialNavigationShell` owns transient
-pointer/focus preview state. The preview and content list use one
-`EditorialInboxView` implementation, with callbacks for ordinary navigation.
-Search and contact selection do not establish eligibility or sending authority.
+pointer/focus preview state. As of 16 October, every area uses its popup for
+device-local layout controls. Home chooses cards/list within the existing permission
+sections; Comms orders receiving-inbox/mailbox sections; Relationships chooses
+column-B grouping and map/list overview; Express lanes orders alias/sender sections;
+Economics orders records by date/name; Notes adjusts the current page's reading
+width (writing is still deferred). Persistent column B owns receiving scope,
+mailbox selection, searchable relationship groups, lane filters and financial
+record direction/period filters. `MailboxNavigation` remains the one mailbox
+presentation owner; detail round trips retain its query, selection and anchors.
+Relationships keeps its organizer while aliases are managed in the main space.
+The main-space owner supplies history return controls for details without their
+own, including alias permission views and nested inboxes. Navigation checkpoints
+capture mailbox context (query, folder, sorting, selection and stable anchors),
+organizer filters and alias detail selection alongside the existing receiving
+scope and correspondence focus. Returning restores that snapshot rather than
+relying on intervening screens to leave mutable presentation state untouched.
+The old multi-area `EditorialInboxView` is removed; the lane renderer is now
+`EditorialLaneOrganizer`, with member-specific organizers in the Apple adapter.
+These use Rust-supplied facts and do not decide eligibility, financial outcomes
+or sending authority. Saved searches, broader finance and Notes remain separate
+work.
 
 The hover correction gives pointer-opened and explicitly keyboard-opened previews
 distinct typed sessions. One shell pointer observer projects the hovered destination
@@ -119,6 +259,14 @@ and popup presence from measured visible regions in one coordinate space. Paddin
 has no hover authority. Incidental focus cannot overwrite or retain a pointer
 preview; explicit keyboard previews retain their own focus. These are presentation
 lifecycles, with no server command or journal effect.
+
+Every area has an explicit configuration session: clicking its icon opens
+the workspace and pins the controls; clicking it within that workspace preserves
+the current detail and search. Escape, Close or an outside content click dismisses
+the controls. Layout changes do not navigate. Non-sensitive grouping/overview
+choices persist in device-local AppStorage and are intentionally not rolled back
+by navigation history. Recent ordering uses available message/request timestamps,
+with name and sender identity tie-breakers; permission remains a Rust projection.
 
 Main-space portal buttons use a separate perimeter style over the supplied
 `EditorialBoundary` shape. Hover strengthens its stroke without filling the
@@ -192,14 +340,42 @@ separate decision.
 
 ## First implementation slice and validation
 
-The [alias product decision](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
-of 14 October 2026 adds CS-MAIL-owned private/public alias creation and management
-to member-application scope. Private creation automatically opens an alias-scoped
-lane; public creation grants no lane and retains existing sender-scoped permission
-and bonded requests. These workflows await design and implementation. Milestone
-placement, lifecycle handling and outbound address selection are not decided;
-the existing first-slice evidence below does not cover them. Phoros will consume
-the infrastructure later rather than own its creation or management rules.
+**Alias creation refinement (2026-10-14).** Each member
+has one protocol identity, one current public-facing alias and multiple private
+aliases. Private creation asks for a **purpose/description**; Rust generates the
+unpredictable email address, which Swift presents for copying. The description is
+owner-visible metadata and is not disclosed unless explicitly shared. Public
+creation asks for a member-chosen email address. Rust enforces the single-current
+public-alias rule; replacement preserves permanent reservation and the previous
+alias's explicit transition. This replaces manual private-address entry in the
+native management flow. The owner-visible list shows purpose/description above
+the generated address; Copy address copies only that address. Confirmed creation
+navigates using the alias ID in the verified Rust outcome, not a guessed address
+or list difference. Exact-operation recovery retains the original signed request.
+This management flow does not establish alias mail delivery or publication.
+
+An alias is a receiving address; express-lane permission is separately granted.
+Private creation collects purpose/description and presents Rust's generated address,
+without implying lane authority. Pairing controls must explicitly offer alias-scoped
+permission (for referred healthcare senders) or sender-scoped permission (for selected
+authenticated Amazon domains), and present the named receiving scope. Changing a
+lane is distinct from address restriction, replacement or retirement. Rust owns the
+authorization and complete atomic effects; Swift collects intent and presents the
+verified result. Private aliases have no bonded fallback; unauthorized senders may
+use the public approach route. Local alias management, receiving, separate permission revisions and these native
+controls share the existing signed command/recovery contract. The
+[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) owns the rules;
+Phoros will later consume CS-MAIL's infrastructure.
+
+**Further alias clarification (2026-10-14; implementation pending).** One
+participant protocol identity may control multiple alias routes without public
+linkage. Sender-identity blocks apply across all receiving aliases. Private routes
+have no automatic expiry and offer Restrict, Replace, Retire. Suspicious or
+insufficiently authenticated private-alias mail is held for review without ongoing
+permission or payment. SMTP envelope recipients and authenticated native targets
+establish receiving-route evidence. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+owns these rules and remaining delivery, transition, reply and held-message contracts;
+implementation and validation records below do not establish this cutover.
 
 Start with one local member journey: browser sign-in and first-device enrollment, reopen it,
 synchronize a request, read its content, and accept or reject it through the
@@ -410,3 +586,54 @@ operation before fetching updated views, preventing a failed refresh from inviti
 a fresh duplicate. Swift presents external conversations under Communications with
 a popup composer and explicit consent/permission confirmations. It does not grant
 permission, authenticate email, or derive delivery success.
+
+
+## Receiving inbox projections — 16 October 2026
+
+Every native message record requires a receiving assignment. A checked
+`AdmittedDelivery` binds that record to its encrypted package; the delivery effect
+also requires the conversation update and carries any allowance consumption.
+Requests sign their target alias. Ordinary native sends sign a public receiving
+alias; alias-lane sends use their separately authorized target. External received
+messages require assignment data in their enum variant, while outgoing copies and
+unadmitted incoming content have distinct representations. External conversations
+fix the member's receiving alias at creation for subsequent reply-token delivery.
+
+PostgreSQL enforces alias ownership and conversation participants. Receiving history
+is a view of the message records, with no independently writable delivery-route
+table. Historical assignment provenance is distinct from live permission; migration
+assignments are excluded from admission-derived alias permissions. Explicit
+development migrations may assign placeholders, preserving the original evidence;
+there is no runtime allowance for unassigned received correspondence.
+
+The member client derives inbox views and alias-search keys from those same records.
+Encrypted metadata retains the owned alias catalog, not a second routing list.
+Lock clears the active catalog and search session; unlock restores them locally.
+Unavailable alias metadata cannot produce a workspace that silently places received
+messages only in All inboxes. Search still uses its session index and targeted copy
+reads, without reopening the account snapshot for each result page.
+
+A mixed-alias conversation retains its scoped native/external conversation key.
+Alias projections contain only matching message IDs, unread counts and activity;
+search snapshots bind both query and inbox scope. The Rust personal-state owner
+rejects read/unread identities outside that scope. Swift shows those messages and
+can explicitly open the full conversation. Inbox selection and origin are part of
+the navigation checkpoint. Existing conversation-wide organization remains in
+All inboxes; per-alias organization and sending-address selection are not inferred.
+
+Comms column B selects All inboxes, active alias inboxes or historical alias inboxes.
+Descriptions stay owner-only. Express lanes separates sender lanes from private
+alias lanes and exposes only explicitly recorded receiving scope for sender lanes.
+The native alias-send API requires an explicit known participant and alias target;
+it is not an alias directory or a privacy-preserving address resolver.
+
+The standalone MX host may be provisioned with an explicit `alias_registration`
+capability carrying the member host's same protected relationship/principal
+derivation material. It can then open an Unknown guest relationship for a sealed,
+authenticated private-alias arrival; this creates neither an invitation, standing
+permission, charge nor outbound disclosure consent. One shared guest-pair creation
+path retains existing history linking. The host still has no account/provider
+signing, relay-decryption or migration authority. Without that optional capability,
+a new guest pair is unavailable rather than derived under a different secret.
+Alias-aware public approach links and detailed held-mail/reply contracts remain
+separate from this receiving-inbox implementation.

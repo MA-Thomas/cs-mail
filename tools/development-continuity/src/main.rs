@@ -91,6 +91,10 @@ struct MemoryStore {
     cache_path: Option<std::path::PathBuf>,
 }
 impl cs_mail_client::member::DeviceStore for MemoryStore {
+    fn retained_state(&self)->Result<(u64,Option<Vec<u8>>),cs_mail_client::member::Error>{Ok((0,None))}
+    fn retained_indexes(&self,_:Option<cs_mail_client::member::RetainedRecordId>,_:u16)->Result<Vec<cs_mail_client::member::RetainedIndexRow>,cs_mail_client::member::Error>{Ok(Vec::new())}
+    fn retained_copy(&self,_:cs_mail_client::member::RetainedRecordId)->Result<Option<Vec<u8>>,cs_mail_client::member::Error>{Err(cs_mail_client::member::Error::StorageUnavailable)}
+    fn commit_retained(&self,_:cs_mail_client::member::RetainedCommit)->Result<(),cs_mail_client::member::Error>{Err(cs_mail_client::member::Error::StorageUnavailable)}
     fn load_secret(&self) -> std::result::Result<Vec<u8>, cs_mail_client::member::Error> {
         Ok(self.secret.to_vec())
     }
@@ -108,6 +112,12 @@ impl cs_mail_client::member::DeviceStore for MemoryStore {
         *self.cache.lock().unwrap() = bytes.to_vec();
         Ok(())
     }
+    fn load_workspace(&self) -> std::result::Result<Option<Vec<u8>>, cs_mail_client::member::Error> { Ok(None) }
+    fn save_workspace(&self, _: &[u8]) -> std::result::Result<(), cs_mail_client::member::Error> { Err(cs_mail_client::member::Error::StorageUnavailable) }
+    fn load_personal(&self) -> std::result::Result<Option<Vec<u8>>, cs_mail_client::member::Error> { Ok(None) }
+    fn save_personal(&self, _: &[u8]) -> std::result::Result<(), cs_mail_client::member::Error> { Err(cs_mail_client::member::Error::StorageUnavailable) }
+    fn save_submission(&self, _: &[u8], _: &[u8], _: &[u8]) -> std::result::Result<(), cs_mail_client::member::Error> { Err(cs_mail_client::member::Error::StorageUnavailable) }
+
 }
 fn main() {
     if let Err(error) = run() {

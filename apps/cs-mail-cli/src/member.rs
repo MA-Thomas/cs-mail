@@ -6,7 +6,8 @@ use crate::state::{JournalEntry, MemberState, Store};
 use cs_mail_application::accounts::EnrollmentIdentifiers;
 use cs_mail_application::members::{AccountView, MemberAnswer, RelationshipView, RequestView};
 use cs_mail_capabilities::{
-    DeclarationAuthorityConstraint, LaneGrant, LaneMode, LaneSubject, RateLimit, SignedLaneGrant,
+    DeclarationAuthorityConstraint, LaneMode, LaneSubject, RateLimit, SenderScopedGrant,
+    SignedLaneGrant,
 };
 use cs_mail_content::{
     ContentBinding, ContentKeyCertificate, EndpointPublicKey, EndpointSecretKey,
@@ -741,6 +742,7 @@ impl Member {
             cs_mail_correspondence::DocumentPart::Text(message.to_owned()),
         ])
         .map_err(|e| e.to_string())?;
+        let document = document.with_subject(self.native_subject(ids.conversation)?);
         let package = cs_mail_client::correspondence::prepare(
             &cs_mail_client::correspondence::EndpointKeys {
                 owner: persona,
@@ -772,6 +774,7 @@ impl Member {
             ids.request,
             ids.content,
             package,
+            self.native_receiving_alias(ProtocolIdentity(to))?,
         )
         .map_err(|e| e.to_string())?;
         let packet = cs_mail_application::requests::documents::SignedRequestDocument {
@@ -1208,7 +1211,7 @@ impl Member {
             &step,
             "v1/lanes",
             |_| {
-                let grant = LaneGrant {
+                let grant = SenderScopedGrant {
                     id: LaneId(identifier()?),
                     // The lane is bound to this relationship's own reference.
                     subject: if guest {

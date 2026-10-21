@@ -298,3 +298,16 @@ pub async fn correspondence(
     .await
     .map(Json)
 }
+
+pub async fn receiving_alias(
+    State(state): State<AppState>,
+    Path(persona): Path<u128>,
+) -> Result<Json<Value>, ApiError> {
+    let alias = run(&state, move |g| {
+        g.public_receiving_alias(ProtocolIdentity(persona))
+            .map_err(refused)
+    })
+    .await?
+    .ok_or_else(|| ApiError::from_status(StatusCode::NOT_FOUND, "no-receiving-address"))?;
+    json(&alias)
+}

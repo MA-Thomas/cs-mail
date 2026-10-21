@@ -4,7 +4,7 @@
 //!
 //! Relationship commands themselves are decided by the protocol kernel; this module only
 //! locates relationships and authorizes and shapes what surrounds them.
-use cs_mail_capabilities::Lane;
+use cs_mail_capabilities::SenderScopedLane;
 use cs_mail_finance::RequestFinancialView;
 use cs_mail_primitives::{
     CanonicalTime, ContentScopeRef, PrincipalRef, ProtocolIdentity, RelationshipRef,
@@ -241,7 +241,7 @@ pub struct RelationshipView {
     /// The version a recipient decision must name.
     pub version: RelationshipVersion,
     pub followup_policy: FollowupPolicy,
-    pub lane: Option<Lane>,
+    pub lane: Option<SenderScopedLane>,
     pub requests: Vec<RequestView>,
     pub external_conversations: Vec<cs_mail_correspondence::ConversationId>,
 }

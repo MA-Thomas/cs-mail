@@ -15,12 +15,34 @@ mail remain later work. Unsupported content/authentication is explicitly refused
 
 ## Addresses and supported email
 
-The [2026-10-14 alias design](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
-adds private aliases with automatic alias-scoped lanes and no bonded route;
-public-facing aliases retain the existing permission/request process. This is
-agreed product scope, not implemented receiver behavior. Its detailed admission
-and lifecycle policies remain open. The address forms, sender checks and
-request-page prompts documented here describe the current sender-scoped paths.
+An alias is a receiving address; express-lane permission is granted separately.
+Private-alias creation grants no lane. A healthcare alias may be explicitly paired
+with an alias-scoped lane; an Amazon alias may instead use sender-scoped permission
+for selected authenticated domains. Private aliases have no bonded route;
+unauthorized senders may use the public approach route. The
+[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) owns these rules.
+Alias management, receiving and explicit lane pairing are implemented locally.
+The earlier transport experiments below retain their stated scope; current
+permission-transition validation is recorded in the Apple runbook.
+
+The receiver resolves the accepted SMTP envelope destination and commits receiving
+alias and permission evidence with delivery. Private-alias admission checks its explicit receiving permission. Domain-scoped
+grants consume authenticated domain evidence; mailbox identity remains distinct
+for correspondence and blocks. Generated identity/conversation routes
+below remain distinct, without inferred alias membership. Alias-aware public
+approach links and held-message release remain unfinished.
+
+**Further alias clarification (2026-10-14).** One
+participant protocol identity may control multiple alias routes without public
+linkage. Sender-identity blocks apply across all receiving aliases. Private routes
+have no automatic expiry and offer Restrict, Replace, Retire. Suspicious or
+insufficiently authenticated private-alias mail is held for review without ongoing
+permission or payment. SMTP envelope recipients and authenticated native targets
+establish receiving-route evidence. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+owns these rules. Detailed held-message release, outbound/reply addressing and
+alias-aware public publications remain separate work. Failed or insufficient
+transport authentication is still explicitly refused by this receiver; this pass
+does not implement a held-mail inbox.
 
 A conversation's address is `reply+<32 lowercase hexadecimal conversation ID>@<mail_domain>`.
 For example, conversation 7001 uses
@@ -60,10 +82,10 @@ remains separate. Native upload paths cannot claim SMTP authority.
 
 ## Local configuration and startup
 
-Migrate/bootstrap through `cs-maild` first. The receiver opens schema 30 without
-running migrations and refuses a different schema version. Use a fresh development
-database for this cutover; the previous synthetic receiver's retry digest semantics
-were replaced, without a fallback reader.
+Migrate/bootstrap through `cs-maild` first. The receiver opens the exact current
+schema (40) without running migrations and refuses a different schema version.
+The original owner uses a preservation-checked copy; no fallback reader or
+credential replacement is introduced.
 
 ```json
 {
@@ -79,8 +101,25 @@ were replaced, without a fallback reader.
 
 The certificate file contains the PEM leaf certificate followed by intermediates;
 the key is PEM. The replay secret is a dedicated, nonzero 32-byte JSON array. Keep
-these files protected. No member signing, relationship derivation, or relay-decryption
-secrets are supplied to this process. The checked-in certificates/private key under
+these files protected. No member/account signing or relay-decryption secrets are
+supplied to this process. To open previously unknown authenticated guests on private
+aliases, provision the optional registration capability explicitly:
+
+```json
+"alias_registration": {
+  "relationship_secret_file": "/secure/member-relationship.json",
+  "principal_secret_file": "/secure/member-principal.json"
+}
+```
+
+These must be the same protected derivation keys used by the member host; never
+generate substitute keys. Registration uses the same guest-pair/history-linking
+owner as existing external conversations and grants no ongoing relationship or
+outbound disclosure consent. Without this capability, a missing guest pair is
+unavailable, not silently created under a different identity mapping. Admission
+still rechecks the exact alias, current lifecycle and identity-level blocks.
+
+The checked-in certificates/private key under
 `cs-mail-test-support/fixtures` are public test material, never deployment credentials.
 
 ```sh

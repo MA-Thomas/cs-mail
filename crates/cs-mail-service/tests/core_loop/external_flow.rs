@@ -48,7 +48,7 @@ impl External {
         Repository {
             accounts: deployment.accounts(move || clock.now()),
             deployment: self.base.gateway.record().clone(),
-            deriver: cs_mail_privacy::PrivacyDeriver::new([5; 32], [6; 32]),
+            deriver: cs_mail_privacy::PrivacyDeriver::new([5; 32], [6; 32]).into(),
             relay_key: self.relay,
         }
     }
@@ -87,6 +87,7 @@ impl External {
             id,
             id,
             app::Command::Start {
+                receiving_alias: cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
                 mailbox: self.mailbox.clone(),
                 disclose_to_external_mail: true,
                 message: Box::new(support::external::text(
@@ -107,7 +108,7 @@ impl External {
     fn grant_lane(&self, id: u128) {
         let p = self.preparation();
         let at = self.base.clock.now();
-        let grant = LaneGrant {
+        let grant = SenderScopedGrant {
             id: LaneId(id),
             subject: LaneSubject::GuestMailbox(p.relationship.sender),
             sender: p.relationship.sender,
@@ -452,6 +453,14 @@ fn failed_atomic_start_and_lost_response_retries_do_not_duplicate_delivery() {
     db.execute("DELETE FROM cs_conversation_routes WHERE id='500'", &[])
         .unwrap();
     let first = app::Service(&f.repository()).handle(&signed).unwrap();
+    // Missing direction cannot bypass the received-assignment constraint through SQL NULL.
+    assert!(
+        db.execute(
+            "UPDATE cs_external_messages SET record=record-'direction' WHERE id='500'",
+            &[]
+        )
+        .is_err()
+    );
     assert_eq!(
         first,
         app::Service(&f.repository()).handle(&signed).unwrap()

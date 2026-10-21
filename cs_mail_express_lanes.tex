@@ -45,26 +45,44 @@ participants; they do not imply organizational C-SQD accounts. The
 
 \section{Two Forms of Express-Lane Permission}
 
-The product distinguishes \textbf{alias-scoped express lanes} from
-\textbf{sender-scoped express lanes}. Creating a private alias automatically
-opens a lane through that receiving address, with no bonded route. Creating a
-public-facing alias grants no automatic lane; existing standing permission,
-sender-scoped grants and bonded-request rules apply.
+An alias is a receiving address; an express lane is separately granted permission.
+Private-alias creation grants no lane. The member may pair a healthcare alias with
+an \emph{alias-scoped express lane}, allowing authenticated new correspondents
+who receive the address, or an Amazon alias with a \emph{sender-scoped express
+lane} restricted to selected authenticated legacy-domain subjects. Possession of
+the latter address alone grants no permission. Grant scope names the receiving
+alias; it never expands implicitly to other aliases.
 
-For example, a member gives their hospital a private alias. A previously unknown
-specialist who receives it through that relationship can write through its lane,
-subject to admission policy, without a separate sender grant. That permission
-does not extend to the member's public-facing or other private aliases. The route
-and sender-authentication evidence remain separate: the address does not prove
-organizational identity or who disclosed it.
+Private aliases have no bonded route. Unauthorized senders may approach through
+the public request route under its existing rules. Public-alias creation also
+grants no lane. Standing permission and invitations remain separate authorities.
+Neither address creation nor lane pairing changes existing request settlements.
 
-Alias infrastructure is agreed design awaiting implementation. CS-MAIL owns it;
-Phoros Account will use it later. See the
-\href{cs_mail_aliases_and_express_lanes.tex}{aliases and express lanes memo} for
-motivation and the \href{DOMAIN_MODEL.md}{domain model} for rules and open decisions.
-The remaining sections explain the existing \emph{sender-scoped} model. Their
-domain matching, lifetime and issuance rules must not be assumed to govern
-alias-scoped lanes. Private-alias restriction or retirement has no bonded fallback.
+The remaining sections describe sender-scoped machinery, including existing
+legacy-domain matching. Its lifetime and renewal rules do not become implicit
+alias-lane policy. Alias management and receiving are locally implemented;
+separate lane pairing and changes use signed commands with exact-operation recovery. CS-MAIL owns the
+infrastructure, with Phoros as a future consumer. The
+\href{DOMAIN_MODEL.md}{domain model} owns rules and open decisions; the
+\href{cs_mail_aliases_and_express_lanes.tex}{alias memo} explains the examples.
+
+The agreed participant/route model allows one protocol identity to control
+multiple aliases without automatically revealing their association. Blocking a
+sender protocol identity overrides permission across every recipient alias;
+external mailbox evidence does not establish equivalence between different
+mailboxes. Private aliases have no automatic expiry. Restrict stops new
+correspondents while preserving authorized existing conversations; Replace creates
+a new route with an explicit transition and no automatic transfer of unknown-sender
+admission; Retire stops all inbound delivery while preserving history. Retired
+addresses are never reassigned to another member. Suspicious or insufficiently
+authenticated private-alias mail is held for explicit review without ongoing
+permission or payment. SMTP envelope recipients and authenticated native targets
+establish route evidence, retained with each admitted message's permission basis.
+Restriction preserves exact admitted conversations; sender and standing grants
+default to one receiving alias, with explicit selection of several permitted.
+New aliases never expand grants. Transition, reply and held-message contracts
+remain open in the domain model. This design
+awaits implementation and does not change historical settlements.
 
 \section{A First Week with a New Bank Account}
 

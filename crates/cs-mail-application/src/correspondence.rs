@@ -36,6 +36,7 @@ pub enum Command {
         limit: u16,
     },
     Create {
+        subject: cs_mail_correspondence::SubjectCommitment,
         id: ConversationId,
         other: ProtocolIdentity,
     },
@@ -50,7 +51,19 @@ pub enum Command {
     Assess {
         manifest: MessageManifest,
     },
-    Send(Box<PreparedMessage>),
+    Send {
+        alias: cs_mail_primitives::AliasId,
+        package: Box<PreparedMessage>,
+    },
+    /// Explicit receiving route, authenticated by this command. May create the
+    /// conversation atomically; it never creates a standing relationship.
+    SendToAlias {
+        alias: cs_mail_primitives::AliasId,
+        package: Box<PreparedMessage>,
+    },
+    ReceivingRoutes {
+        messages: Vec<MessageId>,
+    },
     Fetch {
         message: MessageId,
     },
@@ -65,6 +78,7 @@ pub enum Command {
 // precedes `kind`. Decode the envelope once, then each typed payload directly.
 // Object order is transport syntax; the single Command representation owns meaning.
 impl<'de> Deserialize<'de> for Command {
+    #[allow(clippy::too_many_lines)] // One strict tagged transport decoder, preserving u128 payloads.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -81,6 +95,7 @@ impl<'de> Deserialize<'de> for Command {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Create {
+            subject: cs_mail_correspondence::SubjectCommitment,
             id: ConversationId,
             other: ProtocolIdentity,
         }
@@ -128,6 +143,7 @@ impl<'de> Deserialize<'de> for Command {
             "Create" => {
                 let p: Create = payload(input.data)?;
                 Ok(Self::Create {
+                    subject: p.subject,
                     id: p.id,
                     other: p.other,
                 })
@@ -150,7 +166,37 @@ impl<'de> Deserialize<'de> for Command {
                     manifest: p.manifest,
                 })
             }
-            "Send" => Ok(Self::Send(payload(input.data)?)),
+            "Send" | "SendToAlias" => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Routed {
+                    alias: cs_mail_primitives::AliasId,
+                    package: Box<PreparedMessage>,
+                }
+                let p: Routed = payload(input.data)?;
+                Ok(if input.kind == "Send" {
+                    Self::Send {
+                        alias: p.alias,
+                        package: p.package,
+                    }
+                } else {
+                    Self::SendToAlias {
+                        alias: p.alias,
+                        package: p.package,
+                    }
+                })
+            }
+            "ReceivingRoutes" => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Routes {
+                    messages: Vec<MessageId>,
+                }
+                let p: Routes = payload(input.data)?;
+                Ok(Self::ReceivingRoutes {
+                    messages: p.messages,
+                })
+            }
             "Fetch" => {
                 let p: Fetch = payload(input.data)?;
                 Ok(Self::Fetch { message: p.message })
@@ -175,7 +221,9 @@ impl Command {
             | Self::Policy { id }
             | Self::DeleteCopies { id } => Some(*id),
             Self::Assess { manifest } => Some(manifest.conversation()),
-            Self::Send(p) => Some(p.manifest.conversation()),
+            Self::Send { package: p, .. } | Self::SendToAlias { package: p, .. } => {
+                Some(p.manifest.conversation())
+            }
             _ => None,
         }
     }
@@ -188,7 +236,7 @@ impl Command {
                 .iter()
                 .map(|s| s.selection().message())
                 .collect(),
-            Self::Send(p) => p
+            Self::Send { package: p, .. } | Self::SendToAlias { package: p, .. } => p
                 .manifest
                 .sources()
                 .iter()
@@ -210,7 +258,9 @@ impl Command {
                 expected_revision: *revision,
                 action: *action,
             }),
-            Self::Send(p) => Some(AuditAction::Delivered(p.manifest.message())),
+            Self::Send { package: p, .. } | Self::SendToAlias { package: p, .. } => {
+                Some(AuditAction::Delivered(p.manifest.message()))
+            }
             Self::DeleteCopies { id } => Some(AuditAction::CopiesDeleted(*id)),
             _ => None,
         }
@@ -238,7 +288,7 @@ impl SignedRequest {
             return Err(CorrespondenceError::Invalid);
         }
         serde_json::to_vec(&(
-            "cs-mail/correspondence-command/v3",
+            "cs-mail/correspondence-command/v5",
             &self.product,
             self.account,
             self.persona,
@@ -279,12 +329,72 @@ impl SignedRequest {
 /// Headers survive copy deletion for provenance and current-policy evaluation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MessageRecord {
+pub struct MessageRecordFields {
+    pub receiving: crate::aliases::DeliveredRoute,
     pub sender_key: cs_mail_content::EndpointPublicKey,
     pub manifest: MessageManifest,
     pub author: ProtocolIdentity,
     pub admission: cs_mail_protocol::AdmissionBasis,
     pub committed_at: CanonicalTime,
+}
+/// A durable native message always carries its receiving assignment. Header fields
+/// are readable through Deref, but the validated record cannot be mutated in place.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "MessageRecordFields", into = "MessageRecordFields")]
+pub struct MessageRecord(MessageRecordFields);
+impl MessageRecord {
+    /// # Errors
+    /// Rejects a receiving assignment for another message, sender, transport or time.
+    pub fn new(fields: MessageRecordFields) -> Result<Self, CorrespondenceError> {
+        use crate::aliases::{ReceivingProvenance, RouteBasis};
+        let r = &fields.receiving;
+        let basis_matches = match r.provenance() {
+            ReceivingProvenance::Native { admission } => *admission == fields.admission,
+            ReceivingProvenance::Request { request } => matches!(fields.admission,
+                cs_mail_protocol::AdmissionBasis::InitialRequest { request: id }
+                | cs_mail_protocol::AdmissionBasis::RequestFollowup { request: id, .. } if id == *request),
+            ReceivingProvenance::DevelopmentAssignment { .. } => true,
+            ReceivingProvenance::AliasPermission(basis) => match basis {
+                RouteBasis::Standing { version } => matches!(fields.admission,
+                    cs_mail_protocol::AdmissionBasis::AcceptedRelationship { version: v } if v == *version),
+                RouteBasis::SenderLane { id, version }
+                | RouteBasis::PairedSender { id, version, .. } => matches!(fields.admission,
+                    cs_mail_protocol::AdmissionBasis::ExpressLane { lane, version: v } if lane == *id && v == *version),
+                RouteBasis::AliasLane {
+                    permission_revision,
+                } => matches!(fields.admission,
+                    cs_mail_protocol::AdmissionBasis::AliasLane { alias, revision } if alias == r.alias() && revision == permission_revision.value()),
+            },
+            ReceivingProvenance::ConversationReply => false,
+        };
+        if !basis_matches
+            || r.transport() != crate::aliases::DeliveryTransport::Native
+            || r.message() != fields.manifest.message()
+            || r.conversation() != fields.manifest.conversation()
+            || r.sender() != fields.author
+            || r.at() != fields.committed_at
+        {
+            return Err(CorrespondenceError::Invalid);
+        }
+        Ok(Self(fields))
+    }
+}
+impl TryFrom<MessageRecordFields> for MessageRecord {
+    type Error = CorrespondenceError;
+    fn try_from(fields: MessageRecordFields) -> Result<Self, Self::Error> {
+        Self::new(fields)
+    }
+}
+impl From<MessageRecord> for MessageRecordFields {
+    fn from(record: MessageRecord) -> Self {
+        record.0
+    }
+}
+impl std::ops::Deref for MessageRecord {
+    type Target = MessageRecordFields;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SourceState {
@@ -305,6 +415,10 @@ pub struct MessageView {
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Response {
+    ReceivingRoutes {
+        routes: Vec<crate::aliases::DeliveredRoute>,
+        sender_scopes: Vec<crate::aliases::SenderScopeRecord>,
+    },
     /// A durable, terminal result for an authenticated mutation. Exact replay
     /// retains this result even if permission subsequently changes.
     Refused {
@@ -346,24 +460,104 @@ pub struct Receipt {
     /// Historical evidence, never authority for a subsequent reuse operation.
     pub policy_revisions: BTreeMap<ConversationId, u64>,
 }
+pub struct RoutedContext {
+    pub alias: cs_mail_accounts::aliases::Alias,
+    pub sender_scope: Option<crate::aliases::SenderRouteScope>,
+    pub recipient_active: bool,
+    pub sender_billing: cs_mail_billing::BillingAccount,
+    pub recipient_billing: cs_mail_billing::BillingAccount,
+}
 pub struct Context {
+    pub routed: Option<RoutedContext>,
+    pub receiving_routes: Vec<crate::aliases::DeliveredRoute>,
+    pub sender_scopes: Vec<crate::aliases::SenderScopeRecord>,
     pub receiver_contact: Option<Relationship>,
     pub mailbox: Vec<(u64, MessageRecord, CanonicalTime)>,
     pub authority: AccountState,
     pub custody_key: Option<cs_mail_content::EndpointPublicKey>,
     pub contact: Option<Relationship>,
-    pub lane: Option<cs_mail_capabilities::Lane>,
+    pub lane: Option<cs_mail_capabilities::SenderScopedLane>,
     pub conversations: BTreeMap<ConversationId, Conversation>,
     pub messages: BTreeMap<MessageId, MessageRecord>,
     pub retained: BTreeMap<(MessageId, ProtocolIdentity), CanonicalTime>,
     pub fetched_copy: Option<EncryptedContentRecord>,
     pub prior: Option<Receipt>,
 }
+/// The only native delivery effect: content and receiving assignment cannot separate.
+pub struct AdmittedDelivery {
+    record: MessageRecord,
+    package: Box<PreparedMessage>,
+}
+impl AdmittedDelivery {
+    /// # Errors
+    /// Rejects independently substituted headers, copies or participants.
+    pub fn new(
+        record: MessageRecord,
+        package: Box<PreparedMessage>,
+    ) -> Result<Self, CorrespondenceError> {
+        if record.manifest != package.manifest
+            || record.author != package.sender_copy.binding.sender
+            || record.receiving.recipient() != package.recipient_copy.binding.recipient
+            || record.author != package.recipient_copy.binding.sender
+            || record.sender_key != package.sender_recovery.sender
+        {
+            return Err(CorrespondenceError::Invalid);
+        }
+        Ok(Self { record, package })
+    }
+    pub fn record(&self) -> &MessageRecord {
+        &self.record
+    }
+    pub fn package(&self) -> &PreparedMessage {
+        &self.package
+    }
+    pub fn into_parts(self) -> (MessageRecord, Box<PreparedMessage>) {
+        (self.record, self.package)
+    }
+}
+pub struct DeliveryTransition {
+    conversation: Conversation,
+    delivery: AdmittedDelivery,
+    lane: Option<cs_mail_capabilities::SenderScopedLane>,
+}
+impl DeliveryTransition {
+    fn new(
+        conversation: Conversation,
+        delivery: AdmittedDelivery,
+        lane: Option<cs_mail_capabilities::SenderScopedLane>,
+    ) -> Result<Self, CorrespondenceError> {
+        let record = delivery.record();
+        if conversation.id() != record.manifest.conversation()
+            || conversation.scope().other(record.author)? != record.receiving.recipient()
+        {
+            return Err(CorrespondenceError::Invalid);
+        }
+        Ok(Self {
+            conversation,
+            delivery,
+            lane,
+        })
+    }
+    pub fn into_parts(
+        self,
+    ) -> (
+        Conversation,
+        AdmittedDelivery,
+        Option<cs_mail_capabilities::SenderScopedLane>,
+    ) {
+        (self.conversation, self.delivery, self.lane)
+    }
+}
+/// Each alternative carries its complete consequence. Allowance consumption cannot
+/// be expressed independently of the delivery that consumed it.
+pub enum Change {
+    Conversation(Conversation),
+    Delivery(Box<DeliveryTransition>),
+    DeleteCopies(ConversationId),
+    Refused,
+}
 pub struct Effects {
-    pub lane: Option<cs_mail_capabilities::Lane>,
-    pub conversation: Option<Conversation>,
-    pub delivery: Option<(MessageRecord, Box<PreparedMessage>)>,
-    pub delete_copies: Option<ConversationId>,
+    pub change: Change,
     pub receipt: Receipt,
 }
 pub struct Decision {
@@ -671,7 +865,10 @@ fn replay(
                 Command::Create { id, .. } | Command::ChangePolicy { id, .. },
                 Response::Conversation(c),
             ) => c.id() == *id && c.scope().contains(request.persona),
-            (Command::Send(p), Response::Committed(id)) => p.manifest.message() == *id,
+            (
+                Command::Send { package: p, .. } | Command::SendToAlias { package: p, .. },
+                Response::Committed(id),
+            ) => p.manifest.message() == *id,
             (Command::DeleteCopies { .. }, Response::CopiesDeleted) => true,
             (
                 _,
@@ -708,7 +905,7 @@ fn admit_message(
 ) -> Result<
     (
         cs_mail_protocol::AdmissionBasis,
-        Option<cs_mail_capabilities::Lane>,
+        Option<cs_mail_capabilities::SenderScopedLane>,
     ),
     CorrespondenceError,
 > {
@@ -797,10 +994,7 @@ fn decide(
             Ok(Decision {
                 response: response.clone(),
                 effects: Some(Effects {
-                    lane: None,
-                    conversation: None,
-                    delivery: None,
-                    delete_copies: None,
+                    change: Change::Refused,
                     receipt: Receipt {
                         actor: request.persona,
                         key: request.key,
@@ -830,6 +1024,15 @@ fn execute(
     let mut delete_copies = None;
     let mut policy_revisions = BTreeMap::new();
     let response = match &request.command {
+        Command::ReceivingRoutes { messages } => {
+            if messages.len() > 100 {
+                return Err(CorrespondenceError::Invalid);
+            }
+            Response::ReceivingRoutes {
+                routes: context.receiving_routes.clone(),
+                sender_scopes: context.sender_scopes.clone(),
+            }
+        }
         Command::Mailbox { after, .. } => {
             let next_after = context
                 .mailbox
@@ -846,12 +1049,13 @@ fn execute(
                 next_after,
             }
         }
-        Command::Create { id, other } => {
+        Command::Create { id, other, subject } => {
             contact(context, actor, *other, None, now)?;
             if context.conversations.contains_key(id) {
                 return Err(CorrespondenceError::Conflict);
             }
-            let conversation = Conversation::new(*id, CorrespondenceRef::new(actor, *other)?);
+            let conversation = Conversation::new(*id, CorrespondenceRef::new(actor, *other)?)
+                .bind_subject(Some(*subject))?;
             conversation_write = Some(conversation.clone());
             Response::Conversation(conversation)
         }
@@ -867,14 +1071,185 @@ fn execute(
         }
         Command::Policy { id } => Response::Conversation(owned(context, *id, actor)?.clone()),
         Command::Assess { manifest } => assess(context, manifest, actor, now)?,
-        Command::Send(package) => {
+        Command::SendToAlias { alias, package } => {
+            let route = context
+                .routed
+                .as_ref()
+                .filter(|r| r.alias.id() == *alias)
+                .ok_or(CorrespondenceError::Unauthorized)?;
+            let destination = route.alias.owner();
+            let id = package.manifest.conversation();
+            let current = context
+                .conversations
+                .get(&id)
+                .cloned()
+                .unwrap_or(Conversation::new(
+                    id,
+                    CorrespondenceRef::new(actor, destination)?,
+                ))
+                .bind_subject(package.manifest.subject())?;
+            if current.scope().other(actor)? != destination
+                || context.messages.contains_key(&package.manifest.message())
+            {
+                return Err(CorrespondenceError::Conflict);
+            }
+            let evidence = context.contact.as_ref().map(|r| {
+                cs_mail_capabilities::LaneEvidence::Native(cs_mail_privacy::ScopedHandle(
+                    *r.key.reference.as_bytes(),
+                ))
+            });
+            let crate::aliases::RouteDecision::Authorize(authorization) = crate::aliases::admit(
+                &crate::aliases::AdmissionContext {
+                    alias: &route.alias,
+                    authentication: crate::aliases::SenderAuthentication::Authenticated(actor),
+                    relationship: context.contact.as_ref(),
+                    sender_scope: route.sender_scope.as_ref(),
+                    lane: context.lane.as_ref(),
+                    declarations: &package.recipient_copy.binding.declarations,
+                    lane_evidence: evidence.as_ref(),
+                    domain_evidence: None,
+                    covered: route.recipient_active
+                        && route.sender_billing.covers(now)
+                        && route.recipient_billing.covers(now),
+                    review_required: false,
+                    conversation: id,
+                },
+                now,
+            ) else {
+                return Err(CorrespondenceError::Unauthorized);
+            };
+            let relationship = context
+                .contact
+                .as_ref()
+                .map_or(package.recipient_copy.binding.relationship, |r| {
+                    r.key.reference
+                });
+            validate_prepared(
+                package,
+                actor,
+                request.key,
+                destination,
+                relationship,
+                context.custody_key,
+                now,
+            )?;
+            // New routed conversations contain no source edges until there is a
+            // retained destination policy to assess. Existing ones use the same graph.
+            if context.conversations.contains_key(&id) {
+                policy_revisions = policies(context, &package.manifest, actor)?;
+            } else {
+                if !package.manifest.sources().is_empty() {
+                    return Err(CorrespondenceError::PolicyUnresolved);
+                }
+                policy_revisions.insert(id, current.revision());
+            }
+            let admission = match authorization.basis() {
+                crate::aliases::RouteBasis::AliasLane {
+                    permission_revision,
+                } => cs_mail_protocol::AdmissionBasis::AliasLane {
+                    alias: *alias,
+                    revision: permission_revision.value(),
+                },
+                crate::aliases::RouteBasis::PairedSender { id, version, .. } => {
+                    lane_write = authorization
+                        .consume_paired(
+                            package.manifest.message(),
+                            &package.recipient_copy.binding.declarations,
+                        )
+                        .map_err(|_| CorrespondenceError::Unauthorized)?;
+                    cs_mail_protocol::AdmissionBasis::ExpressLane {
+                        lane: *id,
+                        version: *version,
+                    }
+                }
+                crate::aliases::RouteBasis::Standing { version } => {
+                    cs_mail_protocol::AdmissionBasis::AcceptedRelationship { version: *version }
+                }
+                crate::aliases::RouteBasis::SenderLane { id, version } => {
+                    let mut lane = context
+                        .lane
+                        .clone()
+                        .ok_or(CorrespondenceError::Unauthorized)?;
+                    if lane
+                        .consume(
+                            package.manifest.message(),
+                            Some(*id),
+                            &package.recipient_copy.binding.declarations,
+                            evidence.as_ref().ok_or(CorrespondenceError::Unauthorized)?,
+                            now,
+                        )
+                        .map_err(|_| CorrespondenceError::Unauthorized)?
+                    {
+                        return Err(CorrespondenceError::Conflict);
+                    }
+                    lane_write = Some(lane);
+                    cs_mail_protocol::AdmissionBasis::ExpressLane {
+                        lane: *id,
+                        version: *version,
+                    }
+                }
+            };
+            conversation_write = Some(
+                if context
+                    .receiver_contact
+                    .as_ref()
+                    .is_some_and(|r| r.state.sender_reply_restriction().is_some())
+                {
+                    current
+                } else {
+                    current.receive(
+                        destination,
+                        package.manifest.message(),
+                        context
+                            .receiver_contact
+                            .as_ref()
+                            .map_or(cs_mail_primitives::ReplyEpoch(0), |r| r.reply_epoch),
+                    )?
+                },
+            );
+            let receiving = authorization.delivered(
+                package.manifest.message(),
+                crate::aliases::DeliveryTransport::Native,
+            )?;
+            delivery = Some(AdmittedDelivery::new(
+                MessageRecord::new(MessageRecordFields {
+                    receiving,
+                    sender_key: package.sender_recovery.sender,
+                    manifest: package.manifest.clone(),
+                    author: actor,
+                    admission,
+                    committed_at: now,
+                })?,
+                package.clone(),
+            )?);
+            Response::Committed(package.manifest.message())
+        }
+        Command::Send { alias, package } => {
             let manifest = &package.manifest;
             if context.messages.contains_key(&manifest.message()) {
                 return Err(CorrespondenceError::Conflict);
             }
-            let destination = owned(context, manifest.conversation(), actor)?
-                .scope()
-                .other(actor)?;
+            let current =
+                owned(context, manifest.conversation(), actor)?.bind_subject(manifest.subject())?;
+            conversation_write = Some(current.clone());
+            let destination = current.scope().other(actor)?;
+            let receiving_alias = context
+                .routed
+                .as_ref()
+                .filter(|r| r.alias.id() == *alias && r.alias.owner() == destination)
+                .ok_or(CorrespondenceError::Unauthorized)?;
+            if receiving_alias.alias.kind() != cs_mail_accounts::aliases::AliasKind::Public
+                || receiving_alias
+                    .sender_scope
+                    .as_ref()
+                    .is_some_and(|scope| !scope.receiving().contains(*alias))
+            {
+                return Err(CorrespondenceError::Unauthorized);
+            }
+            receiving_alias
+                .alias
+                .check_conversation(actor, manifest.conversation(), now)
+                .map_err(|_| CorrespondenceError::Unauthorized)?;
             let relationship = contact(
                 context,
                 actor,
@@ -907,22 +1282,27 @@ fn execute(
                         contact.reply_epoch
                     });
                 conversation_write =
-                    Some(owned(context, manifest.conversation(), actor)?.receive(
-                        destination,
-                        manifest.message(),
-                        epoch,
-                    )?);
+                    Some(current.receive(destination, manifest.message(), epoch)?);
             }
-            delivery = Some((
-                MessageRecord {
+            let receiving = crate::aliases::DeliveredRoute::native(
+                &receiving_alias.alias,
+                actor,
+                manifest.conversation(),
+                manifest.message(),
+                admission,
+                now,
+            )?;
+            delivery = Some(AdmittedDelivery::new(
+                MessageRecord::new(MessageRecordFields {
+                    receiving,
                     sender_key: package.sender_recovery.sender,
                     manifest: manifest.clone(),
                     author: actor,
                     admission,
                     committed_at: now,
-                },
+                })?,
                 package.clone(),
-            ));
+            )?);
             Response::Committed(manifest.message())
         }
         Command::Fetch { message } => fetch(context, *message, actor, now),
@@ -933,21 +1313,31 @@ fn execute(
             Response::CopiesDeleted
         }
     };
-    let effects = request.command.audit_action().map(|action| Effects {
-        lane: lane_write,
-        conversation: conversation_write,
-        delivery,
-        delete_copies,
-        receipt: Receipt {
-            actor,
-            key: request.key,
-            action,
-            digest,
-            outcome: response.clone(),
-            authorized_at: now,
-            policy_revisions,
-        },
-    });
+    let change = match (delivery, conversation_write, delete_copies, lane_write) {
+        (Some(delivery), Some(conversation), None, lane) => Some(Change::Delivery(Box::new(
+            DeliveryTransition::new(conversation, delivery, lane)?,
+        ))),
+        (None, Some(conversation), None, None) => Some(Change::Conversation(conversation)),
+        (None, None, Some(id), None) => Some(Change::DeleteCopies(id)),
+        (None, None, None, None) => None,
+        _ => return Err(CorrespondenceError::Invalid),
+    };
+    let effects = request
+        .command
+        .audit_action()
+        .zip(change)
+        .map(|(action, change)| Effects {
+            change,
+            receipt: Receipt {
+                actor,
+                key: request.key,
+                action,
+                digest,
+                outcome: response.clone(),
+                authorized_at: now,
+                policy_revisions,
+            },
+        });
     Ok(Decision { response, effects })
 }
 fn fetch(

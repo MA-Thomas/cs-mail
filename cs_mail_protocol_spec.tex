@@ -107,9 +107,14 @@ requests, refunds, and entitlements; a changed document is not a migration event
 
 \subsection{The identities involved}
 
-A public protocol identity $I_i$ is the addressable persona another participant
-can accept or block. Its controlling provider maintains authorized operational
-keys, status, and version. A provider-local private principal $P_i$ attaches
+A protocol identity $I_i$ identifies a communication participant another
+participant can accept or block. An alias is a separately identified addressable
+route controlled by that participant; one protocol identity may control multiple
+aliases. Alias creation, replacement and retirement preserve the identity,
+account and login. Alias ownership must not automatically disclose associations
+between aliases. This agreed product model supersedes address-equals-identity;
+the current implementation requires an explicit cutover. The identity's controlling
+provider maintains authorized operational keys, status, and version. A provider-local private principal $P_i$ attaches
 control, recovery, and anti-abuse continuity to one or more public identities.
 The general protocol can represent people or organizational principals; that
 scope does not establish organizational accounts in the current C-SQD product.
@@ -128,28 +133,65 @@ globally comparable identifier.
 
 \subsection{Alias-scoped and sender-scoped permission}
 
-The C-SQD product design agreed on 14 October 2026 distinguishes two lane scopes.
-Creating a private alias automatically establishes an \emph{alias-scoped express
-lane}. Correspondence through that receiving address may include previously
-unknown senders who have been given it, subject to admission policy, without a
-separate sender-scoped grant or bonded request. Permission through that route
-\MUSTNOT{} establish permission through another alias. Restriction or retirement
-\MUSTNOT{} introduce a bonded fallback on the private route.
+An alias is a receiving address, independent of express-lane permission.
+Private-alias creation \MUSTNOT{} automatically establish a lane. The member
+explicitly authorizes \emph{alias-scoped} or \emph{sender-scoped} permission for
+that route. An alias-scoped lane may admit previously unknown authenticated
+senders given the address. A sender-scoped lane admits only its authorized subject
+under the grant's receiving scope and validity rules, including recipient-selected
+authenticated legacy domains. Possession of the address alone supplies no authority.
+Permission through one route \MUSTNOT{} establish permission through another.
 
-A public-facing alias has no automatic lane. Existing standing permission,
-\emph{sender-scoped express lanes} and other invitation rules remain applicable;
-approaches lacking permission use the existing bonded-request process. A
-sender-scoped lane explicitly binds a sender subject under its grant. Standing
-acceptance remains a separate permission.
+Public-alias creation grants no lane. Standing acceptance and invitations remain
+separate permissions. Public approaches lacking permission use the existing
+bonded-request process. A private alias \MUSTNOT{} offer a bonded fallback,
+regardless of its paired lane; unauthorized senders may use the public approach
+route. Restriction, retirement or lane changes \MUSTNOT{} silently create a paid
+request. Lane changes are distinct from address lifecycle; an active address alone
+does not establish admission authority.
 
-These are agreed product requirements awaiting alias implementation. The
+Separate address and lane management, alias management and receiving are locally
+implemented through signed commands and independently revisioned permission. The
 \href{DOMAIN_MODEL.md}{domain model} owns the rules and open decisions; see the
 \href{cs_mail_aliases_and_express_lanes.tex}{alias memo} for examples. Detailed
-alias proofs, wire formats, identity mapping, lifetime, block interaction and
-authentication-failure policy are not specified by this revision. The existing
+alias proofs, wire formats, scoped identity references and migration contracts
+remain unspecified. Sender-identity blocks override all permission paths across
+all aliases controlled by the recipient. External identities are limited to
+what authenticated evidence establishes, without inferred person equivalence
+between mailboxes. The existing
 pair-based relationship and capability contracts below describe sender-scoped
 permission. Alias receipt supplies route context, not proof of organizational
 identity; sender authentication and disclosure consent remain distinct.
+
+\paragraph{Alias-scoped lane transitions.}
+Restrict preserves only exact conversations already admitted when the change
+commits. Remove withdraws this lane's authority for every subsequent delivery,
+including existing conversations. Replacement with selected sender grants commits
+withdrawal and activation atomically, without grandfathering earlier senders.
+Other independently valid permission remains separate. These actions preserve
+the address, inbox and retained correspondence. Delivery after the transition
+requires current permission; exact historical replay supplies no new authority.
+
+\subsection{Alias lifecycle and route evidence (agreed; implementation pending)}
+
+Private aliases have no automatic expiry. Restrict stops new correspondents while
+preserving authorized existing conversations; only conversations with already admitted correspondence qualify,
+and new conversations require explicit approval. Replace creates a new alias with an explicit old-route transition,
+preserving identity, blocks and historical correspondence without automatically
+transferring unknown-sender admission. Retire stops all inbound delivery through
+that alias and preserves received correspondence; the member must be told that
+notices and recovery messages will stop arriving. Retired addresses \MUSTNOT{}
+be reassigned to another member. None of these actions introduces a private-route
+bonded fallback or settles an existing paid request.
+
+Every admitted message \MUST{} retain its receiving alias and permission basis.
+SMTP route evidence is the accepted envelope recipient, not the visible To header;
+native commands \MUST{} authenticate the target alias. Preserve route evidence
+through storage and replies without rewriting history on replacement. Outbound
+composition identifies the selected alias. Detailed reply routing, transition
+policy and held-message release/retention contracts remain open. The receiving
+alias scope of standing acceptance and sender-scoped grants must be explicit;
+all-alias permission \MUSTNOT{} be inferred.
 
 \subsection{The enduring relationship}
 
@@ -248,9 +290,11 @@ The base charge is
 Q=C+S.
 \]
 The service operator publishes one versioned pricing policy: $C$ and bounds
-$S_{\min} \le S \le S_{\max}$. Each recipient address publishes at most eight
-user-defined request classes, choosing $S$ for each within those bounds, signed by
-a key of that address and independent of any relationship. A class whose $S$ lies
+$S_{\min} \le S \le S_{\max}$. Each alias offering bonded requests has at most eight
+user-defined request classes, choosing $S$ for each within those bounds. Publication
+is authorized by its controlling protocol identity, explicitly bound to the named
+alias and independent of any relationship. Shared ownership does not permit a
+signed publication for one alias to be applied to another. A class whose $S$ lies
 outside the current bounds \MUST{} NOT be quoted until the address republishes. The
 sender selects from the classes that can currently be quoted. The
 C-SQD defaults are specified in the deployment profile; the protocol does not
@@ -612,10 +656,15 @@ creation with explicit sender authorization. If a request already exists but a
 follow-up is refused, the last branch is unavailable. Capability mismatch never
 silently converts a message into a charged request.
 
-This sequence is not a private-alias admission contract. The agreed alias-scoped
-path must evaluate its receiving-route authority without requiring a separate
-sender grant and must not fall through to a bonded request. Detailed ordering
-with other controls remains an open design decision.
+Private-alias admission evaluates the explicitly authorized permission for the
+receiving route. An alias-scoped lane needs no individual sender grant; a
+sender-scoped lane requires its authenticated subject to match. Neither path may
+fall through to a bonded request on that private alias. Resolve the alias
+and lifecycle, check coverage, evaluate authentication, enforce identity-level
+blocks and evaluate route permission. An unresolved identity does not establish
+absence of a block. Suspicious or insufficiently authenticated private-alias mail
+is held separately for member review; holding or releasing it grants no ongoing
+permission and cannot bypass an established block.
 
 Capability-authorized delivery creates no request, forfeiture, solicitation, or
 new-request history increment. Acceptance with a lane settles the request and

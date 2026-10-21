@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 [dependencies]
+cs-mail-privacy = { path = "../../crates/cs-mail-privacy" }
 clap.workspace = true
 cs-mail-adapters = { path = "../../crates/cs-mail-adapters" }
 cs-mail-primitives = { path = "../../crates/cs-mail-primitives" }

@@ -32,126 +32,90 @@ public struct EditorialNavigationItem: Identifiable {
     }
 }
 
-/// Column B selects an item. Its opened contents belong in column C.
-public struct EditorialInboxView<Status: View>: View {
+/// The Express lanes organizer renders supplied permission projections without deciding admission.
+public struct EditorialLaneOrganizer: View {
+    let aliasesFirst: Bool
     let items: [EditorialNavigationItem]
+    let receivingChoices: [EditorialNavigationItem]
+    @Binding var receivingSelection: String?
+    let aliasItems: [EditorialNavigationItem]
+    let aliasLoaded: Bool
+    let aliasLoading: Bool
+    let aliasError: String?
     let selection: String?
-    let area: MemberArea
-    let destination: MemberDestination
-    let hasRequestWorkflow: Bool
-    let showsStatus: Bool
     let loading: Bool
     let error: String?
-    let navigate: (MemberDestination) -> Void
-    let select: (String?) -> Void
-    let reviewSavedRequest: () -> Void
-    let previewFocusChanged: (Bool) -> Void
-    let status: Status
-    @State private var search = ""
-    @State private var direction: EditorialDirection = .incoming
-    @FocusState private var focusedItem: String?
+    let select: (String) -> Void
+    @Binding var search: String
+    @Binding var direction: EditorialDirection
     @Environment(\.colorScheme) private var scheme
-    public init(items: [EditorialNavigationItem], selection: String?, area: MemberArea,
-                destination: MemberDestination, hasRequestWorkflow: Bool, showsStatus: Bool,
-                loading: Bool, error: String?, navigate: @escaping (MemberDestination) -> Void,
-                select: @escaping (String?) -> Void, reviewSavedRequest: @escaping () -> Void,
-                previewFocusChanged: @escaping (Bool) -> Void = { _ in }, @ViewBuilder status: () -> Status) {
-        self.items = items; self.selection = selection; self.area = area; self.destination = destination
-        self.hasRequestWorkflow = hasRequestWorkflow; self.showsStatus = showsStatus
-        self.loading = loading; self.error = error; self.navigate = navigate; self.select = select
-        self.reviewSavedRequest = reviewSavedRequest; self.previewFocusChanged = previewFocusChanged
-        self.status = status()
+    public init(aliasesFirst: Bool = true, direction: Binding<EditorialDirection>, search: Binding<String>, items: [EditorialNavigationItem], selection: String?,
+                receivingChoices: [EditorialNavigationItem], receivingSelection: Binding<String?>,
+                aliasItems: [EditorialNavigationItem], aliasLoaded: Bool, aliasLoading: Bool, aliasError: String?,
+                loading: Bool, error: String?, select: @escaping (String) -> Void) {
+        self.aliasesFirst = aliasesFirst
+        _direction = direction; _search = search; _receivingSelection = receivingSelection
+        self.items = items; self.selection = selection; self.receivingChoices = receivingChoices
+        self.aliasItems = aliasItems; self.aliasLoaded = aliasLoaded; self.aliasLoading = aliasLoading
+        self.aliasError = aliasError; self.loading = loading; self.error = error; self.select = select
     }
-    private var visibleItems: [EditorialNavigationItem] {
-        items.filter {
-            ($0.direction == nil || $0.direction == direction) &&
-            (search.isEmpty || ($0.title + " " + $0.subtitle).localizedCaseInsensitiveContains(search))
+    private func matches(_ item: EditorialNavigationItem) -> Bool {
+        search.isEmpty || (item.title + " " + item.subtitle).localizedCaseInsensitiveContains(search)
+    }
+    private var visible: [EditorialNavigationItem] { items.filter { ($0.direction == nil || $0.direction == direction) && matches($0) } }
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Express lanes").font(EditorialStyle.heading(23)).accessibilityAddTraits(.isHeader)
+            TextField("Find a lane", text: $search).textFieldStyle(.roundedBorder)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(aliasesFirst ? ["aliases", "people"] : ["people", "aliases"], id: \.self) { section in
+                        if section == "aliases" { aliasSection } else { peopleSection }
+                        Divider().padding(.vertical, 8)
+                    }
+                }
+            }
+        }.padding(22).foregroundStyle(EditorialStyle.ink(scheme))
+    }
+    private var aliasSection: some View {
+        Group {
+                    heading("Alias-scoped lanes")
+                    if let aliasError { Text(aliasError).font(.caption).foregroundStyle(.orange) }
+                    if aliasLoading { ProgressView() }
+                    if aliasLoaded && aliasItems.isEmpty && aliasError == nil { Text("No private-alias lanes.").font(.caption).foregroundStyle(.secondary) }
+                    ForEach(aliasItems.filter(matches)) { item in row(item) }
         }
     }
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(area.title).font(EditorialStyle.heading(23)).accessibilityAddTraits(.isHeader).padding(22)
-            if area == .relationships || area == .lanes {
-                Picker("Direction", selection: $direction) {
-                    ForEach(EditorialDirection.allCases) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented).padding(.horizontal, 18).padding(.bottom, 12)
-            }
-            if area == .communications {
-                TextField("Search conversations", text: $search).textFieldStyle(.roundedBorder)
-                    .focused($focusedItem, equals: "search").padding(.horizontal, 18).padding(.bottom, 16)
-            }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    if area == .relationships {
-                        navigation("Directory", icon: "person.text.rectangle", target: .directory)
-                        navigation("My approach page", icon: "slider.horizontal.3", target: .address)
-                        Divider().padding(.vertical, 8)
-                        if hasRequestWorkflow {
-                            Button("Review saved request", action: reviewSavedRequest)
-                                .buttonStyle(EditorialRegionButtonStyle()).padding(14)
+    private var peopleSection: some View {
+        Group {
+                    heading("People and organizations")
+                    Picker("Sender direction", selection: $direction) {
+                        ForEach(EditorialDirection.allCases) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented).labelsHidden()
+                    if direction == .incoming && !receivingChoices.isEmpty {
+                        Picker("Receiving address", selection: $receivingSelection) {
+                            Text("All receiving addresses").tag(String?.none)
+                            ForEach(receivingChoices) { choice in Text(choice.title).tag(Optional(choice.id)) }
                         }
                     }
-                    if area == .economics {
-                        navigation("Q&A", icon: "questionmark.circle", target: .questions)
-                        Divider().padding(.vertical, 8)
-                    }
-                    if let error { EditorialReadingView(error, style: .warning) }
-                    if loading { ProgressView().padding(14) }
-                    else if visibleItems.isEmpty && error == nil {
-                        Text(search.isEmpty ? emptyText : "No matching conversations.")
-                            .font(EditorialStyle.text(12)).foregroundStyle(EditorialStyle.secondaryInk(scheme)).padding(14)
-                    }
-                    ForEach(visibleItems) { item in row(item) }
-                }.padding(.horizontal, 12).padding(.bottom, 20)
-            }
-            if showsStatus {
-                Divider()
-                ScrollView { status.padding(18).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 220)
-            }
-        }.foregroundStyle(EditorialStyle.ink(scheme)).background(EditorialStyle.canvas(scheme))
-            .onChange(of: focusedItem) { _, item in previewFocusChanged(item != nil) }
-            .onChange(of: direction) { _, _ in select(nil) }
-    }
-    private var emptyText: String {
-        switch area {
-        case .communications: return "No conversations yet."
-        case .relationships: return direction == .incoming ? "No incoming requests." : "No outgoing requests."
-        case .lanes: return direction == .incoming ? "No incoming express lanes." : "No outgoing express lanes."
-        case .economics: return "No financial records."
-        case .home, .notes: return ""
+                    if let error { Text(error).font(.caption).foregroundStyle(.orange) }
+                    if loading { ProgressView() }
+                    else if visible.isEmpty && error == nil { Text("No matching sender lanes.").font(.caption).foregroundStyle(.secondary) }
+                    ForEach(visible) { item in row(item) }
         }
     }
-    private func navigation(_ title: String, icon: String, target: MemberDestination) -> some View {
-        Button { navigate(target) } label: {
-            Label(title, systemImage: icon).font(EditorialStyle.text(13))
-                .frame(maxWidth: .infinity, alignment: .leading).padding(14)
-        }.buttonStyle(EditorialRegionButtonStyle(selected: destination == target))
-            .editorialCopyableLabel(title).focusable().focusEffectDisabled()
-            .focused($focusedItem, equals: "navigation-\(title)")
-            .overlay { focusOutline(focusedItem == "navigation-\(title)") }
+    private func heading(_ title: String) -> some View {
+        Text(title).font(.caption.bold()).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader).padding(.top, 8)
     }
     private func row(_ item: EditorialNavigationItem) -> some View {
         Button { select(item.id) } label: {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack {
-                    Text(item.title).font(EditorialStyle.text(15)).lineLimit(2)
-                    if item.external { Image(systemName: "envelope").font(.caption).accessibilityLabel("External email") }
-                }
-                if !item.subtitle.isEmpty {
-                    Text(item.subtitle).font(EditorialStyle.text(12)).foregroundStyle(EditorialStyle.secondaryInk(scheme)).lineLimit(2)
-                }
-                if let badge = item.badge { Text(badge).font(EditorialStyle.text(11)).foregroundStyle(.orange) }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(item.title).font(.headline)
+                Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
             }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
         }.buttonStyle(EditorialRegionButtonStyle(selected: selection == item.id))
-            .editorialCopyableLabel(item.title + "\n" + item.subtitle).focusable().focusEffectDisabled()
-            .focused($focusedItem, equals: item.id)
-            .overlay { focusOutline(focusedItem == item.id) }
+            .editorialCopyableLabel(item.title + "\n" + item.subtitle)
             .accessibilityAddTraits(selection == item.id ? .isSelected : [])
-    }
-    private func focusOutline(_ focused: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 10)
-            .strokeBorder(EditorialStyle.ink(scheme).opacity(focused ? 0.35 : 0), lineWidth: 1)
-            .allowsHitTesting(false).accessibilityHidden(true)
     }
 }
 

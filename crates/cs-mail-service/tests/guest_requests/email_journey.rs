@@ -16,7 +16,7 @@ fn repository(f: &Fixture) -> cs_mail_storage_postgres::external::Repository {
             .unwrap()
             .accounts(move || clock.now()),
         deployment: f.members.record().clone(),
-        deriver: cs_mail_privacy::PrivacyDeriver::new([5; 32], [6; 32]),
+        deriver: cs_mail_privacy::PrivacyDeriver::new([5; 32], [6; 32]).into(),
         relay_key: cs_mail_content::EndpointSecretKey::from_secret_bytes(
             ContentKeyRef(600),
             &[60; 32],
@@ -261,6 +261,7 @@ fn interrupted_notices_reconcile_once_and_verification_intent_is_atomic() {
         conversation: ConversationId::new(902).unwrap(),
         operation: IdempotencyKey(902),
         command: app::Command::Start {
+            receiving_alias: cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
             mailbox: GuestMailbox::parse("carol@example.test").unwrap(),
             disclose_to_external_mail: true,
             message: Box::new(support::external::text(

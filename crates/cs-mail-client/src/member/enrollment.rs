@@ -74,6 +74,7 @@ pub(super) enum Setup {
     Publish,
     Purchase(Box<cs_mail_billing::SignedBillingCommand>),
     Directory(Box<cs_mail_application::directory::SignedRequest>),
+    Alias(Box<cs_mail_application::aliases::SignedCommand>),
 }
 #[derive(Deserialize)]
 struct IntentResponse {
@@ -343,7 +344,7 @@ impl MemberClient {
                 let ids = EnrollmentIdentifiers::for_operation(&keys.operation);
                 let mut state = State {
                     external: None,
-                    format: 3,
+                    format: 4,
                     mailbox: super::correspondence::Mailbox::default(),
                     sending: None,
                     profile: Profile {
@@ -378,6 +379,7 @@ impl MemberClient {
         state: &mut State,
         keys: &Secrets,
     ) -> Result<(), Error> {
+        self.finish_alias_setup(state, keys)?;
         if matches!(state.setup, Some(Setup::Register(_))) {
             if matches!(state.setup, Some(Setup::Register(None))) {
                 let MemberAnswer::Account(account) =

@@ -341,6 +341,7 @@ fn smtp_success_follows_atomic_commit_and_lost_acknowledgements_do_not_duplicate
     transaction.commit().unwrap();
     assert_eq!(host.runtime.block_on(peer.answer()), 250);
     assert_eq!(f.read(900).1.len(), 3);
+    challenge_alias_receiving(&f, &host);
 }
 
 fn multipart(local: &str, to: &str, id: &str, text: &str) -> Vec<u8> {
@@ -666,4 +667,389 @@ fn member_address_lane_admission_is_atomic_and_member_reply_requires_consent() {
         .handle(&f.command(id, 1306, app::Command::GrantDisclosure))
         .unwrap();
     assert!(f.repository().begin_dispatch(MessageId(1304)).is_err());
+}
+
+// Extend the existing atomic-commit experiment: envelope routing must survive a
+// misleading To header, rollback, redelivery and retirement without reclassification.
+#[allow(clippy::too_many_lines)] // One causal experiment: rollback, exact replay, then retirement.
+#[allow(clippy::too_many_lines)] // One lifecycle experiment challenges exact authority, rollback and replay together.
+fn challenge_alias_receiving(f: &External, host: &Host) {
+    use cs_mail_application::aliases::{AliasCreation, Command, Outcome, SignedCommand};
+    let account = f
+        .base
+        .gateway
+        .deployment()
+        .accounts(|| CanonicalTime(0))
+        .persona_account(BOB)
+        .unwrap();
+    let alias = cs_mail_primitives::AliasId::new(9800).unwrap();
+    let signed = |operation, command| {
+        SignedCommand {
+            scope: f.base.gateway.scope(),
+            product: "cs-mail/test".into(),
+            account,
+            owner: BOB,
+            key: BOB_KEY,
+            operation: IdempotencyKey(operation),
+            command,
+            signature: vec![],
+        }
+        .sign(&[21; 32])
+        .unwrap()
+    };
+    let ack = f
+        .base
+        .gateway
+        .alias_command(
+            &signed(
+                9800,
+                Command::Create {
+                    id: alias,
+                    creation: AliasCreation::Private {
+                        description: "Care team".to_owned().try_into().unwrap(),
+                    },
+                },
+            ),
+            "mail.localhost",
+        )
+        .unwrap();
+    let Outcome::Changed(aliases) = ack.receipt.outcome else {
+        panic!("alias not created")
+    };
+    // Conjecture: DMARC-authenticated domain evidence, not knowledge of the alias,
+    // controls sender-restricted admission; removal and retries cannot restore it.
+    let restricted_id = cs_mail_primitives::AliasId::new(9810).unwrap();
+    let created = f
+        .base
+        .gateway
+        .alias_command(
+            &signed(
+                9810,
+                Command::Create {
+                    id: restricted_id,
+                    creation: AliasCreation::Private {
+                        description: "Shopping".to_owned().try_into().unwrap(),
+                    },
+                },
+            ),
+            "mail.localhost",
+        )
+        .unwrap();
+    let Outcome::Changed(restricted_addresses) = created.receipt.outcome else {
+        panic!("shopping address")
+    };
+    let shopping = restricted_addresses[0].address().as_str();
+    let shopping_mail = support::smtp::signed("shop", shopping, "shopping-domain", "domain canary");
+    assert_eq!(
+        host.send(shopping, &shopping_mail),
+        550,
+        "unpaired address admitted mail"
+    );
+    let domain_pair = |domain: &str, operation, expected: u64| {
+        use cs_mail_capabilities::{
+            DeclarationAuthorityConstraint, LaneMode, LaneSubject, RateLimit, SenderScopedGrant,
+            SignedLaneGrant,
+        };
+        let domain = DomainIdentity::parse_ascii(domain).unwrap();
+        let at = f.base.clock.now();
+        let grant = SenderScopedGrant {
+            id: LaneId(operation),
+            subject: LaneSubject::LegacyDomain(domain.clone()),
+            sender: domain
+                .synthetic_protocol_identity(&f.base.gateway.scope().deployment_domain, 1),
+            recipient: BOB,
+            protocol_version: ProtocolVersion(2),
+            deployment_domain: f.base.gateway.scope().deployment_domain,
+            intended_provider: ProviderRef(30),
+            recipient_operational_key: BOB_KEY,
+            purpose: DeclaredPurpose::Unspecified,
+            origin: Some(OriginMode::LegacyOrUnspecified),
+            declaration_authority: DeclarationAuthorityConstraint::LegacyGateway,
+            lifetime: Duration(10000),
+            rate_limit: RateLimit {
+                max_messages: 1,
+                interval: Duration(10000),
+            },
+            mode: LaneMode::Expiring,
+            issued_at: at,
+            not_before: at,
+            not_after: at.checked_add(Duration(10000)).unwrap(),
+            version: Version(1),
+        };
+        let signature = ed25519_dalek::SigningKey::from_bytes(&[21; 32])
+            .sign(&grant.signing_bytes().unwrap())
+            .to_bytes();
+        signed(
+            operation,
+            Command::Permission {
+                id: restricted_id,
+                expected_address: 0,
+                expected_permission: expected.into(),
+                action: cs_mail_application::aliases::PermissionAction::Senders(vec![
+                    SignedLaneGrant { grant, signature },
+                ]),
+            },
+        )
+    };
+    let wrong = domain_pair("other.test", 9811, 0);
+    assert!(matches!(
+        f.base
+            .gateway
+            .alias_command(&wrong, "mail.localhost")
+            .unwrap()
+            .receipt
+            .outcome,
+        Outcome::Changed(_)
+    ));
+    assert_eq!(
+        host.send(shopping, &shopping_mail),
+        550,
+        "unselected domain admitted"
+    );
+    let matching = domain_pair("example.test", 9812, 1);
+    let paired = f
+        .base
+        .gateway
+        .alias_command(&matching, "mail.localhost")
+        .unwrap();
+    assert!(matches!(paired.receipt.outcome, Outcome::Changed(_)));
+    assert_eq!(host.send(shopping, &shopping_mail), 250);
+    assert_eq!(
+        host.send(shopping, &shopping_mail),
+        250,
+        "exact retry consumed allowance twice"
+    );
+    assert_eq!(
+        host.send(
+            shopping,
+            &support::smtp::signed("shop", shopping, "shopping-second", "over allowance")
+        ),
+        550
+    );
+    let removal = signed(
+        9813,
+        Command::Permission {
+            id: restricted_id,
+            expected_address: 0,
+            expected_permission: 2.into(),
+            action: cs_mail_application::aliases::PermissionAction::Remove,
+        },
+    );
+    assert!(matches!(
+        f.base
+            .gateway
+            .alias_command(&removal, "mail.localhost")
+            .unwrap()
+            .receipt
+            .outcome,
+        Outcome::Changed(_)
+    ));
+    assert_eq!(
+        f.base
+            .gateway
+            .alias_command(&matching, "mail.localhost")
+            .unwrap(),
+        paired,
+        "historical retry reactivated a grant"
+    );
+    assert_eq!(
+        host.send(
+            shopping,
+            &support::smtp::signed("another", shopping, "shopping-after-remove", "removed")
+        ),
+        550
+    );
+    assert_eq!(
+        host.send(shopping, &shopping_mail),
+        250,
+        "historical redelivery created a new authority check"
+    );
+    let address = aliases[0].address().as_str();
+    assert!(matches!(
+        aliases[0].permission().state(),
+        cs_mail_accounts::alias_permission::PermissionState::None
+    ));
+    let open = signed(
+        9802,
+        Command::Permission {
+            id: alias,
+            expected_address: 0,
+            expected_permission: 0.into(),
+            action: cs_mail_application::aliases::PermissionAction::Open,
+        },
+    );
+    assert!(matches!(
+        f.base
+            .gateway
+            .alias_command(&open, "mail.localhost")
+            .unwrap()
+            .receipt
+            .outcome,
+        Outcome::Changed(_)
+    ));
+    let mut db = postgres::Client::connect(&f.base.url, postgres::NoTls).unwrap();
+    let raw = support::smtp::signed(
+        "new-team",
+        &route(900),
+        "alias-delivery",
+        "receiving route canary",
+    );
+    // Conjecture: removal committed after preparation but before delivery fences the prepared authority.
+    let verified = host.runtime.block_on(async {
+        let (_dns, verifier) = support::smtp::Dns::start().await;
+        cs_mail_smtp_gateway::incoming::authenticate(
+            &verifier,
+            cs_mail_adapters::SmtpAuthenticationRequest {
+                raw_message: &raw,
+                remote_ip: "127.0.0.1".parse().unwrap(),
+                helo_identity: "example.test",
+                mail_from: Some("carol@example.test"),
+                receiver_hostname: "mail.localhost",
+                received_at: f.base.clock.now(),
+            },
+            address,
+            &DomainIdentity::parse_ascii("mail.localhost").unwrap(),
+        )
+        .await
+        .unwrap()
+    });
+    let incoming = f.repository().incoming();
+    let preparation = incoming
+        .prepare_mail(&verified, &[88; 32])
+        .unwrap()
+        .unwrap();
+    let prepared = verified
+        .encrypt_reply(
+            cs_mail_smtp_gateway::incoming::ReplyEncryption {
+                conversation: preparation.conversation.id(),
+                deployment: incoming.scope.deployment_domain,
+                provider: incoming.scope.provider,
+                member: preparation.relationship.recipient,
+                relationship: preparation.relationship.relationship,
+                content_scope: preparation.relationship.content_scope,
+                member_key: preparation.member_key,
+                lane: preparation.lane,
+            },
+            &[88; 32],
+            f.base.clock.now(),
+        )
+        .unwrap();
+    let remove_prepared = signed(
+        9803,
+        Command::Permission {
+            id: alias,
+            expected_address: 0,
+            expected_permission: 1.into(),
+            action: cs_mail_application::aliases::PermissionAction::Remove,
+        },
+    );
+    assert!(matches!(
+        f.base
+            .gateway
+            .alias_command(&remove_prepared, "mail.localhost")
+            .unwrap()
+            .receipt
+            .outcome,
+        Outcome::Changed(_)
+    ));
+    assert!(
+        incoming.receive(&prepared).is_err(),
+        "prepared message bypassed committed removal"
+    );
+    let explicit_reopen = signed(
+        9804,
+        Command::Permission {
+            id: alias,
+            expected_address: 0,
+            expected_permission: 2.into(),
+            action: cs_mail_application::aliases::PermissionAction::Open,
+        },
+    );
+    assert!(matches!(
+        f.base
+            .gateway
+            .alias_command(&explicit_reopen, "mail.localhost")
+            .unwrap()
+            .receipt
+            .outcome,
+        Outcome::Changed(_)
+    ));
+    db.batch_execute("CREATE TRIGGER refuse_alias_smtp BEFORE INSERT ON cs_external_messages FOR EACH ROW EXECUTE FUNCTION refuse_smtp()").unwrap();
+    assert_eq!(host.send(address, &raw), 451);
+    assert_eq!(
+        db.query_one(
+            "SELECT count(*) FROM cs_alias_deliveries WHERE alias=$1",
+            &[&alias.value().to_string()]
+        )
+        .unwrap()
+        .get::<_, i64>(0),
+        0,
+        "failed message left alias delivery evidence"
+    );
+    db.batch_execute("DROP TRIGGER refuse_alias_smtp ON cs_external_messages")
+        .unwrap();
+    assert_eq!(
+        host.send(address, &raw),
+        250,
+        "private route must admit an authenticated previously unknown sender"
+    );
+    let before: String = db
+        .query_one(
+            "SELECT row_to_json(d)::text FROM cs_alias_deliveries d WHERE alias=$1",
+            &[&alias.value().to_string()],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        host.send(&address.to_ascii_uppercase(), &raw),
+        250,
+        "canonical receiving address is stable across case"
+    );
+    let known = db
+        .query_one(
+            "SELECT count(*) FROM cs_alias_deliveries WHERE alias=$1 AND transport='external'",
+            &[&alias.value().to_string()],
+        )
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(known, 1);
+    f.base
+        .gateway
+        .alias_command(
+            &signed(
+                9801,
+                Command::Retire {
+                    id: alias,
+                    expected: aliases[0].revision(),
+                },
+            ),
+            "mail.localhost",
+        )
+        .unwrap();
+    assert_eq!(
+        host.send(address, &raw),
+        250,
+        "historical exact redelivery is not a new admission"
+    );
+    assert_eq!(
+        host.send(
+            address,
+            &support::smtp::signed(
+                "new-team",
+                address,
+                "alias-new-after-retire",
+                "must not deliver"
+            )
+        ),
+        550
+    );
+    assert_eq!(
+        before,
+        db.query_one(
+            "SELECT row_to_json(d)::text FROM cs_alias_deliveries d WHERE alias=$1",
+            &[&alias.value().to_string()]
+        )
+        .unwrap()
+        .get::<_, String>(0)
+    );
 }

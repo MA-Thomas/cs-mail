@@ -332,6 +332,11 @@ impl RelationshipRequest {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum AdmissionBasis {
+    /// Recorded alias-lane admission; the application owns its authorization.
+    AliasLane {
+        alias: cs_mail_primitives::AliasId,
+        revision: u64,
+    },
     ConversationReply {
         source: MessageId,
     },
@@ -504,7 +509,7 @@ impl ProtocolState {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SettlementSnapshot {
-    pub lane: Option<cs_mail_capabilities::Lane>,
+    pub lane: Option<cs_mail_capabilities::SenderScopedLane>,
     pub revision: u64,
     pub state: ProtocolState,
     pub history: RequestHistory,

@@ -25,6 +25,8 @@ mkdir -p "$work" apps/cs-mail-apple/Generated/CsMailRust apps/cs-mail-apple/Gene
 cp "$work/CsMailRust.swift" apps/cs-mail-apple/Generated/CsMailRust/
 cp "$work/CsMailFFI.h" apps/cs-mail-apple/Generated/CsMailFFI/
 cp "$work/CsMailFFI.modulemap" apps/cs-mail-apple/Generated/CsMailFFI/module.modulemap
+# SwiftPM does not track the external Rust archive as a linker input. Force both products to relink.
+rm -f apps/cs-mail-apple/.build/debug/CsMailMac apps/cs-mail-apple/.build/debug/CsMailAppleCheck
 swift build --package-path apps/cs-mail-apple --cache-path "$root/target/apple-swift-cache" --disable-sandbox
 bundle_identifier="com.csqd.member.dev.continuity-20261012"
 destination="$root/target/apple/CsMail-continuity-20261012.app"

@@ -5,20 +5,22 @@ public struct EditorialPortalView<Content: View>: View {
     let person: String
     let permission: String
     let route: EditorialRoute
+    let returnTitle: String
     let returnToSpace: () -> Void
     let content: Content
     let portalID: SenderReference?
     let space: Namespace.ID?
     @Environment(\.colorScheme) private var scheme
-    public init(person: String, permission: String, route: EditorialRoute, portalID: SenderReference? = nil, space: Namespace.ID? = nil, returnToSpace: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+    public init(person: String, permission: String, route: EditorialRoute, portalID: SenderReference? = nil, space: Namespace.ID? = nil, returnTitle: String = "Your communication space", returnToSpace: @escaping () -> Void, @ViewBuilder content: () -> Content) {
         self.person = person; self.permission = permission; self.content = content()
+        self.returnTitle = returnTitle
         self.route = route; self.returnToSpace = returnToSpace
         self.portalID = portalID; self.space = space
     }
     public var body: some View {
         VStack(spacing: 18) {
             HStack {
-                Button(action: returnToSpace) { Label("Your communication space", systemImage: "chevron.left") }.buttonStyle(.plain)
+                Button(action: returnToSpace) { Label(returnTitle, systemImage: "chevron.left").padding(.horizontal, 10).padding(.vertical, 8).contentShape(Rectangle()) }.buttonStyle(.plain)
                 Spacer()
                 Text(person).lineLimit(1)
             }.font(EditorialStyle.text(13)).foregroundStyle(EditorialStyle.secondaryInk(scheme))

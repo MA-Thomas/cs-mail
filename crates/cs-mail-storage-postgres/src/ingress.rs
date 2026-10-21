@@ -884,13 +884,13 @@ fn apply_grant(
 pub(super) fn load_current_lane(
     tx: &mut Transaction<'_>,
     key: &str,
-) -> Result<Option<Lane>, StorageError> {
+) -> Result<Option<SenderScopedLane>, StorageError> {
     Ok(tx
         .query_opt(
             "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1 FOR UPDATE",
             &[&key],
         )?
-        .map(|r| r.try_get::<_, Json<Lane>>(0).map(|j| j.0))
+        .map(|r| r.try_get::<_, Json<SenderScopedLane>>(0).map(|j| j.0))
         .transpose()?)
 }
 
@@ -912,7 +912,7 @@ fn apply_control(
             &[&aggregate_key],
         )?
         .ok_or(StorageError::Capability(CapabilityError::MissingLane))?;
-    let mut lane = row.try_get::<_, Json<Lane>>("lane")?.0;
+    let mut lane = row.try_get::<_, Json<SenderScopedLane>>("lane")?.0;
     if lane.grant().id != control.lane_id || lane.version() != control.expected_version {
         return Err(StorageError::VersionConflict);
     }
@@ -986,7 +986,7 @@ fn apply_free(
             "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1 FOR UPDATE",
             &[&aggregate_key],
         )?
-        .map(|r| r.try_get::<_, Json<Lane>>(0).map(|j| j.0))
+        .map(|r| r.try_get::<_, Json<SenderScopedLane>>(0).map(|j| j.0))
         .transpose()?;
     let plan = cs_mail_protocol::admission::plan_free_admission(
         &aggregate.state,

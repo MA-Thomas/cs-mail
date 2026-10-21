@@ -1,10 +1,8 @@
 //! Native correspondence for the member application: mailbox metadata, the conversations
 //! with one contact, and journaled sends. Plaintext is decrypted in memory, never cached.
 use super::{Error, MemberClient, Profile, State, storage::Secrets};
-use crate::correspondence::{EndpointKeys, compose, open, prepare, readable_text};
-use cs_mail_application::correspondence::{
-    Command, MessageRecord, MessageView, Response, SignedRequest,
-};
+use crate::correspondence::{EndpointKeys, compose, prepare};
+use cs_mail_application::correspondence::{Command, MessageRecord, Response, SignedRequest};
 use cs_mail_application::members::{MemberAnswer, RelationshipHandle, RelationshipView};
 use cs_mail_content::{
     ContentBinding, ContentCertificateDigest, EndpointPublicKey, EndpointSecretKey,
@@ -32,16 +30,26 @@ pub const MAX_TEXT_BYTES: usize = 64 * 1024;
 #[derive(Clone, Default, Deserialize, Serialize)]
 pub(super) struct Mailbox {
     after: u64,
-    records: Vec<(u64, MessageRecord)>,
+    pub(super) records: Vec<(u64, MessageRecord)>,
     /// The other participant of each conversation this address belongs to.
-    participants: BTreeMap<u128, ProtocolIdentity>,
+    pub(super) participants: BTreeMap<u128, ProtocolIdentity>,
 }
 /// One exact send, journaled before transmission and resent unchanged until answered.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(super) struct PendingSend {
-    other: ProtocolIdentity,
-    create: Option<SignedRequest>,
-    send: SignedRequest,
+    pub(super) other: ProtocolIdentity,
+    pub(super) create: Option<SignedRequest>,
+    pub(super) send: SignedRequest,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SendWriting<'a> {
+    pub alias: Option<cs_mail_primitives::AliasId>,
+    pub other: ProtocolIdentity,
+    pub conversation: Option<u128>,
+    pub text: &'a str,
+    pub sources: &'a [super::SourceDraft],
+    pub draft: Option<&'a super::Draft>,
 }
 
 /// How this address may write to a contact now. Presentation only: the service decides
@@ -78,6 +86,9 @@ pub struct Item {
     pub text: String,
     pub references: Vec<u32>,
     pub outgoing: bool,
+    pub committed_at: u64,
+    pub sequence: u64,
+    pub content: super::ReadingContent,
 }
 /// Everything shown for one contact's correspondence.
 pub(super) struct Correspondence {
@@ -134,6 +145,9 @@ impl MemberClient {
                 return Err(Error::InvalidData);
             };
             for (sequence, record) in entries {
+                if record.author != me && record.receiving.recipient() != me {
+                    return Err(Error::InvalidData);
+                }
                 let conversation = record.manifest.conversation().value();
                 if !state.mailbox.participants.contains_key(&conversation) {
                     let other = if record.author == me {
@@ -154,6 +168,16 @@ impl MemberClient {
                         record.author
                     };
                     state.mailbox.participants.insert(conversation, other);
+                }
+                let other = state
+                    .mailbox
+                    .participants
+                    .get(&conversation)
+                    .ok_or(Error::InvalidData)?;
+                if (record.author == me && record.receiving.recipient() != *other)
+                    || (record.author != me && record.author != *other)
+                {
+                    return Err(Error::InvalidData);
                 }
                 state.mailbox.records.push((sequence, record));
             }
@@ -183,6 +207,21 @@ impl MemberClient {
         }
         Ok(publication.key)
     }
+    pub(super) fn receiving_alias(
+        &self,
+        profile: &Profile,
+        owner: ProtocolIdentity,
+    ) -> Result<cs_mail_primitives::AliasId, Error> {
+        let published: cs_mail_application::aliases::PublicReceivingAlias = self.call(
+            &profile.server,
+            &format!("v1/addresses/{}/receiving-alias", owner.0),
+            None,
+        )?;
+        if published.owner != owner {
+            return Err(Error::InvalidData);
+        }
+        Ok(published.id)
+    }
     pub(super) fn sending(
         &self,
         profile: &Profile,
@@ -207,15 +246,9 @@ impl MemberClient {
         other: ProtocolIdentity,
     ) -> Result<Correspondence, Error> {
         let me = state.profile.persona;
-        let (secret, public) = own_keys(&state.profile, keys)?;
-        let endpoint = EndpointKeys {
-            owner: me,
-            secret: &secret,
-            public,
-        };
         let mut items = Vec::new();
         let mut threads: BTreeMap<u128, ConversationSummary> = BTreeMap::new();
-        for (_, record) in &state.mailbox.records {
+        for (sequence, record) in &state.mailbox.records {
             let conversation = record.manifest.conversation().value();
             if state.mailbox.participants.get(&conversation) != Some(&other) {
                 continue;
@@ -227,38 +260,41 @@ impl MemberClient {
                 _ => None,
             };
             let message = record.manifest.message();
-            let signed = Self::signed(&state.profile, keys, Command::Fetch { message })?;
-            let mut references = Vec::new();
-            let text = match self.correspondence_call(&state.profile, &signed)? {
-                Response::Message(view) => {
-                    let view: MessageView = *view;
-                    let current = super::storage::secrets(self.store.as_ref())?;
-                    if current.cache != keys.cache {
-                        return Err(Error::KeyUnavailable);
-                    }
-                    let author_key = view.record.sender_key;
-                    let document =
-                        open(&endpoint, &view, author_key).map_err(|_| Error::InvalidData)?;
-                    references = document
-                        .parts()
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(part, content)| {
-                            matches!(content, DocumentPart::Reference(_))
-                                .then(|| u32::try_from(part).ok())
-                                .flatten()
-                        })
-                        .collect();
-                    readable_text(&document)
-                }
-                Response::Unavailable | Response::AccessDenied => "(deleted or expired)".into(),
-                _ => return Err(Error::InvalidData),
+            let content = self.read_native(state, keys, record)?;
+            let text = content.search_text().unwrap_or_else(|_| match content {
+                super::ReadingContent::NotRetained => "(not downloaded on this device)".into(),
+                super::ReadingContent::AccessDenied => "(access denied)".into(),
+                _ => "(deleted or expired)".into(),
+            });
+            let references = if let super::ReadingContent::Readable(parts) = &content {
+                parts
+                    .iter()
+                    .filter_map(|p| {
+                        if let super::ReadingPart::Reference { part, .. } = p {
+                            Some(*part)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
             };
             let thread = threads
                 .entry(conversation)
                 .or_insert_with(|| ConversationSummary {
                     id: conversation.to_string(),
-                    label: opening(&text),
+                    label: super::retained::Retained::load(self, keys, state)
+                        .ok()
+                        .and_then(|index| {
+                            index
+                                .subject(
+                                    super::MailKey::Native(record.manifest.conversation()),
+                                    (self.clock)(),
+                                )
+                                .map(|subject| subject.text().to_owned())
+                        })
+                        .unwrap_or_else(|| "Subject unavailable".into()),
                     request: request.map(|r: RequestId| r.0.to_string()),
                     sent_request: match record.admission {
                         AdmissionBasis::InitialRequest { request } if record.author == me => {
@@ -277,6 +313,9 @@ impl MemberClient {
                 text,
                 references,
                 outgoing: record.author == me,
+                committed_at: record.committed_at.0,
+                sequence: *sequence,
+                content,
             });
         }
         let mut threads: Vec<ConversationSummary> = threads.into_values().collect();
@@ -307,37 +346,38 @@ impl MemberClient {
         }
     }
     /// Composes, journals and sends `text` to `other`: in `conversation`, or in a new one.
+    #[allow(clippy::too_many_lines)] // Bind subject, ciphertext and receiving destination before journaling one immutable send.
     pub(super) fn prepare_send(
         &self,
         state: &State,
         keys: &Secrets,
-        other: ProtocolIdentity,
-        conversation: Option<u128>,
-        text: &str,
-        sources: &[super::SourceDraft],
+        writing: SendWriting<'_>,
     ) -> Result<PendingSend, Error> {
+        let SendWriting {
+            alias,
+            other,
+            conversation,
+            text,
+            sources,
+            draft,
+        } = writing;
         if (text.trim().is_empty() && sources.is_empty()) || text.len() > MAX_TEXT_BYTES {
             return Err(Error::InvalidData);
         }
+        let subject = if let Some(id) = conversation {
+            self.conversation_subject(
+                state,
+                keys,
+                ConversationId::new(id).map_err(|_| Error::InvalidData)?,
+            )?
+        } else {
+            self.new_subject(draft)?
+        };
         let profile = &state.profile;
         let (handle, view) = self.sending(profile, keys, other)?;
         let now = (self.clock)();
-        let (conversation, create) = if let Some(id) = conversation {
-            if state.mailbox.participants.get(&id) != Some(&other) {
-                return Err(Error::InvalidData);
-            }
-            (
-                ConversationId::new(id).map_err(|_| Error::InvalidData)?,
-                None,
-            )
-        } else {
-            let mut random = [0; 16];
-            getrandom::fill(&mut random).map_err(|_| Error::Unavailable)?;
-            let id = ConversationId::new(u128::from_be_bytes(random) | 1)
-                .map_err(|_| Error::InvalidData)?;
-            let create = Self::signed(profile, keys, Command::Create { id, other })?;
-            (id, Some(create))
-        };
+        let (conversation, create) =
+            Self::plan_conversation(state, keys, other, conversation, subject.commitment())?;
         let replying = if create.is_none() {
             let signed = Self::signed(profile, keys, Command::Policy { id: conversation })?;
             let Response::Conversation(policy) = self.correspondence_call(profile, &signed)? else {
@@ -382,7 +422,9 @@ impl MemberClient {
                 secret: &secret,
                 public,
             },
-            &compose(parts).map_err(|_| Error::InvalidData)?,
+            &compose(parts)
+                .map_err(|_| Error::InvalidData)?
+                .with_subject(subject),
             conversation,
             self.endpoint_key(profile, keys, other)?,
             profile.deployment.custody_key,
@@ -397,14 +439,7 @@ impl MemberClient {
                 content_scope: handle.content_scope,
                 // A native send is authenticated by its signed command.
                 sender_certificate: ContentCertificateDigest([0; 32]),
-                declarations: MessageDeclarations {
-                    purpose: DeclaredPurpose::Known(KnownPurpose::Personal),
-                    origin: OriginDeclaration {
-                        mode: OriginMode::HumanInitiated,
-                        authority: DeclarationAuthority::NativeSender(profile.sender_key),
-                    },
-                    payload_schema: None,
-                },
+                declarations: native_declarations(profile),
                 message_valid_until: MessageValidityUntil(expires),
                 capability,
             },
@@ -414,7 +449,42 @@ impl MemberClient {
         Ok(PendingSend {
             other,
             create,
-            send: Self::signed(profile, keys, Command::Send(Box::new(package)))?,
+            send: Self::signed(
+                profile,
+                keys,
+                Command::Send {
+                    alias: match alias {
+                        Some(id) => id,
+                        None => self.receiving_alias(profile, other)?,
+                    },
+                    package: Box::new(package),
+                },
+            )?,
+        })
+    }
+    fn plan_conversation(
+        state: &State,
+        keys: &Secrets,
+        other: ProtocolIdentity,
+        conversation: Option<u128>,
+        subject: cs_mail_correspondence::SubjectCommitment,
+    ) -> Result<(ConversationId, Option<SignedRequest>), Error> {
+        let profile = &state.profile;
+        Ok(if let Some(id) = conversation {
+            if state.mailbox.participants.get(&id) != Some(&other) {
+                return Err(Error::InvalidData);
+            }
+            (
+                ConversationId::new(id).map_err(|_| Error::InvalidData)?,
+                None,
+            )
+        } else {
+            let mut random = [0; 16];
+            getrandom::fill(&mut random).map_err(|_| Error::Unavailable)?;
+            let id = ConversationId::new(u128::from_be_bytes(random) | 1)
+                .map_err(|_| Error::InvalidData)?;
+            let create = Self::signed(profile, keys, Command::Create { id, other, subject })?;
+            (id, Some(create))
         })
     }
     /// Resolves only a matching durable commit/refusal; transport uncertainty retains exact bytes.
@@ -445,7 +515,9 @@ impl MemberClient {
                     _ => return Err(Error::InvalidData),
                 }
             }
-            let Command::Send(package) = &pending.send.command else {
+            let (Command::Send { package, .. } | Command::SendToAlias { package, .. }) =
+                &pending.send.command
+            else {
                 return Err(Error::InvalidData);
             };
             match self.correspondence_call(&state.profile, &pending.send)? {
@@ -467,14 +539,30 @@ impl MemberClient {
             Ok(id) => {
                 state.sending = None;
                 state.last_send = Some(super::SendOutcome::Committed(id));
-                super::storage::save(self.store.as_ref(), keys, state)?;
+                self.finish_draft(
+                    keys,
+                    state,
+                    super::drafts::DraftResolution::RemoveSubmitted,
+                    state
+                        .last_send
+                        .clone()
+                        .map(super::personal::WorkEvidence::Native),
+                )?;
                 Ok(id)
             }
             Err(Error::SendRefused) => {
                 state.sending = None;
                 let (operation, reason) = refusal.ok_or(Error::InvalidData)?;
                 state.last_send = Some(super::SendOutcome::Refused { operation, reason });
-                super::storage::save(self.store.as_ref(), keys, state)?;
+                self.finish_draft(
+                    keys,
+                    state,
+                    super::drafts::DraftResolution::RestoreEditable,
+                    state
+                        .last_send
+                        .clone()
+                        .map(super::personal::WorkEvidence::Native),
+                )?;
                 Err(Error::SendRefused)
             }
             Err(error) => Err(error),
@@ -522,6 +610,7 @@ impl MemberClient {
         other: ProtocolIdentity,
     ) -> Result<super::Conversation, Error> {
         self.sync_mailbox(state, keys)?;
+        self.retain_batch(state, keys, 100, Some(other))?;
         let MemberAnswer::Receiving { handle, view, .. } = self.read(
             &state.profile,
             keys,
@@ -591,10 +680,80 @@ impl MemberClient {
                 references: item.references,
                 conversation: Some(item.conversation),
                 outgoing: item.outgoing,
+                committed_at: Some(item.committed_at),
+                sequence: Some(item.sequence),
+                content: item.content,
             })
             .collect();
         super::storage::save(self.store.as_ref(), keys, state)?;
         Ok(result)
+    }
+    pub(super) fn cached_native_conversation(
+        &self,
+        state: &State,
+        keys: &Secrets,
+        other: ProtocolIdentity,
+    ) -> Result<super::Conversation, Error> {
+        let data = self.correspondence_with(state, keys, other)?;
+        let mut result = state
+            .inbox
+            .iter()
+            .find(|view| view.handle.sender == other)
+            .map_or_else(
+                || super::views::unestablished(other),
+                |view| super::views::summary(view, Some((self.clock)())),
+            );
+        result.threads = data.threads;
+        result.messages = data
+            .items
+            .into_iter()
+            .map(|item| super::Message {
+                id: item.id,
+                text: item.text,
+                references: item.references,
+                conversation: Some(item.conversation),
+                outgoing: item.outgoing,
+                committed_at: Some(item.committed_at),
+                sequence: Some(item.sequence),
+                content: item.content,
+            })
+            .collect();
+        Ok(result)
+    }
+    pub(super) fn new_subject(
+        &self,
+        draft: Option<&super::Draft>,
+    ) -> Result<cs_mail_correspondence::ConversationSubject, Error> {
+        let mut secret = [0; 32];
+        getrandom::fill(&mut secret).map_err(|_| Error::Unavailable)?;
+        cs_mail_correspondence::ConversationSubject::new(
+            draft.map_or("", super::Draft::subject),
+            (self.clock)(),
+            draft.map_or(0, super::Draft::local_offset_seconds),
+            secret,
+        )
+        .map_err(|_| Error::InvalidData)
+    }
+    pub(super) fn conversation_subject(
+        &self,
+        state: &State,
+        keys: &Secrets,
+        id: ConversationId,
+    ) -> Result<cs_mail_correspondence::ConversationSubject, Error> {
+        self.retain_batch(
+            state,
+            keys,
+            100,
+            state.mailbox.participants.get(&id.value()).copied(),
+        )?;
+        for (_, record) in &state.mailbox.records {
+            if record.manifest.conversation() == id {
+                if let Some(doc) = self.retained_document(state, keys, record)? {
+                    return doc.subject().cloned().ok_or(Error::InvalidData);
+                }
+            }
+        }
+        Err(Error::SourceUnavailable)
     }
     pub(super) fn mailbox_contacts(state: &State) -> std::collections::BTreeSet<ProtocolIdentity> {
         state.mailbox.participants.values().copied().collect()
@@ -611,19 +770,6 @@ pub(super) fn own_keys(
     EndpointSecretKey::from_secret_bytes(profile.content_key, &keys.content)
         .map_err(|_| Error::KeyUnavailable)
 }
-fn opening(text: &str) -> String {
-    let line = text
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    let mut label: String = line.chars().take(80).collect();
-    if line.chars().count() > 80 {
-        label.push('…');
-    }
-    label
-}
-
 pub(super) fn request_conversation(
     state: &State,
     other: ProtocolIdentity,
@@ -635,4 +781,15 @@ pub(super) fn request_conversation(
             && state.mailbox.participants.get(&record.manifest.conversation().value()) == Some(&other))
             .then_some(record.manifest.conversation())
     })
+}
+
+fn native_declarations(profile: &Profile) -> MessageDeclarations {
+    MessageDeclarations {
+        purpose: DeclaredPurpose::Known(KnownPurpose::Personal),
+        origin: OriginDeclaration {
+            mode: OriginMode::HumanInitiated,
+            authority: DeclarationAuthority::NativeSender(profile.sender_key),
+        },
+        payload_schema: None,
+    }
 }

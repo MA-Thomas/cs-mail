@@ -73,7 +73,8 @@ impl IntoResponse for ApiError {
 impl From<StorageError> for ApiError {
     fn from(error: StorageError) -> Self {
         let mapped = match &error {
-            StorageError::Operations(OperationsError::Unauthorized) => {
+            StorageError::Alias(cs_mail_accounts::aliases::AliasError::Permission)
+            | StorageError::Operations(OperationsError::Unauthorized) => {
                 Self::new(StatusCode::UNAUTHORIZED, "unauthorized")
             }
             StorageError::Operations(OperationsError::NotBootstrapped) => {
@@ -112,6 +113,10 @@ pub fn router(state: AppState) -> Router {
     let router = Router::new()
         .route("/health", get(health))
         .route(
+            "/v1/aliases/commands",
+            post(crate::aliases::command).layer(DefaultBodyLimit::max(CONTENT_LIMIT)),
+        )
+        .route(
             "/v1/directory/commands",
             post(crate::directory::command).layer(DefaultBodyLimit::max(CONTENT_LIMIT)),
         )
@@ -146,6 +151,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/endpoint-keys",
             post(crate::members::publish_endpoint_key),
+        )
+        .route(
+            "/v1/addresses/{persona}/receiving-alias",
+            get(crate::members::receiving_alias),
         )
         .route("/v1/addresses/{persona}/offer", get(crate::members::offer))
         .route(

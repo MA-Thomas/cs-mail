@@ -20,16 +20,18 @@ use cs_mail_primitives::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+pub(super) const MAX_TEXT_BYTES: usize = 16384;
+
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Workspace {
     pub(super) pending: Option<SignedCommand>,
-    records: BTreeMap<u128, Record>,
+    pub(super) records: BTreeMap<u128, Record>,
 }
 #[derive(Serialize, Deserialize)]
-struct Record {
-    conversation: ExternalConversation,
-    relationship: cs_mail_protocol::Relationship,
-    messages: Vec<MessageView>,
+pub(super) struct Record {
+    pub(super) conversation: ExternalConversation,
+    pub(super) relationship: cs_mail_protocol::Relationship,
+    pub(super) messages: Vec<MessageView>,
 }
 #[derive(Clone, Debug)]
 pub struct ExternalInbox {
@@ -53,7 +55,11 @@ pub struct ExternalMessage {
     pub id: String,
     pub text: String,
     pub outgoing: bool,
-    pub delivery: String,
+    pub committed_at: u64,
+    pub sequence: u64,
+    pub delivery: Option<DeliveryState>,
+    pub provider_events: Vec<cs_mail_correspondence::external::delivery::ProviderEvent>,
+    pub content: super::ReadingContent,
 }
 #[derive(Clone, Copy, Debug)]
 pub enum ExternalAction {
@@ -109,15 +115,24 @@ impl MemberClient {
             return Ok(());
         };
         let response = self.external_call(&state.profile, pending);
+        let evidence;
         match response {
             Ok(Response::Outcome(acknowledgement)) => {
                 acknowledgement
                     .verify(pending, &state.profile.deployment.provider_key)
                     .map_err(|_| Error::InvalidData)?;
+                evidence = Some(super::personal::WorkEvidence::External(
+                    acknowledgement.clone(),
+                ));
                 let outcome = acknowledgement.receipt.outcome;
                 if matches!(outcome, Outcome::Refused(_)) {
                     state.external.as_mut().ok_or(Error::InvalidData)?.pending = None;
-                    storage::save(self.store.as_ref(), keys, state)?;
+                    self.finish_draft(
+                        keys,
+                        state,
+                        super::drafts::DraftResolution::RestoreEditable,
+                        evidence,
+                    )?;
                     return Err(Error::ExternalRefused);
                 }
                 let matched = match (&pending.command, &outcome) {
@@ -138,7 +153,12 @@ impl MemberClient {
             _ => return Err(Error::InvalidData),
         }
         state.external.as_mut().ok_or(Error::InvalidData)?.pending = None;
-        storage::save(self.store.as_ref(), keys, state)
+        self.finish_draft(
+            keys,
+            state,
+            super::drafts::DraftResolution::RemoveSubmitted,
+            evidence,
+        )
     }
     pub(super) fn sync_external(&self, state: &mut State, keys: &Secrets) -> Result<(), Error> {
         let ids: std::collections::BTreeSet<_> = state
@@ -227,6 +247,16 @@ impl MemberClient {
                 let mut messages = Vec::new();
                 for entry in &record.messages {
                     if entry.message.member_copy.expires_at <= now {
+                        messages.push(ExternalMessage {
+                            id: entry.message.manifest.message().0.to_string(),
+                            text: "(expired)".into(),
+                            outgoing: entry.message.direction == Direction::MemberToGuest,
+                            committed_at: entry.message.committed_at.0,
+                            sequence: entry.sequence,
+                            delivery: entry.delivery.clone(),
+                            provider_events: entry.provider_events.clone(),
+                            content: super::ReadingContent::Unavailable,
+                        });
                         continue;
                     }
                     entry
@@ -249,33 +279,15 @@ impl MemberClient {
                     {
                         return Err(Error::InvalidData);
                     }
-                    let delivery = match &entry.delivery {
-                        None => "Authenticated incoming email",
-                        Some(DeliveryState::Waiting) => "Waiting for dispatch",
-                        Some(DeliveryState::Cancelled { .. }) => "Cancelled before dispatch",
-                        Some(DeliveryState::DispatchBegun { .. }) => {
-                            "Dispatch began; handoff outcome unknown"
-                        }
-                        Some(DeliveryState::Accepted { .. }) => {
-                            "Relay accepted; delivery unconfirmed"
-                        }
-                        Some(DeliveryState::Failed { .. }) => "Relay handoff failed",
-                    };
-                    let events = entry
-                        .provider_events
-                        .iter()
-                        .map(|e| format!("{:?}", e.kind))
-                        .collect::<Vec<_>>()
-                        .join(", ");
                     messages.push(ExternalMessage {
                         id: entry.message.manifest.message().0.to_string(),
                         text: crate::correspondence::readable_text(&doc),
                         outgoing: entry.message.direction == Direction::MemberToGuest,
-                        delivery: if events.is_empty() {
-                            delivery.into()
-                        } else {
-                            format!("{delivery} · Provider reports: {events}")
-                        },
+                        committed_at: entry.message.committed_at.0,
+                        sequence: entry.sequence,
+                        delivery: entry.delivery.clone(),
+                        provider_events: entry.provider_events.clone(),
+                        content: super::ReadingContent::from_document(&doc),
                     });
                 }
                 let pending = c.pending_access(r);
@@ -314,7 +326,6 @@ impl MemberClient {
     /// Journals the exact ciphertext and explicit consent before the first send.
     /// # Errors
     /// Invalid destination/text, unresolved work, unavailable authority or transport.
-    #[allow(clippy::too_many_lines)] // Keep preparation, encryption and the durable signed-send boundary together.
     pub fn send_external(
         &self,
         conversation: Option<&str>,
@@ -322,11 +333,26 @@ impl MemberClient {
         text: &str,
         disclose: bool,
     ) -> Result<String, Error> {
+        self.send_external_with_draft(conversation, mailbox, text, disclose, None)
+            .map(|id| id.value().to_string())
+    }
+    #[allow(clippy::too_many_lines)] // Keep preparation, encryption and the atomic draft/signed-send handoff together.
+    pub(super) fn send_external_with_draft(
+        &self,
+        conversation: Option<&str>,
+        mailbox: &str,
+        text: &str,
+        disclose: bool,
+        draft: Option<&super::Draft>,
+    ) -> Result<ConversationId, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let mut state = storage::open(self.store.as_ref(), &keys)?;
         super::require_idle(&state)?;
-        if text.trim().is_empty() || text.len() > 16384 || (conversation.is_none() && !disclose) {
+        if text.trim().is_empty()
+            || text.len() > MAX_TEXT_BYTES
+            || (conversation.is_none() && !disclose)
+        {
             return Err(Error::InvalidData);
         }
         let mailbox = GuestMailbox::parse(mailbox).map_err(|_| Error::InvalidData)?;
@@ -422,6 +448,7 @@ impl MemberClient {
         });
         let command = if conversation.is_none() {
             Command::Start {
+                receiving_alias: self.receiving_alias(&state.profile, state.profile.persona)?,
                 mailbox,
                 message: package,
                 disclose_to_external_mail: disclose,
@@ -433,9 +460,9 @@ impl MemberClient {
             .external
             .get_or_insert_with(Workspace::default)
             .pending = Some(Self::external_signed(&state.profile, &keys, id, command)?);
-        storage::save(self.store.as_ref(), &keys, &state)?;
+        self.commit_draft(&keys, &state, draft)?;
         self.transmit_external(&mut state, &keys)?;
-        Ok(id.value().to_string())
+        Ok(id)
     }
     /// # Errors
     /// Unresolved work, invalid conversation, or unknown/refused command outcome.

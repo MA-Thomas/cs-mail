@@ -30,7 +30,6 @@ import CsMailPresentation
     @Published private(set) var failure: ClientError?
     var error: String? { failure.map(MemberModel.explanation) }
     @Published var query = ""
-    @Published var reference = ""
     private let worker: ClientWorker
     private var generation = 0
     private var lifetime = PresentationLifetime()
@@ -41,7 +40,7 @@ import CsMailPresentation
         lifetime = PresentationLifetime()
         generation += 1
         screen = .results(Results(query: "", offset: 0, page: nil))
-        operation = .idle; failure = nil; query = ""; reference = ""
+        operation = .idle; failure = nil; query = ""
     }
     func returnToResults() { screen = .results(screen.results); failure = nil }
     func loadIfNeeded() async {
@@ -58,7 +57,14 @@ import CsMailPresentation
         case .results(let results): await search(query: results.query, offset: results.offset)
         }
     }
-    func openReference() async { await open(AddressReference(reference)) }
+    /// Chooses a presentation destination; Rust validates the reference and visibility.
+    func submit() async {
+        let input = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if input.contains("@") || input.contains("://") || input.hasPrefix("/request/") ||
+            (!input.isEmpty && input.allSatisfy(\.isNumber)) {
+            await open(AddressReference(input))
+        } else { await search() }
+    }
     private func search(query: String, offset: UInt32) async {
         await perform(.searching) {
             let page = try await self.worker.run(lifetime: self.lifetime) { try $0.directorySearch(text: query, offset: offset) }

@@ -684,3 +684,32 @@ pub mod signature_bytes {
             .map_err(|_| serde::de::Error::custom("a signature is 64 bytes"))
     }
 }
+
+/// A communication entrance, independent of the participant controlling it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "u128", into = "u128")]
+pub struct AliasId(u128);
+impl AliasId {
+    /// # Errors
+    /// Rejects the empty identifier.
+    pub fn new(value: u128) -> Result<Self, DeclarationError> {
+        if value == 0 {
+            return Err(DeclarationError::InvalidIdentifier);
+        }
+        Ok(Self(value))
+    }
+    pub const fn value(self) -> u128 {
+        self.0
+    }
+}
+impl TryFrom<u128> for AliasId {
+    type Error = DeclarationError;
+    fn try_from(value: u128) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+impl From<AliasId> for u128 {
+    fn from(value: AliasId) -> Self {
+        value.0
+    }
+}

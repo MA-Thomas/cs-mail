@@ -105,7 +105,7 @@ fn prepared_reply_cannot_cross_a_block_or_expiry_during_a_database_wait() {
     let repo = Repository {
         accounts: deployment.accounts(move || clock.now()),
         deployment: f.base.gateway.record().clone(),
-        deriver: cs_mail_privacy::PrivacyDeriver::new([5; 32], [6; 32]),
+        deriver: cs_mail_privacy::PrivacyDeriver::new([5; 32], [6; 32]).into(),
         relay_key: f.relay,
     };
     let mut db = Client::connect(&f.base.url, NoTls).unwrap();

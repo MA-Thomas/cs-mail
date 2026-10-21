@@ -80,8 +80,19 @@ pub fn stage_request_message(
         valid_until: staged.valid_until.0,
     })
     .expect("fixture certificate");
-    let document =
-        compose(vec![DocumentPart::Text(staged.text.to_owned())]).expect("fixture document");
+    let document = compose(vec![DocumentPart::Text(staged.text.to_owned())])
+        .map(|doc| {
+            doc.with_subject(
+                cs_mail_correspondence::ConversationSubject::new(
+                    "Fixture conversation",
+                    cs_mail_primitives::CanonicalTime(0),
+                    0,
+                    [19; 32],
+                )
+                .unwrap(),
+            )
+        })
+        .expect("fixture document");
     let package = prepare(
         &EndpointKeys {
             owner: key.sender,
@@ -109,8 +120,13 @@ pub fn stage_request_message(
         (staged.created, staged.valid_until.0),
     )
     .expect("fixture package");
-    let document = RequestDocument::new(staged.request, staged.content, package)
-        .expect("fixture request document");
+    let document = RequestDocument::new(
+        staged.request,
+        staged.content,
+        package,
+        cs_mail_primitives::AliasId::new(key.recipient.0).expect("fixture inbox"),
+    )
+    .expect("fixture request document");
     let scope = cs_mail_security::SigningScope {
         deployment_domain,
         intended_provider: policy.recipient_provider,

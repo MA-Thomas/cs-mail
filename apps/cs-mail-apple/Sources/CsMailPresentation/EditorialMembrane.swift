@@ -33,11 +33,12 @@ public struct EditorialBoundary: Shape {
 public struct EditorialMembraneView: View {
     let conversations: [EditorialConversationSummary]
     @Binding var selection: SenderReference?
+    let listLayout: Bool
     let space: Namespace.ID?
     @Environment(\.colorScheme) private var scheme
-    public init(conversations: [EditorialConversationSummary], selection: Binding<SenderReference?>, space: Namespace.ID? = nil) {
+    public init(conversations: [EditorialConversationSummary], listLayout: Bool = false, selection: Binding<SenderReference?>, space: Namespace.ID? = nil) {
         self.conversations = conversations; self._selection = selection
-        self.space = space
+        self.space = space; self.listLayout = listLayout
     }
     private var approaches: [EditorialConversationSummary] { conversations.filter { $0.route == .closed && $0.awaitingDecision } }
     private var history: [EditorialConversationSummary] { conversations.filter { $0.route == .closed && !$0.awaitingDecision } }
@@ -47,7 +48,7 @@ public struct EditorialMembraneView: View {
                 Text("Your communication space").font(EditorialStyle.heading(28))
                 VStack(alignment: .leading, spacing: 16) {
                     Text("At the boundary").font(EditorialStyle.text(13)).accessibilityAddTraits(.isHeader)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 18)], spacing: 18) {
+                    LazyVGrid(columns: portalColumns, spacing: 18) {
                         ForEach(approaches) { person in portal(person) }
                     }
                     if approaches.isEmpty { Text("No new approaches awaiting permission.").font(EditorialStyle.text(13)) }
@@ -55,12 +56,12 @@ public struct EditorialMembraneView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     Text("Within your space").font(EditorialStyle.heading(21)).accessibilityAddTraits(.isHeader)
                     Text("Standing contacts").font(EditorialStyle.text(13)).accessibilityAddTraits(.isHeader)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 22)], spacing: 22) {
+                    LazyVGrid(columns: portalColumns, spacing: 22) {
                         ForEach(conversations.filter { $0.route == .standing }) { person in portal(person) }
                     }
                     Divider()
-                    Text("Express lanes · scope and validity apply").font(EditorialStyle.text(13)).accessibilityAddTraits(.isHeader)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 22)], spacing: 22) {
+                    Text("Express lanes").font(EditorialStyle.text(13)).accessibilityAddTraits(.isHeader)
+                    LazyVGrid(columns: portalColumns, spacing: 22) {
                         ForEach(conversations.filter { $0.route == .bounded }) { person in portal(person) }
                     }
                 }
@@ -69,7 +70,7 @@ public struct EditorialMembraneView: View {
                 if !history.isEmpty {
                     VStack(alignment: .leading, spacing: 16) {
                         Text("History outside the boundary").font(EditorialStyle.text(13)).accessibilityAddTraits(.isHeader)
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 18)], spacing: 18) {
+                        LazyVGrid(columns: portalColumns, spacing: 18) {
                             ForEach(history) { person in portal(person) }
                         }
                     }
@@ -77,6 +78,7 @@ public struct EditorialMembraneView: View {
             }.padding(40).frame(maxWidth: 940, alignment: .leading).frame(maxWidth: .infinity)
         }.foregroundStyle(EditorialStyle.ink(scheme)).background(EditorialStyle.canvas(scheme))
     }
+    private var portalColumns: [GridItem] { [GridItem(listLayout ? .flexible() : .adaptive(minimum: 200), spacing: 22)] }
     private func portal(_ person: EditorialConversationSummary) -> some View {
         Button { selection = person.id } label: {
             VStack(alignment: .leading, spacing: 10) {
@@ -86,13 +88,14 @@ public struct EditorialMembraneView: View {
                     Spacer()
                     Image(systemName: "arrow.up.right").accessibilityHidden(true)
                 }.font(EditorialStyle.text(11)).foregroundStyle(EditorialStyle.secondaryInk(scheme))
-            }.padding(22).frame(maxWidth: .infinity, minHeight: 130, alignment: .leading)
+            }.padding(22).frame(maxWidth: .infinity, minHeight: listLayout ? 64 : 130, alignment: .leading)
                 .contentShape(Rectangle())
                 .overlay {
                     EditorialBoundary(route: person.route).stroke(EditorialStyle.ink(scheme).opacity(0.3), lineWidth: 1)
                         .modifier(EditorialPortalAnchor(id: person.id, space: space)).allowsHitTesting(false).accessibilityHidden(true)
                 }
-        }.buttonStyle(EditorialPortalButtonStyle(route: person.route))
-            .editorialCopyableLabel(person.title + "\n" + person.subtitle)
+        }
+        .buttonStyle(EditorialPortalButtonStyle(route: person.route))
+        .editorialCopyableLabel(person.title + "\n" + person.subtitle)
     }
 }

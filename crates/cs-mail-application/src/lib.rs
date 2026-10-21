@@ -2,6 +2,7 @@
 //! Business decisions use domain values; adapters supply consistent context and durable commits.
 
 pub mod accounts;
+pub mod aliases;
 pub mod billing;
 pub mod correspondence;
 pub mod directory;

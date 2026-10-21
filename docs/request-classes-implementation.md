@@ -7,6 +7,14 @@
 > menu and relationship-scoped publication. Lane acceptance and settlement are
 > unchanged.
 
+**Alias-model clarification (14 October 2026; implementation pending).** The
+[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) now separates
+protocol identities from alias routes. Each bonded-route alias retains independent
+classes, authorized by the controlling identity and bound to the named alias.
+Shared control must not let a publication for one alias change another. The
+per-persona keys and storage described below record the current implementation,
+which requires an explicit cutover; they no longer define future alias ownership.
+
 Each protocol identity publishes up to eight of its own classes. No purpose
 taxonomy is hard-coded. A class has a stable `RequestClassId`, user-authored
 description, and collateral within the operator's cs-mail-wide bounds; the

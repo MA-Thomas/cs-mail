@@ -35,7 +35,18 @@ communication addresses within the existing CS-MAIL account. It creates no
 additional product login or shared subject. CS-MAIL owns the infrastructure;
 Phoros will later consume it through a linked account. That linkage does not
 itself authorize correspondence access, decryption or healthcare-record disclosure.
-The alias-to-protocol-identity mapping remains open.
+A protocol identity identifies a communication participant; an alias is a route
+controlled by that participant. One protocol identity may control multiple aliases.
+Alias creation, replacement and retirement preserve the protocol identity, account,
+login and subject. This replaces the product's address-equals-protocol-identity
+assumption; the current implementation has not made that cutover.
+
+Blocking a sender protocol identity applies across all receiving aliases of the
+recipient. External mailbox evidence does not establish person-level equivalence
+between different mailboxes. Shared control must not automatically reveal alias
+associations to correspondents. Detailed scoped references and enforcement contracts
+remain to be designed. Alias lifecycle and admission rules belong to the domain
+model, including Restrict, Replace, Retire and held correspondence.
 
 ## Enrollment
 

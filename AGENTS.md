@@ -26,8 +26,12 @@ Working conventions:
   `target/apple/CsMail-continuity-20261012.app` (**cs-mail Development**).
   Read the current sections of [the Apple runbook](apps/cs-mail-apple/README.md)
   before operating the deployment; older dated sections are historical evidence.
-- Marcus's owner address during development is always `marcus@csqd-mail.com`.
-  Retain that address across development-environment setup and cutovers. Preserving
+- Marcus's requested development protocol address is `mtallis62831@c-sqdmail.com`,
+  with public alias `marcus.thomas@c-sqdmail.com` and private aliases
+  `mat7771@c-sqdmail.com` (NYC-Hospital) and `m11a33t@c-sqdmail.com`
+  (Brooklyn-Lab-Co). This explicitly replaces the earlier `marcus@csqd-mail.com`
+  address by the owner's October 16 instruction; the original account is retained.
+  Retain these addresses across development-environment setup and cutovers. Preserving
   the address and preserving the existing account/Keychain identity are distinct
   requirements; do not treat a newly enrolled account as continuity of the old one.
   Maintain Marcus's original Keychain entry and its account association. Do not

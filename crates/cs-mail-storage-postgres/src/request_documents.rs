@@ -66,7 +66,10 @@ pub(super) fn submission(
     } else {
         None
     };
+    let receiving_alias = super::aliases::receiving_context(tx, document.document.alias())?
+        .ok_or(cs_mail_correspondence::CorrespondenceError::Unavailable)?;
     Ok(Some(SubmissionDocument {
+        receiving_alias,
         document,
         conversation: link,
         policy_conversation,
@@ -150,7 +153,7 @@ pub(super) fn persist_delivery(
     key: &str,
     delivery: MailboxDelivery,
 ) -> Result<(), StorageError> {
-    let (conversation, link, record, package, content) = delivery.into_parts();
+    let (conversation, link, admitted, content) = delivery.into_parts();
     let id = link.conversation().value().to_string();
     match conversation {
         cs_mail_application::requests::documents::ConversationWrite::Create(conversation) => {
@@ -174,7 +177,7 @@ pub(super) fn persist_delivery(
             }
         }
     }
-    super::correspondence::persist_delivery(tx, &record, &package)?;
+    super::correspondence::persist_delivery(tx, &admitted)?;
     if tx.execute(
         "DELETE FROM cs_request_documents WHERE aggregate_key=$1 AND content_ref=$2",
         &[&key, &content.0.to_string()],

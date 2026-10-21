@@ -77,14 +77,43 @@ redeemable value.
 
 \section{What Changed in Draft 0.13}
 
-CS-MAIL now owns agreed alias infrastructure: private aliases automatically open
-alias-scoped express lanes without a bonded route; public-facing aliases retain
-the existing permission and bonded-request process, including explicitly granted
-sender-scoped lanes. Phoros Account will later consume this infrastructure through
-a linked CS-MAIL account. This is product scope awaiting implementation, not work
-deferred to Phoros development. Milestone placement and delivery order remain
-undecided. See the \href{cs_mail_aliases_and_express_lanes.tex}{alias memo} and
-the \href{DOMAIN_MODEL.md}{domain model} for confirmed rules and open decisions.
+The agreed creation model is one protocol identity per member, one current
+public-facing alias and multiple private aliases. Private creation collects an
+owner-visible purpose/description and generates an unpredictable email address;
+public creation collects a member-chosen address. Public replacement preserves
+the previous address's permanent reservation and explicit transition. Implementation
+puts address generation and the public-alias limit behind Rust contracts,
+with Swift collecting intent and presenting results. Signed management now uses
+these distinct creation requests, with private replacement generating another
+address while preserving its purpose/description. Alias delivery remains separate.
+
+CS-MAIL owns alias infrastructure independently of Phoros. Address creation grants
+no lane; the member explicitly pairs a private alias with alias-scoped permission
+for referred healthcare senders or sender-scoped permission for selected
+authenticated Amazon domains. Private aliases have no bonded route; unauthorized
+senders use the public approach process. Alias management and receiving are
+locally implemented. Separate address/lane management uses independently revisioned permission, signed
+Rust commands and native pairing controls. See
+the \href{cs_mail_aliases_and_express_lanes.tex}{alias memo} and
+\href{DOMAIN_MODEL.md}{domain model} for rules and open decisions.
+
+The agreed participant/route model allows one protocol identity to control
+multiple aliases without automatically revealing their association. Blocking a
+sender protocol identity overrides permission across every recipient alias;
+external mailbox evidence does not establish equivalence between different
+mailboxes. Private aliases have no automatic expiry. Restrict stops new
+correspondents while preserving authorized existing conversations; Replace creates
+a new route with an explicit transition and no automatic transfer of unknown-sender
+admission; Retire stops all inbound delivery while preserving history. Retired
+addresses are never reassigned to another member. Suspicious or insufficiently
+authenticated private-alias mail is held for explicit review without ongoing
+permission or payment. SMTP envelope recipients and authenticated native targets
+establish route evidence, retained with each admitted message's permission basis.
+Restriction preserves exact admitted conversations; sender and standing grants
+default to one receiving alias, with explicit selection of several permitted.
+New aliases never expand grants. Transition, reply and held-message contracts
+remain open in the domain model. This design
+awaits implementation and does not change historical settlements.
 
 \section{What Changed in Draft 0.12}
 
@@ -186,15 +215,16 @@ reviewed cutover in the owning domain, not patched in an adapter.
 
 \section{The Product and Its Users}
 
-\paragraph{Aliases and permission scope (agreed; implementation pending).}
-The member creates private aliases for healthcare organizations. Each creation
-automatically opens an alias-scoped express lane, admitting correspondence under
-its policy even from unfamiliar specialists who have been given that address,
-without a separate sender grant or bonded request. Public-facing aliases grant
-no automatic lane: existing standing permission, sender-scoped lanes and other
-invitations apply, and approaches lacking permission use the bonded route.
-Permission through one private alias does not authorize another route; retiring
-or restricting it does not introduce a bonded fallback.
+\paragraph{Aliases and permission scope.}
+Creating a private alias supplies a receiving address, not lane authority. The
+member explicitly pairs the address with an alias-scoped or sender-scoped lane.
+A healthcare pairing can admit referred specialists; an Amazon pairing can admit
+only selected authenticated domains. Permission remains confined to explicitly
+selected receiving aliases. An unpaired address supplies no permission.
+Private routes have no bonded fallback; public approaches retain the existing
+permission and request process. Changing lane permission is distinct from
+restricting, replacing or retiring the address. Local management and receiving
+and separate pairing are implemented locally through native controls.
 
 CS-MAIL owns creation, routing, permissions, lifecycle management and
 correspondence independently of Phoros. Member-facing creation, recognition,
@@ -476,9 +506,10 @@ with the agreed design in
 \href{docs/request-pricing-design.md}{\texttt{docs/request-pricing-design.md}}.
 CSQD publishes one versioned operator policy---processing component $C$ and
 cs-mail-wide collateral bounds---through the authenticated administration API.
-Each protocol identity publishes up to eight request classes, each with collateral
-within the bounds, signed by that address's own key and independent of any
-relationship. A class outside the current bounds cannot be quoted until the
+Each bonded-route alias has up to eight request classes, each with collateral
+within the bounds, authorized by its controlling protocol identity for that named
+alias and independent of any relationship. The implemented per-persona publication
+requires an explicit alias-aware cutover. A class outside the current bounds cannot be quoted until the
 recipient republishes; issued quotes keep their terms. Quote prices become their
 own value rather than fields of the policy snapshot. The replaced tables, APIs and
 menu types are removed without aliases.
@@ -488,7 +519,7 @@ menu types are removed without aliases.
     {After the operator narrows the bounds, a quote is issued for a class outside them.}
     {Bounds that do not bind would let old classes escape policy indefinitely.}
 \claim{PostgreSQL}{A publication signed for one address cannot be applied to another, including another address of the same account.}
-    {A publication signed with address A's key changes address B's classes.}
+    {A publication authorized for alias A changes alias B's classes.}
     {Each address's classes are its own consent to paid approaches.}
 \claim{PostgreSQL}{A quote issued concurrently with a republication or policy change carries the terms of exactly one publication and one policy version.}
     {An issued quote combines $C$, $S$, or a description from different versions.}
@@ -1020,10 +1051,14 @@ creation, routing or lifecycle ownership to Phoros.
 \section{Deferred and Open}
 
 \begin{itemize}
-    \item Alias infrastructure is agreed CS-MAIL scope with milestone placement
-    undecided. Its lifetime, restriction/block interaction, authentication-failure
-    handling, replacement continuity, outbound addressing and identity mapping
-    remain open in the domain model.
+    \item Alias receiving and separate lane pairing are implemented locally.
+    Public alias publication, held-message release and detailed reply routing
+    remain open. The participant/alias distinction, identity-level blocks across
+    aliases, no automatic private-alias expiry, Restrict/Replace/Retire and
+    held-mail direction are agreed. Restrict preserves exact admitted conversations;
+    sender/standing permission defaults to one alias, with explicit several-alias
+    selection. Replacement transition, reply routing,
+    held-message contracts and migration remain open in the domain model.
     \item Bank-account replacement, full account management, and detailed
     erasure policy.
     \item Independent-provider federation and general mailbox hosting (such as IMAP).
@@ -1053,6 +1088,115 @@ boundary is repaired. If a policy parameter is unresolved, use an explicitly
 versioned simulation policy and keep the live deployment gate closed.
 
 \section{Current Next Assignment}
+
+\paragraph{Shared subjects and offline search, 19 October 2026.}
+The client implements required, fixed shared native subjects and device-retained
+search after unlock. Blank input receives a local date/time default with an
+alphabetic month. Subjects remain encrypted; salted commitments bind creation and
+later messages. Independent encrypted copy and per-message index records commit with a small
+progress marker. The unlocked index selects candidates directly; readers retrieve
+selected copies. Search reports device-local coverage and excludes known expiry/removal.
+Connected background downloads extend coverage without blocking local search.
+
+The existing experiments challenge subject substitution, exact retry, offline
+reopening, expiry/removal, failed index checkpoints and plaintext leakage. The full
+local quality gate passed, including PostgreSQL. Native and owner-install evidence
+is recorded in the Apple runbook. Large-mailbox performance, iOS runtime and
+public/live-provider delivery remain unvalidated.
+
+\paragraph{Separate receiving permission, 16 October 2026.}
+Address creation establishes no lane. Independently revisioned receiving permission
+supports explicit opening, exact-conversation restriction, removal and atomic
+replacement with selected signed sender grants. Native and SMTP admission check
+current authority, consume sender allowance and record the grant basis with delivery.
+Swift exposes these actions separately from address lifecycle. Existing experiments
+challenge unpaired refusal, domain matching, restriction/removal, rollback and exact
+retry. The owner deployment requires a preservation-checked schema-41 copy with
+original account, addresses, keys and signed evidence retained. This establishes
+local behavior, not public mail delivery.
+
+\paragraph{Receiving inboxes, updated 19 October 2026.}
+Each received message requires a receiving-inbox assignment. All inboxes derives
+its received correspondence from the individual inboxes; sent copies remain
+distinct. Existing placeholders receive explicit migration assignments, preserving
+original evidence. Membership is never inferred from a sender or a current grant.
+The application coordinates explicit native alias targets and authenticated
+SMTP envelope destinations with the existing alias admission owner; storage commits
+evidence, message copies, conversation changes, allowance effects and receipts
+atomically. The portable client derives inbox membership, counts and scoped search
+from metadata, without decrypting every message. A mixed-alias conversation retains
+one identity; an alias reader acknowledges only its displayed matching messages.
+Retirement/replacement preserve the original receiving history.
+
+Swift Comms column B selects inboxes and the main space browses/reads them. Express
+lanes currently separates People and organizations from Private aliases, with
+explicit receiving-scope views. The intended grouping distinguishes sender-scoped
+from alias-scoped permission; a private alias may be paired with either. Separate
+pairing has its own permission-transition validation in the Apple runbook. The existing experiments challenge partial delivery/evidence
+commits, reclassification after lifecycle changes, and cross-alias read/search
+leakage. The original account and credential association use a preservation-checked
+schema-40 copy, without replacement readers or enrollment. See the Apple runbook
+for current validation and installation evidence. Custom inbox unions, per-alias
+organization, alias-aware public publications, normal composer address selection,
+detailed outbound/reply addressing, held-mail release and public deployment remain
+separate work.
+
+\paragraph{Reading and personal mail organization, 15 October 2026.}
+The two implemented usability slices add structured native/external readers with service
+commit times, snapshot-scoped read state, retained-copy text search with bounded
+coverage, and separate observation refresh without mutation retries. Personal
+Inbox/Archive/Trash placement, flags, restore and bulk actions remain device-local
+and grant no permission or retention extension. Native permanent copy removal
+uses the existing journaled DeleteCopies contract; external permanent deletion
+remains undefined. Sent derives from committed messages, while durable outgoing
+history retains exact native/external commands and terminal evidence from this
+version onward. Native mailbox commit, external queue acceptance, relay handoff
+and provider observations remain distinct. The existing single unresolved
+mutation rule remains. See the Apple runbook for validation and installation
+evidence; cross-device personal state, complete offline content search, external
+subjects, general attachments and public delivery remain outside this pass.
+
+\paragraph{Durable local writing, 15 October 2026.}
+The first usability slice gives drafts their own deterministic portable-client
+workspace, with checked revisions and separate native, external, initial-request
+and follow-up targets. Independent encrypted workspace writes do not wait for
+network operations. A selected revision and its prepared signed operation commit
+in one local transaction; unknown outcomes retain the operation and definite
+refusals restore writing. The protocol kernel, financial rules, original account,
+Keychain association and v3 account-cache format remain unchanged. Swift exposes
+automatic saving, save/close, discard, reopening and a Drafts list. This slice
+challenges concurrent writing, failed handoff, exact retry, reopening and
+ciphertext persistence; it does not establish unread/search/organization,
+cross-device drafts, replacement-device recovery or public transport delivery.
+See the Apple runbook for current validation and installation evidence.
+
+\paragraph{Alias foundation, 14 October 2026.}
+The first Rust slice implements distinct participant/alias meanings, checked route
+lifecycle, exact-conversation restriction and explicit approval, separate alias and
+sender permissions, named receiving scopes and signed management with atomic
+PostgreSQL state/command/receipt persistence. The portable client journals exact
+signed commands and verifies provider acknowledgements. It creates no account,
+credential, consent or financial effects. This is not the native/SMTP alias delivery
+cutover. Publication/class ownership, request-acceptance defaults, transport route
+binding, held-mail delivery/release, outbound addressing and native management
+presentation remain exit work. See
+\href{docs/application-persistence-boundaries.md}{the implementation boundary}.
+
+\paragraph{Native alias management, 14 October 2026.}
+The unified member app now has a My addresses workspace under Relationships,
+using typed Rust projections and commands for creation, Restrict, Replace, Retire
+and exact-operation recovery. Swift owns presentation and user intent; it does not
+decide admission or grant authority. The additional addresses are explicitly
+identified as unavailable for mail delivery pending the native/SMTP integration.
+The existing primary publication and account remain intact. Existing recovery
+and native enrollment experiments were extended; no test cases were added.
+Column B now distinguishes alias-scoped and sender-scoped express lanes through
+separate Rust projections and Swift selection cases. Sender direction, expiry
+and rate remain sender properties; alias lifecycle and address management remain
+route properties. The existing native experiment challenges public-address
+exclusion and preservation of closed alias state. The installed app's groups and
+sender direction switching were inspected; populated owner alias rows and actual
+alias mail delivery were not exercised.
 
 \paragraph{Native requests and replies, agreed 12 October 2026.}
 Preserve the working baseline, repair relationship revocation, then implement

@@ -5,17 +5,24 @@ import AppKit
 import UIKit
 #endif
 
+/// Copies exactly the supplied value, without adding surrounding private metadata.
+public enum EditorialClipboard {
+    public static func copy(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
+    }
+}
+
 public extension View {
     /// Copy a navigation label without turning its click target into a text editor.
     func editorialCopyableLabel(_ text: String) -> some View {
         contextMenu {
             Button("Copy") {
-                #if os(macOS)
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                #else
-                UIPasteboard.general.string = text
-                #endif
+                EditorialClipboard.copy(text)
             }
         }
     }
@@ -36,15 +43,19 @@ public struct EditorialReadingBlock {
 public struct EditorialReadingView: View {
     let blocks: [EditorialReadingBlock]
     let activate: (String) -> Void
+    private let query: String
+    private let reveal: ReadingReveal?
     @Environment(\.colorScheme) private var scheme
-    public init(_ text: String, style: EditorialReadingBlock.Style = .body) {
+    public init(_ text: String, style: EditorialReadingBlock.Style = .body, query: String = "", reveal: ReadingReveal? = nil) {
         blocks = [EditorialReadingBlock(text, style: style)]; activate = { _ in }
+        self.query = query; self.reveal = reveal
     }
     public init(blocks: [EditorialReadingBlock], activate: @escaping (String) -> Void = { _ in }) {
         self.blocks = blocks; self.activate = activate
+        query = ""; reveal = nil
     }
     public var body: some View {
-        NativeReadingView(document: document, activate: activate)
+        NativeReadingView(document: document, reveal: reveal, activate: activate)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
     private var document: NSAttributedString {
@@ -71,6 +82,22 @@ public struct EditorialReadingView: View {
             if let action = block.action { attributes[.link] = URL(string: "cs-mail-reading://action/\(action)") }
             result.append(NSAttributedString(string: block.text + (index == blocks.count - 1 ? "" : "\n\n"), attributes: attributes))
         }
+        for range in ReadingMatches.ranges(in: result.string, query: query) {
+            #if os(macOS)
+            result.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.45), range: range)
+            #else
+            result.addAttribute(.backgroundColor, value: UIColor.systemYellow.withAlphaComponent(0.45), range: range)
+            #endif
+        }
+        if let reveal, NSMaxRange(reveal.range) <= result.length {
+            #if os(macOS)
+            result.addAttributes([.backgroundColor: NSColor.systemOrange, .foregroundColor: NSColor.black,
+                                  .underlineStyle: NSUnderlineStyle.single.rawValue], range: reveal.range)
+            #else
+            result.addAttributes([.backgroundColor: UIColor.systemOrange, .foregroundColor: UIColor.black,
+                                  .underlineStyle: NSUnderlineStyle.single.rawValue], range: reveal.range)
+            #endif
+        }
         return result
     }
 }
@@ -78,6 +105,7 @@ public struct EditorialReadingView: View {
 #if os(macOS)
 private struct NativeReadingView: NSViewRepresentable {
     let document: NSAttributedString
+    let reveal: ReadingReveal?
     let activate: (String) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(activate) }
     func makeNSView(context: Context) -> NSTextView {
@@ -100,6 +128,28 @@ private struct NativeReadingView: NSViewRepresentable {
             reader.textStorage?.setAttributedString(document)
             if oldText == document.string { reader.setSelectedRange(selection) }
         }
+        guard context.coordinator.reveal != reveal?.request else { return }
+        context.coordinator.reveal = reveal?.request
+        if let reveal {
+            let coordinator = context.coordinator
+            DispatchQueue.main.async { [weak reader] in
+                guard coordinator.reveal == reveal.request, let reader,
+                      NSMaxRange(reveal.range) <= reader.string.utf16.count else { return }
+                reader.window?.contentView?.layoutSubtreeIfNeeded()
+                guard let layout = reader.layoutManager, let container = reader.textContainer,
+                      let scroll = reader.enclosingScrollView, let document = scroll.documentView else { return }
+                layout.ensureLayout(for: container)
+                let glyphs = layout.glyphRange(forCharacterRange: reveal.range, actualCharacterRange: nil)
+                let rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
+                    .offsetBy(dx: reader.textContainerOrigin.x, dy: reader.textContainerOrigin.y)
+                let target = reader.convert(rect, to: document)
+                let clip = scroll.contentView
+                var bounds = clip.bounds
+                bounds.origin.y = target.midY - bounds.height / 2
+                clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+                scroll.reflectScrolledClipView(clip)
+            }
+        }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView reader: NSTextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 16 else { return nil }
@@ -115,6 +165,7 @@ private struct NativeReadingView: NSViewRepresentable {
         return CGSize(width: width, height: ceil(layout.usedRect(for: container).height) + 16)
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
+        var reveal: UUID?
         var activate: (String) -> Void
         init(_ activate: @escaping (String) -> Void) { self.activate = activate }
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
@@ -127,6 +178,7 @@ private struct NativeReadingView: NSViewRepresentable {
 #else
 private struct NativeReadingView: UIViewRepresentable {
     let document: NSAttributedString
+    let reveal: ReadingReveal?
     let activate: (String) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(activate) }
     func makeUIView(context: Context) -> UITextView {
@@ -145,12 +197,34 @@ private struct NativeReadingView: UIViewRepresentable {
             reader.attributedText = document
             if oldText == document.string { reader.selectedRange = selection }
         }
+        guard context.coordinator.reveal != reveal?.request else { return }
+        context.coordinator.reveal = reveal?.request
+        if let reveal {
+            let coordinator = context.coordinator
+            DispatchQueue.main.async { [weak reader] in
+                guard coordinator.reveal == reveal.request, let reader,
+                      NSMaxRange(reveal.range) <= reader.text.utf16.count else { return }
+                reader.window?.layoutIfNeeded()
+                let glyphs = reader.layoutManager.glyphRange(forCharacterRange: reveal.range, actualCharacterRange: nil)
+                let rect = reader.layoutManager.boundingRect(forGlyphRange: glyphs, in: reader.textContainer)
+                    .offsetBy(dx: reader.textContainerInset.left, dy: reader.textContainerInset.top)
+                var ancestor = reader.superview
+                while let view = ancestor {
+                    if let scroll = view as? UIScrollView, scroll.isScrollEnabled {
+                        scroll.scrollRectToVisible(reader.convert(rect.insetBy(dx: 0, dy: -24), to: scroll), animated: false)
+                        break
+                    }
+                    ancestor = view.superview
+                }
+            }
+        }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView reader: UITextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 16 else { return nil }
         return reader.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
     }
     final class Coordinator: NSObject, UITextViewDelegate {
+        var reveal: UUID?
         var activate: (String) -> Void
         init(_ activate: @escaping (String) -> Void) { self.activate = activate }
         func textView(_ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {

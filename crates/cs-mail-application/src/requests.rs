@@ -15,7 +15,7 @@ pub struct DirectionSnapshot {
     pub snapshot: Box<SettlementSnapshot>,
 }
 pub struct DirectionEffect {
-    lane: Option<cs_mail_capabilities::Lane>,
+    lane: Option<cs_mail_capabilities::SenderScopedLane>,
     schedules: Vec<cs_mail_primitives::ScheduleChange>,
     relationship: RelationshipRef,
     manifest: TransitionManifest,
@@ -25,7 +25,7 @@ impl DirectionEffect {
     pub fn schedules(&self) -> &[cs_mail_primitives::ScheduleChange] {
         &self.schedules
     }
-    pub fn lane(&self) -> Option<&cs_mail_capabilities::Lane> {
+    pub fn lane(&self) -> Option<&cs_mail_capabilities::SenderScopedLane> {
         self.lane.as_ref()
     }
     pub const fn relationship(&self) -> RelationshipRef {

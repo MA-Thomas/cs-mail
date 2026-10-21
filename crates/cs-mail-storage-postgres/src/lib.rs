@@ -33,6 +33,7 @@ pub use work::{
     DeploymentQueue, RelationshipQueue, WorkClaims, WorkFailure, WorkItem, WorkPayload, WorkReport,
 };
 mod accounts;
+mod aliases;
 mod consent;
 mod correspondence;
 pub mod external;
@@ -65,8 +66,8 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use cs_mail_capabilities::{
-    BondFreeAdmission, CapabilityError, Lane, LaneControl, LaneControlAction, LaneHorizonEffect,
-    LaneState, SignedLaneGrant,
+    BondFreeAdmission, CapabilityError, LaneControl, LaneControlAction, LaneHorizonEffect,
+    LaneState, SenderScopedLane, SignedLaneGrant,
 };
 use cs_mail_content::EncryptedContentRecord;
 use cs_mail_ledger::{Account, LedgerError, LedgerView};
@@ -95,6 +96,12 @@ const MIGRATION_4: &str = include_str!("../migrations/0004_express_lanes.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_protocol_foundations.sql");
 const MIGRATION_6: &str = include_str!("../migrations/0006_authenticated_message_envelopes.sql");
 const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 11;
+const MIGRATION_43: &str = include_str!("../migrations/0043_required_receiving_inboxes.sql");
+const MIGRATION_42: &str = include_str!("../migrations/0042_shared_subjects.sql");
+const MIGRATION_41: &str = include_str!("../migrations/0041_alias_permission.sql");
+const MIGRATION_40: &str = include_str!("../migrations/0040_alias_inboxes.sql");
+const MIGRATION_39: &str = include_str!("../migrations/0039_alias_creation.sql");
+const MIGRATION_38: &str = include_str!("../migrations/0038_alias_routes.sql");
 const MIGRATION_37: &str = include_str!("../migrations/0037_external_refusal_receipts.sql");
 const MIGRATION_36: &str = include_str!("../migrations/0036_received_conversation_replies.sql");
 const MIGRATION_35: &str = include_str!("../migrations/0035_billing_refusals.sql");
@@ -130,6 +137,7 @@ const MIGRATION_7: &str = include_str!("../migrations/0007_relationship_requests
 #[derive(Debug)]
 pub enum StorageError {
     SchemaNotReady,
+    Alias(cs_mail_accounts::aliases::AliasError),
     Consent(cs_mail_consent::ConsentError),
     Correspondence(cs_mail_correspondence::CorrespondenceError),
     Identity(identity_contract::Error),
@@ -166,6 +174,7 @@ pub enum StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Alias(error) => write!(formatter, "{error}"),
             Self::SchemaNotReady => formatter
                 .write_str("schema is not ready; run migrations through the administration host"),
             Self::Correspondence(error) => error.fmt(formatter),
@@ -643,7 +652,7 @@ impl PostgresEngine {
             transaction.commit()?;
             return Ok(false);
         };
-        let mut lane = row.try_get::<_, Json<Lane>>("lane")?.0;
+        let mut lane = row.try_get::<_, Json<SenderScopedLane>>("lane")?.0;
         if lane.grant().id != lane_id || lane.state() == LaneState::Revoked {
             delete_schedule(
                 &mut transaction,
@@ -711,14 +720,17 @@ impl PostgresEngine {
     ///
     /// # Errors
     ///
-    pub fn lane(&self) -> Result<Option<Lane>, StorageError> {
+    pub fn lane(&self) -> Result<Option<SenderScopedLane>, StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         Ok(client
             .query_opt(
                 "SELECT lane FROM cs_capability_lanes WHERE aggregate_key = $1",
                 &[&self.aggregate_key],
             )?
-            .map(|row| row.try_get::<_, Json<Lane>>("lane").map(|j| j.0))
+            .map(|row| {
+                row.try_get::<_, Json<SenderScopedLane>>("lane")
+                    .map(|j| j.0)
+            })
             .transpose()?)
     }
 
@@ -805,7 +817,7 @@ impl PostgresEngine {
                 "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1",
                 &[&self.aggregate_key],
             )?
-            .map(|r| r.try_get::<_, Json<Lane>>(0).map(|j| j.0))
+            .map(|r| r.try_get::<_, Json<SenderScopedLane>>(0).map(|j| j.0))
             .transpose()?;
         transaction.commit()?;
         let mut snapshot = SettlementSnapshot::complete(
@@ -1040,6 +1052,12 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (35_i64, MIGRATION_35),
     (36_i64, MIGRATION_36),
     (37_i64, MIGRATION_37),
+    (38_i64, MIGRATION_38),
+    (39_i64, MIGRATION_39),
+    (40_i64, MIGRATION_40),
+    (41_i64, MIGRATION_41),
+    (42_i64, MIGRATION_42),
+    (43_i64, MIGRATION_43),
 ];
 
 fn migrate(client: &mut Client) -> Result<(), StorageError> {
@@ -1179,7 +1197,7 @@ fn advance_aggregate_revision(
 fn upsert_lane(
     transaction: &mut Transaction<'_>,
     aggregate_key: &str,
-    lane: &Lane,
+    lane: &SenderScopedLane,
     now: CanonicalTime,
 ) -> Result<(), StorageError> {
     transaction.execute(

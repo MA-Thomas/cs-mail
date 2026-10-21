@@ -10,6 +10,7 @@ use cs_mail_finance::{BankVerification, FinancialScope};
 use cs_mail_primitives::*;
 use cs_mail_protocol::{ActorRef, ProtocolState, RelationshipState};
 use cs_mail_storage_postgres::{PostgresAccountRepository, PostgresDeployment, StorageError};
+use cs_mail_test_support::{fixture_inbox, fixture_native_send};
 use ed25519_dalek::SigningKey;
 use postgres::{Client, NoTls};
 use std::sync::{
@@ -40,6 +41,7 @@ struct Fixture {
     capability: std::cell::Cell<Option<LaneId>>,
 }
 impl Fixture {
+    #[allow(clippy::too_many_lines)] // Provision complete enrolled participants, endpoint keys and receiving inboxes before actions.
     fn new() -> Self {
         let base =
             std::env::var("CS_MAIL_TEST_DATABASE_URL").expect("requires isolated PostgreSQL");
@@ -120,6 +122,14 @@ impl Fixture {
                 )
                 .unwrap(),
             );
+            fixture_inbox(
+                host.deployment(),
+                persona(i),
+                OperationalKeyRef(id),
+                &[n; 32],
+                NOW,
+            )
+            .unwrap();
             clients.push(NativeClient::new(
                 ActorRef::Sender(persona(i)),
                 OperationalKeyRef(id),
@@ -173,6 +183,14 @@ impl Fixture {
         self.call(
             a,
             Command::Create {
+                subject: cs_mail_correspondence::ConversationSubject::new(
+                    "Fixture conversation",
+                    cs_mail_primitives::CanonicalTime(0),
+                    0,
+                    [19; 32],
+                )
+                .unwrap()
+                .commitment(),
                 id: conversation(id),
                 other: persona(b),
             },
@@ -186,7 +204,19 @@ impl Fixture {
         conv: u128,
         parts: Vec<DocumentPart>,
     ) -> PreparedMessage {
-        let document = cs_mail_client::correspondence::compose(parts).unwrap();
+        let document = cs_mail_client::correspondence::compose(parts)
+            .map(|doc| {
+                doc.with_subject(
+                    cs_mail_correspondence::ConversationSubject::new(
+                        "Fixture conversation",
+                        cs_mail_primitives::CanonicalTime(0),
+                        0,
+                        [19; 32],
+                    )
+                    .unwrap(),
+                )
+            })
+            .unwrap();
         cs_mail_client::correspondence::prepare(
             &self.clients[actor].endpoint_keys().unwrap(),
             &document,
@@ -241,7 +271,7 @@ impl Fixture {
             vec![DocumentPart::Text("private proposal".into())],
         );
         let manifest = message.manifest.clone();
-        self.call(0, Command::Send(Box::new(message)));
+        self.call(0, fixture_native_send(Box::new(message)));
         let document = cs_mail_client::correspondence::open(
             &self.clients[1].endpoint_keys().unwrap(),
             &self.view(1, 100),
@@ -271,6 +301,24 @@ impl Fixture {
 fn two_clients_retain_quotes_but_references_do_not_grant_or_restore_access() {
     let h = Fixture::new();
     let (source, manifest, anchor) = h.source();
+    let record = h.view(1, 100).record;
+    // A valid alias belonging to a third participant cannot be substituted through SQL.
+    let mut storage = Client::connect(&h.url, NoTls).unwrap();
+    assert!(storage.execute("UPDATE cs_correspondence_messages SET record=jsonb_set(jsonb_set(record,'{receiving,alias}','3'::jsonb),'{receiving,recipient}','3'::jsonb) WHERE id='100'", &[]).is_err());
+
+    let mut missing = serde_json::to_value(&record).unwrap();
+    missing.as_object_mut().unwrap().remove("receiving");
+    assert!(
+        serde_json::from_value::<cs_mail_application::correspondence::MessageRecord>(missing)
+            .is_err()
+    );
+    let mut substituted = serde_json::to_value(&record).unwrap();
+    substituted["receiving"]["message"] = serde_json::json!(999);
+    assert!(
+        serde_json::from_value::<cs_mail_application::correspondence::MessageRecord>(substituted)
+            .is_err()
+    );
+
     // Public versions must not fingerprint independently composed identical text;
     // otherwise the service could recover short messages by guessing plaintexts.
     let same_text = h.prepare(
@@ -283,6 +331,51 @@ fn two_clients_retain_quotes_but_references_do_not_grant_or_restore_access() {
     assert_ne!(same_text.manifest.version(), manifest.version());
     let serialized_manifest = serde_json::to_string(&manifest).unwrap();
     assert!(!serialized_manifest.contains("version_secret"));
+    assert!(!serialized_manifest.contains("Fixture conversation"));
+    // A changed shared subject must fail before any new mailbox copy commits.
+    let changed_doc = cs_mail_client::correspondence::compose(vec![DocumentPart::Text(
+        "changed subject attempt".into(),
+    )])
+    .unwrap()
+    .with_subject(ConversationSubject::new("Different subject", NOW, 0, [39; 32]).unwrap());
+    let mut changed = h.prepare(
+        0,
+        1,
+        999,
+        1,
+        vec![DocumentPart::Text("changed subject attempt".into())],
+    );
+    // Prepare every envelope from the substituted document, so this challenges the
+    // conversation invariant rather than merely a broken document binding.
+    changed = cs_mail_client::correspondence::prepare(
+        &h.clients[0].endpoint_keys().unwrap(),
+        &changed_doc,
+        conversation(1),
+        h.clients[1].content_public_key(),
+        h.repository.custody_public_key().unwrap(),
+        changed.recipient_copy.binding.clone(),
+        (NOW, changed.recipient_copy.expires_at),
+    )
+    .unwrap();
+    let rejected = h.call(0, fixture_native_send(Box::new(changed)));
+    assert!(matches!(
+        rejected,
+        Response::Refused {
+            reason: CorrespondenceError::Conflict,
+            ..
+        }
+    ));
+    assert_eq!(
+        Client::connect(&h.url, NoTls)
+            .unwrap()
+            .query_one(
+                "SELECT count(*) FROM cs_correspondence_messages WHERE id='999'",
+                &[]
+            )
+            .unwrap()
+            .get::<_, i64>(0),
+        0
+    );
     h.create(2, 0, 1);
     h.create(3, 0, 2);
     let quote = source.quote(&manifest, anchor.clone()).unwrap();
@@ -296,7 +389,7 @@ fn two_clients_retain_quotes_but_references_do_not_grant_or_restore_access() {
             DocumentPart::Quotation(quote.clone()),
         ],
     );
-    let signed = h.request(0, Command::Send(Box::new(message)));
+    let signed = h.request(0, fixture_native_send(Box::new(message)));
     assert_eq!(
         CorrespondenceService::new(&h.repository)
             .handle(&signed)
@@ -334,7 +427,7 @@ fn two_clients_retain_quotes_but_references_do_not_grant_or_restore_access() {
         preview.recipient_sources,
         vec![SourceState::AccessDenied, SourceState::AccessDenied]
     );
-    h.call(0, Command::Send(Box::new(shared)));
+    h.call(0, fixture_native_send(Box::new(shared)));
     assert_eq!(
         h.call(
             2,
@@ -416,7 +509,14 @@ fn two_clients_retain_quotes_but_references_do_not_grant_or_restore_access() {
         .contains("ciphertext")
     );
     let mut tampered = h.view(1, 101);
-    tampered.record.manifest = manifest;
+    let mut fields: cs_mail_application::correspondence::MessageRecordFields =
+        tampered.record.clone().into();
+    fields.manifest = manifest;
+    let mut receiving = serde_json::to_value(&fields.receiving).unwrap();
+    receiving["message"] = serde_json::to_value(fields.manifest.message()).unwrap();
+    receiving["conversation"] = serde_json::to_value(fields.manifest.conversation()).unwrap();
+    fields.receiving = serde_json::from_value(receiving).unwrap();
+    tampered.record = cs_mail_application::correspondence::MessageRecord::new(fields).unwrap();
     assert!(
         cs_mail_client::correspondence::open(
             &h.clients[1].endpoint_keys().unwrap(),
@@ -441,7 +541,7 @@ fn current_policy_survives_derivation_deletion_and_conflicting_approvals() {
     let quote = source.quote(&manifest, anchor).unwrap();
     let intermediate = h.prepare(0, 1, 101, 2, vec![DocumentPart::Quotation(quote)]);
     let intermediate_manifest = intermediate.manifest.clone();
-    h.call(0, Command::Send(Box::new(intermediate)));
+    h.call(0, fixture_native_send(Box::new(intermediate)));
     let document = cs_mail_client::correspondence::open(
         &h.clients[1].endpoint_keys().unwrap(),
         &h.view(1, 101),
@@ -496,7 +596,7 @@ fn current_policy_survives_derivation_deletion_and_conflicting_approvals() {
             id: conversation(1),
         },
     );
-    let outgoing = h.request(1, Command::Send(Box::new(onward)));
+    let outgoing = h.request(1, fixture_native_send(Box::new(onward)));
     assert!(matches!(
         CorrespondenceService::new(&h.repository).handle(&outgoing),
         Ok(Response::Refused {
@@ -578,12 +678,14 @@ fn current_policy_survives_derivation_deletion_and_conflicting_approvals() {
     );
     // Missing policy data is uncertainty, not an implicit grant (model a damaged restore).
     let mut db = Client::connect(&h.url, NoTls).unwrap();
-    db.batch_execute("ALTER TABLE cs_correspondence_messages DROP CONSTRAINT cs_correspondence_messages_conversation_fkey; DELETE FROM cs_conversations WHERE id='1'").unwrap();
+    // Production now also protects participant binding; disable that constraint only
+    // inside this deliberately damaged, isolated restore fixture.
+    db.batch_execute("ALTER TABLE cs_correspondence_messages DROP CONSTRAINT cs_correspondence_messages_conversation_fkey; ALTER TABLE cs_correspondence_messages DROP CONSTRAINT cs_native_participants; DELETE FROM cs_conversations WHERE id='1'").unwrap();
     let assessment = h.request(
         1,
         Command::Assess {
             manifest: match outgoing.command {
-                Command::Send(p) => p.manifest,
+                Command::Send { package, .. } => package.manifest,
                 _ => unreachable!(),
             },
         },
@@ -615,7 +717,7 @@ fn concurrent_commits_and_storage_failures_preserve_one_complete_delivery() {
             source.quote(&manifest, anchor).unwrap(),
         )],
     );
-    let send = h.request(0, Command::Send(Box::new(package)));
+    let send = h.request(0, fixture_native_send(Box::new(package)));
     let restriction = h.request(
         1,
         Command::ChangePolicy {
@@ -677,7 +779,7 @@ fn concurrent_commits_and_storage_failures_preserve_one_complete_delivery() {
         2,
         vec![DocumentPart::Text("atomic delivery".into())],
     );
-    let request = h.request(0, Command::Send(Box::new(plain)));
+    let request = h.request(0, fixture_native_send(Box::new(plain)));
     db.batch_execute("CREATE FUNCTION reject_correspondence_receipt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected failure'; END $$; CREATE TRIGGER fail_receipt BEFORE INSERT ON cs_correspondence_receipts FOR EACH ROW EXECUTE FUNCTION reject_correspondence_receipt()").unwrap();
     assert!(
         CorrespondenceService::new(&h.repository)
@@ -687,6 +789,15 @@ fn concurrent_commits_and_storage_failures_preserve_one_complete_delivery() {
     assert_eq!(
         db.query_one(
             "SELECT count(*) FROM cs_correspondence_messages WHERE id='102'",
+            &[]
+        )
+        .unwrap()
+        .get::<_, i64>(0),
+        0
+    );
+    assert_eq!(
+        db.query_one(
+            "SELECT count(*) FROM cs_alias_deliveries WHERE message='102' AND transport='native'",
             &[]
         )
         .unwrap()
@@ -785,7 +896,7 @@ fn mailbox_and_live_authority_do_not_inherit_permission_from_correspondence_scop
         ))
     ));
     let forward = h.prepare(0, 1, 103, 1, vec![DocumentPart::Text("follow-up".into())]);
-    let forward_request = h.request(0, Command::Send(Box::new(forward)));
+    let forward_request = h.request(0, fixture_native_send(Box::new(forward)));
     let mut db = Client::connect(&h.url, NoTls).unwrap();
     // A pending receipt stands in for an authority change awaiting processing.
     // No command is evaluated here; only the ordering barrier is exercised.
@@ -815,7 +926,7 @@ fn mailbox_and_live_authority_do_not_inherit_permission_from_correspondence_scop
         "UPDATE cs_relationship_aggregates SET relationship_state=jsonb_set(relationship_state,'{relationship,state}','\"Revoked\"') WHERE aggregate_key='pair-1-0'"
     ).unwrap();
     let reply = h.prepare(1, 0, 101, 1, vec![DocumentPart::Text("reply".into())]);
-    let request = h.request(1, Command::Send(Box::new(reply)));
+    let request = h.request(1, fixture_native_send(Box::new(reply)));
     assert!(matches!(
         CorrespondenceService::new(&h.repository).handle(&request),
         Ok(Response::Refused {
@@ -860,7 +971,7 @@ fn mailbox_and_live_authority_do_not_inherit_permission_from_correspondence_scop
 fn exercise_native_lane(h: &Fixture) {
     use cs_mail_capabilities::*;
     use ed25519_dalek::Signer;
-    let grant = LaneGrant {
+    let grant = SenderScopedGrant {
         id: LaneId(800),
         subject: LaneSubject::Native(cs_mail_privacy::ScopedHandle([8; 32])),
         sender: persona(1),
@@ -906,7 +1017,7 @@ fn exercise_native_lane(h: &Fixture) {
     );
     assert!(matches!(
         CorrespondenceService::new(&h.repository)
-            .handle(&h.request(1, Command::Send(Box::new(no_capability)))),
+            .handle(&h.request(1, fixture_native_send(Box::new(no_capability)))),
         Ok(Response::Refused {
             reason: CorrespondenceError::Unauthorized,
             ..
@@ -914,7 +1025,7 @@ fn exercise_native_lane(h: &Fixture) {
     ));
     h.capability.set(Some(LaneId(800)));
     let package = h.prepare(1, 0, 802, 50, vec![DocumentPart::Text("permitted".into())]);
-    let request = h.request(1, Command::Send(Box::new(package)));
+    let request = h.request(1, fixture_native_send(Box::new(package)));
     let service = CorrespondenceService::new(&h.repository);
     assert_eq!(
         service.handle(&request).unwrap(),
@@ -930,7 +1041,7 @@ fn exercise_native_lane(h: &Fixture) {
             &[],
         )
         .unwrap()
-        .get::<_, postgres::types::Json<Lane>>(0)
+        .get::<_, postgres::types::Json<cs_mail_capabilities::SenderScopedLane>>(0)
         .0;
     assert_eq!(used.messages_in_rate_window(), 1);
     assert!(matches!(
@@ -948,7 +1059,7 @@ fn exercise_native_lane(h: &Fixture) {
         vec![DocumentPart::Text("over allowance".into())],
     );
     assert!(matches!(
-        service.handle(&h.request(1, Command::Send(Box::new(excess)))),
+        service.handle(&h.request(1, fixture_native_send(Box::new(excess)))),
         Ok(Response::Refused { .. })
     ));
     h.capability.set(None);
@@ -983,7 +1094,7 @@ fn mixed_selections_survive_copy_delivery_without_bypassing_source_authority() {
         ],
     );
     let manifest = source.manifest.clone();
-    h.call(0, Command::Send(Box::new(source)));
+    h.call(0, fixture_native_send(Box::new(source)));
     let selection = MessageSelection::new(
         MessageId(200),
         manifest.version(),
@@ -1035,7 +1146,7 @@ fn mixed_selections_survive_copy_delivery_without_bypassing_source_authority() {
         ],
     );
     let copy_manifest = copy.manifest.clone();
-    h.call(0, Command::Send(Box::new(copy)));
+    h.call(0, fixture_native_send(Box::new(copy)));
     h.call(
         0,
         Command::DeleteCopies {
@@ -1095,7 +1206,7 @@ fn mixed_selections_survive_copy_delivery_without_bypassing_source_authority() {
     );
     assert!(matches!(
         CorrespondenceService::new(&h.repository)
-            .handle(&h.request(1, Command::Send(Box::new(onward)))),
+            .handle(&h.request(1, fixture_native_send(Box::new(onward)))),
         Ok(Response::Refused {
             reason: CorrespondenceError::PolicyRestricted,
             ..

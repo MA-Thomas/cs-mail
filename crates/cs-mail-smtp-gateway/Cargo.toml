@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-accounts = { path = "../cs-mail-accounts" }
 cs-mail-content = { path = "../cs-mail-content" }
 hmac.workspace = true
 getrandom = "0.2"

@@ -155,6 +155,7 @@ impl Member {
                 });
                 let command = if to.is_some() {
                     Command::Start {
+                        receiving_alias: member.native_receiving_alias(member.persona()?)?,
                         mailbox,
                         message: package,
                         disclose_to_external_mail: disclose,

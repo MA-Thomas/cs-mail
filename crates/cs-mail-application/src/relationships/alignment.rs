@@ -1,6 +1,8 @@
 //! Explicit development correction, authorized by fresh recipient consent.
 //! Historical terms stay immutable; ordinary acceptance continues to use `ReplyLane`.
-use cs_mail_capabilities::{Lane, LaneMode, LaneSubject, SignedLaneGrant, VerifiedLaneGrant};
+use cs_mail_capabilities::{
+    LaneMode, LaneSubject, SenderScopedLane, SignedLaneGrant, VerifiedLaneGrant,
+};
 use cs_mail_primitives::{CanonicalTime, IdempotencyKey};
 use cs_mail_protocol::{
     PolicySnapshot, ProtocolError, ProtocolEvent, ProtocolEventKind, Relationship,
@@ -31,7 +33,7 @@ pub struct AcceptanceAlignmentContext<'a> {
     pub acceptance: Option<&'a ProtocolEvent>,
     pub original: &'a Relationship,
     pub reverse: &'a Relationship,
-    pub lane: Option<&'a Lane>,
+    pub lane: Option<&'a SenderScopedLane>,
     pub last_withdrawal: Option<&'a ProtocolEvent>,
     pub reverse_has_unresolved_request: bool,
     pub now: CanonicalTime,

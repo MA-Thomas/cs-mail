@@ -165,6 +165,17 @@ impl Loop {
         let document = cs_mail_client::correspondence::compose(vec![
             cs_mail_correspondence::DocumentPart::Text("Hello Alice".into()),
         ])
+        .map(|doc| {
+            doc.with_subject(
+                cs_mail_correspondence::ConversationSubject::new(
+                    "Fixture conversation",
+                    cs_mail_primitives::CanonicalTime(0),
+                    0,
+                    [19; 32],
+                )
+                .unwrap(),
+            )
+        })
         .unwrap();
         let package = cs_mail_client::correspondence::prepare(
             &cs_mail_client::correspondence::EndpointKeys {
@@ -197,6 +208,7 @@ impl Loop {
             RequestId(9),
             ContentRef(9),
             package,
+            cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
         )
         .unwrap();
         let packet = cs_mail_application::requests::documents::SignedRequestDocument {

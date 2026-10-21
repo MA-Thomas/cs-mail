@@ -142,3 +142,7 @@ pub mod keys;
 pub mod control;
 
 pub mod directory;
+
+pub mod aliases;
+
+pub mod alias_permission;

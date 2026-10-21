@@ -6,7 +6,7 @@ use std::thread;
 use cs_mail_application::receipts::DurableExecutionOutcome;
 use cs_mail_capabilities::{
     AdmissionAuthentication, BondFreeAdmission, DeclarationAuthorityConstraint, LaneEvidence,
-    LaneGrant, LaneMode, LaneState, LaneSubject, RateLimit, SignedLaneGrant,
+    LaneMode, LaneState, LaneSubject, RateLimit, SenderScopedGrant, SignedLaneGrant,
 };
 use cs_mail_content::{
     ContentBinding, ContentCertificateDigest, EndpointSecretKey, encrypt,
@@ -548,7 +548,7 @@ fn database_row_lock_serializes_conflicting_decisions() {
 
 fn signed_lane_grant() -> SignedLaneGrant {
     let recipient_signing = SigningKey::from_bytes(&[2; 32]);
-    let grant = LaneGrant {
+    let grant = SenderScopedGrant {
         id: LaneId(90),
         subject: LaneSubject::Native(cs_mail_privacy::ScopedHandle(
             *signing_scope().relationship.as_bytes(),
@@ -2841,11 +2841,23 @@ fn restored_grant_rechecks_signed_evidence_using_frozen_authority() {
     );
 }
 
+fn provision_native_inbox(engine: &PostgresEngine, at: CanonicalTime) {
+    support::fixture_inbox(
+        engine.deployment(),
+        RECIPIENT,
+        OperationalKeyRef(2),
+        &[2; 32],
+        at,
+    )
+    .unwrap();
+}
+
 fn stage_native_request(
     engine: &PostgresEngine,
     declarations: MessageDeclarations,
     until: CanonicalTime,
 ) {
+    provision_native_inbox(engine, test_time(0));
     support::requests::stage_request_message(
         engine,
         &policy(),
@@ -2904,6 +2916,7 @@ fn native_send_packet(
     at: CanonicalTime,
 ) -> cs_mail_application::correspondence::SignedRequest {
     use cs_mail_application::correspondence::Command;
+    provision_native_inbox(engine, at);
     let (_, custody) = EndpointSecretKey::from_secret_bytes(ContentKeyRef(900), &[90; 32]).unwrap();
     engine
         .deployment()
@@ -2917,6 +2930,14 @@ fn native_send_packet(
             engine,
             89_000,
             Command::Create {
+                subject: cs_mail_correspondence::ConversationSubject::new(
+                    "Fixture conversation",
+                    cs_mail_primitives::CanonicalTime(0),
+                    0,
+                    [19; 32],
+                )
+                .unwrap()
+                .commitment(),
                 id: conversation,
                 other: RECIPIENT,
             },
@@ -2934,6 +2955,17 @@ fn native_send_packet(
         cs_mail_client::correspondence::compose(vec![cs_mail_correspondence::DocumentPart::Text(
             "native ciphertext".into(),
         )])
+        .map(|doc| {
+            doc.with_subject(
+                cs_mail_correspondence::ConversationSubject::new(
+                    "Fixture conversation",
+                    cs_mail_primitives::CanonicalTime(0),
+                    0,
+                    [19; 32],
+                )
+                .unwrap(),
+            )
+        })
         .unwrap();
     let packet = cs_mail_client::correspondence::prepare(
         &cs_mail_client::correspondence::EndpointKeys {
@@ -2965,7 +2997,7 @@ fn native_send_packet(
     native_command(
         engine,
         admission.idempotency_key.0,
-        Command::Send(Box::new(packet)),
+        support::fixture_native_send(Box::new(packet)),
         at,
     )
 }

@@ -7,6 +7,7 @@ use cs_mail_application::correspondence::{
 };
 use cs_mail_client::correspondence::{EndpointKeys, compose, open, prepare, readable_text};
 use cs_mail_correspondence::{ConversationId, CorrespondenceError, DocumentPart};
+use cs_mail_test_support::fixture_native_send;
 
 fn signed(f: &Loop, actor: usize, operation: u128, command: Command) -> SignedRequest {
     let (persona, key, seed) = if actor == 0 {
@@ -88,7 +89,19 @@ fn package_with_capability(
             secret: &secret,
             public,
         },
-        &compose(parts).unwrap(),
+        &compose(parts)
+            .map(|doc| {
+                doc.with_subject(
+                    cs_mail_correspondence::ConversationSubject::new(
+                        "Fixture conversation",
+                        cs_mail_primitives::CanonicalTime(0),
+                        0,
+                        [19; 32],
+                    )
+                    .unwrap(),
+                )
+            })
+            .unwrap(),
         ConversationId::new(conversation).unwrap(),
         recipient,
         f.gateway.custody_key().unwrap(),
@@ -260,7 +273,7 @@ fn submitted_documents_and_answers_survive_rejection_expiry_and_exact_replay() {
             1001,
             vec![DocumentPart::Text("answer-canary-private".into())],
         );
-        let request = signed(&f, 1, 200, Command::Send(Box::new(payload)));
+        let request = signed(&f, 1, 200, fixture_native_send(Box::new(payload)));
         // The transport may reorder object fields; signatures bind the typed command.
         let mut tampered = request.clone();
         tampered.command = Command::Fetch {
@@ -309,7 +322,7 @@ fn submitted_documents_and_answers_survive_rejection_expiry_and_exact_replay() {
             &f,
             1,
             200,
-            Command::Send(Box::new(package(
+            fixture_native_send(Box::new(package(
                 &f,
                 1,
                 200,
@@ -407,6 +420,14 @@ fn acceptance_and_frozen_reply_lane_roll_back_together() {
         1,
         300,
         Command::Create {
+            subject: cs_mail_correspondence::ConversationSubject::new(
+                "Fixture conversation",
+                cs_mail_primitives::CanonicalTime(0),
+                0,
+                [19; 32],
+            )
+            .unwrap()
+            .commitment(),
             id: ConversationId::new(2000).unwrap(),
             other: ALICE,
         },
@@ -421,7 +442,11 @@ fn acceptance_and_frozen_reply_lane_roll_back_together() {
         Some(lane.grant().id),
     );
     assert_eq!(
-        call(&f, &signed(&f, 1, 301, Command::Send(Box::new(packet)))).unwrap(),
+        call(
+            &f,
+            &signed(&f, 1, 301, fixture_native_send(Box::new(packet)))
+        )
+        .unwrap(),
         Response::Committed(MessageId(301))
     );
 }
@@ -436,7 +461,7 @@ fn revoking_scoped_answers_and_unblocking_never_revives_the_old_offer() {
             &f,
             1,
             400,
-            Command::Send(Box::new(package(
+            fixture_native_send(Box::new(package(
                 &f,
                 1,
                 400,
@@ -531,7 +556,11 @@ fn acceptance_preserves_custom_reverse_lane_and_consumed_allowance() {
         vec![DocumentPart::Text("custom lane answer".into())],
         Some(LaneId(777)),
     );
-    call(&f, &signed(&f, 1, 701, Command::Send(Box::new(packet)))).unwrap();
+    call(
+        &f,
+        &signed(&f, 1, 701, fixture_native_send(Box::new(packet))),
+    )
+    .unwrap();
     let before = reverse(&f).lane.unwrap();
     assert_eq!(before.messages_in_rate_window(), 1);
     f.send(&f.accept(702)).unwrap();
@@ -662,6 +691,14 @@ fn every_received_conversation_keeps_replies_after_broad_reverse_lane_expiry() {
             0,
             9501,
             Command::Create {
+                subject: cs_mail_correspondence::ConversationSubject::new(
+                    "Fixture conversation",
+                    cs_mail_primitives::CanonicalTime(0),
+                    0,
+                    [19; 32],
+                )
+                .unwrap()
+                .commitment(),
                 id: ConversationId::new(9501).unwrap(),
                 other: BOB,
             },
@@ -678,7 +715,11 @@ fn every_received_conversation_keeps_replies_after_broad_reverse_lane_expiry() {
         )],
     );
     assert_eq!(
-        call(&f, &signed(&f, 0, 9502, Command::Send(Box::new(outgoing)))).unwrap(),
+        call(
+            &f,
+            &signed(&f, 0, 9502, fixture_native_send(Box::new(outgoing)))
+        )
+        .unwrap(),
         Response::Committed(MessageId(9502))
     );
     let reply = package(
@@ -689,7 +730,11 @@ fn every_received_conversation_keeps_replies_after_broad_reverse_lane_expiry() {
         vec![DocumentPart::Text("reply without a broad lane".into())],
     );
     assert_eq!(
-        call(&f, &signed(&f, 1, 9503, Command::Send(Box::new(reply)))).unwrap(),
+        call(
+            &f,
+            &signed(&f, 1, 9503, fixture_native_send(Box::new(reply)))
+        )
+        .unwrap(),
         Response::Committed(MessageId(9503))
     );
     assert!(matches!(
@@ -700,6 +745,14 @@ fn every_received_conversation_keeps_replies_after_broad_reverse_lane_expiry() {
                 1,
                 9504,
                 Command::Create {
+                    subject: cs_mail_correspondence::ConversationSubject::new(
+                        "Fixture conversation",
+                        cs_mail_primitives::CanonicalTime(0),
+                        0,
+                        [19; 32]
+                    )
+                    .unwrap()
+                    .commitment(),
                     id: ConversationId::new(9504).unwrap(),
                     other: ALICE
                 }

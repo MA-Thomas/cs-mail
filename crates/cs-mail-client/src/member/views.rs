@@ -10,6 +10,7 @@ pub struct Inbox {
     pub pending_request: bool,
     pub request_progress: Option<super::RequestProgress>,
     pub pending_policy: bool,
+    pub pending_deletion: Option<String>,
     pub pending_send: Option<String>,
     pub account: String,
     pub persona: String,
@@ -26,6 +27,7 @@ pub enum PendingSetup {
     ContentKeyPublication,
     ServicePurchase,
     DirectoryPublication,
+    AliasManagement,
 }
 #[derive(Clone, Debug)]
 pub struct Conversation {
@@ -141,6 +143,9 @@ pub struct Request {
 }
 #[derive(Clone, Debug)]
 pub struct Message {
+    pub committed_at: Option<u64>,
+    pub sequence: Option<u64>,
+    pub content: super::ReadingContent,
     pub id: String,
     pub conversation: Option<String>,
     pub outgoing: bool,
@@ -157,6 +162,13 @@ pub(super) fn inbox(state: &State) -> Result<Inbox, Error> {
         request_progress: super::MemberClient::request_progress_of(state)?,
         last_send: state.last_send.clone(),
         pending_policy: state.editing_conversation.is_some(),
+        pending_deletion: state.editing_conversation.as_ref().and_then(|s| {
+            if let cs_mail_application::correspondence::Command::DeleteCopies { id } = s.command {
+                Some(id.value().to_string())
+            } else {
+                None
+            }
+        }),
         pending_send: super::MemberClient::pending_send_other(state)
             .map(|other| other.0.to_string()),
         account: state.profile.account.0.to_string(),
@@ -169,6 +181,7 @@ pub(super) fn inbox(state: &State) -> Result<Inbox, Error> {
             Setup::Publish => PendingSetup::ContentKeyPublication,
             Setup::Purchase(_) => PendingSetup::ServicePurchase,
             Setup::Directory(_) => PendingSetup::DirectoryPublication,
+            Setup::Alias(_) => PendingSetup::AliasManagement,
         }),
         last_decision: state.last_decision.clone(),
     })
@@ -216,7 +229,7 @@ fn lane_expiry_reminder(
 /// One time-scoped presentation rule for native and external directional permission.
 pub(super) fn permission(
     state: RelationshipState,
-    lane: Option<&cs_mail_capabilities::Lane>,
+    lane: Option<&cs_mail_capabilities::SenderScopedLane>,
     now: Option<cs_mail_primitives::CanonicalTime>,
 ) -> (&'static str, PermissionRoute) {
     match state {
@@ -227,10 +240,7 @@ pub(super) fn permission(
                 lane.is_some_and(|lane| lane.grant().id == id && lane.is_current(now))
             }) =>
         {
-            (
-                "Express lane — scope and validity apply",
-                PermissionRoute::Bounded,
-            )
+            ("Express lane", PermissionRoute::Bounded)
         }
         RelationshipState::ExpressLane(_) => ("No active express lane", PermissionRoute::Closed),
         RelationshipState::Rejected => ("Rejected", PermissionRoute::Closed),
@@ -302,41 +312,39 @@ pub(super) fn project_requests(
                     let refund = match money.refund {
                         RefundView::None => "No refund recorded".to_owned(),
                         RefundView::Owed(amount) => format!(
-                            "Refund owed: {} minor units; not yet confirmed",
+                            "Refund due: {} units · awaiting confirmation",
                             amount.minor_units()
                         ),
                         RefundView::Confirmed(amount) => {
-                            format!("Refund confirmed: {} minor units", amount.minor_units())
+                            format!("Refund confirmed: {} units", amount.minor_units())
                         }
                     };
                     let capture = match money.capture {
-                        cs_mail_finance::CaptureStatus::Pending => "Funding outcome pending",
+                        cs_mail_finance::CaptureStatus::Pending => "Charge awaiting confirmation",
                         cs_mail_finance::CaptureStatus::CancellationRequested => {
-                            "Funding cancellation requested; outcome pending"
+                            "Charge cancellation awaiting confirmation"
                         }
-                        cs_mail_finance::CaptureStatus::FundingFinalized => "Funding finalized",
+                        cs_mail_finance::CaptureStatus::FundingFinalized => "Charge confirmed",
                         cs_mail_finance::CaptureStatus::Voided => {
-                            "Funding voided; no charge collected"
+                            "Charge cancelled · nothing collected"
                         }
-                        cs_mail_finance::CaptureStatus::Reversed => "Collected funding reversed",
+                        cs_mail_finance::CaptureStatus::Reversed => "Charge reversed",
                     };
-                    let mut lines = vec![format!(
-                        "Authorized amount: {units} minor units · {capture} · {refund}"
-                    )];
+                    let mut lines = vec![format!("Authorized: {units} units\n{capture}\n{refund}")];
                     if !money.processing_retained.is_zero() {
                         lines.push(format!(
-                            "Processing retained by CSQD: {} minor units",
+                            "Processing fee retained: {} units",
                             money.processing_retained.minor_units()
                         ));
                     }
                     if !money.collateral_forfeited.is_zero() {
                         lines.push(format!(
-                            "Collateral pending forfeiture to the member program: {} minor units",
+                            "Collateral pending for the member pool: {} units",
                             money.collateral_forfeited.minor_units()
                         ));
                     }
                     if money.awaiting_processor {
-                        lines.push("Processor outcome pending".into());
+                        lines.push("Payment confirmation pending".into());
                     }
                     lines.join("\n")
                 },
@@ -418,6 +426,9 @@ pub(super) fn conversation(
             .map_err(|_| Error::InvalidData)?
             .to_owned();
         result.messages.push(Message {
+            committed_at: None,
+            sequence: None,
+            content: super::ReadingContent::Readable(vec![super::ReadingPart::Text(text.clone())]),
             conversation: None,
             outgoing: false,
             id: record.binding.message_id.0.to_string(),

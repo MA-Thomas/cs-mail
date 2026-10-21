@@ -13,7 +13,8 @@ struct RequestFinancialStatusView: View {
                 EditorialReadingBlock(title, style: .title),
                 EditorialReadingBlock(request.className, style: .heading),
                 EditorialReadingBlock(direction == .incoming ? "Received request" : "Sent request", style: .caption),
-                EditorialReadingBlock(request.financialStatus)
+                EditorialReadingBlock(request.financialStatus),
+                EditorialReadingBlock("Simulated units · no real money is taken.", style: .caption)
             ]).padding(32).frame(maxWidth: 720).frame(maxWidth: .infinity)
         }
     }

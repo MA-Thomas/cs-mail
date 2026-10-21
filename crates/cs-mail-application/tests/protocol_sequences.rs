@@ -1096,6 +1096,7 @@ fn three_messages_are_one_request_one_solicitation_and_one_refund() {
 
 #[test]
 fn domain_snapshots_round_trip_without_embedding_shared_or_financial_owners() {
+    challenge_alias_conversation_boundaries();
     let mut f = Fixture::new();
     f.create(1, 1);
     // Conjecture: restoration cannot admit two unresolved requests or a foreign owner.
@@ -1409,4 +1410,367 @@ fn altered_retries_under_an_existing_operation_identity_are_rejected() {
         Err(EngineError::DuplicateConflict)
     ));
     assert_eq!(f.engine.snapshot().unwrap(), before);
+}
+
+// Conjecture: alias replacement/restriction cannot widen the receiving entrance
+// or evade a participant block. A new conversation or another sender being admitted
+// on a restricted route would falsify the member's explicit permission boundary.
+#[allow(clippy::too_many_lines)] // One lifecycle experiment challenges exact authority, rollback and replay together.
+fn challenge_alias_conversation_boundaries() {
+    use cs_mail_accounts::{aliases::*, directory::MemberAddress};
+    use cs_mail_application::aliases::{
+        AdmissionContext, RouteDecision, SenderAuthentication, admit,
+    };
+    use cs_mail_correspondence::ConversationId;
+    let owner = ProtocolIdentity(20);
+    let sender = ProtocolIdentity(10);
+    let id = cs_mail_primitives::AliasId::new(801).unwrap();
+    let conversation = ConversationId::new(900).unwrap();
+    let another = ConversationId::new(901).unwrap();
+    let private = Alias::create(
+        id,
+        owner,
+        MemberAddress::try_from("hospital@example.test".to_owned()).unwrap(),
+        cs_mail_accounts::aliases::AliasUsage::Private {
+            description: "Hospital".to_owned().try_into().unwrap(),
+        },
+        CanonicalTime(10),
+    )
+    .unwrap();
+    let declarations = alias_declarations();
+    // Conjecture: address creation has no authority; removing a broad lane cannot grandfather a conversation.
+    let mut unpaired_context = AdmissionContext {
+        alias: &private,
+        authentication: SenderAuthentication::Authenticated(sender),
+        relationship: None,
+        sender_scope: None,
+        lane: None,
+        declarations: &declarations,
+        lane_evidence: None,
+        domain_evidence: None,
+        covered: true,
+        review_required: false,
+        conversation,
+    };
+    assert_eq!(
+        admit(&unpaired_context, CanonicalTime(20)),
+        RouteDecision::Refuse(AliasError::Permission)
+    );
+    let opened = private
+        .with_permission(
+            private
+                .permission()
+                .open(0.into(), CanonicalTime(15))
+                .unwrap(),
+        )
+        .unwrap();
+    unpaired_context.alias = &opened;
+    assert!(matches!(
+        admit(&unpaired_context, CanonicalTime(20)),
+        RouteDecision::Authorize(_)
+    ));
+    let frozen = opened
+        .with_permission(
+            opened
+                .permission()
+                .restrict(
+                    1.into(),
+                    vec![
+                        AdmittedConversation::new(id, conversation, sender, CanonicalTime(20))
+                            .unwrap(),
+                    ],
+                    CanonicalTime(25),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+    unpaired_context.alias = &frozen;
+    assert!(matches!(
+        admit(&unpaired_context, CanonicalTime(26)),
+        RouteDecision::Authorize(_)
+    ));
+    unpaired_context.conversation = another;
+    assert_eq!(
+        admit(&unpaired_context, CanonicalTime(26)),
+        RouteDecision::Refuse(AliasError::Permission)
+    );
+    let removed = frozen
+        .with_permission(
+            frozen
+                .permission()
+                .remove(2.into(), CanonicalTime(27))
+                .unwrap(),
+        )
+        .unwrap();
+    unpaired_context.alias = &removed;
+    unpaired_context.conversation = conversation;
+    assert_eq!(
+        admit(&unpaired_context, CanonicalTime(28)),
+        RouteDecision::Refuse(AliasError::Permission)
+    );
+    assert_eq!(removed.revision(), private.revision());
+    assert_eq!(removed.address(), private.address());
+    assert!(
+        frozen
+            .permission()
+            .remove(1.into(), CanonicalTime(28))
+            .is_err()
+    );
+    let private = opened;
+    let mut context = AdmissionContext {
+        alias: &private,
+        authentication: SenderAuthentication::Authenticated(sender),
+        relationship: None,
+        sender_scope: None,
+        lane: None,
+        declarations: &declarations,
+        lane_evidence: None,
+        domain_evidence: None,
+        covered: true,
+        review_required: false,
+        conversation,
+    };
+    assert!(matches!(
+        admit(&context, CanonicalTime(20)),
+        RouteDecision::Authorize(_)
+    ));
+    context.review_required = true;
+    assert_eq!(admit(&context, CanonicalTime(20)), RouteDecision::Hold);
+    context.review_required = false;
+    context.authentication = SenderAuthentication::Uncertain;
+    assert_eq!(admit(&context, CanonicalTime(20)), RouteDecision::Hold);
+    context.authentication = SenderAuthentication::Authenticated(sender);
+    let restricted = private
+        .restrict(
+            0,
+            vec![AdmittedConversation::new(id, conversation, sender, CanonicalTime(20)).unwrap()],
+            CanonicalTime(30),
+        )
+        .unwrap();
+    context.alias = &restricted;
+    assert!(matches!(
+        admit(&context, CanonicalTime(31)),
+        RouteDecision::Authorize(_)
+    ));
+    context.conversation = another;
+    assert_eq!(
+        admit(&context, CanonicalTime(31)),
+        RouteDecision::Refuse(AliasError::Restricted)
+    );
+    let approved = restricted
+        .approve_conversation(1, sender, another, CanonicalTime(32))
+        .unwrap();
+    context.alias = &approved;
+    assert!(matches!(
+        admit(&context, CanonicalTime(33)),
+        RouteDecision::Authorize(_)
+    ));
+    context.authentication = SenderAuthentication::Authenticated(ProtocolIdentity(11));
+    assert_eq!(
+        admit(&context, CanonicalTime(33)),
+        RouteDecision::Refuse(AliasError::Restricted)
+    );
+    context.alias = &restricted;
+    context.conversation = conversation;
+    context.authentication = SenderAuthentication::Authenticated(ProtocolIdentity(11));
+    assert_eq!(
+        admit(&context, CanonicalTime(31)),
+        RouteDecision::Refuse(AliasError::Restricted)
+    );
+    context.authentication = SenderAuthentication::Authenticated(sender);
+    let mut relationship =
+        ProtocolState::initial(PrincipalRef(10), sender, owner, CanonicalTime(10)).relationship;
+    relationship.state = cs_mail_protocol::RelationshipState::Blocked;
+    context.relationship = Some(&relationship);
+    assert_eq!(
+        admit(&context, CanonicalTime(31)),
+        RouteDecision::Refuse(AliasError::Blocked)
+    );
+    context.relationship = None;
+    challenge_alias_replacement(&restricted, &declarations);
+}
+
+fn alias_declarations() -> cs_mail_primitives::MessageDeclarations {
+    cs_mail_primitives::MessageDeclarations {
+        purpose: cs_mail_primitives::DeclaredPurpose::Unspecified,
+        origin: cs_mail_primitives::OriginDeclaration {
+            mode: cs_mail_primitives::OriginMode::LegacyOrUnspecified,
+            authority: cs_mail_primitives::DeclarationAuthority::GuestSmtp(ProviderRef(30)),
+        },
+        payload_schema: None,
+    }
+}
+fn challenge_alias_public_scope(
+    relationship: &cs_mail_protocol::Relationship,
+    declarations: &cs_mail_primitives::MessageDeclarations,
+) {
+    use cs_mail_accounts::{aliases::*, directory::MemberAddress};
+    use cs_mail_application::aliases::{
+        AdmissionContext, RouteDecision, SenderAuthentication, SenderRouteScope, SenderScopeRecord,
+        admit,
+    };
+    use cs_mail_capabilities::routes::ReceivingScope;
+    let owner = ProtocolIdentity(20);
+    let sender = ProtocolIdentity(10);
+    let id = cs_mail_primitives::AliasId::new(801).unwrap();
+    let mut context = AdmissionContext {
+        alias: &Alias::create(
+            id,
+            owner,
+            MemberAddress::try_from("fixture@example.test".to_owned()).unwrap(),
+            cs_mail_accounts::aliases::AliasUsage::Private {
+                description: "Hospital".to_owned().try_into().unwrap(),
+            },
+            CanonicalTime(10),
+        )
+        .unwrap(),
+        authentication: SenderAuthentication::Authenticated(sender),
+        relationship: None,
+        sender_scope: None,
+        lane: None,
+        declarations,
+        lane_evidence: None,
+        domain_evidence: None,
+        covered: true,
+        review_required: false,
+        conversation: cs_mail_correspondence::ConversationId::new(900).unwrap(),
+    };
+    let public = Alias::create(
+        cs_mail_primitives::AliasId::new(803).unwrap(),
+        owner,
+        MemberAddress::try_from("research@example.test".to_owned()).unwrap(),
+        cs_mail_accounts::aliases::AliasUsage::Public,
+        CanonicalTime(10),
+    )
+    .unwrap();
+    let relationship = cs_mail_protocol::Relationship {
+        state: cs_mail_protocol::RelationshipState::Accepted,
+        ..relationship.clone()
+    };
+    let scoped: SenderRouteScope = SenderScopeRecord {
+        revision: 1,
+        established_at: CanonicalTime(10),
+        sender,
+        recipient: owner,
+        relationship_version: relationship.version,
+        receiving: ReceivingScope::one(id),
+        lane: None,
+    }
+    .try_into()
+    .unwrap();
+    context.alias = &public;
+    context.relationship = Some(&relationship);
+    context.sender_scope = Some(&scoped);
+    assert_eq!(admit(&context, CanonicalTime(46)), RouteDecision::Request);
+    let scoped: SenderRouteScope = SenderScopeRecord {
+        receiving: ReceivingScope::one(public.id()),
+        ..scoped.clone().into()
+    }
+    .try_into()
+    .unwrap();
+    context.sender_scope = Some(&scoped);
+    assert!(matches!(
+        admit(&context, CanonicalTime(46)),
+        RouteDecision::Authorize(_)
+    ));
+    context.covered = false;
+    assert_eq!(
+        admit(&context, CanonicalTime(46)),
+        RouteDecision::Refuse(AliasError::Coverage)
+    );
+}
+fn challenge_alias_restoration(
+    restricted: &cs_mail_accounts::aliases::Alias,
+    replaced: &cs_mail_accounts::aliases::Alias,
+    other_id: cs_mail_primitives::AliasId,
+) {
+    use cs_mail_accounts::aliases::Alias;
+    let owner = ProtocolIdentity(20);
+    let id = cs_mail_primitives::AliasId::new(801).unwrap();
+    let mut malformed = serde_json::to_value(restricted).unwrap();
+    malformed["permission"]["alias"] = serde_json::json!(other_id);
+    assert!(serde_json::from_value::<Alias>(malformed).is_err());
+    // A restored private route cannot smuggle an empty owner-only description.
+    let mut malformed_description = serde_json::to_value(restricted).unwrap();
+    malformed_description["usage"]["Private"]["description"] = serde_json::json!("   ");
+    assert!(serde_json::from_value::<Alias>(malformed_description).is_err());
+    let restored: Alias = serde_json::from_value(serde_json::to_value(replaced).unwrap()).unwrap();
+    assert_eq!(restored.owner(), owner);
+    assert_eq!(restored.id(), id);
+    assert_eq!(restored.revision(), 2);
+}
+
+fn challenge_alias_replacement(
+    restricted: &cs_mail_accounts::aliases::Alias,
+    declarations: &cs_mail_primitives::MessageDeclarations,
+) {
+    use cs_mail_accounts::{aliases::*, directory::MemberAddress};
+    use cs_mail_application::aliases::{
+        AdmissionContext, RouteDecision, SenderAuthentication, admit,
+    };
+    let owner = ProtocolIdentity(20);
+    let sender = ProtocolIdentity(10);
+    let other_id = cs_mail_primitives::AliasId::new(802).unwrap();
+    let mut context = AdmissionContext {
+        alias: restricted,
+        authentication: SenderAuthentication::Authenticated(sender),
+        relationship: None,
+        sender_scope: None,
+        lane: None,
+        declarations,
+        lane_evidence: None,
+        domain_evidence: None,
+        covered: true,
+        review_required: false,
+        conversation: cs_mail_correspondence::ConversationId::new(900).unwrap(),
+    };
+    let relationship =
+        ProtocolState::initial(PrincipalRef(10), sender, owner, CanonicalTime(10)).relationship;
+    let replacement = Alias::create(
+        other_id,
+        owner,
+        MemberAddress::try_from("new-hospital@example.test".to_owned()).unwrap(),
+        cs_mail_accounts::aliases::AliasUsage::Private {
+            description: "Hospital".to_owned().try_into().unwrap(),
+        },
+        CanonicalTime(40),
+    )
+    .unwrap();
+    let blocked = cs_mail_protocol::Relationship {
+        state: cs_mail_protocol::RelationshipState::Blocked,
+        ..relationship.clone()
+    };
+    context.alias = &replacement;
+    context.relationship = Some(&blocked);
+    assert_eq!(
+        admit(&context, CanonicalTime(40)),
+        RouteDecision::Refuse(AliasError::Blocked)
+    );
+    context.relationship = None;
+    let replaced = restricted
+        .replace(
+            1,
+            &replacement,
+            CanonicalTime(50),
+            vec![],
+            CanonicalTime(40),
+        )
+        .unwrap();
+    context.alias = &replaced;
+    assert!(matches!(
+        admit(&context, CanonicalTime(49)),
+        RouteDecision::Authorize(_)
+    ));
+    assert_eq!(
+        admit(&context, CanonicalTime(50)),
+        RouteDecision::Refuse(AliasError::Retired)
+    );
+    let retired = replaced.retire(2, CanonicalTime(45)).unwrap();
+    context.alias = &retired;
+    assert_eq!(
+        admit(&context, CanonicalTime(46)),
+        RouteDecision::Refuse(AliasError::Retired)
+    );
+    challenge_alias_public_scope(&relationship, declarations);
+    challenge_alias_restoration(restricted, &replaced, other_id);
 }

@@ -47,8 +47,8 @@ impl AuthenticatedReply {
     pub const fn arrival(&self) -> super::ArrivalIdentity {
         self.arrival
     }
-    pub const fn destination(&self) -> super::MailDestination {
-        self.destination
+    pub fn destination(&self) -> super::MailDestination {
+        self.destination.clone()
     }
     pub fn rfc_message_id(&self) -> &str {
         &self.rfc_message_id

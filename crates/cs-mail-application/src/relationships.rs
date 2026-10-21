@@ -2,13 +2,13 @@
 #[cfg(feature = "development-maintenance")]
 pub mod alignment;
 
-use cs_mail_capabilities::{CapabilityError, Lane, VerifiedLaneGrant};
+use cs_mail_capabilities::{CapabilityError, SenderScopedLane, VerifiedLaneGrant};
 use cs_mail_protocol::{ProtocolError, SettlementSnapshot, TransitionContext, TransitionManifest};
 
 /// Reverse permission derives from the sender's signed formation record and the
 /// accepted lifecycle in protected state. It is not an ordinary recipient-signed grant.
 pub struct ReplyLane {
-    lane: Lane,
+    lane: SenderScopedLane,
     manifest: TransitionManifest,
 }
 impl ReplyLane {
@@ -82,13 +82,13 @@ impl ReplyLane {
             .map_err(LaneAcceptanceError::Protocol)?;
         Ok(Some(Self { lane, manifest }))
     }
-    pub fn into_effects(self) -> (Lane, TransitionManifest) {
+    pub fn into_effects(self) -> (SenderScopedLane, TransitionManifest) {
         (self.lane, self.manifest)
     }
 }
 
 pub struct LaneAcceptance {
-    lane: Lane,
+    lane: SenderScopedLane,
     schedules: Vec<cs_mail_primitives::ScheduleChange>,
     settlement: TransitionManifest,
 }
@@ -142,7 +142,7 @@ impl LaneAcceptance {
     pub fn into_effects(
         self,
     ) -> (
-        Lane,
+        SenderScopedLane,
         TransitionManifest,
         Vec<cs_mail_primitives::ScheduleChange>,
     ) {

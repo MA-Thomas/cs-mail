@@ -378,7 +378,7 @@ impl From<LedgerError> for ProtocolError {
 struct ManifestBuilder {
     delivery_route: RequestDeliveryRoute,
     mailbox_deliveries: Vec<MessageId>,
-    lane: Option<cs_mail_capabilities::Lane>,
+    lane: Option<cs_mail_capabilities::SenderScopedLane>,
     lane_revocation: Option<cs_mail_capabilities::LaneRevocation>,
     next: ProtocolState,
     history: RequestHistory,

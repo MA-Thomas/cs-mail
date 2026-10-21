@@ -1,5 +1,7 @@
 //! Signed staging and complete publication of a request's native document.
-use crate::correspondence::{MessageRecord, PreparedMessage, validate_prepared};
+use crate::correspondence::{
+    MessageRecord, MessageRecordFields, PreparedMessage, validate_prepared,
+};
 use cs_mail_content::EndpointPublicKey;
 use cs_mail_correspondence::{
     Conversation, ConversationId, CorrespondenceError, CorrespondenceRef,
@@ -19,6 +21,7 @@ pub struct RequestDocument(DocumentRecord);
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct DocumentRecord {
+    alias: cs_mail_primitives::AliasId,
     request: RequestId,
     content: ContentRef,
     package: Box<PreparedMessage>,
@@ -28,6 +31,7 @@ impl TryFrom<DocumentRecord> for RequestDocument {
     fn try_from(record: DocumentRecord) -> Result<Self, Self::Error> {
         if record.request.0 == 0
             || record.content.0 == 0
+            || record.package.manifest.subject().is_none()
             || !record.package.manifest.sources().is_empty()
             || [
                 &record.package.sender_copy,
@@ -62,13 +66,18 @@ impl RequestDocument {
         request: RequestId,
         content: ContentRef,
         package: PreparedMessage,
+        alias: cs_mail_primitives::AliasId,
     ) -> Result<Self, CorrespondenceError> {
         DocumentRecord {
+            alias,
             request,
             content,
             package: Box::new(package),
         }
         .try_into()
+    }
+    pub const fn alias(&self) -> cs_mail_primitives::AliasId {
+        self.0.alias
     }
     pub const fn request(&self) -> RequestId {
         self.0.request
@@ -92,7 +101,7 @@ pub struct SignedRequestDocument {
 impl SignedRequestDocument {
     fn bytes(&self) -> Result<Vec<u8>, CorrespondenceError> {
         serde_json::to_vec(&(
-            "cs-mail/request-document/v1",
+            "cs-mail/request-document/v3",
             self.scope,
             self.key,
             &self.document,
@@ -283,6 +292,7 @@ impl StageDecision {
     }
 }
 pub struct SubmissionDocument {
+    pub receiving_alias: cs_mail_accounts::aliases::Alias,
     pub policy_conversation: Option<Conversation>,
     pub document: SignedRequestDocument,
     pub conversation: Option<RequestConversation>,
@@ -294,8 +304,7 @@ pub enum ConversationWrite {
 pub struct MailboxDelivery {
     conversation: ConversationWrite,
     link: RequestConversation,
-    record: MessageRecord,
-    package: Box<PreparedMessage>,
+    delivery: crate::correspondence::AdmittedDelivery,
     content: ContentRef,
 }
 impl MailboxDelivery {
@@ -304,17 +313,10 @@ impl MailboxDelivery {
     ) -> (
         ConversationWrite,
         RequestConversation,
-        MessageRecord,
-        Box<PreparedMessage>,
+        crate::correspondence::AdmittedDelivery,
         ContentRef,
     ) {
-        (
-            self.conversation,
-            self.link,
-            self.record,
-            self.package,
-            self.content,
-        )
+        (self.conversation, self.link, self.delivery, self.content)
     }
     /// # Errors
     /// Rejects a staged document not bound to the admitted message and request.
@@ -327,7 +329,18 @@ impl MailboxDelivery {
     ) -> Result<Self, CorrespondenceError> {
         let doc = &input.document.document;
         let package = doc.package();
-        if doc.request() != request.id
+        if input.receiving_alias.kind() != cs_mail_accounts::aliases::AliasKind::Public
+            || input.receiving_alias.id() != doc.alias()
+            || input.receiving_alias.owner() != request.terms.recipient
+            || input
+                .receiving_alias
+                .check_conversation(
+                    request.terms.sender,
+                    package.manifest.conversation(),
+                    context.now,
+                )
+                .is_err()
+            || doc.request() != request.id
             || doc.content() != message.content
             || package.manifest.message() != message.id
         {
@@ -351,11 +364,9 @@ impl MailboxDelivery {
             .try_into()?;
             (
                 ConversationWrite::Create(
-                    Conversation::begun_by_request(link.conversation(), pair).receive(
-                        request.terms.recipient,
-                        message.id,
-                        epoch,
-                    )?,
+                    Conversation::begun_by_request(link.conversation(), pair)
+                        .bind_subject(package.manifest.subject())?
+                        .receive(request.terms.recipient, message.id, epoch)?,
                 ),
                 link,
             )
@@ -375,25 +386,37 @@ impl MailboxDelivery {
                 .as_ref()
                 .ok_or(CorrespondenceError::Invalid)?;
             (
-                ConversationWrite::Update(current.receive(
-                    request.terms.recipient,
-                    message.id,
-                    epoch,
-                )?),
+                ConversationWrite::Update(
+                    current.bind_subject(package.manifest.subject())?.receive(
+                        request.terms.recipient,
+                        message.id,
+                        epoch,
+                    )?,
+                ),
                 link,
             )
         };
         Ok(Self {
             conversation,
             link,
-            record: MessageRecord {
-                sender_key: package.sender_recovery.sender,
-                manifest: package.manifest.clone(),
-                author: request.terms.sender,
-                admission: message.basis,
-                committed_at: context.now,
-            },
-            package: Box::new(package.clone()),
+            delivery: crate::correspondence::AdmittedDelivery::new(
+                MessageRecord::new(MessageRecordFields {
+                    receiving: crate::aliases::DeliveredRoute::request(
+                        &input.receiving_alias,
+                        request.terms.sender,
+                        package.manifest.conversation(),
+                        message.id,
+                        request.id,
+                        context.now,
+                    )?,
+                    sender_key: package.sender_recovery.sender,
+                    manifest: package.manifest.clone(),
+                    author: request.terms.sender,
+                    admission: message.basis,
+                    committed_at: context.now,
+                })?,
+                Box::new(package.clone()),
+            )?,
             content: doc.content(),
         })
     }

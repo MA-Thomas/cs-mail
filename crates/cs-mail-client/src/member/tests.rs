@@ -1,8 +1,9 @@
 //! Agreed conjectures: local persistence does not disclose credentials or plaintext;
 //! interruptions never replace an unresolved operation or release data after custody denial.
 use super::{
-    Deployment, DeviceStore, EnrollmentDetails, Error, LoginStart, MemberClient, Pending, Profile,
-    State, Transport, login, storage,
+    AddressMutation, AddressUpdateResult, Deployment, DeviceStore, EnrollmentDetails, Error,
+    LoginStart, MemberClient, Pending, PendingAddressAction, Profile, State, Transport, login,
+    storage,
 };
 use cs_mail_primitives as p;
 use cs_mail_security::{CommandSigner, ProviderSigner, ReceiptKind, ReceiptPayload, SigningScope};
@@ -13,14 +14,91 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+struct RetainedData {
+    revision: u64,
+    metadata: Option<Vec<u8>>,
+    indexes: std::collections::BTreeMap<super::RetainedRecordId, Vec<u8>>,
+    copies: std::collections::BTreeMap<super::RetainedRecordId, Vec<u8>>,
+}
 #[derive(Default)]
 struct Store {
+    retained: Mutex<RetainedData>,
+    copy_reads: AtomicU64,
+    index_reads: AtomicU64,
+    retained_bytes_written: AtomicU64,
+    lose_retained_ack: AtomicBool,
     key: Mutex<Option<Vec<u8>>>,
     cache: Mutex<Option<Vec<u8>>>,
+    workspace: Mutex<Option<Vec<u8>>>,
+    personal: Mutex<Option<Vec<u8>>>,
     denied: AtomicBool,
     fail_save: AtomicBool,
 }
 impl DeviceStore for Store {
+    fn retained_state(&self) -> Result<(u64, Option<Vec<u8>>), Error> {
+        let d = self.retained.lock().unwrap();
+        Ok((d.revision, d.metadata.clone()))
+    }
+    fn retained_indexes(
+        &self,
+        after: Option<super::RetainedRecordId>,
+        limit: u16,
+    ) -> Result<Vec<super::RetainedIndexRow>, Error> {
+        self.index_reads.fetch_add(1, Ordering::SeqCst);
+        let d = self.retained.lock().unwrap();
+        Ok(d.indexes
+            .range((
+                after.map_or(std::ops::Bound::Unbounded, std::ops::Bound::Excluded),
+                std::ops::Bound::Unbounded,
+            ))
+            .take(limit as usize)
+            .map(|(id, bytes)| super::RetainedIndexRow {
+                id: *id,
+                ciphertext: bytes.clone(),
+            })
+            .collect())
+    }
+    fn retained_copy(&self, id: super::RetainedRecordId) -> Result<Option<Vec<u8>>, Error> {
+        self.copy_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(self.retained.lock().unwrap().copies.get(&id).cloned())
+    }
+    fn commit_retained(&self, change: super::RetainedCommit) -> Result<(), Error> {
+        if self.fail_save.load(Ordering::SeqCst) {
+            return Err(Error::StorageUnavailable);
+        }
+        let mut d = self.retained.lock().unwrap();
+        if d.revision != change.expected_revision || (d.revision == 0 && change.metadata.is_none())
+        {
+            return Err(Error::StorageUnavailable);
+        }
+        if let Some(meta) = change.metadata {
+            self.retained_bytes_written
+                .fetch_add(meta.len() as u64, Ordering::SeqCst);
+            d.metadata = Some(meta);
+        }
+        for write in change.writes {
+            self.retained_bytes_written
+                .fetch_add(write.index.ciphertext.len() as u64, Ordering::SeqCst);
+            d.indexes.insert(write.index.id, write.index.ciphertext);
+            match write.copy {
+                super::RetainedCopyWrite::Keep => {}
+                super::RetainedCopyWrite::Remove => {
+                    d.copies.remove(&write.index.id);
+                }
+                super::RetainedCopyWrite::Replace(bytes) => {
+                    self.retained_bytes_written
+                        .fetch_add(bytes.len() as u64, Ordering::SeqCst);
+                    d.copies.insert(write.index.id, bytes);
+                }
+            }
+        }
+        d.revision += 1;
+        if self.lose_retained_ack.swap(false, Ordering::SeqCst) {
+            return Err(Error::StorageUnavailable);
+        }
+        Ok(())
+    }
     fn load_secret(&self) -> Result<Vec<u8>, Error> {
         if self.denied.load(Ordering::SeqCst) {
             return Err(Error::KeyUnavailable);
@@ -43,6 +121,42 @@ impl DeviceStore for Store {
             return Err(Error::StorageUnavailable);
         }
         *self.cache.lock().unwrap() = Some(bytes.to_vec());
+        Ok(())
+    }
+    fn load_workspace(&self) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self.workspace.lock().unwrap().clone())
+    }
+    fn save_workspace(&self, bytes: &[u8]) -> Result<(), Error> {
+        if self.fail_save.load(Ordering::SeqCst) {
+            return Err(Error::StorageUnavailable);
+        }
+        *self.workspace.lock().unwrap() = Some(bytes.to_vec());
+        Ok(())
+    }
+    fn load_personal(&self) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self.personal.lock().unwrap().clone())
+    }
+    fn save_personal(&self, bytes: &[u8]) -> Result<(), Error> {
+        if self.fail_save.load(Ordering::SeqCst) {
+            return Err(Error::StorageUnavailable);
+        }
+        *self.personal.lock().unwrap() = Some(bytes.to_vec());
+        Ok(())
+    }
+    fn save_submission(
+        &self,
+        cache: &[u8],
+        workspace: &[u8],
+        personal: &[u8],
+    ) -> Result<(), Error> {
+        if self.fail_save.load(Ordering::SeqCst) {
+            return Err(Error::StorageUnavailable);
+        }
+        let mut a = self.cache.lock().unwrap();
+        let mut b = self.workspace.lock().unwrap();
+        *a = Some(cache.to_vec());
+        *b = Some(workspace.to_vec());
+        *self.personal.lock().unwrap() = Some(personal.to_vec());
         Ok(())
     }
 }
@@ -263,7 +377,7 @@ fn lost_decision_response_and_failed_local_commit_replay_exact_operation_after_r
             .unwrap();
     let mut state = State {
         external: None,
-        format: 3,
+        format: 4,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -330,16 +444,19 @@ fn lost_decision_response_and_failed_local_commit_replay_exact_operation_after_r
 }
 
 struct ContentNetwork {
+    fail_mailbox_page: AtomicBool,
     view: cs_mail_application::members::RelationshipView,
     message: cs_mail_application::correspondence::MessageView,
     store: Arc<Store>,
     deny_during_fetch: AtomicBool,
+    fetch_gate: Mutex<Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
     lose_send: AtomicBool,
     offline_after_ack: AtomicBool,
     offline: AtomicBool,
     sends: Mutex<Vec<Vec<u8>>>,
 }
 impl Transport for ContentNetwork {
+    #[allow(clippy::too_many_lines)] // Keep the existing protocol fixture's routes and injected page failure together.
     fn request(&self, _: &str, route: &str, body: Option<&[u8]>) -> Result<Vec<u8>, Error> {
         use cs_mail_application::{
             correspondence::{Command, Response, SignedRequest},
@@ -351,6 +468,11 @@ impl Transport for ContentNetwork {
         let value = if route == "v1/correspondence/commands" {
             let request: SignedRequest = serde_json::from_slice(body.unwrap()).unwrap();
             let response = match request.command {
+                Command::Mailbox { after, .. }
+                    if after > 0 && self.fail_mailbox_page.load(Ordering::SeqCst) =>
+                {
+                    return Err(Error::Offline);
+                }
                 Command::Mailbox { after, .. } => Response::Mailbox {
                     entries: if after == 0 {
                         vec![(1, self.message.record.clone())]
@@ -370,12 +492,16 @@ impl Transport for ContentNetwork {
                     ))
                 }
                 Command::Fetch { .. } => {
+                    if let Some(gate) = self.fetch_gate.lock().unwrap().clone() {
+                        gate.0.wait();
+                        gate.1.wait();
+                    }
                     if self.deny_during_fetch.load(Ordering::SeqCst) {
                         self.store.denied.store(true, Ordering::SeqCst);
                     }
                     Response::Message(Box::new(self.message.clone()))
                 }
-                Command::Send(package) => {
+                Command::Send { package, .. } => {
                     self.sends.lock().unwrap().push(body.unwrap().to_vec());
                     if self.lose_send.swap(false, Ordering::SeqCst) {
                         return Err(Error::Offline);
@@ -390,6 +516,8 @@ impl Transport for ContentNetwork {
             serde_json::to_value(response).unwrap()
         } else if route == "v1/deployment" {
             serde_json::to_value(deployment()).unwrap()
+        } else if route.ends_with("/receiving-alias") {
+            fixture_public_alias(route)
         } else if route.ends_with("/endpoint-key") {
             serde_json::to_value(cs_mail_security::EndpointKeyPublication {
                 persona: p::ProtocolIdentity(1),
@@ -446,6 +574,7 @@ impl Transport for ContentNetwork {
         Err(Error::Offline)
     }
 }
+#[allow(clippy::too_many_lines)] // Keep the complete endpoint, assignment and ciphertext fixture visible together.
 fn content_fixture(keys: &storage::Secrets, store: Arc<Store>) -> ContentNetwork {
     use crate::correspondence::{EndpointKeys, compose, prepare};
     use cs_mail_application::{
@@ -466,6 +595,17 @@ fn content_fixture(keys: &storage::Secrets, store: Arc<Store>) -> ContentNetwork
     let document = compose(vec![cs_mail_correspondence::DocumentPart::Text(
         "private-message-canary".into(),
     )])
+    .map(|doc| {
+        doc.with_subject(
+            cs_mail_correspondence::ConversationSubject::new(
+                "Fixture conversation",
+                cs_mail_primitives::CanonicalTime(0),
+                0,
+                [19; 32],
+            )
+            .unwrap(),
+        )
+    })
     .unwrap();
     let package = prepare(
         &EndpointKeys {
@@ -515,7 +655,14 @@ fn content_fixture(keys: &storage::Secrets, store: Arc<Store>) -> ContentNetwork
             external_conversations: vec![],
         },
         message: MessageView {
-            record: MessageRecord {
+            record: MessageRecord::new(cs_mail_application::correspondence::MessageRecordFields {
+                receiving: fixture_assignment(
+                    handle.sender,
+                    handle.recipient,
+                    package.manifest.conversation(),
+                    package.manifest.message(),
+                    p::CanonicalTime(1),
+                ),
                 sender_key: public,
                 manifest: package.manifest,
                 author: handle.sender,
@@ -523,11 +670,14 @@ fn content_fixture(keys: &storage::Secrets, store: Arc<Store>) -> ContentNetwork
                     version: p::RelationshipVersion(1),
                 },
                 committed_at: p::CanonicalTime(1),
-            },
+            })
+            .unwrap(),
             ciphertext: package.recipient_copy,
         },
         store,
+        fail_mailbox_page: AtomicBool::new(false),
         deny_during_fetch: AtomicBool::new(false),
+        fetch_gate: Mutex::new(None),
         lose_send: AtomicBool::new(false),
         offline_after_ack: AtomicBool::new(false),
         offline: AtomicBool::new(false),
@@ -550,7 +700,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         .unwrap();
     let state = State {
         external: None,
-        format: 3,
+        format: 4,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -584,6 +734,32 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         client.conversation("1").unwrap().messages[0].text,
         "private-message-canary"
     );
+    challenge_personal_reading(&client, &store, &keys);
+    // Losing a later mailbox page must not persist early headers with the old cursor.
+    let complete = store.load_cache().unwrap().unwrap();
+    let mut empty = storage::open(store.as_ref(), &keys).unwrap();
+    empty.mailbox = super::correspondence::Mailbox::default();
+    storage::save(store.as_ref(), &keys, &empty).unwrap();
+    network.fail_mailbox_page.store(true, Ordering::SeqCst);
+    assert!(!client.refresh_mail().unwrap().native_current);
+    assert!(
+        storage::open(store.as_ref(), &keys)
+            .unwrap()
+            .mailbox
+            .records
+            .is_empty()
+    );
+    network.fail_mailbox_page.store(false, Ordering::SeqCst);
+    assert!(client.refresh_mail().unwrap().native_current);
+    assert_eq!(
+        storage::open(store.as_ref(), &keys)
+            .unwrap()
+            .mailbox
+            .records
+            .len(),
+        1
+    );
+    store.save_cache(&complete).unwrap();
     // Navigation exposes owned metadata without decrypting or replacing the cache.
     let before = store.load_cache().unwrap();
     let navigation = client.navigation().unwrap();
@@ -608,10 +784,14 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
             .prepare_send(
                 &state,
                 &keys,
-                p::ProtocolIdentity(1),
-                Some(1),
-                "outgoing-private-canary",
-                &[],
+                super::correspondence::SendWriting {
+                    alias: None,
+                    other: p::ProtocolIdentity(1),
+                    conversation: Some(1),
+                    text: "outgoing-private-canary",
+                    sources: &[],
+                    draft: None,
+                },
             )
             .unwrap(),
     );
@@ -622,6 +802,9 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
             .windows(b"outgoing-private-canary".len())
             .any(|part| part == b"outgoing-private-canary")
     );
+    // Observation must not retry the pending message.
+    client.refresh_mail().unwrap();
+    assert!(network.sends.lock().unwrap().is_empty());
     network.lose_send.store(true, Ordering::SeqCst);
     assert_eq!(
         client.transmit_send(&mut state, &keys).unwrap_err(),
@@ -649,12 +832,147 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     let sends = network.sends.lock().unwrap();
     let packet: cs_mail_application::correspondence::SignedRequest =
         serde_json::from_slice(sends.last().unwrap()).unwrap();
-    let cs_mail_application::correspondence::Command::Send(package) = packet.command else {
+    let cs_mail_application::correspondence::Command::Send { package, .. } = packet.command else {
         panic!()
     };
     assert_eq!(committed, package.manifest.message());
     drop(sends);
-    assert_eq!(client.conversation("1").unwrap_err(), Error::Offline);
+    // Conjecture: retained correspondence remains searchable and readable after offline reopen.
+    let offline = MemberClient::new(
+        store.clone(),
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(100)),
+    );
+    assert_eq!(
+        offline.cached_conversation("1").unwrap().messages[0].text,
+        "private-message-canary"
+    );
+    assert!(
+        !offline
+            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .unwrap()
+            .matches
+            .is_empty()
+    );
+    assert!(
+        !offline
+            .search_mail("Fixture conversation", super::InboxScope::All, 0, 25)
+            .unwrap()
+            .matches
+            .is_empty()
+    );
+    let before_index_reads = store.index_reads.load(Ordering::SeqCst);
+    let before_copy_reads = store.copy_reads.load(Ordering::SeqCst);
+    let empty = offline
+        .search_mail("wordthatdoesnotexist", super::InboxScope::All, 0, 25)
+        .unwrap();
+    assert!(empty.matches.is_empty());
+    assert_eq!(
+        store.copy_reads.load(Ordering::SeqCst),
+        before_copy_reads,
+        "no-match search opened message copies"
+    );
+    assert_eq!(
+        store.index_reads.load(Ordering::SeqCst),
+        before_index_reads,
+        "warm search reconstructed its index"
+    );
+    let original_copies = store.retained.lock().unwrap().copies.clone();
+    offline.rebuild_search_index().unwrap();
+    assert_eq!(
+        store.retained.lock().unwrap().copies,
+        original_copies,
+        "index rebuilding rewrote retained ciphertext copies"
+    );
+
+    assert!(
+        !offline
+            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .unwrap()
+            .matches
+            .is_empty()
+    );
+    // Conjecture: losing a local commit acknowledgement cannot strand the live index at an old revision.
+    let committed_revision = store.retained.lock().unwrap().revision;
+    store.lose_retained_ack.store(true, Ordering::SeqCst);
+    assert_eq!(
+        offline.rebuild_search_index().unwrap_err(),
+        Error::StorageUnavailable
+    );
+    assert_eq!(
+        store.retained.lock().unwrap().revision,
+        committed_revision + 1
+    );
+    assert!(
+        offline.retained.lock().unwrap().is_none(),
+        "uncertain commit retained a stale index"
+    );
+    assert_eq!(
+        offline
+            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .unwrap()
+            .matches
+            .len(),
+        1
+    );
+    let prior_retained = store.retained.lock().unwrap().clone();
+    let active = storage::open(store.as_ref(), &keys).unwrap();
+    let mut removed = super::retained::Retained::load(&offline, &keys, &active).unwrap();
+    removed.exclude(super::retained::CopyKey {
+        thread: super::MailKey::Native(cs_mail_correspondence::ConversationId::new(1).unwrap()),
+        message: p::MessageId(1),
+    });
+    removed.save(&offline, &keys).unwrap();
+    drop(removed);
+    offline.rebuild_search_index().unwrap();
+    assert!(
+        offline
+            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .unwrap()
+            .matches
+            .is_empty(),
+        "rebuilding revived an excluded copy"
+    );
+    let checkpoint = store.retained.lock().unwrap().clone();
+    store.fail_save.store(true, Ordering::SeqCst);
+    assert_eq!(
+        offline.rebuild_search_index().unwrap_err(),
+        Error::StorageUnavailable
+    );
+    assert_eq!(
+        store.retained.lock().unwrap().clone(),
+        checkpoint,
+        "failed rebuild changed its checkpoint"
+    );
+    store.fail_save.store(false, Ordering::SeqCst);
+    *store.retained.lock().unwrap() = prior_retained;
+    let expired = MemberClient::new(
+        store.clone(),
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(u64::MAX)),
+    );
+    assert!(
+        expired
+            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .unwrap()
+            .matches
+            .is_empty()
+    );
+    let default =
+        cs_mail_correspondence::ConversationSubject::new("  ", p::CanonicalTime(0), 0, [31; 32])
+            .unwrap();
+    assert_eq!(default.text(), "Default subject: January-1-1970, 12:00 AM");
+    assert_eq!(
+        cs_mail_correspondence::ConversationSubject::new(
+            "",
+            p::CanonicalTime(0),
+            -18_000,
+            [32; 32]
+        )
+        .unwrap()
+        .text(),
+        "Default subject: December-31-1969, 7:00 PM"
+    );
     assert!(
         storage::open(store.as_ref(), &keys)
             .unwrap()
@@ -662,18 +980,184 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
             .is_none()
     );
     network.offline.store(false, Ordering::SeqCst);
+    let history = client.outgoing_work().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, super::WorkStatus::Committed);
     let ciphertext = store.load_cache().unwrap().unwrap();
     let marker = b"private-message-canary";
     assert!(!ciphertext.windows(marker.len()).any(|part| part == marker));
     // Even the decrypted device snapshot contains only HPKE ciphertext, never display text.
     let snapshot = serde_json::to_vec(&storage::open(store.as_ref(), &keys).unwrap()).unwrap();
     assert!(!snapshot.windows(marker.len()).any(|part| part == marker));
+    let retained_bytes = store.retained.lock().unwrap().clone();
+    for bytes in retained_bytes
+        .indexes
+        .values()
+        .chain(retained_bytes.copies.values())
+    {
+        assert!(!bytes.windows(marker.len()).any(|part| part == marker));
+    }
+    challenge_index_scale(&store, &keys);
+    // Conjecture: a blocked download cannot block local queries or repopulate a locked session.
+    let isolated = Arc::new(Store::default());
+    *isolated.key.lock().unwrap() = store.key.lock().unwrap().clone();
+    *isolated.cache.lock().unwrap() = store.cache.lock().unwrap().clone();
+    let concurrent = Arc::new(MemberClient::new(
+        isolated,
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(100)),
+    ));
+    let gate = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
+    *network.fetch_gate.lock().unwrap() = Some(gate.clone());
+    let background = concurrent.clone();
+    let download = std::thread::spawn(move || background.retain_mail(1));
+    gate.0.wait();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let querying = concurrent.clone();
+    let query = std::thread::spawn(move || {
+        tx.send(querying.search_mail("absentword", super::InboxScope::All, 0, 10))
+            .unwrap();
+    });
+    let outcome = rx.recv_timeout(std::time::Duration::from_secs(2));
+    if outcome.is_ok() {
+        concurrent.clear_inboxes().unwrap();
+    }
+    gate.1.wait();
+    let download_outcome = download.join().unwrap();
+    query.join().unwrap();
+    *network.fetch_gate.lock().unwrap() = None;
+    assert!(
+        outcome.is_ok(),
+        "blocked network download blocked local search"
+    );
+    assert!(outcome.unwrap().unwrap().matches.is_empty());
+    assert_eq!(download_outcome.unwrap_err(), Error::Unavailable);
+    assert!(
+        concurrent.retained.lock().unwrap().is_none(),
+        "late download restored a locked index"
+    );
+
+    // Force a fresh download in this fixture: denied custody must prevent its checkpoint.
+    *store.retained.lock().unwrap() = RetainedData::default();
+    client.clear_inboxes().unwrap();
     network.deny_during_fetch.store(true, Ordering::SeqCst);
     assert_eq!(client.conversation("1").unwrap_err(), Error::KeyUnavailable);
     assert_eq!(store.load_cache().unwrap().unwrap(), ciphertext);
 }
 
+// Existing custody/recovery experiment also challenges snapshot-read races and
+// reversible organization. A later arrival becoming read, or permission/cache
+// mutation from organization, would falsify the personal-state boundary.
+#[allow(clippy::too_many_lines)] // One read-state scenario across later arrival, organization and restoration.
+fn challenge_personal_reading(client: &MemberClient, store: &Arc<Store>, keys: &storage::Secrets) {
+    use super::{MailAction, MailFolder};
+    let item = client.mail_items().unwrap().remove(0);
+    assert_eq!(item.unread, 1);
+    let original = store.load_cache().unwrap();
+    client
+        .organize_mail(
+            item.key,
+            super::InboxScope::All,
+            MailAction::Read(item.messages.clone()),
+        )
+        .unwrap();
+    assert_eq!(client.mail_items().unwrap()[0].unread, 0);
+    let mut arrival = storage::open(store.as_ref(), keys).unwrap();
+    let mut record: cs_mail_application::correspondence::MessageRecordFields =
+        arrival.mailbox.records[0].1.clone().into();
+    let doc = cs_mail_correspondence::Document::new(
+        vec![cs_mail_correspondence::DocumentPart::Text(
+            "later arrival".into(),
+        )],
+        [2; 32],
+    )
+    .unwrap();
+    record.manifest = doc
+        .manifest(p::MessageId(998), record.manifest.conversation())
+        .unwrap();
+    record.receiving = fixture_assignment(
+        record.author,
+        record.receiving.recipient(),
+        record.manifest.conversation(),
+        record.manifest.message(),
+        record.committed_at,
+    );
+    arrival.mailbox.records.push((
+        2,
+        cs_mail_application::correspondence::MessageRecord::new(record).unwrap(),
+    ));
+    storage::save(store.as_ref(), keys, &arrival).unwrap();
+    client
+        .organize_mail(
+            item.key,
+            super::InboxScope::All,
+            MailAction::Read(item.messages.clone()),
+        )
+        .unwrap();
+    assert_eq!(
+        client.mail_items().unwrap()[0].unread,
+        1,
+        "old displayed snapshot read a later arrival"
+    );
+    client
+        .organize_mail(
+            item.key,
+            super::InboxScope::All,
+            MailAction::Move(MailFolder::Archive),
+        )
+        .unwrap();
+    client
+        .organize_mail(
+            item.key,
+            super::InboxScope::All,
+            MailAction::Move(MailFolder::Trash),
+        )
+        .unwrap();
+    client
+        .organize_mail(item.key, super::InboxScope::All, MailAction::Restore)
+        .unwrap();
+    assert_eq!(client.mail_items().unwrap()[0].folder, MailFolder::Archive);
+    let before = store.load_personal().unwrap();
+    store.fail_save.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        client.organize_mail(item.key, super::InboxScope::All, MailAction::Flag(true)),
+        Err(Error::StorageUnavailable)
+    ));
+    store.fail_save.store(false, Ordering::SeqCst);
+    assert_eq!(before, store.load_personal().unwrap());
+    store.save_cache(original.as_ref().unwrap()).unwrap();
+    assert_eq!(client.mail_items().unwrap()[0].folder, MailFolder::Archive);
+    assert_eq!(client.mail_items().unwrap()[0].unread, 0);
+    let page = client
+        .search_mail("private-message-canary", super::InboxScope::All, 0, 1)
+        .unwrap();
+    assert_eq!(page.matches.len(), 1);
+    client.clear_search().unwrap();
+    assert!(matches!(
+        client.search_mail("private-message-canary", super::InboxScope::All, 1, 1),
+        Err(Error::InvalidData)
+    ));
+    let bytes = store.load_personal().unwrap().unwrap();
+    assert!(
+        !bytes
+            .windows(b"private-message-canary".len())
+            .any(|w| w == b"private-message-canary")
+    );
+    let mut malformed: Value = serde_json::from_slice(
+        &storage::decrypt(keys, &bytes, b"cs-mail/personal-mailbox/v1").unwrap(),
+    )
+    .unwrap();
+    malformed["threads"][0]["before_trash"] = json!("Trash");
+    store
+        .save_personal(&storage::encrypt(keys, &malformed, b"cs-mail/personal-mailbox/v1").unwrap())
+        .unwrap();
+    assert!(matches!(client.mail_items(), Err(Error::InvalidData)));
+    store.save_personal(&bytes).unwrap();
+}
+
 struct DirectoryNetwork {
+    alias_tamper: AtomicBool,
+    alias_refuse: AtomicBool,
     sent: Mutex<Vec<Vec<u8>>>,
     lost: AtomicBool,
     fail_ack: AtomicBool,
@@ -683,6 +1167,74 @@ impl Transport for DirectoryNetwork {
     fn request(&self, _: &str, route: &str, body: Option<&[u8]>) -> Result<Vec<u8>, Error> {
         use cs_mail_accounts::directory::DirectoryRevision;
         use cs_mail_application::directory::{Command, Receipt, Response, SignedRequest};
+        if route == "v1/aliases/commands" {
+            use cs_mail_application::aliases::{
+                Acknowledgement, Command as AliasCommand, Outcome as AliasOutcome,
+                Receipt as AliasReceipt, SignedCommand as AliasCommandRequest,
+            };
+            let bytes = body.unwrap().to_vec();
+            self.sent.lock().unwrap().push(bytes.clone());
+            if self.lost.swap(false, Ordering::SeqCst) {
+                return Err(Error::Offline);
+            }
+            let request: AliasCommandRequest = serde_json::from_slice(&bytes).unwrap();
+            let cs_mail_application::aliases::Command::Create { id, ref creation } =
+                request.command
+            else {
+                panic!("expected alias creation");
+            };
+            request
+                .verify(
+                    &ed25519_dalek::SigningKey::from_bytes(&[5; 32])
+                        .verifying_key()
+                        .to_bytes(),
+                )
+                .unwrap();
+            assert!(matches!(request.command, AliasCommand::Create { .. }));
+            let (address, usage) = match creation {
+                cs_mail_application::aliases::AliasCreation::Private { description } => (
+                    "p00000000000000000000000000000001@csqd-mail.com"
+                        .to_owned()
+                        .try_into()
+                        .unwrap(),
+                    cs_mail_accounts::aliases::AliasUsage::Private {
+                        description: description.clone(),
+                    },
+                ),
+                cs_mail_application::aliases::AliasCreation::Public { address } => (
+                    address.clone(),
+                    cs_mail_accounts::aliases::AliasUsage::Public,
+                ),
+            };
+            let alias = cs_mail_accounts::aliases::Alias::create(
+                id,
+                request.owner,
+                address,
+                usage,
+                p::CanonicalTime(100),
+            )
+            .unwrap();
+            let mut acknowledgement = Acknowledgement::sign(
+                AliasReceipt {
+                    digest: request.digest().unwrap(),
+                    at: p::CanonicalTime(100),
+                    outcome: if self.alias_refuse.swap(false, Ordering::SeqCst) {
+                        AliasOutcome::Refused(cs_mail_accounts::aliases::AliasError::Conflict)
+                    } else {
+                        AliasOutcome::Changed(vec![alias])
+                    },
+                },
+                &[3; 32],
+            )
+            .unwrap();
+            if self.alias_tamper.swap(false, Ordering::SeqCst) {
+                acknowledgement.signature[0] ^= 1;
+            }
+            if self.fail_ack.swap(false, Ordering::SeqCst) {
+                self.store.fail_save.store(true, Ordering::SeqCst);
+            }
+            return Ok(serde_json::to_vec(&acknowledgement).unwrap());
+        }
         assert_eq!(route, "v1/directory/commands");
         let bytes = body.unwrap().to_vec();
         self.sent.lock().unwrap().push(bytes.clone());
@@ -726,7 +1278,7 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
         .unwrap();
     let state = State {
         external: None,
-        format: 3,
+        format: 4,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -751,6 +1303,8 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
     };
     storage::save(store.as_ref(), &keys, &state).unwrap();
     let network = Arc::new(DirectoryNetwork {
+        alias_tamper: AtomicBool::new(false),
+        alias_refuse: AtomicBool::new(false),
         sent: Mutex::new(Vec::new()),
         lost: AtomicBool::new(true),
         fail_ack: AtomicBool::new(true),
@@ -804,12 +1358,9 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
     let sent = network.sent.lock().unwrap();
     assert_eq!(sent.len(), 3);
     assert!(sent.iter().all(|bytes| bytes == &sent[0]));
-    assert!(
-        storage::open(store.as_ref(), &keys)
-            .unwrap()
-            .setup
-            .is_none()
-    );
+    assert_setup_complete(store.as_ref(), &keys);
+    drop(sent);
+    challenge_alias_client_recovery(&reopened, &store, &network, &keys);
 }
 
 // Conjecture: losing an external command acknowledgement cannot create a second
@@ -829,6 +1380,9 @@ impl Transport for ExternalNetwork {
         use cs_mail_application::correspondence::external::{
             Acknowledgement, Command, Outcome, Receipt, Response, SignedCommand,
         };
+        if route.ends_with("/receiving-alias") {
+            return Ok(serde_json::to_vec(&fixture_public_alias(route)).unwrap());
+        }
         if route == "v1/external/prepare" {
             let input: Value = serde_json::from_slice(body.unwrap()).unwrap();
             let mailbox =
@@ -860,6 +1414,7 @@ impl Transport for ExternalNetwork {
                 let conversation = cs_mail_correspondence::external::ExternalConversation::start(
                     start.conversation,
                     start.persona,
+                    p::AliasId::new(start.persona.0).unwrap(),
                     mailbox,
                     [7; 32],
                     &relationship,
@@ -868,10 +1423,10 @@ impl Transport for ExternalNetwork {
                 .unwrap();
                 let page = if after == 7 {
                     vec![cs_mail_application::correspondence::external::MessageView {
-                    sequence: 8, message: cs_mail_application::correspondence::external::Message {
+                    sequence: 8, message: cs_mail_application::correspondence::external::Message::new(cs_mail_application::correspondence::external::MessageFields {
                         manifest: message.manifest, sender_key: message.sender_key, member_copy: message.member_copy,
                         direction: cs_mail_application::correspondence::external::Direction::MemberToGuest,
-                        committed_at: p::CanonicalTime(100), }, delivery: None, provider_events: vec![] }]
+                        committed_at: p::CanonicalTime(100), }).unwrap(), delivery: None, provider_events: vec![] }]
                 } else {
                     vec![]
                 };
@@ -936,20 +1491,15 @@ fn external_response_loss_reopens_exact_ciphertext_and_blocks_replacement() {
             .unwrap()
             .1,
     });
-    let first = MemberClient::new(
+    // Conjectures: local writing remains available while network work owns its lock;
+    // a stale editor or failed handoff cannot consume a later draft or submit anything;
+    // a lost reply reopens exactly the prepared operation, never a second submission.
+    let first = Arc::new(MemberClient::new(
         store.clone(),
         network.clone(),
         Arc::new(|| p::CanonicalTime(100)),
-    );
-    assert!(matches!(
-        first.send_external(
-            None,
-            "guest@example.test",
-            "external-loss-private-canary",
-            true
-        ),
-        Err(Error::Offline)
     ));
+    challenge_draft_handoff(&first, &store, &keys, &state, &network);
     let original = first.external_inbox().unwrap().pending.unwrap();
     drop(first);
     let reopened = MemberClient::new(
@@ -965,12 +1515,30 @@ fn external_response_loss_reopens_exact_ciphertext_and_blocks_replacement() {
         reopened.send_external(None, "other@example.test", "changed", true),
         Err(Error::ExternalPending)
     ));
+    assert_eq!(
+        reopened.outgoing_work().unwrap()[0].status,
+        super::WorkStatus::AwaitingConfirmation
+    );
     challenge_external_errors(&reopened, &network, &original);
+    assert_eq!(
+        reopened.outgoing_work().unwrap()[0].status,
+        super::WorkStatus::AwaitingConfirmation
+    );
+    // A known queue outcome cannot consume the submitted draft if its local commit fails.
+    store.fail_save.store(true, Ordering::SeqCst);
+    assert!(matches!(reopened.retry(), Err(Error::StorageUnavailable)));
+    assert!(reopened.external_inbox().unwrap().pending.is_some());
+    assert!(reopened.drafts().unwrap().is_empty());
+    store.fail_save.store(false, Ordering::SeqCst);
     reopened.retry().unwrap();
     assert!(reopened.external_inbox().unwrap().pending.is_none());
+    assert_eq!(
+        reopened.outgoing_work().unwrap()[0].status,
+        super::WorkStatus::Queued
+    );
     {
         let calls = network.commands.lock().unwrap();
-        assert_eq!(calls.len(), 4);
+        assert_eq!(calls.len(), 5);
         assert!(calls.iter().all(|c| *c == calls[0]));
     }
     challenge_external_pages(&reopened, &network, &store, &keys, &original);
@@ -991,6 +1559,137 @@ fn external_response_loss_reopens_exact_ciphertext_and_blocks_replacement() {
             .unwrap()
             .windows(b"external-loss-private-canary".len())
             .any(|w| w == b"external-loss-private-canary")
+    );
+    challenge_multiple_drafts(&reopened);
+}
+
+fn challenge_multiple_drafts(client: &MemberClient) {
+    // Distinct writing to the same destination must not overwrite or resume another draft.
+    let target = super::DraftTarget::External { conversation: None };
+    let a = client.create_draft(target.clone()).unwrap();
+    let a = client
+        .save_draft(
+            a.id(),
+            a.revision(),
+            super::DraftBody::External {
+                mailbox: "first@example.test".into(),
+                text: "first independent draft".into(),
+            },
+            "",
+            0,
+        )
+        .unwrap();
+    let b = client.create_draft(target).unwrap();
+    let b = client
+        .save_draft(
+            b.id(),
+            b.revision(),
+            super::DraftBody::External {
+                mailbox: "second@example.test".into(),
+                text: "second independent draft".into(),
+            },
+            "",
+            0,
+        )
+        .unwrap();
+    assert_ne!(a.id(), b.id());
+    let restored = client.drafts().unwrap();
+    assert_eq!(
+        restored
+            .iter()
+            .find(|d| d.id() == a.id())
+            .unwrap()
+            .body()
+            .text(),
+        "first independent draft"
+    );
+    assert_eq!(
+        restored
+            .iter()
+            .find(|d| d.id() == b.id())
+            .unwrap()
+            .body()
+            .text(),
+        "second independent draft"
+    );
+}
+
+fn challenge_draft_handoff(
+    first: &Arc<MemberClient>,
+    store: &Arc<Store>,
+    keys: &storage::Secrets,
+    state: &State,
+    network: &ExternalNetwork,
+) {
+    let draft = first
+        .open_draft(super::DraftTarget::External { conversation: None })
+        .unwrap();
+    let body = super::DraftBody::External {
+        mailbox: "guest@example.test".into(),
+        text: "external-loss-private-canary".into(),
+    };
+    let guard = first.operation.lock().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let writer = first.clone();
+    let writing = std::thread::spawn(move || {
+        tx.send(writer.save_draft(draft.id(), draft.revision(), body, "", 0))
+            .unwrap();
+    });
+    let result = rx.recv_timeout(std::time::Duration::from_secs(2));
+    drop(guard);
+    writing.join().unwrap();
+    let saved = result.expect("autosave waited on network lock").unwrap();
+    assert!(matches!(
+        first.submit_draft(saved.id(), 1.try_into().unwrap(), true, None),
+        Err(Error::DraftChanged)
+    ));
+    store.fail_save.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        first.submit_draft(saved.id(), saved.revision(), true, None),
+        Err(Error::StorageUnavailable)
+    ));
+    store.fail_save.store(false, Ordering::SeqCst);
+    assert_eq!(first.drafts().unwrap()[0].revision(), saved.revision());
+    assert!(first.external_inbox().unwrap().pending.is_none());
+    assert!(network.commands.lock().unwrap().is_empty());
+    let original_workspace = store.workspace.lock().unwrap().clone().unwrap();
+    let mut malformed: serde_json::Value = serde_json::from_slice(
+        &storage::decrypt(keys, &original_workspace, b"cs-mail/member-workspace/v2").unwrap(),
+    )
+    .unwrap();
+    malformed["drafts"][0]["revision"] = json!(0);
+    *store.workspace.lock().unwrap() =
+        Some(storage::encrypt(keys, &malformed, b"cs-mail/member-workspace/v2").unwrap());
+    assert!(matches!(first.drafts(), Err(Error::InvalidData)));
+    *store.workspace.lock().unwrap() = Some(original_workspace);
+    store.denied.store(true, Ordering::SeqCst);
+    assert!(matches!(first.drafts(), Err(Error::KeyUnavailable)));
+    store.denied.store(false, Ordering::SeqCst);
+
+    // A stale transport snapshot commit cannot overwrite separately persisted writing.
+    storage::save(store.as_ref(), keys, state).unwrap();
+    assert_eq!(
+        first.drafts().unwrap()[0].body().text(),
+        "external-loss-private-canary"
+    );
+    assert!(matches!(
+        first.submit_draft(saved.id(), saved.revision(), true, None),
+        Err(Error::Offline)
+    ));
+    assert!(first.drafts().unwrap().is_empty());
+    assert!(matches!(
+        first.submit_draft(saved.id(), saved.revision(), true, None),
+        Err(Error::DraftChanged)
+    ));
+    assert!(
+        !store
+            .workspace
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .windows(b"external-loss-private-canary".len())
+            .any(|v| v == b"external-loss-private-canary")
     );
 }
 
@@ -1046,12 +1745,31 @@ fn challenge_external_pages(
             super::PermissionRoute::Closed
         ));
     }
+    let draft = client
+        .open_draft(super::DraftTarget::External { conversation: None })
+        .unwrap();
+    let saved = client
+        .save_draft(
+            draft.id(),
+            draft.revision(),
+            super::DraftBody::External {
+                mailbox: "guest@example.test".into(),
+                text: "durably-refused".into(),
+            },
+            "",
+            0,
+        )
+        .unwrap();
     network.refuse.store(true, Ordering::SeqCst);
     assert!(matches!(
-        client.send_external(None, "guest@example.test", "durably-refused", true),
+        client.submit_draft(saved.id(), saved.revision(), true, None),
         Err(Error::ExternalRefused)
     ));
     assert!(client.external_inbox().unwrap().pending.is_none());
+    let recovered = client.drafts().unwrap();
+    assert_eq!(recovered[0].id(), saved.id());
+    assert_eq!(recovered[0].body().text(), "durably-refused");
+    assert!(recovered[0].revision().value() > saved.revision().value());
 }
 
 fn external_device() -> (Arc<Store>, storage::Secrets, State) {
@@ -1068,7 +1786,7 @@ fn external_device() -> (Arc<Store>, storage::Secrets, State) {
         .unwrap();
     let state = State {
         external: None,
-        format: 3,
+        format: 4,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -1093,4 +1811,213 @@ fn external_device() -> (Arc<Store>, storage::Secrets, State) {
     };
     storage::save(store.as_ref(), &keys, &state).unwrap();
     (store, keys, state)
+}
+
+fn challenge_alias_client_recovery(
+    reopened: &MemberClient,
+    store: &Arc<Store>,
+    network: &Arc<DirectoryNetwork>,
+    keys: &storage::Secrets,
+) {
+    // The same recovery experiment now challenges private-alias commands:
+    // response loss, substituted acknowledgements and local commit failure must
+    // retain the exact signed operation in encrypted storage without replacing keys.
+    let original_secret = store.load_secret().unwrap();
+    network.lost.store(true, Ordering::SeqCst);
+    let command = AddressMutation::CreatePrivate {
+        description: "Private context canary".into(),
+    };
+    assert_eq!(
+        reopened.update_address(command).unwrap_err(),
+        Error::Offline
+    );
+    let pending = reopened.pending_address_update().unwrap().unwrap();
+    assert!(matches!(
+        pending.action,
+        PendingAddressAction::CreatePrivate { .. }
+    ));
+    assert!(
+        !store
+            .load_cache()
+            .unwrap()
+            .unwrap()
+            .windows(22)
+            .any(|w| w == b"Private context canary")
+    );
+    let client = MemberClient::new(
+        store.clone(),
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(100)),
+    );
+    network.alias_tamper.store(true, Ordering::SeqCst);
+    assert_eq!(
+        client.resume_address_update().unwrap_err(),
+        Error::InvalidData
+    );
+    assert_eq!(client.pending_address_update().unwrap().unwrap(), pending);
+    network.fail_ack.store(true, Ordering::SeqCst);
+    assert_eq!(
+        client.resume_address_update().unwrap_err(),
+        Error::StorageUnavailable
+    );
+    store.fail_save.store(false, Ordering::SeqCst);
+    assert!(matches!(
+        client.resume_address_update().unwrap(),
+        Some(AddressUpdateResult::Applied { .. })
+    ));
+    let sent = network.sent.lock().unwrap();
+    assert_eq!(sent.len(), 7);
+    assert!(sent[3..].iter().all(|bytes| bytes == &sent[3]));
+    assert_eq!(original_secret, store.load_secret().unwrap());
+    assert!(storage::open(store.as_ref(), keys).unwrap().setup.is_none());
+    drop(sent);
+    network.lost.store(true, Ordering::SeqCst);
+    let refused = cs_mail_application::aliases::Command::Create {
+        id: p::AliasId::new(702).unwrap(),
+        creation: cs_mail_application::aliases::AliasCreation::Private {
+            description: "Refused context".to_owned().try_into().unwrap(),
+        },
+    };
+    assert_eq!(client.change_alias(refused).unwrap_err(), Error::Offline);
+    network.alias_refuse.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        client.resume_address_update().unwrap(),
+        Some(AddressUpdateResult::Refused { .. })
+    ));
+    assert!(client.pending_address_update().unwrap().is_none());
+    assert!(storage::open(store.as_ref(), keys).unwrap().setup.is_none());
+}
+
+fn assert_setup_complete(store: &Store, keys: &storage::Secrets) {
+    assert!(storage::open(store, keys).unwrap().setup.is_none());
+}
+
+// Conjecture: index growth does not increase an unchanged-sized copy's checkpoint size,
+// and a warm selective query fetches only its match. Excess bytes or unrelated copy reads falsify it.
+// Optional scale experiment inside the existing retained-custody scenario, not another test case.
+fn challenge_index_scale(source: &Arc<Store>, keys: &storage::Secrets) {
+    if std::env::var_os("CS_MAIL_SEARCH_BENCH").is_none() {
+        return;
+    }
+    let store = Arc::new(Store::default());
+    *store.key.lock().unwrap() = source.key.lock().unwrap().clone();
+    *store.cache.lock().unwrap() = source.cache.lock().unwrap().clone();
+    let client = MemberClient::new(
+        store.clone(),
+        Arc::new(EnrollmentNetwork::default()),
+        Arc::new(|| p::CanonicalTime(100)),
+    );
+    let state = storage::open(store.as_ref(), keys).unwrap();
+    let mut index = super::retained::Retained::load(&client, keys, &state).unwrap();
+    let started = std::time::Instant::now();
+    let mut largest = 0;
+    for n in 0..100_000u128 {
+        let key = super::retained::CopyKey {
+            thread: super::MailKey::External(
+                cs_mail_correspondence::ConversationId::new(n + 10_000).unwrap(),
+            ),
+            message: p::MessageId(n + 10_000),
+        };
+        let before = store.retained_bytes_written.load(Ordering::SeqCst);
+        index.insert(super::retained::Entry {
+            key,
+            native: None,
+            text: format!("common needle{n:06} {}", "x".repeat(1000)),
+            subject: None,
+            expires: p::CanonicalTime(1_000_000),
+        });
+        index.save(&client, keys).unwrap();
+        index.known_keys.insert(key);
+        let delta = store.retained_bytes_written.load(Ordering::SeqCst) - before;
+        largest = largest.max(delta);
+        assert!(
+            delta < 4096,
+            "checkpoint size grew with mailbox instead of this message"
+        );
+        if [1000, 10_000, 100_000].contains(&(n + 1)) {
+            drop(index);
+            let before = store.copy_reads.load(Ordering::SeqCst);
+            let query_started = std::time::Instant::now();
+            let result = client
+                .search_mail("needle000999", super::InboxScope::All, 0, 10)
+                .unwrap();
+            let query_time = query_started.elapsed();
+            assert_eq!(result.matches.len(), 1);
+            assert_eq!(store.copy_reads.load(Ordering::SeqCst) - before, 1);
+            let miss_started = std::time::Instant::now();
+            assert!(
+                client
+                    .search_mail("absentword", super::InboxScope::All, 0, 10)
+                    .unwrap()
+                    .matches
+                    .is_empty()
+            );
+            let miss_time = miss_started.elapsed();
+            eprintln!(
+                "SEARCH SCALE messages={} selective_us={} miss_us={} largest_checkpoint_bytes={} cumulative_write_bytes={} import_elapsed_ms={}",
+                n + 1,
+                query_time.as_micros(),
+                miss_time.as_micros(),
+                largest,
+                store.retained_bytes_written.load(Ordering::SeqCst),
+                started.elapsed().as_millis()
+            );
+            index = super::retained::Retained::load(&client, keys, &state).unwrap();
+        }
+    }
+    drop(index);
+    client.clear_inboxes().unwrap();
+    let reads = store.copy_reads.load(Ordering::SeqCst);
+    let cold = std::time::Instant::now();
+    let index = super::retained::Retained::load(&client, keys, &state).unwrap();
+    assert_eq!(index.matching("needle000999").len(), 1);
+    assert_eq!(
+        store.copy_reads.load(Ordering::SeqCst),
+        reads,
+        "cold index opening read message bodies"
+    );
+    eprintln!(
+        "SEARCH SCALE cold_index_messages=100000 cold_ms={} message_copy_reads=0",
+        cold.elapsed().as_millis()
+    );
+}
+
+fn fixture_assignment(
+    sender: p::ProtocolIdentity,
+    recipient: p::ProtocolIdentity,
+    conversation: cs_mail_correspondence::ConversationId,
+    message: p::MessageId,
+    at: p::CanonicalTime,
+) -> cs_mail_application::aliases::DeliveredRoute {
+    let alias = cs_mail_accounts::aliases::Alias::create(
+        p::AliasId::new(recipient.0).unwrap(),
+        recipient,
+        format!("fixture-{}@inbox.test", recipient.0)
+            .try_into()
+            .unwrap(),
+        cs_mail_accounts::aliases::AliasUsage::Public,
+        p::CanonicalTime(0),
+    )
+    .unwrap();
+    cs_mail_application::aliases::DeliveredRoute::native(
+        &alias,
+        sender,
+        conversation,
+        message,
+        cs_mail_protocol::AdmissionBasis::AcceptedRelationship {
+            version: p::RelationshipVersion(1),
+        },
+        at,
+    )
+    .unwrap()
+}
+
+fn fixture_public_alias(route: &str) -> Value {
+    let owner = route.split('/').nth(2).unwrap().parse::<u128>().unwrap();
+    serde_json::to_value(cs_mail_application::aliases::PublicReceivingAlias {
+        owner: p::ProtocolIdentity(owner),
+        id: p::AliasId::new(owner).unwrap(),
+        address: format!("fixture-{owner}@inbox.test").try_into().unwrap(),
+    })
+    .unwrap()
 }

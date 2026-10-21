@@ -29,6 +29,7 @@ pub struct ExternalConversation(Record);
 struct Record {
     conversation: Conversation,
     member: ProtocolIdentity,
+    receiving_alias: cs_mail_primitives::AliasId,
     mailbox: GuestMailbox,
     deployment: [u8; 32],
     invitation: Invitation,
@@ -64,6 +65,7 @@ impl ExternalConversation {
     pub fn inbound(
         id: ConversationId,
         member: ProtocolIdentity,
+        receiving_alias: cs_mail_primitives::AliasId,
         mailbox: GuestMailbox,
         deployment: [u8; 32],
         relationship: &Relationship,
@@ -80,6 +82,7 @@ impl ExternalConversation {
                 CorrespondenceRef::new(member, relationship.key.sender)?,
             ),
             member,
+            receiving_alias,
             mailbox,
             deployment,
             invitation: Invitation::NotRequired,
@@ -112,6 +115,7 @@ impl ExternalConversation {
     pub fn start(
         id: ConversationId,
         member: ProtocolIdentity,
+        receiving_alias: cs_mail_primitives::AliasId,
         mailbox: GuestMailbox,
         deployment: [u8; 32],
         relationship: &Relationship,
@@ -129,6 +133,7 @@ impl ExternalConversation {
                 CorrespondenceRef::new(member, mailbox.synthetic_protocol_identity(&deployment))?,
             ),
             member,
+            receiving_alias,
             mailbox,
             deployment,
             invitation: match relationship.state {
@@ -147,6 +152,9 @@ impl ExternalConversation {
     pub fn guest(&self) -> ProtocolIdentity {
         self.mailbox()
             .synthetic_protocol_identity(&self.0.deployment)
+    }
+    pub const fn receiving_alias(&self) -> cs_mail_primitives::AliasId {
+        self.0.receiving_alias
     }
     pub const fn member(&self) -> ProtocolIdentity {
         self.0.member

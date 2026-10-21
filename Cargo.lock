@@ -583,6 +583,8 @@ dependencies = [
 name = "cs-mail-accounts"
 version = "0.1.0"
 dependencies = [
+ "cs-mail-capabilities",
+ "cs-mail-correspondence",
  "cs-mail-finance",
  "cs-mail-primitives",
  "cs-mail-protocol",
@@ -704,6 +706,7 @@ dependencies = [
  "base64",
  "chacha20poly1305",
  "cs-mail-accounts",
+ "cs-mail-adapters",
  "cs-mail-application",
  "cs-mail-billing",
  "cs-mail-capabilities",
@@ -717,6 +720,7 @@ dependencies = [
  "cs-mail-security",
  "ed25519-dalek 3.0.0",
  "getrandom 0.4.3",
+ "hmac 0.13.0",
  "identity-contract",
  "reqwest",
  "serde",
@@ -784,6 +788,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "time",
 ]
 
 [[package]]
@@ -848,6 +853,7 @@ dependencies = [
  "clap",
  "cs-mail-adapters",
  "cs-mail-primitives",
+ "cs-mail-privacy",
  "cs-mail-security",
  "cs-mail-service",
  "cs-mail-smtp-gateway",
@@ -981,6 +987,7 @@ name = "cs-mail-smtp-gateway"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "cs-mail-accounts",
  "cs-mail-adapters",
  "cs-mail-content",
  "cs-mail-correspondence",

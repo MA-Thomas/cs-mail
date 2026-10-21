@@ -209,7 +209,7 @@ fn enroll(
         },
         at,
     )
-    .map(|_| ())
+    .and_then(|_| support::fixture_inbox(deployment, persona, key, &[secret; 32], at).map(|_| ()))
 }
 
 struct Fixture {

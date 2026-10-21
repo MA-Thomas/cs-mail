@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-adapters = { path = "../cs-mail-adapters" }
 cs-mail-guests = { path = "../cs-mail-guests" }
 cs-mail-capabilities = { path = "../cs-mail-capabilities" }
 cs-mail-privacy = { path = "../cs-mail-privacy" }
@@ -24,6 +25,7 @@ cs-mail-accounts = { path = "../cs-mail-accounts" }
 ed25519-dalek.workspace = true
 base64 = "0.22"
 sha2.workspace = true
+hmac.workspace = true
 zeroize = { version = "1", features = ["derive"] }
 chacha20poly1305 = { version = "0.11", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }

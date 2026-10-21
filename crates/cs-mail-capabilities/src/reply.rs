@@ -1,8 +1,8 @@
 //! Operator-defined reply terms and the distinct authority of recorded acceptance.
 //! These records are facts from protected persistence, not proof of current authority.
 use super::{
-    CapabilityError, DeclarationAuthorityConstraint, Lane, LaneGrant, LaneId, LaneMode,
-    LaneSubject, RateLimit,
+    CapabilityError, DeclarationAuthorityConstraint, LaneId, LaneMode, LaneSubject, RateLimit,
+    SenderScopedGrant, SenderScopedLane,
 };
 use cs_mail_primitives::{
     CanonicalTime, DeclaredPurpose, Duration, OperationalKeyRef, OriginMode, ProtocolIdentity,
@@ -61,7 +61,10 @@ impl ReplyLaneTerms {
     /// No recipient signature is invented and this is not a raw-grant activation API.
     /// # Errors
     /// Rejects foreign/empty identifiers, invalid intervals or overflow.
-    pub fn accepted_lane(&self, acceptance: &ReplyAcceptance) -> Result<Lane, CapabilityError> {
+    pub fn accepted_lane(
+        &self,
+        acceptance: &ReplyAcceptance,
+    ) -> Result<SenderScopedLane, CapabilityError> {
         if acceptance.request.0 == 0
             || acceptance.creation_key.0 == 0
             || acceptance.creation_event.0.0 == 0
@@ -77,7 +80,7 @@ impl ReplyLaneTerms {
         let digest = hash.finalize();
         let mut id = [0; 16];
         id.copy_from_slice(&digest[..16]);
-        let grant = LaneGrant {
+        let grant = SenderScopedGrant {
             id: LaneId(u128::from_be_bytes(id) | 1),
             subject: LaneSubject::Native(ScopedHandle(*acceptance.reverse_relationship.as_bytes())),
             sender: acceptance.recipient,
@@ -100,7 +103,7 @@ impl ReplyLaneTerms {
                 .ok_or(CapabilityError::ArithmeticOverflow)?,
             version: acceptance.version,
         };
-        let mut lane = Lane::from_grant(grant)?;
+        let mut lane = SenderScopedLane::from_grant(grant)?;
         lane.authority = LaneAuthority::RequestAcceptance {
             request: acceptance.request,
             relationship: acceptance.originating_relationship,

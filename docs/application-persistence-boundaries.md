@@ -234,3 +234,125 @@ same rule. Invalid stored state or decoding failure stops processing without a
 permanent refusal; repaired records permit recovery of the original received work.
 This bounded repair does not move all older transactional orchestration or claim
 that every storage-owned domain call is itself a behavioral defect.
+
+## Alias foundation — 14 October 2026
+
+Rust separates address lifecycle from independently revisioned receiving permission.
+Private creation grants no lane. Explicit signed actions open, restrict or remove
+an alias-scoped lane, or atomically replace access with selected signed sender
+grants. The existing alias transaction commits permission and its exact-operation
+receipt together. Native and SMTP admission recheck current permission; domain
+matching uses authenticated evidence while correspondence and blocks retain the
+actual sender identity. Swift groups lanes by permission and exposes pairing
+controls. The schema-41 cutover preserves original evidence and the owner account
+in an offline checked copy, with no runtime predecessor reader.
+
+`AliasId` identifies a receiving route independently of `ProtocolIdentity`.
+The sender capability types are now `SenderScopedGrant` and `SenderScopedLane`;
+the old Rust names are removed without aliases, while their signed/storage field
+representations remain unchanged. `AliasScopedGrant` has no sender, charge or
+sender-lane renewal interval. `ReceivingScope` contains explicitly selected alias
+IDs; `ExpressLanePermission` distinguishes the two forms without sharing their
+lifecycle operations.
+
+`cs-mail-accounts::aliases::Alias` owns route lifecycle and checked restoration.
+Restrict freezes exact admitted conversations. A signed conversation approval adds
+one named sender/conversation authority separately from that historical snapshot.
+Replace creates a new route and keeps the old route's confined permissions through
+an explicit transition interval; it does not copy scopes into the new route.
+Retire preserves the address reservation. Participant blocks remain relationship
+facts and override every alias permission; alias operations do not mutate accounts,
+credentials, consent or financial records.
+
+`cs-mail-application::aliases::AliasService` authenticates the original enrolled
+participant's recipient key against protected account authority. Additional legacy
+personas are not a route-creation mechanism. One decision declares aliases,
+reviewed receiving-scope revisions and an exact operation receipt. PostgreSQL
+serializes these through the existing receipt-order barrier and commits state,
+original signed command and receipt atomically. Alias IDs and addresses remain
+unique, including retired rows; Directory publication respects the same protected
+reservation. No alias management command invokes request
+settlement. The host signs the committed acknowledgement; the portable client
+verifies command/result binding before resolving its existing encrypted journal.
+
+Migration 0038 adds alias metadata without rewriting any existing account,
+identity, key, protocol, financial or encrypted-copy representation. Owner-only
+inspection does not publish aliases or associate them through Directory. The
+delivery-evidence table is reserved for the coordinated delivery integration;
+management cannot turn an authorization or a held item into admitted history.
+
+This is a foundation pass, not the native/SMTP alias cutover. The deterministic
+receiving decision returns a non-deserializable `ReceivingAuthorization`, Hold,
+Request or refusal, never a delivery receipt. Transport integration must authenticate
+the exact receiving alias and commit the complete message/ciphertext, admission
+basis, allowance changes, route evidence and receipt together. Public per-alias
+profiles/classes, default receiving scope on request acceptance, sender/reply alias
+selection and held-mail persistence/release are not
+implemented by this pass. The subsequent native management slice below exposes
+address metadata and lifecycle operations without claiming mail delivery. Neither existing sender-lane tests nor a management
+receipt establish those behaviors.
+
+Validation extends the existing domain snapshot, directory/PostgreSQL replay and
+portable client recovery experiments without adding test cases. The claims concern
+conversation confinement, explicit approval, cross-route block precedence, address
+reservation, replacement rollback, competing claims, exact replay, unchanged
+canonical account/financial tables and original encrypted retry/credential bytes.
+Concurrent alias delivery/blocking, actual power loss, public-provider delivery and
+iOS remain outside these experiments.
+
+
+## Native address management — 14 October 2026
+
+The portable member client projects checked alias records into `ManagedAddress`,
+`AddressState`, available lifecycle actions, retained conversation facts and an
+observation time. These are presentation projections, not current authority.
+`AddressMutation` parses inputs, creates checked random alias identifiers and
+uses the original signed, encrypted operation journal. `PendingAddressAction`
+identifies the original intent separately from an editable draft. A typed
+`AddressUpdateResult` distinguishes a verified refusal from transport uncertainty.
+UniFFI translates these owned values without deciding permission or lifecycle.
+
+Swift's My addresses workspace lives under Relationships. Its list and detail
+render Rust projections; confirmations capture the selected revision and user
+intent. Rust and the protected backend recheck every command. Reload failure
+retains a visibly stale snapshot and disables new updates. Resume sends the
+original signed operation; closing a view or locking does not cancel that work.
+Session generations prevent late results from revealing content after Lock.
+Creation, restriction, explicit replacement transition and retirement are supported.
+Private records have no publication or paid-request controls. The existing primary
+address/publication remains intact until its separate alias-aware publication
+cutover. No new account, credential or disclosure permission is introduced.
+
+The workspace explicitly states that additional addresses cannot yet send or
+receive mail. Receiving-route badges, sender-scope acceptance controls, alias-aware
+publications, outbound alias selection and held-message release still depend on
+those missing contracts and integration. They are not inferred in Swift.
+
+Validation extends the existing client recovery experiment through the native
+adapter API and the existing native enrollment journey against an isolated real
+backend. It challenges signed-byte retention through response loss, altered
+acknowledgement and local save failure; typed terminal refusal; canonical lifecycle
+projections; Directory isolation; and original account/credential preservation.
+No new automated test cases were added. The owner cutover uses the offline
+`alias_metadata_upgrade.py` helper to restore a fresh copy, add schema 38, and
+verify every original table/sequence fingerprint, migration history and configured
+key file. The original source is retained. See the Apple runbook for installation
+and interactive verification status.
+
+## Native express lane groups — 14 October 2026
+
+`AddressWorkspace.alias_lanes` contains broad/restricted `ReceivingLaneView` values;
+`sender_alias_lanes` contains sender-restricted receiving permissions.
+The portable Rust client classifies the owner-authenticated checked records by
+their explicit receiving permission (`Alias::permission`), then projects lifecycle with the injected
+observation time. Private addresses without lane authority are excluded; retired and replaced routes
+retain explicit closed/transition state. UniFFI translates this projection without
+reclassifying it. These snapshots do not establish current delivery authority.
+
+Swift uses separate alias-lane and sender-lane selection cases. Only sender
+selection opens sender correspondence; alias selection opens lifecycle details
+and the existing address manager. Incoming/Outgoing filters only sender lanes.
+Alias metadata does not acquire sender-lane expiry, renewal or rate semantics.
+The existing native enrollment experiment now challenges public-address exclusion
+and preservation of closed alias state; no automated test cases were added.
+This presentation slice does not implement alias mail delivery.

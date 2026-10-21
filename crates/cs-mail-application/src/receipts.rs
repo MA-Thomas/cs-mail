@@ -1,5 +1,5 @@
 //! Shared, database-independent outcome evidence. Typed serialization is the receipt commitment.
-use cs_mail_capabilities::{CapabilityError, Lane};
+use cs_mail_capabilities::{CapabilityError, SenderScopedLane};
 use cs_mail_primitives::{JournalPosition, LaneId};
 use cs_mail_protocol::{CommittedTransition, ProtocolError};
 use cs_mail_security::OutcomeDigest;
@@ -30,7 +30,7 @@ pub struct BondFreeAdmissionOutcome {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LaneOperationOutcome {
     pub changed: bool,
-    pub lane: Lane,
+    pub lane: SenderScopedLane,
     #[serde(skip)]
     pub replayed: bool,
 }

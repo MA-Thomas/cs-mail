@@ -41,13 +41,67 @@ actor ClientWorker {
 }
 
 @MainActor public final class MemberModel: ObservableObject {
+    @Published private(set) var addressWorkspace: AddressWorkspace?
+    @Published private(set) var pendingAddressUpdate: PendingAddressUpdate?
+    @Published private(set) var addressUpdateResult: AddressUpdateResult?
+    @Published private(set) var addressesCurrent = false
     @Published private(set) var addressSettings: AddressSettings?
     @Published private(set) var externalInbox: ExternalInbox?
     @Published private(set) var sentExternalConversation: String?
+    @Published private(set) var draftClient: AppleClient?
+    @Published private(set) var mailItems: [MailItem] = []
+    @Published private(set) var aliasInboxes: [AliasInbox] = []
+    @Published private(set) var selectedInbox: String?
+    @Published private(set) var senderLaneScopes: [SenderLaneScope] = []
+    func changeInbox(_ id: String?) {
+        endReading(); selectedInbox = id; searchComplete = false; searchGeneration += 1
+        searchMatches = []; searchStatus = nil; searchContext = nil; searching = false
+    }
+    var mailScope: InboxScope { selectedInbox.map { .alias(id: $0) } ?? .all }
+    var scopedMailItems: [MailItem] { selectedInbox.map { id in aliasInboxes.first(where: { $0.address.id == id })?.items ?? [] } ?? mailItems }
+    var inboxTitle: String { selectedInbox.flatMap { id in aliasInboxes.first(where: { $0.address.id == id }).map { $0.address.description ?? $0.address.address } } ?? "All inboxes" }
+    func visibleInInbox(_ key: MailKey, _ message: String) -> Bool { selectedInbox == nil || scopedMailItems.contains { $0.key == key && $0.messages.contains(message) } }
+    func receivingLabel(_ key: MailKey, _ message: String? = nil) -> String? {
+        guard selectedInbox == nil, let item = mailItems.first(where: { $0.key == key }) else { return nil }
+        let ids = Set(item.receiving.filter { message == nil || $0.message == message }.map(\.alias))
+        let names = aliasInboxes.filter { ids.contains($0.address.id) }.map { $0.address.description ?? $0.address.address }
+        if names.isEmpty { return nil }
+        return "Received through " + names.joined(separator: ", ")
+    }
+    @Published private(set) var outgoingWork: [OutgoingWork] = []
+    @Published private(set) var mailboxError: String?
+    @Published private(set) var searchMatches: [SearchMatch] = []
+    @Published private(set) var searchStatus: String?
+    @Published private(set) var searching = false
+    @Published var openedThread: String?
+    @Published var focusedMessage: String?
+    private struct SearchContext {
+        let query: String
+        let scope: InboxScope
+        let request: Int
+        let lifetime: Int
+        var cursor: UInt64 = 0
+        var total: UInt64 = 0
+        var indexed: UInt64 = 0
+        var unavailable: UInt64 = 0
+        var notRetained: UInt64 = 0
+    }
+    @Published private var searchContext: SearchContext?
+    var hasMoreSearchResults: Bool { searchContext.map { $0.request == searchGeneration && $0.cursor < $0.total } ?? false }
+    var searchPageCursor: UInt64? { searchContext?.cursor }
+    func hasSearch(_ query: String) -> Bool { searchContext.map { $0.query == query && $0.scope == mailScope && $0.request == searchGeneration } ?? false }
+    private(set) var searchQuery = ""
+    private(set) var searchComplete = true
+    private var pendingSelection: SenderReference?
+    private var drainingSelection = false
+    private var readingContext: MailKey?
+    let approachDraft = ApproachEditorDraft()
+    private var retaining: Task<Void, Never>?
+    private var searchGeneration = 0
     let directory: DirectoryModel
     enum Connection { case synchronized, saved }
     enum Session { case locked, open(Inbox, Connection) }
-    enum Work { case source, reference, request, policy, relationship, unlock, signIn, enrollment, refresh, conversation, decision, retry, addressLoad, publication, purchase, message }
+    enum Work { case aliasLoad, aliasUpdate, aliasResume, source, reference, request, policy, relationship, unlock, signIn, enrollment, refresh, conversation, decision, retry, addressLoad, publication, purchase, message }
     enum Operation { case idle, working(Work), authenticating }
     struct Failure {
         let work: Work
@@ -77,7 +131,7 @@ actor ClientWorker {
         }
         return contacts
     }
-    var busy: Bool { if case .idle = operation { return false }; return true }
+    package var busy: Bool { if case .idle = operation { return false }; return true }
     private(set) var connected: Bool {
         get { if case .open(_, .synchronized) = session { return true }; return false }
         set { if let inbox { session = .open(inbox, newValue ? .synchronized : .saved) } }
@@ -93,7 +147,7 @@ actor ClientWorker {
         return failure.explanation
     }
     var memberError: String? {
-        guard let failure, failure.work != .addressLoad && failure.work != .publication else { return nil }
+        guard let failure, ![.addressLoad, .publication, .aliasLoad, .aliasUpdate, .aliasResume].contains(failure.work) else { return nil }
         return failure.explanation
     }
     private let worker: ClientWorker
@@ -116,6 +170,7 @@ actor ClientWorker {
     }
     func receiveLogin(_ url: URL) { browser.receive(url) }
     func lock() {
+        retaining?.cancel(); retaining = nil
         let abandoned = lifetime
         abandoned.invalidate()
         lifetime = PresentationLifetime()
@@ -126,12 +181,20 @@ actor ClientWorker {
         }
         browserCeremony = nil
         navigationContacts = nil; navigationError = nil
-        addressSettings = nil; directory.clear()
+        addressSettings = nil; addressWorkspace = nil; pendingAddressUpdate = nil; addressUpdateResult = nil; addressesCurrent = false; directory.clear()
         clearSourceContact(); reference = nil; externalInbox = nil; sentExternalConversation = nil; inbox = nil; conversation = nil; selectedSender = nil
+        pendingSelection = nil; readingContext = nil; approachDraft.clear()
+        searchQuery = ""; searchComplete = true
+        mailItems = []; aliasInboxes = []; senderLaneScopes = []; selectedInbox = nil; outgoingWork = []; mailboxError = nil
+        searchGeneration += 1; searchMatches = []; searchStatus = nil; searchContext = nil; searching = false
+        openedThread = nil; focusedMessage = nil
+        if let client = draftClient { Task.detached { try? client.clearInboxes() } }
+        draftClient = nil
         connected = false; failure = nil; notice = nil; operation = .idle
     }
     package func unlock() async {
         await perform(.unlock) {
+            self.draftClient = try await self.call { $0 }
             do { self.inbox = try await self.call { try $0.cachedInbox() } }
             catch ClientError.EnrollmentRequired {
                 let status = try await self.call { try $0.enrollmentStatus() }
@@ -139,10 +202,11 @@ actor ClientWorker {
                 return
             }
             self.externalInbox = try await self.call { try $0.externalInbox() }
-            self.notice = "Saved snapshot. Refreshing current state…"
+            self.notice = nil
             self.connected = false
-            self.inbox = try await self.call { try $0.sync() }
-            self.connected = true; self.notice = nil
+            await self.reloadMailbox()
+            self.retainAvailableMail()
+            try await self.observeMail()
             self.externalInbox = try await self.call { try $0.externalInbox() }
         }
         if connected { await loadAddressSettings() }
@@ -196,25 +260,43 @@ actor ClientWorker {
         case .denied: notice = "Enrollment was denied. No account access has been granted."
         }
     }
-    func refresh() async {
+    package func refresh() async {
         await perform(.refresh) {
-            self.inbox = try await self.call { try $0.sync() }
-            self.connected = true; self.notice = nil
+            try await self.observeMail()
             self.externalInbox = try await self.call { try $0.externalInbox() }
             if let sender = self.selectedSender { self.conversation = try await self.call { try $0.conversation(sender: sender.value) } }
         }
     }
-    func chooseSender(_ sender: SenderReference?) {
+    package func chooseSender(_ sender: SenderReference?) {
+        if selectedSender != sender { conversation = nil }
         selectedSender = sender
-        if sender == nil { conversation = nil }
+        pendingSelection = nil
+        readingContext = nil
     }
     package func select(_ sender: SenderReference) async {
-        guard !busy else { return }
-        selectedSender = sender; conversation = nil
-        await perform(.conversation) {
-            self.conversation = try await self.call { try $0.conversation(sender: sender.value) }
+        guard inbox != nil else { return }
+        if selectedSender != sender { chooseSender(sender) }
+        pendingSelection = sender
+        await drainSelections()
+    }
+    private func drainSelections() async {
+        guard !busy, !drainingSelection else { return }
+        drainingSelection = true
+        defer { drainingSelection = false }
+        while let sender = pendingSelection, inbox != nil {
+            pendingSelection = nil
+            guard selectedSender == sender else { continue }
+            await perform(.conversation) {
+                let opened: Conversation
+                if !self.connected, let client = self.draftClient {
+                    opened = try await Task.detached { try client.cachedConversation(sender: sender.value) }.value
+                } else { opened = try await self.call { try $0.conversation(sender: sender.value) } }
+                if self.selectedSender == sender { self.conversation = opened }
+            }
         }
     }
+    package func beginReading(_ key: MailKey) { readingContext = key }
+    package func endReading(_ key: MailKey? = nil) { if key == nil || readingContext == key { readingContext = nil } }
     func decide(sender: SenderReference, request: RequestID, decision: Decision) async {
         guard selectedSender == sender, conversation?.sender == sender.value,
               conversation?.requests.contains(where: { $0.id == request.value && $0.awaitingDecision }) == true,
@@ -242,6 +324,50 @@ actor ClientWorker {
             self.notice = covered ? "Simulated service coverage is active." : "Simulated purchase recorded. Refresh after collection finishes."
         }
     }
+    var addressManagementError: String? {
+        guard let failure, [.aliasLoad, .aliasUpdate, .aliasResume].contains(failure.work) else { return nil }
+        return failure.explanation
+    }
+    var canStartAddressUpdate: Bool {
+        !busy && addressesCurrent && pendingAddressUpdate == nil && inbox?.pendingSetup == nil &&
+        inbox?.pendingSend == nil && inbox?.pendingSender == nil && inbox?.pendingPolicy != true && inbox?.pendingRequest != true
+    }
+    func loadManagedAddresses() async {
+        await perform(.aliasLoad) {
+            self.addressesCurrent = false
+            self.pendingAddressUpdate = try await self.call { try $0.pendingAddressUpdate() }
+            self.addressWorkspace = try await self.call { try $0.addressWorkspace() }
+            self.addressesCurrent = true
+        }
+    }
+    @discardableResult
+    func updateAddress(_ mutation: AddressMutation) async -> AddressUpdateResult? {
+        let started = generation
+        var outcome: AddressUpdateResult?
+        await perform(.aliasUpdate) {
+            self.addressUpdateResult = nil
+            self.addressesCurrent = false
+            let result = try await self.call { try $0.updateAddress(mutation: mutation) }
+            outcome = result
+            self.addressUpdateResult = result
+            try await self.reloadAddressOutcome()
+        }
+        return generation == started ? outcome : nil
+    }
+    func resumeAddressUpdate() async {
+        await perform(.aliasResume) {
+            self.addressUpdateResult = nil
+            self.addressesCurrent = false
+            self.addressUpdateResult = try await self.call { try $0.resumeAddressUpdate() }
+            try await self.reloadAddressOutcome()
+        }
+    }
+    private func reloadAddressOutcome() async throws {
+        pendingAddressUpdate = try await call { try $0.pendingAddressUpdate() }
+        inbox = try await call { try $0.cachedInbox() }
+        addressWorkspace = try await call { try $0.addressWorkspace() }
+        addressesCurrent = true
+    }
     func loadAddressSettings() async {
         await perform(.addressLoad) { self.addressSettings = try await self.call { try $0.addressSettings() } }
     }
@@ -252,7 +378,7 @@ actor ClientWorker {
             try await self.call { try $0.publishAddress(expected: expected, classVersion: classVersion,
                 displayName: name, description: description, image: image, listed: listed, classes: classes, mailbox: mailbox) }
             self.addressSettings = try await self.call { try $0.addressSettings() }
-            self.notice = "Address publication saved."
+            self.notice = "Changes saved."
             await self.directory.refresh()
         }
     }
@@ -299,17 +425,6 @@ actor ClientWorker {
             self.inbox = try await self.call { try $0.cachedInbox() }
         }
     }
-    package func authorizeRequest(request: RequestID, text: String) async -> Bool {
-        var accepted = false
-        await perform(.request) {
-            _ = try await self.call { try $0.authorizeRequest(request: request.value, text: text) }
-            accepted = true
-            self.inbox = try await self.call { try $0.cachedInbox() }
-            self.inbox = try await self.call { try $0.sync() }
-            try await self.refreshSelectedConversation()
-        }
-        return accepted || inbox?.pendingRequest == true && inbox?.requestProgress?.status != .review
-    }
     func cancelRequest() async {
         await perform(.request) {
             try await self.call { try $0.cancelRequest() }
@@ -317,17 +432,6 @@ actor ClientWorker {
             self.inbox = try await self.call { try $0.sync() }
             try await self.refreshSelectedConversation()
         }
-    }
-    func sendFollowup(request: RequestID, text: String) async -> Bool {
-        guard let sender = selectedSender, connected else { return false }
-        var accepted = false
-        await perform(.request) {
-            _ = try await self.call { try $0.sendFollowup(other: sender.value, request: request.value, text: text) }
-            accepted = true
-            self.inbox = try await self.call { try $0.sync() }
-            self.conversation = try await self.call { try $0.conversation(sender: sender.value) }
-        }
-        return accepted || inbox?.pendingRequest == true
     }
     func changePolicy(conversationID: String, revision: UInt64, action: PolicyAction) async {
         guard let sender = selectedSender, connected else { return }
@@ -337,41 +441,24 @@ actor ClientWorker {
             self.conversation = try await self.call { try $0.conversation(sender: sender.value) }
         }
     }
-    func sendMessage(conversationID: String?, text: String, sources: [SourceDraft]) async -> Bool {
-        guard let sender = selectedSender, conversation?.sender == sender.value, connected else { return false }
-        var succeeded = false
+    func submitDraft(_ draft: Draft, disclose: Bool = false, reviewedRequest: String? = nil) async -> Bool {
+        guard let client = draftClient, connected else { return false }
         await perform(.message) {
-            _ = try await self.call { try $0.sendMessage(other: sender.value, conversation: conversationID, text: text, sources: sources) }
-            succeeded = true; self.notice = "Message sent."
+            let submission = try await self.call { try $0.submitDraft(id: draft.id, revision: draft.revision, disclose: disclose, reviewedRequest: reviewedRequest) }
+            if case .external(let id) = submission { self.sentExternalConversation = id }
+            self.inbox = try await self.call { try $0.cachedInbox() }
+            self.notice = "Submission recorded."
             self.inbox = try await self.call { try $0.sync() }
-            self.conversation = try await self.call { try $0.conversation(sender: sender.value) }
+            self.externalInbox = try await self.call { try $0.externalInbox() }
+            try await self.refreshSelectedConversation()
         }
-        if succeeded, let failure {
-            self.failure = Failure(work: .conversation, cause: failure.cause)
-            self.notice = "Message sent. Refresh to load the updated conversation."
-        }
-        return succeeded
+        // A handed-off revision belongs to the existing recovery journal even if its reply was lost.
+        do { return try await Task.detached { try !client.drafts().contains { $0.id == draft.id } }.value }
+        catch { return false }
     }
 
     func loadExternal() async {
         await perform(.conversation) { self.externalInbox = try await self.call { try $0.externalInbox() } }
-    }
-    func sendExternal(conversation: String?, mailbox: String, text: String, disclose: Bool) async -> Bool {
-        let started = generation
-        var queued = false
-        sentExternalConversation = nil
-        await perform(.message) {
-            self.sentExternalConversation = try await self.call { try $0.sendExternal(conversation: conversation, mailbox: mailbox, text: text, disclose: disclose) }
-            queued = true
-            self.notice = "Email queued. Relay acceptance and delivery are reported separately."
-            self.inbox = try await self.call { try $0.sync() }
-        }
-        // Read the encrypted journal even when transport failed, so a new send cannot replace it.
-        let savedFailure = failure
-        await loadExternal()
-        guard started == generation else { return false }
-        if let savedFailure { failure = savedFailure }
-        return queued || externalInbox?.pending != nil
     }
     func controlExternal(conversation: String, action: ExternalAction) async {
         await perform(.message) {
@@ -399,6 +486,7 @@ actor ClientWorker {
     /// Session generations prevent results arriving after Lock from revealing content.
     private func perform(_ work: Work, _ action: () async throws -> Void) async {
         guard !busy, !Task.isCancelled else { return }
+        let readOnly = [.source, .reference, .conversation, .aliasLoad, .addressLoad].contains(work)
         let started = generation
         operation = .working(work); failure = nil
         do {
@@ -407,6 +495,8 @@ actor ClientWorker {
                 do {
                     navigationContacts = try await call { try $0.navigation() }
                     navigationError = nil
+                } catch is CancellationError {
+                    // Leaving a read screen does not invalidate the committed navigation.
                 } catch {
                     navigationContacts = nil
                     navigationError = "Couldn’t refresh the navigation list. Try Refresh."
@@ -414,16 +504,18 @@ actor ClientWorker {
             }
         }
         catch is CancellationError {
-            if generation == started {
+            if generation == started && !readOnly {
                 // A submitted operation may still have completed or remain journaled.
                 connected = false
-                notice = "Stopped waiting. Reopen or refresh to reconcile any operation already started."
+                notice = "Refresh to check the latest status before trying again."
             }
         }
         catch {
             if generation == started, Task.isCancelled {
-                connected = false
-                notice = "Stopped waiting. Reopen or refresh to reconcile any operation already started."
+                if !readOnly {
+                    connected = false
+                    notice = "Refresh to check the latest status before trying again."
+                }
             } else if generation == started {
                 if work == .unlock { notice = nil }
                 if let clientError = error as? ClientError {
@@ -434,46 +526,169 @@ actor ClientWorker {
                     }
                 }
                 failure = Failure(work: work, cause: error as? ClientError)
-                if work == .purchase || work == .request || work == .policy || work == .relationship || work == .decision || work == .retry || work == .publication || work == .message {
+                if work == .aliasUpdate || work == .aliasResume || work == .purchase || work == .request || work == .policy || work == .relationship || work == .decision || work == .retry || work == .publication || work == .message {
                     // Preserve the Rust journal's uncertain outcome without assuming rollback.
                     let cached = try? await call { try $0.cachedInbox() }
                     let external = try? await call { try $0.externalInbox() }
-                    if generation == started { inbox = cached ?? inbox; externalInbox = external ?? externalInbox }
+                    if generation == started {
+                        inbox = cached ?? inbox; externalInbox = external ?? externalInbox
+                        if work == .aliasUpdate || work == .aliasResume {
+                            pendingAddressUpdate = try? await call { try $0.pendingAddressUpdate() }
+                        }
+                    }
                 }
             }
         }
-        if generation == started { operation = .idle }
+        if generation == started { operation = .idle; await reloadMailbox(); await drainSelections() }
+    }
+    private func observeMail() async throws {
+        let result = try await call { try $0.refreshMail() }
+        inbox = result.inbox
+        connected = result.nativeCurrent && result.externalCurrent
+        notice = connected ? nil : "Refresh is incomplete. Some mail is saved information; pending submissions have not been retried."
+        if connected { retainAvailableMail() }
+    }
+    func deleteCopies(_ item: MailItem) async {
+        searchGeneration += 1; searchMatches = []; searchStatus = nil; searchContext = nil
+        clearSourceContact(); reference = nil
+        conversation = nil
+        await perform(.message) {
+            try await self.call { try $0.deleteNativeCopies(conversation: item.key.conversation) }
+            self.inbox = try await self.call { try $0.cachedInbox() }
+            try await self.refreshSelectedConversation()
+        }
+    }
+    func reloadMailbox() async {
+        guard let client = draftClient, inbox != nil else { return }
+        let started = generation
+        do {
+            let workspace: InboxWorkspace
+            if connected {
+                workspace = try await call { try $0.inboxWorkspace() }
+            } else {
+                workspace = try await Task.detached { try client.cachedInboxWorkspace() }.value
+            }
+            let work = try await Task.detached { try client.outgoingWork() }.value
+            guard started == generation else { return }
+            mailItems = workspace.all; aliasInboxes = workspace.inboxes; senderLaneScopes = workspace.senderLanes
+            outgoingWork = work; mailboxError = nil
+        } catch { if started == generation { mailboxError = Self.explanation(error) } }
+    }
+    private func retainAvailableMail() {
+        guard retaining == nil else { return }
+        let started = generation
+        retaining = Task {
+            defer { if generation == started { retaining = nil } }
+            do {
+                while generation == started && !Task.isCancelled {
+                    let indexed = try await call { try $0.indexLocalMail(limit: 10) }
+                    if indexed < 10 { break }
+                    await Task.yield()
+                }
+                if !searchQuery.isEmpty { await search(searchQuery) }
+                while generation == started && !Task.isCancelled {
+                    let progress = try await call { try $0.retainMail(limit: 5) }
+                    guard generation == started else { return }
+                    await reloadMailbox()
+                    if progress.remaining == 0 {
+                        if !searchQuery.isEmpty { await search(searchQuery) }
+                        return
+                    }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            } catch { /* Retained mail remains usable; a later refresh resumes downloads. */ }
+        }
+    }
+    func organize(_ item: MailItem, _ action: MailAction) async {
+        guard let client = draftClient else { return }
+        let started = generation
+        let scope = mailScope
+        do {
+            try await Task.detached { try client.organizeMail(key: item.key, scope: scope, action: action) }.value
+            if generation == started { await reloadMailbox() }
+        } catch { if generation == started { mailboxError = Self.explanation(error) } }
+    }
+    package func displayed(key: MailKey, ids: [String]) async {
+        guard !Task.isCancelled, inbox != nil, readingContext == key, !ids.isEmpty, ids.allSatisfy({ visibleInInbox(key, $0) }), let item = scopedMailItems.first(where: { $0.key == key }) else { return }
+        await organize(item, .read(displayed: ids))
+    }
+    func search(_ query: String) async {
+        let restoreCursor = hasSearch(query) ? (searchContext?.cursor ?? 0) : 0
+        searchQuery = query; searchComplete = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        searchGeneration += 1
+        let context = SearchContext(query: query, scope: mailScope, request: searchGeneration, lifetime: generation)
+        searchMatches = []; searchStatus = nil; searchContext = nil; searching = false
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        searching = true
+        do {
+            try await Task.sleep(for: .milliseconds(100))
+            await fetchSearchPage(context)
+            while let loaded = searchContext, loaded.request == context.request,
+                  loaded.cursor < restoreCursor, loaded.cursor < loaded.total, !Task.isCancelled {
+                searching = true
+                await fetchSearchPage(loaded)
+            }
+        } catch is CancellationError {
+            if context.request == searchGeneration { searching = false }
+        } catch { }
+    }
+    func loadMoreSearchResults() async {
+        guard !searching, hasMoreSearchResults, let context = searchContext else { return }
+        searching = true
+        await fetchSearchPage(context)
+    }
+    private func fetchSearchPage(_ initial: SearchContext) async {
+        guard initial.request == searchGeneration, initial.lifetime == generation, let client = draftClient else { return }
+        do {
+            let page = try await Task.detached { try client.searchMail(query: initial.query, scope: initial.scope, after: initial.cursor, limit: 10) }.value
+            guard initial.request == searchGeneration, initial.lifetime == generation else { return }
+            var context = initial
+            context.cursor = page.next; context.total = page.total
+            context.indexed += page.searched; context.unavailable += page.unavailable; context.notRetained += page.notRetained
+            searchMatches += page.matches
+            searchContext = context
+            searchStatus = "On this device: \(context.indexed) searchable · \(context.notRetained) not downloaded · \(context.unavailable) unavailable · \(context.total - context.cursor) more possible matches"
+            searchComplete = context.cursor >= context.total && context.notRetained == 0 && context.unavailable == 0
+        } catch {
+            if initial.request == searchGeneration, initial.lifetime == generation {
+                searchContext = nil
+                searchStatus = Self.explanation(error) + " Search is incomplete."
+            }
+        }
+        if initial.request == searchGeneration, initial.lifetime == generation { searching = false }
     }
     nonisolated static func explanation(_ error: Error) -> String {
         guard let error = error as? ClientError else { return "The operation could not finish. No success has been assumed." }
         switch error {
-        case .ExternalPending: return "An external-email operation has an unresolved outcome. Resume its saved operation before composing again."
-        case .ExternalRefused: return "The service refused this external-email operation. Refresh its current permission and consent before trying again."
+        case .CopyDeletionRefused: return "The service refused copy removal. No deletion has been assumed."
+        case .DraftChanged: return "This draft changed or was submitted. Reopen it from Drafts before editing again."
+        case .ExternalPending: return "Your last email change has not been confirmed. Check its status before composing again."
+        case .ExternalRefused: return "This email change was declined. Refresh to see the current permission and consent."
         case .NotConfigured: return "Sign in to enroll this device."
         case .EnrollmentRequired: return "Device enrollment is unfinished. Check enrollment status or continue sign-in."
         case .LoginUnavailable: return "Browser sign-in is not configured or could not start."
         case .LoginCancelled: return "Sign-in cancelled. You can resume the same enrollment."
         case .AlreadyConfigured: return "This app already has a connected device."
         case .KeyUnavailable: return "Device credentials are unavailable. Unlock your Mac and allow Keychain access to this development app, then reopen the account. The saved account has not been replaced."
-        case .Offline: return "The service could not be reached. Saved state may be out of date."
+        case .Offline: return "Can’t connect. Information shown may be out of date."
         case .Unauthorized: return "Authentication was refused or expired. Refresh after restoring access."
-        case .QuoteExpired: return "This quote has expired. Discard it and review a new signed quote. No charge has been authorized from this quote."
-        case .RequestPending: return "A request workflow is unfinished. Review or resume its saved operation before starting another."
+        case .QuoteExpired: return "This quote expired. Review a new quote. No charge was authorized from this quote."
+        case .RequestPending: return "Finish or cancel your pending request before starting another."
         case .RequestRefused: return "The service refused this request operation. No success or refund completion has been assumed. Review its current state before cancelling or starting again."
-        case .PolicyRefused: return "The service refused the policy change. Refresh its current revision before reviewing another change."
+        case .PolicyRefused: return "Your sharing change was declined. Refresh before making another change."
         case .SourceUnavailable: return "An explicitly selected source is unavailable. It has not been replaced or omitted."
         case .SendRefused: return "The service refused this message. It will not be retried or delivered later. Refresh current permission before composing again."
-        case .SendPending: return "A message has an unresolved outcome. Retry its original send."
-        case .DecisionPending: return "A decision has an unresolved outcome. Retry the original operation."
+        case .SendPending: return "We couldn’t confirm whether your message was sent. Choose Check message status."
+        case .DecisionPending: return "Your decision has not been confirmed. Check its status before deciding again."
         case .SetupRefused: return "The service refused the setup operation. Its saved operation is resolved; review current terms before trying again."
-        case .SetupPending: return "Account setup has an unresolved operation. Refresh to retry its original request."
+        case .SetupPending: return "Account setup is unfinished. Refresh to continue."
         case .NoPendingRequest: return "This request is no longer awaiting a decision. Refresh its current state."
-        case .PublicationRefused: return "The publication was refused. Reload the current profile and classes before editing again."
+        case .PublicationRefused: return "Your changes were declined. Refresh your page before editing again."
         case .AddressUnavailable: return "This address is currently unavailable."
         case .DecisionRefused: return "The service refused the decision. Refresh to see the current request."
         case .StorageUnavailable: return "Local storage is unavailable or open in another process."
-        case .InvalidData: return "The enrollment details, service response or encrypted data could not be validated."
-        case .Unavailable: return "The operation could not finish. Any pending decision retains its original identity."
+        case .InvalidData: return "This information could not be verified. Try Refresh; if the problem continues, contact support."
+        case .Unavailable: return "This couldn’t be completed. Check its status before trying again."
         }
     }
 }

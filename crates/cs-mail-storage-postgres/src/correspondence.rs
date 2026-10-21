@@ -66,6 +66,9 @@ fn load_context(
         .map(|r| r.try_get::<_, Json<Receipt>>(0).map(|j| j.0))
         .transpose()?;
     let mut context = Context {
+        routed: None,
+        receiving_routes: vec![],
+        sender_scopes: vec![],
         receiver_contact: None,
         mailbox: vec![],
         authority,
@@ -82,6 +85,14 @@ fn load_context(
     if context.prior.is_some() {
         return Ok(context);
     }
+    if let Command::ReceivingRoutes { messages } = &request.command {
+        if messages.len() > 100 {
+            return Err(CorrespondenceError::Invalid.into());
+        }
+        context.receiving_routes = super::aliases::delivery_routes(tx, request.persona, messages)?;
+        context.sender_scopes = super::aliases::current_sender_scopes(tx, request.persona)?;
+        return Ok(context);
+    }
     if let Command::Mailbox { after, limit } = request.command {
         load_mailbox(tx, request, &mut context, after, limit)?;
         return Ok(context);
@@ -92,7 +103,25 @@ fn load_context(
     load_sources(tx, request, &mut context)?;
     load_copy(tx, request, &mut context)?;
     load_contact(tx, request, &mut context)?;
-    if matches!(request.command, Command::Send(_)) {
+    if let Command::SendToAlias { alias, .. } | Command::Send { alias, .. } = &request.command {
+        if let Some(route) = super::aliases::receiving_context(tx, *alias)? {
+            let owner_active = tx.query_opt("SELECT a.control FROM cs_persona_owners p JOIN cs_product_accounts a ON a.id=p.account WHERE p.identity=$1 FOR SHARE OF a", &[&route.owner().0.to_string()])?.map(|r| r.try_get::<_, Json<cs_mail_accounts::control::AccountControl>>(0).map(|j| j.0.allows_service())).transpose()?.unwrap_or(false);
+            let recipient_billing = super::billing::identity_account(tx, route.owner())?;
+            let sender_billing = super::billing::identity_account(tx, request.persona)?;
+            let scope = super::aliases::sender_scope(tx, request.persona, route.owner())?;
+            context.routed = Some(cs_mail_application::correspondence::RoutedContext {
+                alias: route,
+                sender_scope: scope,
+                recipient_active: owner_active,
+                recipient_billing,
+                sender_billing,
+            });
+        }
+    }
+    if matches!(
+        request.command,
+        Command::Send { .. } | Command::SendToAlias { .. }
+    ) {
         context.custody_key = Some(super::consent::custody_key(tx)?);
     }
     Ok(context)
@@ -113,26 +142,37 @@ impl CorrespondenceStore for PostgresAccountRepository {
         let context = load_context(&mut tx, request, &*self.clock)?;
         let (response, effects) = decide(context, &*self.clock)?.into_parts();
         if let Some(effects) = effects {
-            if let Some(lane) = &effects.lane {
-                let key: String = tx
-                    .query_one(
-                        "SELECT aggregate_key FROM cs_capability_lanes WHERE lane_id=$1",
-                        &[&lane.grant().id.0.to_string()],
-                    )?
-                    .get(0);
-                super::upsert_lane(&mut tx, &key, lane, effects.receipt.authorized_at)?;
-                super::persist_schedules(&mut tx, &key, &[lane.schedule_change()])?;
-            }
-            if let Some(conversation) = effects.conversation {
-                tx.execute("INSERT INTO cs_conversation_routes(id,route) VALUES($1,'native') ON CONFLICT(id) DO NOTHING", &[&conversation.id().value().to_string()])?;
-                tx.execute("INSERT INTO cs_conversations(id,record) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record", &[&conversation.id().value().to_string(), &Json(conversation)])?;
-            }
-            if let Some((record, package)) = effects.delivery {
-                persist_delivery(&mut tx, &record, &package)?;
-            }
-            if let Some(id) = effects.delete_copies {
-                tx.execute("DELETE FROM cs_correspondence_copies c USING cs_correspondence_messages m WHERE c.message=m.id AND m.conversation=$1 AND c.owner=$2", &[&id.value().to_string(), &request.persona.0.to_string()])?;
-                tx.execute("DELETE FROM cs_correspondence_recovery c USING cs_correspondence_messages m WHERE c.message=m.id AND m.conversation=$1 AND c.owner=$2", &[&id.value().to_string(), &request.persona.0.to_string()])?;
+            match effects.change {
+                cs_mail_application::correspondence::Change::Conversation(conversation) => {
+                    persist_conversation(&mut tx, &conversation)?;
+                }
+                cs_mail_application::correspondence::Change::Delivery(transition) => {
+                    let (conversation, delivery, lane) = transition.into_parts();
+                    if let Some(lane) = lane {
+                        let paired = super::aliases::persist_paired_lane(
+                            &mut tx,
+                            &delivery.record().receiving,
+                            &lane,
+                        )?;
+                        if !paired {
+                            let key: String = tx.query_one("SELECT aggregate_key FROM cs_capability_lanes WHERE lane_id=$1", &[&lane.grant().id.0.to_string()])?.get(0);
+                            super::upsert_lane(
+                                &mut tx,
+                                &key,
+                                &lane,
+                                effects.receipt.authorized_at,
+                            )?;
+                            super::persist_schedules(&mut tx, &key, &[lane.schedule_change()])?;
+                        }
+                    }
+                    persist_conversation(&mut tx, &conversation)?;
+                    persist_delivery(&mut tx, &delivery)?;
+                }
+                cs_mail_application::correspondence::Change::DeleteCopies(id) => {
+                    tx.execute("DELETE FROM cs_correspondence_copies c USING cs_correspondence_messages m WHERE c.message=m.id AND m.conversation=$1 AND c.owner=$2", &[&id.value().to_string(), &request.persona.0.to_string()])?;
+                    tx.execute("DELETE FROM cs_correspondence_recovery c USING cs_correspondence_messages m WHERE c.message=m.id AND m.conversation=$1 AND c.owner=$2", &[&id.value().to_string(), &request.persona.0.to_string()])?;
+                }
+                cs_mail_application::correspondence::Change::Refused => (),
             }
             tx.execute("INSERT INTO cs_correspondence_receipts(account,operation,receipt) VALUES($1,$2,$3)", &[&request.account.0.to_string(), &request.operation.0.to_string(), &Json(effects.receipt)])?;
         }
@@ -190,7 +230,10 @@ fn load_sources(
     request: &SignedRequest,
     context: &mut Context,
 ) -> Result<(), StorageError> {
-    let follow_ancestry = matches!(request.command, Command::Send(_) | Command::Assess { .. });
+    let follow_ancestry = matches!(
+        request.command,
+        Command::Send { .. } | Command::SendToAlias { .. } | Command::Assess { .. }
+    );
     let mut pending = request.command.source_messages();
     let mut visited = BTreeSet::new();
     while let Some(id) = pending.pop() {
@@ -292,10 +335,9 @@ fn load_contact(
 ) -> Result<(), StorageError> {
     let other = match &request.command {
         Command::Create { other, .. } => Some(*other),
-        Command::Send(p) => context
-            .conversations
-            .get(&p.manifest.conversation())
-            .and_then(|c| c.scope().other(request.persona).ok()),
+        Command::SendToAlias { alias, .. } | Command::Send { alias, .. } => {
+            super::aliases::receiving_context(tx, *alias)?.map(|a| a.owner())
+        }
         _ => None,
     };
     if let Some(other) = other {
@@ -332,7 +374,7 @@ fn load_contact(
                     &[&key],
                 )?
                 .map(|r| {
-                    r.try_get::<_, Json<cs_mail_capabilities::Lane>>(0)
+                    r.try_get::<_, Json<cs_mail_capabilities::SenderScopedLane>>(0)
                         .map(|j| j.0)
                 })
                 .transpose()?;
@@ -347,11 +389,21 @@ fn load_contact(
     Ok(())
 }
 
+fn persist_conversation(
+    tx: &mut Transaction<'_>,
+    conversation: &Conversation,
+) -> Result<(), StorageError> {
+    tx.execute("INSERT INTO cs_conversation_routes(id,route) VALUES($1,'native') ON CONFLICT(id) DO NOTHING", &[&conversation.id().value().to_string()])?;
+    tx.execute("INSERT INTO cs_conversations(id,record) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record", &[&conversation.id().value().to_string(), &Json(conversation)])?;
+    Ok(())
+}
+
 pub(super) fn persist_delivery(
     tx: &mut Transaction<'_>,
-    record: &MessageRecord,
-    package: &cs_mail_application::correspondence::PreparedMessage,
+    delivery: &cs_mail_application::correspondence::AdmittedDelivery,
 ) -> Result<(), StorageError> {
+    let record = delivery.record();
+    let package = delivery.package();
     let id = record.manifest.message().0.to_string();
     tx.execute(
         "INSERT INTO cs_correspondence_messages(id,conversation,record) VALUES($1,$2,$3)",

@@ -14,7 +14,7 @@ let package = Package(
         .target(name: "CsMailPresentation"),
         .target(name: "CsMailApple", dependencies: ["CsMailRust", "CSQLite", "CsMailPresentation"]),
         .executableTarget(name: "CsMailMac", dependencies: ["CsMailApple"]),
-        .executableTarget(name: "CsMailAppleCheck", dependencies: ["CsMailApple", "CsMailRust", "CsMailPresentation"])
+        .executableTarget(name: "CsMailAppleCheck", dependencies: ["CsMailApple", "CsMailRust", "CsMailPresentation", "CSQLite"])
     ],
     swiftLanguageModes: [.v6]
 )

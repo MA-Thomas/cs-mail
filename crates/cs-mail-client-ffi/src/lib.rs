@@ -2,9 +2,17 @@
 use cs_mail_client::member as core;
 use std::sync::Arc;
 uniffi::setup_scaffolding!();
+mod drafts;
+mod mailbox;
+pub use drafts::*;
+pub use mailbox::*;
+mod addresses;
+pub use addresses::*;
 
 #[derive(Debug, uniffi::Error)]
 pub enum ClientError {
+    DraftChanged,
+    CopyDeletionRefused,
     NotConfigured,
     AlreadyConfigured,
     KeyUnavailable,
@@ -42,6 +50,8 @@ impl std::error::Error for ClientError {}
 impl From<core::Error> for ClientError {
     fn from(error: core::Error) -> Self {
         match error {
+            core::Error::CopyDeletionRefused => Self::CopyDeletionRefused,
+            core::Error::DraftChanged => Self::DraftChanged,
             core::Error::ExternalPending => Self::ExternalPending,
             core::Error::ExternalRefused => Self::ExternalRefused,
             core::Error::NotConfigured => Self::NotConfigured,
@@ -73,8 +83,51 @@ impl From<core::Error> for ClientError {
     }
 }
 
+#[derive(uniffi::Record)]
+pub struct RetainedState {
+    pub revision: u64,
+    pub metadata: Option<Vec<u8>>,
+}
+#[derive(uniffi::Record)]
+pub struct RetainedIndexRow {
+    pub id: Vec<u8>,
+    pub ciphertext: Vec<u8>,
+}
+#[derive(uniffi::Enum)]
+pub enum RetainedCopyWrite {
+    Keep,
+    Replace { bytes: Vec<u8> },
+    Remove,
+}
+#[derive(uniffi::Record)]
+pub struct RetainedWrite {
+    pub index: RetainedIndexRow,
+    pub copy: RetainedCopyWrite,
+}
+
 #[uniffi::export(callback_interface)]
 pub trait AppleStore: Send + Sync {
+    /// # Errors
+    /// Retained metadata or progress cannot be read.
+    fn retained_state(&self) -> Result<RetainedState, ClientError>;
+    /// # Errors
+    /// Index storage cannot be read.
+    fn retained_indexes(
+        &self,
+        after: Option<Vec<u8>>,
+        limit: u16,
+    ) -> Result<Vec<RetainedIndexRow>, ClientError>;
+    /// # Errors
+    /// Copy storage cannot be read.
+    fn retained_copy(&self, id: Vec<u8>) -> Result<Option<Vec<u8>>, ClientError>;
+    /// # Errors
+    /// Stale revision or failed atomic commit.
+    fn commit_retained(
+        &self,
+        expected_revision: u64,
+        metadata: Option<Vec<u8>>,
+        writes: Vec<RetainedWrite>,
+    ) -> Result<(), ClientError>;
     /// # Errors
     /// Missing credential must be NotConfigured; all custody denials must fail closed.
     fn load_secret(&self) -> Result<Vec<u8>, ClientError>;
@@ -87,9 +140,78 @@ pub trait AppleStore: Send + Sync {
     /// # Errors
     /// Atomic durable cache replacement failed.
     fn save_cache(&self, bytes: Vec<u8>) -> Result<(), ClientError>;
+    /// # Errors
+    /// Workspace storage cannot be read.
+    fn load_workspace(&self) -> Result<Option<Vec<u8>>, ClientError>;
+    /// # Errors
+    /// Atomic durable workspace replacement failed.
+    fn save_workspace(&self, bytes: Vec<u8>) -> Result<(), ClientError>;
+    /// # Errors
+    /// The complete cache/workspace transaction failed and must roll back.
+    fn load_personal(&self) -> Result<Option<Vec<u8>>, ClientError>;
+    /// # Errors
+    /// Durable personal-state replacement failed.
+    fn save_personal(&self, bytes: Vec<u8>) -> Result<(), ClientError>;
+    /// # Errors
+    /// The complete three-record transaction failed; all writes must roll back.
+    fn save_submission(
+        &self,
+        cache: Vec<u8>,
+        workspace: Vec<u8>,
+        personal: Vec<u8>,
+    ) -> Result<(), ClientError>;
 }
 struct Store(Box<dyn AppleStore>);
 impl core::DeviceStore for Store {
+    fn retained_state(&self) -> Result<(u64, Option<Vec<u8>>), core::Error> {
+        let state = self
+            .0
+            .retained_state()
+            .map_err(|_| core::Error::StorageUnavailable)?;
+        Ok((state.revision, state.metadata))
+    }
+    fn retained_indexes(
+        &self,
+        after: Option<core::RetainedRecordId>,
+        limit: u16,
+    ) -> Result<Vec<core::RetainedIndexRow>, core::Error> {
+        self.0
+            .retained_indexes(after.map(|id| id.bytes().to_vec()), limit)
+            .map_err(|_| core::Error::StorageUnavailable)?
+            .into_iter()
+            .map(|row| {
+                Ok(core::RetainedIndexRow {
+                    id: row.id.try_into().map_err(|_| core::Error::InvalidData)?,
+                    ciphertext: row.ciphertext,
+                })
+            })
+            .collect()
+    }
+    fn retained_copy(&self, id: core::RetainedRecordId) -> Result<Option<Vec<u8>>, core::Error> {
+        self.0
+            .retained_copy(id.bytes().to_vec())
+            .map_err(|_| core::Error::StorageUnavailable)
+    }
+    fn commit_retained(&self, change: core::RetainedCommit) -> Result<(), core::Error> {
+        let writes = change
+            .writes
+            .into_iter()
+            .map(|w| RetainedWrite {
+                index: RetainedIndexRow {
+                    id: w.index.id.bytes().to_vec(),
+                    ciphertext: w.index.ciphertext,
+                },
+                copy: match w.copy {
+                    core::RetainedCopyWrite::Keep => RetainedCopyWrite::Keep,
+                    core::RetainedCopyWrite::Replace(bytes) => RetainedCopyWrite::Replace { bytes },
+                    core::RetainedCopyWrite::Remove => RetainedCopyWrite::Remove,
+                },
+            })
+            .collect();
+        self.0
+            .commit_retained(change.expected_revision, change.metadata, writes)
+            .map_err(|_| core::Error::StorageUnavailable)
+    }
     fn load_secret(&self) -> Result<Vec<u8>, core::Error> {
         self.0.load_secret().map_err(|e| {
             if matches!(e, ClientError::NotConfigured) {
@@ -112,6 +234,36 @@ impl core::DeviceStore for Store {
     fn save_cache(&self, bytes: &[u8]) -> Result<(), core::Error> {
         self.0
             .save_cache(bytes.to_vec())
+            .map_err(|_| core::Error::StorageUnavailable)
+    }
+    fn load_workspace(&self) -> Result<Option<Vec<u8>>, core::Error> {
+        self.0
+            .load_workspace()
+            .map_err(|_| core::Error::StorageUnavailable)
+    }
+    fn save_workspace(&self, bytes: &[u8]) -> Result<(), core::Error> {
+        self.0
+            .save_workspace(bytes.to_vec())
+            .map_err(|_| core::Error::StorageUnavailable)
+    }
+    fn load_personal(&self) -> Result<Option<Vec<u8>>, core::Error> {
+        self.0
+            .load_personal()
+            .map_err(|_| core::Error::StorageUnavailable)
+    }
+    fn save_personal(&self, bytes: &[u8]) -> Result<(), core::Error> {
+        self.0
+            .save_personal(bytes.to_vec())
+            .map_err(|_| core::Error::StorageUnavailable)
+    }
+    fn save_submission(
+        &self,
+        cache: &[u8],
+        workspace: &[u8],
+        personal: &[u8],
+    ) -> Result<(), core::Error> {
+        self.0
+            .save_submission(cache.to_vec(), workspace.to_vec(), personal.to_vec())
             .map_err(|_| core::Error::StorageUnavailable)
     }
 }
@@ -162,6 +314,7 @@ pub struct Inbox {
     pub pending_request: bool,
     pub request_progress: Option<RequestProgress>,
     pub pending_policy: bool,
+    pub pending_deletion: Option<String>,
     pub pending_send: Option<String>,
     pub account: String,
     pub persona: String,
@@ -177,6 +330,7 @@ pub enum PendingSetup {
     ContentKeyPublication,
     ServicePurchase,
     DirectoryPublication,
+    AliasManagement,
 }
 impl From<core::PendingSetup> for PendingSetup {
     fn from(value: core::PendingSetup) -> Self {
@@ -185,6 +339,7 @@ impl From<core::PendingSetup> for PendingSetup {
             core::PendingSetup::ContentKeyPublication => Self::ContentKeyPublication,
             core::PendingSetup::ServicePurchase => Self::ServicePurchase,
             core::PendingSetup::DirectoryPublication => Self::DirectoryPublication,
+            core::PendingSetup::AliasManagement => Self::AliasManagement,
         }
     }
 }
@@ -335,6 +490,9 @@ pub struct Request {
 }
 #[derive(uniffi::Record)]
 pub struct Message {
+    pub committed_at: Option<u64>,
+    pub sequence: Option<u64>,
+    pub content: ReadingContent,
     pub conversation: Option<String>,
     pub outgoing: bool,
     pub id: String,
@@ -354,6 +512,7 @@ impl From<core::Inbox> for Inbox {
             pending_request: value.pending_request,
             request_progress: value.request_progress.map(Into::into),
             pending_policy: value.pending_policy,
+            pending_deletion: value.pending_deletion,
             pending_send: value.pending_send,
             account: value.account,
             persona: value.persona,
@@ -387,6 +546,9 @@ impl From<core::Conversation> for Conversation {
                 .messages
                 .into_iter()
                 .map(|m| Message {
+                    committed_at: m.committed_at,
+                    sequence: m.sequence,
+                    content: m.content.into(),
                     conversation: m.conversation,
                     outgoing: m.outgoing,
                     id: m.id,
@@ -499,6 +661,14 @@ impl AppleClient {
     pub fn purchase_service(&self, offer: u64) -> Result<bool, ClientError> {
         self.0
             .purchase_service(cs_mail_primitives::PolicyVersion(offer))
+            .map_err(Into::into)
+    }
+    /// # Errors
+    /// Unavailable local custody or invalid retained correspondence.
+    pub fn cached_conversation(&self, sender: String) -> Result<Conversation, ClientError> {
+        self.0
+            .cached_conversation(&sender)
+            .map(Into::into)
             .map_err(Into::into)
     }
     /// # Errors
@@ -1120,6 +1290,7 @@ impl From<core::RequestStatus> for RequestStatus {
 }
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct RequestQuote {
+    pub class_id: String,
     pub class_name: String,
     pub processing: u64,
     pub collateral: u64,
@@ -1135,6 +1306,7 @@ pub struct RequestQuote {
 impl From<core::RequestQuote> for RequestQuote {
     fn from(value: core::RequestQuote) -> Self {
         Self {
+            class_id: value.class_id,
             class_name: value.class_name,
             processing: value.processing,
             collateral: value.collateral,
@@ -1330,7 +1502,11 @@ pub struct ExternalMessage {
     pub id: String,
     pub text: String,
     pub outgoing: bool,
-    pub delivery: String,
+    pub committed_at: u64,
+    pub sequence: u64,
+    pub delivery: HandoffState,
+    pub provider_events: Vec<ProviderObservation>,
+    pub content: ReadingContent,
 }
 #[derive(uniffi::Enum)]
 pub enum ExternalAction {
@@ -1366,7 +1542,15 @@ impl AppleClient {
                                 id: m.id,
                                 text: m.text,
                                 outgoing: m.outgoing,
-                                delivery: m.delivery,
+                                committed_at: m.committed_at,
+                                sequence: m.sequence,
+                                delivery: m.delivery.into(),
+                                provider_events: m
+                                    .provider_events
+                                    .into_iter()
+                                    .map(Into::into)
+                                    .collect(),
+                                content: m.content.into(),
                             })
                             .collect(),
                     })

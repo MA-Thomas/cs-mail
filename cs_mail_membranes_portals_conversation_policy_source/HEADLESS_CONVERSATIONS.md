@@ -59,6 +59,15 @@ signed, revision checked, recorded and serialized with outgoing commitments.
 
 ## Content and provenance
 
+Agreed and implemented 19 October 2026: the sender supplies a shared subject
+when creating a native conversation. Both participants see the same fixed subject.
+It is authenticated and encrypted conversation content, not plaintext control
+metadata. Its retained copies follow content access, retention and deletion rules;
+disclosing it elsewhere follows the conversation's reuse policy. Creation and exact
+retry must preserve the subject. Blank input receives a date-and-time default with an alphabetic month; every new
+conversation has a subject. Existing development placeholders may be updated. See the [domain model](../DOMAIN_MODEL.md#personal-reading-and-organization)
+for the agreed offline-search behavior.
+
 Messages are immutable versioned documents containing text, inline image blocks,
 references and retained quotations/shared copies. A checked `MessageSelection`
 names one message and version plus an ordered, nonempty list of `TextRange` and

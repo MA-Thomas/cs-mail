@@ -66,6 +66,32 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
             clock,
         })
     }
+    /// Authenticated participant-owned aliases. Provider evidence is signed only
+    /// after the management transaction commits; replay recovers a lost acknowledgement.
+    /// # Errors
+    /// Rejects caller authority, altered operations or unavailable storage.
+    pub fn alias_command(
+        &self,
+        request: &cs_mail_application::aliases::SignedCommand,
+        domain: &str,
+    ) -> Result<cs_mail_application::aliases::Acknowledgement, ServiceError> {
+        let clock = self.clock.clone();
+        let repository = self.deployment.accounts(move || clock.now());
+        let receipt = cs_mail_application::aliases::AliasService(&repository).handle(
+            request,
+            self.scope(),
+            domain,
+            &|| {
+                let mut bytes = [0; 16];
+                getrandom::getrandom(&mut bytes)
+                    .map_err(|_| cs_mail_accounts::aliases::AliasError::Invalid)?;
+                Ok(bytes)
+            },
+        )?;
+        cs_mail_application::aliases::Acknowledgement::sign(receipt, &self.secrets.provider_seed)
+            .map_err(StorageError::from)
+            .map_err(ServiceError::from)
+    }
     pub const fn scope(&self) -> RecipientSigningScope {
         RecipientSigningScope {
             deployment_domain: self.record.record().deployment_domain,
@@ -332,6 +358,14 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
         persona: ProtocolIdentity,
     ) -> Result<Option<EndpointKeyPublication>, ServiceError> {
         Ok(self.deployment.endpoint_key(persona)?)
+    }
+    /// # Errors
+    /// Storage failure or invalid receiving ownership.
+    pub fn public_receiving_alias(
+        &self,
+        persona: ProtocolIdentity,
+    ) -> Result<Option<cs_mail_application::aliases::PublicReceivingAlias>, ServiceError> {
+        Ok(self.deployment.public_receiving_alias(persona)?)
     }
     /// Answers an authenticated member read, limited to the reader's own records.
     /// # Errors

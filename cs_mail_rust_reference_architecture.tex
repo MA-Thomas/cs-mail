@@ -94,26 +94,65 @@ The implementation notes describe the coordinated format cutover.
 
 \section{Agreed Alias Infrastructure: Implementation Pending}
 
-The 14 October 2026 product decision distinguishes alias-scoped and sender-scoped
-express lanes. Creating a private alias automatically opens its alias-scoped
-lane, allowing previously unknown senders given the address to correspond under
-its admission policy without a bonded request. Public-alias creation grants no
-lane and retains existing permission and bonded-request behavior. Permission
-through a private alias must not authorize another alias; restriction or retirement
-must not introduce a bonded fallback.
+The creation model is one protocol identity per member, one current public-facing
+alias and multiple private aliases. Rust owns private-address generation and
+enforcement of the public-alias limit, including concurrent creation and replacement.
+The application layer obtains randomness through an infrastructure port and passes
+candidate addresses into deterministic domain validation; address reservation and
+the complete creation/replacement consequences commit atomically. A previous public
+alias may complete its explicit transition and remains permanently reserved.
+Private purpose/description is owner-visible metadata, distinct from the generated
+email address, and is not disclosed without explicit sharing. Swift collects this
+description for private creation or a chosen address for public creation; it does
+not enforce cardinality or generate authoritative addresses. Signed management
+implements these refinements with a checked owner portfolio, owner-serialized
+transactions and a PostgreSQL unique index for the current public route. Version-2
+signed commands/acknowledgements and schema~39 replace the old creation format;
+there are no old-format runtime readers. The explicit preservation upgrade refuses
+populated legacy alias metadata instead of inventing descriptions or rewriting
+signed history. Delivery integration remains separate.
+
+Address creation and lane permission are separate domain decisions. Creating a
+private alias grants no lane. The member explicitly pairs a receiving alias with
+an alias-scoped lane (for example, referred healthcare correspondents) or a
+sender-scoped lane (for example, selected authenticated Amazon domains). Existing
+sender subject and receiving-scope types supply distinct dimensions of authority.
+An active alias alone grants no permission, and possession of a sender-restricted
+alias cannot bypass its subject check. Private aliases have no bonded fallback;
+unauthorized senders may approach through the public request route. Lane changes
+are distinct from address lifecycle, while restriction and retirement constrain
+all permission through the route.
 
 CS-MAIL owns alias creation, routing, permissions, lifecycle and correspondence
 independently of Phoros, which will later consume those capabilities through a
 linked account. Domain/application owners must retain the decisions; SMTP and
-client adapters must not invent policy. The current grant and admission
-implementation described in this document is sender-scoped. It does not yet
-implement the alias design.
+client adapters must not invent policy. Local alias receiving is implemented,
+with independently revisioned receiving permission checked on restoration.
+Signed pairing commands activate existing verified sender-lane types or explicit
+alias-scoped permission. Native and SMTP delivery commit the chosen grant's
+allowance and route evidence atomically. Schema~41 preserves original signed
+evidence offline; no compatibility reader or parallel permission implementation
+is introduced.
 
 The \href{DOMAIN_MODEL.md}{domain model} owns confirmed rules and open decisions;
 the \href{cs_mail_aliases_and_express_lanes.tex}{alias memo} explains the product.
-Alias-to-persona mapping, aggregate ownership, persistence contracts, wire formats
-and migration details await design. No new Rust type, table or completed boundary
-is asserted here. Existing sender-lane settlement and lifetime semantics must not
+The product now separates participant protocol identity from alias route: one
+identity may control multiple aliases. Identity-level sender blocks apply across
+all recipient aliases without publicly linking those aliases. Domain ownership
+must distinguish alias lifecycle/admission from participant relationships; a
+wildcard sender grant must not stand in for alias authority. Private aliases have
+no automatic expiry and offer Restrict, Replace, Retire. Delivery records retain
+the receiving alias and permission basis, with SMTP envelope evidence or a native
+authenticated target. Suspicious or insufficiently authenticated private-alias
+mail is held for review without granting ongoing permission.
+Aggregate contracts, scoped references, atomic lifecycle/block enforcement,
+hold/release behavior, persistence, wire formats and migration details await
+design for the delivery cutover. The first foundation now provides checked
+AliasId, AliasScopedGrant, sender-scoped grant/lane types and explicit ReceivingScope;
+the alias lifecycle and signed management port have an atomic PostgreSQL adapter.
+See \href{docs/application-persistence-boundaries.md}{the boundary record} for
+implemented contracts and remaining transport work. Management receipts do not
+establish completed alias delivery. Existing sender-lane settlement and lifetime semantics must not
 be silently applied to private-alias creation or retirement.
 
 \section{Planned Apple Client Boundary}

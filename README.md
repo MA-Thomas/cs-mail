@@ -7,14 +7,16 @@ published request class and authorizes one conditional charge. The recipient can
 accept with standing permission or an express lane, or reject; that decision
 determines both future permission and settlement.
 
-The agreed alias design adds two address uses. Creating a private alias for a
-healthcare organization automatically opens an **alias-scoped express lane**,
-including for unfamiliar specialists who receive that address, without a bonded
-route. Public-facing aliases do not automatically grant a lane: unknown senders
-without other permission use the existing bonded requests. Explicit
-**sender-scoped express lanes** continue to authorize particular senders.
-CS-MAIL owns this infrastructure; Phoros Account will later consume it through a
-linked account. Alias infrastructure is agreed product scope awaiting implementation.
+An alias is a receiving address; an express lane is separately granted permission.
+Creating a private alias grants no lane. A member can pair a healthcare alias with
+an **alias-scoped express lane**, allowing authenticated new correspondents given
+that address, or an Amazon alias with a **sender-scoped express lane**, admitting
+only its explicitly authorized subjects, such as selected authenticated domains.
+Private aliases have no bonded route; unauthorized senders may use the public
+approach route under its existing request rules. CS-MAIL owns this infrastructure;
+Phoros Account will later consume it through a linked account. Alias management
+and receiving inboxes are implemented locally; explicit lane pairing uses signed Rust commands and native controls. See the [domain model](DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+and [boundary record](docs/application-persistence-boundaries.md#alias-foundation--14-october-2026).
 
 External email is now available under Communications in the unified app: authored-text
 composition, conversation-scoped disclosure consent, authenticated pending replies,
@@ -105,7 +107,7 @@ durable login identity with multiple authentication methods. See the
 arrangement. See [shared identity integration](docs/shared-identity-contract.md)
 for the contract, migration behavior, service setup, and coordinated build.
 
-Each protocol identity offering the bonded route defines up to eight request
+Each alias offering the bonded route defines up to eight request
 classes of its own, each with collateral `S` within cs-mail-wide bounds; CSQD sets one processing
 component `C` (see the [request pricing design](docs/request-pricing-design.md)).
 The sender's chosen class, `C`, and `S` are fixed for one request. Submission requires authenticated evidence that
@@ -141,20 +143,30 @@ Keychain credential and `marcus@csqd-mail.com`, all sample contacts and message
 text, and a separate current-format cache. The older app/database/cache remain
 the rollback checkpoint. See the [current owner-app runbook](apps/cs-mail-apple/README.md#current-owner-app--12-october-2026).
 
+The alias design separates participant identity from address routing. Blocking a
+sender applies across all recipient aliases. Private aliases have no automatic
+expiry and offer **Restrict, Replace, Retire** controls. Suspicious or insufficiently
+authenticated private-alias mail is held for explicit review. SMTP envelope routing
+and authenticated native targets establish the receiving alias. These are agreed
+requirements awaiting implementation; see the [domain rules](DOMAIN_MODEL.md#aliases-and-express-lane-scope).
 ## Core vocabulary
 
-- **Private alias**: an address issued for an organization relationship; creation
-  automatically establishes an alias-scoped express lane, with no bonded route.
+- **Private alias**: a receiving address for a chosen context; creation grants no
+  lane. The member explicitly pairs permission with it. It has no bonded route.
 - **Public-facing alias**: an address for public approaches; creation grants no
   lane, and the existing permission and bonded-request rules apply.
 - **Alias-scoped express lane**: permission through one receiving alias, including
-  for previously unknown senders; its detailed admission/lifecycle policy is open.
+  for previously unknown senders, subject to route policy and identity-level blocks.
 - **Sender-scoped express lane**: an explicit grant to a particular sender subject
-  under the grant's scope and validity rules; the currently implemented lane kind.
+  under the grant's receiving scope and validity rules. Subjects include native
+  identities, external mailboxes and recipient-selected authenticated legacy domains.
 
 - **Private principal**: the provider-local subject used for control, recovery,
   and request continuity across public aliases.
-- **Protocol identity**: the public persona to which directed permission applies.
+- **Protocol identity**: a communication participant whom another participant can
+  accept or block; may control multiple aliases without publishing their association.
+- **Alias**: a separately identified communication route controlled by a protocol
+  identity. Replacing the route preserves the participant and its blocks.
 - **Relationship**: recipient-controlled permission, independent of any request.
 - **Request class**: a recipient-defined kind of approach with its collateral
   requirement; selecting it proposes contact without granting permission.
@@ -196,6 +208,12 @@ Rust APIs and serialized records use the same submission terminology, including
 state labels, command and event names, timeout tasks, and record fields.
 
 ## Status
+
+**Implemented 19 October 2026:** native conversations have an
+encrypted, sender-supplied shared subject that stays fixed. After unlock, members
+can search locally retained correspondence offline, with explicit device-local
+coverage and known local expiry/removal enforced. See the
+[domain model](DOMAIN_MODEL.md#personal-reading-and-organization).
 
 The repository contains Rust libraries implementing the base
 protocol and its centralized deployment foundations. It includes the pure

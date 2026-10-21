@@ -6,6 +6,9 @@ import CsMailPresentation
 struct ExternalEmailView: View {
     @ObservedObject var model: MemberModel
     @Binding var composeNew: Bool
+    let backTitle: String
+    let goBack: () -> Void
+    @StateObject private var find = ConversationFind()
     @State private var selected: String?
     @State private var composing = false
     @State private var newConversation = false
@@ -19,20 +22,22 @@ struct ExternalEmailView: View {
         let relationship: RelationshipControl?
     }
     private var relatedThreads: [ExternalThread] {
-        model.externalInbox?.threads.filter { $0.guest == model.selectedSender?.value } ?? []
+        model.externalInbox?.threads.filter { thread in thread.guest == model.selectedSender?.value && (model.selectedInbox == nil || model.scopedMailItems.contains { $0.key == MailKey(transport: .external, conversation: thread.id) }) } ?? []
     }
     private var thread: ExternalThread? {
         relatedThreads.first { $0.id == selected } ?? relatedThreads.first
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            Button(backTitle, systemImage: "chevron.left", action: goBack)
+                .buttonStyle(EditorialRegionButtonStyle()).padding(.vertical, 8)
             Text("External email").font(EditorialStyle.heading(28))
             Text("Email leaves the native encrypted space. The relay and external mailbox can read it. Consent is specific to each conversation.")
                 .font(.callout).foregroundStyle(.secondary)
             if model.externalInbox?.pending != nil {
                 HStack {
-                    Text("An operation is saved with an unresolved outcome. Resume it to reconcile the original command.")
-                    Button("Resume saved operation") { Task { await model.retry() } }
+                    Text("Your last email change has not been confirmed. Check it before making another.")
+                    Button("Check email status") { Task { await model.retry() } }
                 }.padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
             if let error = model.memberError { Text(error).foregroundStyle(.orange) }
@@ -45,6 +50,12 @@ struct ExternalEmailView: View {
                     }
                 }
                 if let thread {
+                    ScrollViewReader { proxy in
+                    VStack(alignment: .leading) {
+                    HStack {
+                        ConversationFindBar(find: find, texts: thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }.flatMap { ConversationText.displayed($0.content, message: $0.id) })
+                        Button("Latest") { if let id = thread.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) } }
+                    }
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
                             EditorialReadingView(blocks: headerBlocks(thread))
@@ -56,7 +67,7 @@ struct ExternalEmailView: View {
                                 }.buttonStyle(EditorialButtonStyle())
                             }
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 185))], alignment: .leading) {
-                                Button("Reply", systemImage: "arrowshape.turn.up.left") { newConversation = false; composing = true }.disabled(!thread.disclosure || thread.blocked)
+                                Button("Reply", systemImage: "arrowshape.turn.up.left") { newConversation = false; composing = true }.disabled(!thread.disclosure || thread.blocked || model.selectedInbox != nil)
                                 Button(thread.disclosure ? "Withdraw email consent" : "Allow email disclosure") {
                                     review(thread, title: thread.disclosure ? "Withdraw email disclosure consent?" : "Allow email disclosure?",
                                            explanation: thread.disclosure ? "Cancel waiting emails. Email whose dispatch has begun may already have left and cannot be guaranteed recalled. Incoming permission is separate." : "Allow the relay service and this external mailbox to read plaintext sent in this conversation. Previously cancelled emails will remain cancelled.",
@@ -67,15 +78,38 @@ struct ExternalEmailView: View {
                                     Button("Revoke incoming permission") { review(thread, title: "Revoke incoming permission?", explanation: "Withdraw incoming standing or lane permission. Outbound disclosure consent is separate.", relationship: .revoke) }
                                 }
                             }.buttonStyle(EditorialButtonStyle()).disabled(!model.connected || model.externalInbox?.pending != nil)
+                            if model.selectedInbox != nil {
+                                Button("View full conversation") { model.changeInbox(nil) }
+                            }
                             Divider()
-                            EditorialReadingView(blocks: messageBlocks(thread)).privacySensitive()
+                            MailOrganizationMenu(model: model, key: MailKey(transport: .external, conversation: thread.id), displayed: thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }.map(\.id))
+                            ForEach(thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }, id: \.id) { message in
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Divider()
+                                    HStack { Text(message.outgoing ? "You → external mailbox" : "Authenticated external reply").font(.headline); Spacer(); Text(SidebarProjection.date(message.committedAt)).font(.caption) }
+                                    DocumentReader(content: message.content, messageID: message.id, findQuery: find.query, findSelection: find.selection)
+                                    Text(message.delivery.label).font(.caption).foregroundStyle(.secondary)
+                                    ForEach(message.providerEvents, id: \.id) { event in Text("Provider reports: " + event.kind.label + " · " + event.providerTime).font(.caption) }
+                                }.id(message.id)
+                            }
                         }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    }
+                    .onDisappear { model.endReading(MailKey(transport: .external, conversation: thread.id)) }
+                    .task(id: thread.messages.map(\.id)) {
+                        guard !Task.isCancelled else { return }
+                        model.beginReading(MailKey(transport: .external, conversation: thread.id))
+                        await model.displayed(key: MailKey(transport: .external, conversation: thread.id), ids: thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }.map(\.id))
+                        if let message = model.focusedMessage { proxy.scrollTo(message, anchor: .center) }
+                    }
                     }
                 } else { Text("Choose an external conversation or write an email.").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity) }
             }
         }.padding(28).background(EditorialStyle.canvas(scheme))
             .task { if model.externalInbox == nil { await model.loadExternal() } }
+            .task(id: model.openedThread) { if let id = model.openedThread { selected = id } }
             .onChange(of: model.selectedSender) { _, _ in selected = nil; confirmation = nil }
+            .onChange(of: thread?.id) { _, _ in find.reset() }
             .onChange(of: composeNew, initial: true) { _, requested in
                 if requested { newConversation = true; composing = true; composeNew = false }
             }
@@ -107,51 +141,73 @@ struct ExternalEmailView: View {
         }
         return blocks
     }
-    private func messageBlocks(_ thread: ExternalThread) -> [EditorialReadingBlock] {
-        var blocks: [EditorialReadingBlock] = []
-        for message in thread.messages {
-            blocks.append(EditorialReadingBlock(message.outgoing ? "You → external mailbox" : "Authenticated external reply", style: .heading))
-            blocks.append(EditorialReadingBlock(message.text))
-            blocks.append(EditorialReadingBlock(message.delivery, style: .caption))
-        }
-        return blocks
-    }
     private func review(_ thread: ExternalThread, title: String, explanation: String, action: ExternalAction? = nil, relationship: RelationshipControl? = nil) {
         confirmation = Change(thread: thread, title: title, explanation: explanation, action: action, relationship: relationship)
     }
 }
 
-private struct ExternalEmailComposer: View {
+struct ExternalEmailComposer: View {
     @ObservedObject var model: MemberModel
     let thread: ExternalThread?
     let completed: (String?) -> Void
-    @State private var mailbox = ""
-    @State private var text = ""
+    var savedDraft: Draft? = nil
+    @StateObject private var draft = DraftEditor()
+    @State private var confirmingDiscard = false
     @State private var consent = false
+    @State private var finishing = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack { Text(thread == nil ? "Write an external email" : "Reply by email").font(.title2); Spacer(); Button("Close") { dismiss() }.disabled(model.busy) }
-            if let thread { Text("To: " + thread.mailbox) } else { TextField("External email address", text: $mailbox).textFieldStyle(.roundedBorder) }
-            TextEditor(text: $text).frame(minHeight: 200).privacySensitive()
-            EditorialReadingView("Authored text only · maximum 16 KiB. Native messages and references cannot be included in external email.", style: .caption)
+            HStack { Text(thread == nil ? "Write an external email" : "Reply by email").font(.title2); Spacer(); Button("Save & close") { saveAndClose() }.disabled(model.busy) }
+            if let thread { Text("To: " + thread.mailbox) } else { TextField("External email address", text: $draft.mailbox).textFieldStyle(.roundedBorder) }
+            DraftSaveStatus(draft: draft)
+            TextEditor(text: $draft.text).disabled(draft.record == nil).frame(minHeight: 200).privacySensitive()
+            EditorialReadingView("Write a text email. Native messages and references cannot be included.", style: .caption)
             if thread == nil {
                 Toggle("I allow the relay service and this external mailbox to read plaintext in this conversation.", isOn: $consent)
-                EditorialReadingView("Choosing an address does not verify its owner. Replies must pass automatic email authentication and match this mailbox and conversation.", style: .caption)
+                EditorialReadingView("Check the recipient’s address before sending.", style: .caption)
             } else { EditorialReadingView("This conversation’s email disclosure consent applies. The relay service and external mailbox can read your reply.", style: .body) }
             if let error = model.memberError { Text(error).foregroundStyle(.orange) }
             HStack {
                 Text("Local development relay; no public email delivery.").font(.caption).foregroundStyle(.secondary)
+                Button("Discard draft", role: .destructive) { confirmingDiscard = true }
                 Spacer()
                 Button("Queue email") {
+                    finishing = true
                     Task {
-                        if await model.sendExternal(conversation: thread?.id, mailbox: thread?.mailbox ?? mailbox, text: text, disclose: consent) {
-                            text = ""; completed(model.sentExternalConversation ?? model.externalInbox?.pending ?? thread?.id)
-                        }
+                        draft.save(draftBody)
+                        if let saved = await draft.flush(), await model.submitDraft(saved, disclose: consent) {
+                            completed(model.sentExternalConversation ?? model.externalInbox?.pending ?? thread?.id)
+                        } else { await draft.reload(); finishing = false }
                     }
                 }.buttonStyle(EditorialButtonStyle(prominent: true))
-                    .disabled(!model.connected || model.busy || model.externalInbox?.pending != nil || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || text.utf8.count > 16384 || (thread == nil && (mailbox.isEmpty || !consent)))
+                    .disabled(!draft.canSubmit || !model.connected || model.busy || model.externalInbox?.pending != nil || draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.text.utf8.count > 16384 || (thread == nil && (draft.mailbox.isEmpty || !consent)))
             }
-        }.padding(28).frame(idealWidth: 650, idealHeight: 520).interactiveDismissDisabled(model.busy)
+        }.disabled(finishing).padding(28).frame(idealWidth: 650, idealHeight: 520).interactiveDismissDisabled(true)
+        .task {
+            await draft.open(client: model.draftClient, target: .external(conversation: thread?.id), saved: savedDraft, createNew: thread == nil)
+            if let thread, draft.mailbox.isEmpty { draft.mailbox = thread.mailbox; draft.save(draftBody) }
+        }
+        .onChange(of: draft.text) { _, _ in draft.save(draftBody) }
+        .onChange(of: draft.mailbox) { _, _ in draft.save(draftBody) }
+        .onDisappear { draft.leave() }
+        .confirmationDialog("Discard this draft?", isPresented: $confirmingDiscard) {
+            Button("Discard draft", role: .destructive) { Task { if await draft.discard() { dismiss() } } }
+            Button("Keep writing", role: .cancel) { }
+        }
+    }
+    private var draftBody: DraftBody { .external(mailbox: draft.mailbox, text: draft.text) }
+    private func saveAndClose() {
+        guard draft.record != nil else { dismiss(); return }
+        finishing = true
+        draft.save(draftBody)
+        Task {
+            if let saved = await draft.flush() {
+                if draft.text.isEmpty && draft.mailbox.isEmpty {
+                    if await draft.discard() { dismiss() }
+                } else if saved.id == draft.record?.id { dismiss() }
+            }
+            finishing = false
+        }
     }
 }

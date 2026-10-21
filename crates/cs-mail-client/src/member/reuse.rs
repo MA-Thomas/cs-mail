@@ -9,13 +9,13 @@ use cs_mail_correspondence::{
 };
 use cs_mail_primitives::MessageId;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ReuseMode {
     Quotation,
     Sharing,
     Reference,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SourceDraft {
     pub selection: MessageSelection,
     pub mode: ReuseMode,
@@ -277,19 +277,57 @@ impl MemberClient {
             },
         )?);
         super::storage::save(self.store.as_ref(), &keys, &state)?;
-        self.transmit_policy(&mut state, &keys)
+        self.transmit_conversation_edit(&mut state, &keys)
     }
 
-    pub(super) fn transmit_policy(&self, state: &mut State, keys: &Secrets) -> Result<(), Error> {
+    /// Permanently removes only this member's native endpoint and recovery copies.
+    /// The exact signed deletion stays journaled across an uncertain response.
+    /// # Errors
+    /// Invalid thread, denied authority, unresolved work, refusal or transport failure.
+    pub fn delete_native_copies(
+        &self,
+        conversation: cs_mail_correspondence::ConversationId,
+    ) -> Result<(), Error> {
+        let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
+        let keys = super::storage::secrets(self.store.as_ref())?;
+        let mut state = super::storage::open(self.store.as_ref(), &keys)?;
+        super::require_idle(&state)?;
+        if !state
+            .mailbox
+            .participants
+            .contains_key(&conversation.value())
+        {
+            return Err(Error::InvalidData);
+        }
+        self.account_view(&state.profile, &keys)?;
+        state.editing_conversation = Some(Self::signed(
+            &state.profile,
+            &keys,
+            Command::DeleteCopies { id: conversation },
+        )?);
+        super::storage::save(self.store.as_ref(), &keys, &state)?;
+        self.transmit_conversation_edit(&mut state, &keys)
+    }
+
+    pub(super) fn transmit_conversation_edit(
+        &self,
+        state: &mut State,
+        keys: &Secrets,
+    ) -> Result<(), Error> {
         let Some(signed) = &state.editing_conversation else {
             return Ok(());
         };
-        let Command::ChangePolicy { id, .. } = signed.command else {
-            return Err(Error::InvalidData);
+        let (id, deleting) = match signed.command {
+            Command::ChangePolicy { id, .. } => (id, false),
+            Command::DeleteCopies { id } => (id, true),
+            _ => return Err(Error::InvalidData),
         };
         let refused = match self.correspondence_call(&state.profile, signed)? {
+            Response::CopiesDeleted if deleting => false,
             Response::Conversation(found)
-                if found.id() == id && found.scope().contains(state.profile.persona) =>
+                if !deleting
+                    && found.id() == id
+                    && found.scope().contains(state.profile.persona) =>
             {
                 false
             }
@@ -302,10 +340,29 @@ impl MemberClient {
             }
             _ => return Err(Error::InvalidData),
         };
+        if deleting && !refused {
+            let mut retained = super::retained::Retained::load(self, keys, state)?;
+            for (_, record) in &state.mailbox.records {
+                if record.manifest.conversation() == id {
+                    retained.exclude(super::retained::CopyKey {
+                        thread: super::MailKey::Native(id),
+                        message: record.manifest.message(),
+                    });
+                }
+            }
+            retained.save(self, keys)?;
+        }
         state.editing_conversation = None;
         super::storage::save(self.store.as_ref(), keys, state)?;
+        if deleting {
+            self.clear_search()?;
+        }
         if refused {
-            Err(Error::PolicyRefused)
+            Err(if deleting {
+                Error::CopyDeletionRefused
+            } else {
+                Error::PolicyRefused
+            })
         } else {
             Ok(())
         }

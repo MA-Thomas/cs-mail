@@ -448,6 +448,7 @@ fn unlisting_excludes_search_but_direct_lookup_and_expired_profile_survive() {
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
 fn lost_response_replay_preserves_later_edits_and_altered_retry_is_refused() {
     let f = Fixture::new();
+    challenge_alias_management(&f);
     let original = publication(1, 0, 40, true, "Earlier");
     let first = f.send(&original).unwrap(); // Caller loses this response.
     assert_eq!(revision(first), 1);
@@ -492,5 +493,456 @@ fn lost_response_replay_preserves_later_edits_and_altered_retry_is_refused() {
             error: Error::Conflict,
             ..
         }
+    ));
+}
+
+// Conjecture: alias lifecycle/replay cannot replace an identity, mutate financial
+// records, reuse a retired address or commit half a replacement. Existing directory
+// experiments also challenge the owner-only alias boundary under the same receipt lock.
+fn alias_request(
+    f: &Fixture,
+    owner: u8,
+    operation: u128,
+    command: cs_mail_application::aliases::Command,
+) -> cs_mail_application::aliases::SignedCommand {
+    cs_mail_application::aliases::SignedCommand {
+        scope: signing_scope(),
+        product: "cs-mail/test".into(),
+        account: f.accounts[usize::from(owner - 1)],
+        owner: ProtocolIdentity(u128::from(owner)),
+        key: OperationalKeyRef(u128::from(owner)),
+        operation: IdempotencyKey(operation),
+        command,
+        signature: vec![],
+    }
+    .sign(&[owner; 32])
+    .unwrap()
+}
+#[allow(clippy::too_many_lines)] // One lifecycle experiment challenges exact authority, rollback and replay together.
+fn challenge_alias_management(f: &Fixture) {
+    use cs_mail_accounts::directory::MemberAddress;
+    use cs_mail_application::aliases::{
+        AliasCreation, AliasService, Command, Outcome, ReplacementAddress,
+    };
+    let mut sql = Client::connect(&f.url, NoTls).unwrap();
+    let before = alias_canonical_fingerprint(&mut sql);
+    let id = AliasId::new(700).unwrap();
+    let replacement = AliasId::new(701).unwrap();
+    let address =
+        MemberAddress::try_from("p07070707070707070707070707070707@csqd-mail.com".to_owned())
+            .unwrap();
+    let create = alias_request(
+        f,
+        1,
+        700,
+        Command::Create {
+            id,
+            creation: AliasCreation::Private {
+                description: "Hospital".to_owned().try_into().unwrap(),
+            },
+        },
+    );
+    let repository = f.deployment.accounts(|| AT);
+    let service = AliasService(&repository);
+    sql.batch_execute("CREATE FUNCTION fail_alias() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected alias receipt failure'; END $$; CREATE TRIGGER fail_alias BEFORE INSERT ON cs_alias_commands FOR EACH ROW EXECUTE FUNCTION fail_alias()").unwrap();
+    assert!(
+        service
+            .handle(&create, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+            .is_err()
+    );
+    assert_eq!(
+        sql.query_one("SELECT count(*) FROM cs_alias_routes", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        0
+    );
+    sql.batch_execute("DROP TRIGGER fail_alias ON cs_alias_commands")
+        .unwrap();
+    let first = service
+        .handle(&create, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+        .unwrap();
+    assert!(
+        matches!(&first.outcome, Outcome::Changed(aliases) if aliases.len() == 1 && matches!(aliases[0].permission().state(), cs_mail_accounts::alias_permission::PermissionState::None) && aliases[0].owner() == ProtocolIdentity(1))
+    );
+    // Conjecture: permission state and its terminal receipt commit together; a stale retry cannot restore access.
+    let opening = alias_request(
+        f,
+        1,
+        790,
+        Command::Permission {
+            id,
+            expected_address: 0,
+            expected_permission: 0.into(),
+            action: cs_mail_application::aliases::PermissionAction::Open,
+        },
+    );
+    sql.batch_execute("CREATE TRIGGER fail_alias BEFORE INSERT ON cs_alias_commands FOR EACH ROW EXECUTE FUNCTION fail_alias()").unwrap();
+    assert!(
+        service
+            .handle(&opening, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+            .is_err()
+    );
+    assert_eq!(
+        sql.query_one(
+            "SELECT record#>>'{permission,revision}' FROM cs_alias_routes WHERE id=$1",
+            &[&id.value().to_string()]
+        )
+        .unwrap()
+        .get::<_, String>(0),
+        "0"
+    );
+    sql.batch_execute("DROP TRIGGER fail_alias ON cs_alias_commands")
+        .unwrap();
+    let opened = service
+        .handle(&opening, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+        .unwrap();
+    let removal = alias_request(
+        f,
+        1,
+        791,
+        Command::Permission {
+            id,
+            expected_address: 0,
+            expected_permission: 1.into(),
+            action: cs_mail_application::aliases::PermissionAction::Remove,
+        },
+    );
+    assert!(matches!(
+        service
+            .handle(&removal, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+            .unwrap()
+            .outcome,
+        Outcome::Changed(_)
+    ));
+    assert_eq!(
+        service
+            .handle(&opening, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+            .unwrap(),
+        opened
+    );
+    assert_eq!(
+        sql.query_one(
+            "SELECT record#>>'{permission,revision}' FROM cs_alias_routes WHERE id=$1",
+            &[&id.value().to_string()]
+        )
+        .unwrap()
+        .get::<_, String>(0),
+        "2"
+    );
+    let replace = alias_request(
+        f,
+        1,
+        701,
+        Command::Replace {
+            id,
+            expected: 0,
+            replacement,
+            address: ReplacementAddress::GeneratePrivate,
+            until: CanonicalTime(AT.0 + 100),
+        },
+    );
+    sql.batch_execute("CREATE TRIGGER fail_alias BEFORE INSERT ON cs_alias_commands FOR EACH ROW EXECUTE FUNCTION fail_alias()").unwrap();
+    assert!(
+        service
+            .handle(&replace, signing_scope(), "csqd-mail.com", &|| Ok([8; 16]))
+            .is_err()
+    );
+    assert_eq!(
+        sql.query_one("SELECT count(*) FROM cs_alias_routes", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        1
+    );
+    sql.batch_execute("DROP TRIGGER fail_alias ON cs_alias_commands")
+        .unwrap();
+    assert!(
+        matches!(service.handle(&replace, signing_scope(), "csqd-mail.com", &|| Ok([8; 16])).unwrap().outcome, Outcome::Changed(aliases) if aliases.len() == 2)
+    );
+    challenge_alias_replay(f, &create, &first, replacement);
+    assert_eq!(before, alias_canonical_fingerprint(&mut sql));
+    challenge_directory_alias_reservation(f, &address);
+    challenge_alias_claim_race(f);
+}
+
+fn alias_canonical_fingerprint(sql: &mut Client) -> std::collections::BTreeMap<String, String> {
+    let mut rows = std::collections::BTreeMap::new();
+    for row in sql.query("SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename NOT LIKE 'cs_alias_%' ORDER BY tablename", &[]).unwrap() {
+            let name: String = row.get(0);
+            let body: String = sql.query_one(&format!("SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text,'[]') FROM \"{name}\" t"), &[]).unwrap().get(0);
+            rows.insert(name, body);
+        }
+    rows
+}
+fn challenge_alias_replay(
+    f: &Fixture,
+    create: &cs_mail_application::aliases::SignedCommand,
+    first: &cs_mail_application::aliases::Receipt,
+    replacement: AliasId,
+) {
+    use cs_mail_application::aliases::{AliasCreation, AliasService, Command, Outcome};
+    let repository = f.deployment.accounts(|| AT);
+    let service = AliasService(&repository);
+    let Command::Create { id, .. } = &create.command else {
+        panic!("creation fixture");
+    };
+    let id = *id;
+    let Outcome::Changed(aliases) = &first.outcome else {
+        panic!("creation receipt");
+    };
+    let address = aliases[0].address().clone();
+    let retire = alias_request(f, 1, 702, Command::Retire { id, expected: 1 });
+    assert!(matches!(
+        service
+            .handle(&retire, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+            .unwrap()
+            .outcome,
+        Outcome::Changed(_)
+    ));
+    // Exact replay returns historical facts without reopening the retired entrance.
+    assert_eq!(
+        *first,
+        service
+            .handle(create, signing_scope(), "csqd-mail.com", &|| Ok([99; 16]))
+            .unwrap()
+    );
+    let reuse = alias_request(
+        f,
+        2,
+        703,
+        Command::Create {
+            id: AliasId::new(702).unwrap(),
+            creation: AliasCreation::Public { address },
+        },
+    );
+    assert!(matches!(
+        service
+            .handle(&reuse, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+            .unwrap()
+            .outcome,
+        Outcome::Refused(_)
+    ));
+    let foreign = alias_request(
+        f,
+        2,
+        704,
+        Command::Retire {
+            id: replacement,
+            expected: 0,
+        },
+    );
+    assert!(matches!(
+        service
+            .handle(&foreign, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+            .unwrap()
+            .outcome,
+        Outcome::Refused(_)
+    ));
+    let inspect = alias_request(f, 2, 705, Command::Inspect);
+    assert!(
+        matches!(service.handle(&inspect, signing_scope(), "csqd-mail.com", &|| Ok([7; 16])).unwrap().outcome, Outcome::Aliases(aliases) if aliases.is_empty())
+    );
+    let mut altered = (*create).clone();
+    altered.command = Command::Retire { id, expected: 2 };
+    altered = altered.sign(&[1; 32]).unwrap();
+    assert!(
+        service
+            .handle(&altered, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+            .is_err()
+    );
+}
+fn challenge_directory_alias_reservation(
+    f: &Fixture,
+    address: &cs_mail_accounts::directory::MemberAddress,
+) {
+    // Directory publication participates in the same namespace reservation,
+    // including when the member tries to publish its own retired alias.
+    let mut publication = publication(1, 0, 799, true, "Reserved alias");
+    if let cs_mail_application::directory::Command::Publish { mailbox, .. } =
+        &mut publication.command
+    {
+        *mailbox = Some(address.clone());
+    }
+    publication = publication.sign(&[1; 32]).unwrap();
+    assert!(matches!(
+        f.send(&publication).unwrap(),
+        Response::Refused { .. }
+    ));
+}
+
+fn challenge_alias_claim_race(f: &Fixture) {
+    use cs_mail_accounts::directory::MemberAddress;
+    use cs_mail_application::aliases::{AliasCreation, AliasService, Command, Outcome};
+    let mut sql = Client::connect(&f.url, NoTls).unwrap();
+    let before = alias_canonical_fingerprint(&mut sql);
+    let barrier = Arc::new(Barrier::new(2));
+    let handles: Vec<_> = (1..=2)
+        .map(|owner| {
+            let signed = alias_request(
+                f,
+                owner,
+                800 + u128::from(owner),
+                Command::Create {
+                    id: AliasId::new(800 + u128::from(owner)).unwrap(),
+                    creation: AliasCreation::Public {
+                        address: MemberAddress::try_from("contested@csqd-mail.com".to_owned())
+                            .unwrap(),
+                    },
+                },
+            );
+            let url = f.url.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let deployment = PostgresDeployment::connect_existing(&url).unwrap();
+                let repository = deployment.accounts(|| AT);
+                barrier.wait();
+                AliasService(&repository)
+                    .handle(&signed, signing_scope(), "csqd-mail.com", &|| Ok([7; 16]))
+                    .unwrap()
+            })
+        })
+        .collect();
+    let outcomes: Vec<_> = handles
+        .into_iter()
+        .map(|h| h.join().unwrap().outcome)
+        .collect();
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|o| matches!(o, Outcome::Changed(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|o| matches!(o, Outcome::Refused(_)))
+            .count(),
+        1
+    );
+    challenge_public_alias_slot(f, &mut sql);
+    assert_eq!(before, alias_canonical_fingerprint(&mut sql));
+}
+
+fn challenge_public_alias_slot(f: &Fixture, sql: &mut Client) {
+    use cs_mail_accounts::aliases::AliasError;
+    use cs_mail_application::aliases::{AliasCreation, AliasService, Command, Outcome};
+    // A single owner racing different public addresses must also get one winner.
+    // Falsification would give the account two current public entrances.
+    let winner: String = sql
+        .query_one(
+            "SELECT owner FROM cs_alias_routes WHERE record->>'usage'='Public'",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    let owner = if winner == "1" { 2 } else { 1 };
+    let barrier = Arc::new(Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|n| {
+            let signed = alias_request(
+                f,
+                owner,
+                820 + n,
+                Command::Create {
+                    id: AliasId::new(820 + n).unwrap(),
+                    creation: AliasCreation::Public {
+                        address: format!("public-{n}@csqd-mail.com").try_into().unwrap(),
+                    },
+                },
+            );
+            let url = f.url.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let deployment = PostgresDeployment::connect_existing(&url).unwrap();
+                let repository = deployment.accounts(|| AT);
+                barrier.wait();
+                AliasService(&repository)
+                    .handle(&signed, signing_scope(), "csqd-mail.com", &|| Ok([9; 16]))
+                    .unwrap()
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| matches!(r.outcome, Outcome::Changed(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| matches!(r.outcome, Outcome::Refused(AliasError::PublicAliasExists)))
+            .count(),
+        1
+    );
+    let current = results
+        .iter()
+        .find_map(|r| match &r.outcome {
+            Outcome::Changed(a) => a.first(),
+            _ => None,
+        })
+        .unwrap();
+    challenge_public_alias_replacement(f, owner, current);
+}
+
+fn challenge_public_alias_replacement(
+    f: &Fixture,
+    owner: u8,
+    current: &cs_mail_accounts::aliases::Alias,
+) {
+    use cs_mail_accounts::aliases::AliasError;
+    use cs_mail_application::aliases::{
+        AliasCreation, AliasService, Command, Outcome, ReplacementAddress,
+    };
+    let replacement = alias_request(
+        f,
+        owner,
+        830,
+        Command::Replace {
+            id: current.id(),
+            expected: current.revision(),
+            replacement: AliasId::new(830).unwrap(),
+            address: ReplacementAddress::Public {
+                address: "replacement-public@csqd-mail.com"
+                    .to_owned()
+                    .try_into()
+                    .unwrap(),
+            },
+            until: CanonicalTime(AT.0 + 100),
+        },
+    );
+    let repository = f.deployment.accounts(|| AT);
+    let changed = AliasService(&repository)
+        .handle(&replacement, signing_scope(), "csqd-mail.com", &|| {
+            Ok([9; 16])
+        })
+        .unwrap();
+    assert!(
+        matches!(changed.outcome, Outcome::Changed(ref aliases) if aliases.len() == 2 && aliases.iter().filter(|a| a.is_current_public()).count() == 1)
+    );
+    let duplicate = alias_request(
+        f,
+        owner,
+        831,
+        Command::Create {
+            id: AliasId::new(831).unwrap(),
+            creation: AliasCreation::Public {
+                address: "third-public@csqd-mail.com".to_owned().try_into().unwrap(),
+            },
+        },
+    );
+    assert!(matches!(
+        AliasService(&repository)
+            .handle(
+                &duplicate,
+                signing_scope(),
+                "csqd-mail.com",
+                &|| Ok([9; 16])
+            )
+            .unwrap()
+            .outcome,
+        Outcome::Refused(AliasError::PublicAliasExists)
     ));
 }

@@ -34,7 +34,16 @@ struct Config {
     tls_certificate_file: PathBuf,
     tls_private_key_file: PathBuf,
     replay_secret_file: PathBuf,
+    /// Configure both with the same protected derivation material as the member host
+    /// to admit previously unknown authenticated guests through private aliases.
+    alias_registration: Option<AliasRegistration>,
     maximum_connections: usize,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AliasRegistration {
+    relationship_secret_file: PathBuf,
+    principal_secret_file: PathBuf,
 }
 #[derive(Clone, Copy)]
 struct Clock;
@@ -58,6 +67,15 @@ async fn main() {
         eprintln!("cs-mail-mx: {error}");
         std::process::exit(1);
     }
+}
+fn registration_key(path: PathBuf) -> Result<[u8; 32], &'static str> {
+    let bytes = std::fs::read(path).map_err(|_| "cannot read alias registration key")?;
+    let key: [u8; 32] =
+        serde_json::from_slice(&bytes).map_err(|_| "invalid alias registration key")?;
+    if key == [0; 32] {
+        return Err("invalid alias registration key");
+    }
+    Ok(key)
 }
 async fn run(args: Args) -> Result<(), &'static str> {
     let config: Config = serde_json::from_slice(
@@ -105,10 +123,21 @@ async fn run(args: Args) -> Result<(), &'static str> {
             deployment_domain: record.record().deployment_domain,
             provider: record.record().provider,
         };
-        Ok::<_, &'static str>(IncomingRepository {
-            accounts: deployment.accounts(|| Clock.now()),
-            scope,
-        })
+        let incoming = IncomingRepository::new(deployment.accounts(|| Clock.now()), scope);
+        let incoming = if let Some(paths) = config.alias_registration {
+            incoming
+                .with_registration(
+                    cs_mail_privacy::PrivacyDeriver::new(
+                        registration_key(paths.relationship_secret_file)?,
+                        registration_key(paths.principal_secret_file)?,
+                    ),
+                    record,
+                )
+                .map_err(|_| "invalid alias registration scope")?
+        } else {
+            incoming
+        };
+        Ok::<_, &'static str>(incoming)
     })
     .await
     .map_err(|_| "database worker failed")??;

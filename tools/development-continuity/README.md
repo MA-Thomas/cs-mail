@@ -1,3 +1,80 @@
+## Required receiving assignments — 19 October 2026
+
+The current cutover is `inbox_assignments_upgrade.py` with the standalone
+`inbox-assignments-upgrade` binary. It accepts only the named local fixture copies
+of schema 42, with ten native copies, no external conversations, no pending
+submission and no legacy outgoing-work history. Marcus's received placeholders
+are explicitly assigned to `marcus.thomas@c-sqdmail.com`. The original facts are
+archived; the assignment operation and its supplied time are recorded separately
+from historical admission. No permission or sender signature is invented.
+
+The backend command copies the stopped source into a fresh database, rehearses
+rollback, applies schema 43 and verifies exact retry, unchanged original facts,
+keys and unrelated tables. The device command holds `client.lock`, backs up SQLite,
+validates authenticated retained content and preserves the account profile, drafts,
+personal state and index rows. One atomic transaction updates the required headers,
+alias metadata and progress marker. It also rehearses rollback and verifies exact
+retry. The read-only Swift helper must match the original app's signing requirement
+before its single credential read; it never creates, changes or deletes a Keychain
+entry. Runtime readers accept only the current assigned representation.
+
+Build this tool explicitly with `cargo build --manifest-path
+ tools/development-continuity/Cargo.toml --bin inbox-assignments-upgrade`.
+Earlier sections and converters below describe preserved historical checkpoints;
+the old whole-mailbox conversion probe is no longer part of the current client
+experiment. Rollback must pair the preserved database, device store and signed app;
+do not silently revert after new activity has committed.
+
+## Current owner address scenario — 16 October 2026
+
+Marcus explicitly requested replacing his displayed development address with
+`mtallis62831@c-sqdmail.com` while retaining his original account and Keychain
+identity. The public alias is `marcus.thomas@c-sqdmail.com`; private alias lanes are
+`mat7771@c-sqdmail.com` (NYC-Hospital) and `m11a33t@c-sqdmail.com`
+(Brooklyn-Lab-Co). These user-supplied private addresses are local fixtures only;
+the member product still generates private addresses normally.
+
+`alias_assessment.py` prepares a fresh schema-40 copy of the previous current
+deployment. `src/bin/alias-assessment.rs` is a standalone, database-name-restricted
+offline tool, never linked into the app/server. It constructs checked alias and
+portfolio records, retains the prior directory entry in a durable prepared plan,
+and atomically changes only the owner directory mailbox/revision and alias records.
+It neither invents owner signatures nor rewrites historical receipts. The explicit
+fixture correction is not a general mailbox-renaming API. No Keychain/cache access
+or substitute owner identity is present. The wrapper checks source preservation,
+all 112 unaffected table/sequence fingerprints, configured key files, rollback
+after all writes and exact completed retry. Both rehearsal and owner runs passed.
+
+The current server/config/verification artifacts are in
+`target/alias-assessment-owner-20261016/`, launched by its `start.sh` at 9693.
+Use this database as the source of subsequent continuity work. The prior
+`target/alias-inboxes-owner-20261016/` remains an offline rollback checkpoint;
+never silently switch back after new current-account activity. The original v3
+encrypted device store was backed up unchanged under
+`target/alias-assessment-owner-device-checkpoint-20261016/`. The unchanged canonical
+signed app reopened with its original credentials. See the current Apple runbook
+for running-app observations and limits.
+
+## Receiving-inbox upgrade checkpoint — 16 October 2026
+
+`alias_inboxes_upgrade.py` creates a fresh local schema-40 copy of the original
+schema-39 owner database. It refuses a live source or populated experimental
+receiving evidence, preserves original rows/sequences and migration history, and
+checks configured key-file fingerprints. It never opens or changes the owner's
+Keychain credential or device cache. The guarded additive migration introduces
+transport-scoped receiving evidence; there is no runtime fallback reader.
+
+The current checked owner copy and pinned server are in
+`target/alias-inboxes-owner-20261016/`, started by its `start.sh` at the existing
+9693 endpoint. All 114 original table/sequence fingerprints and configured keys
+were preserved. The previous schema-39 copy and
+`target/alias-creation-owner-20261014/start.sh` are retained as the rollback
+checkpoint. Use the current copy as the source for subsequent work; do not silently
+revert to the checkpoint after new activity has committed.
+
+See the current Apple runbook for app installation/signing status and validation
+evidence. A server upgrade does not establish that the updated app is running.
+
 # Preserved development account conversion
 
 This is a standalone maintenance tool for Marcus's preserved October 11 local
@@ -128,3 +205,45 @@ The verified owner copy is `cs_mail_principles_owner_ready_20261013`; original s
 `cs_mail_continuity_20261012` remains unchanged. Its preservation artifacts and current
 launcher are under `target/principles-alignment-20261013`. The original encrypted
 cache was backed up and reopened using the original Keychain item and account.
+
+## Alias creation format cutover (38 to 39)
+
+`alias_creation_upgrade.py` follows the offline preservation workflow for a fresh
+local copy. It requires a schema-38 source with empty legacy alias routes and
+commands, retains the untouched source/backup and configured keys, and verifies
+all original table/sequence fingerprints and migration history. It installs the
+new creation-record constraint and single-current-public-alias index in schema 39.
+It refuses populated old alias metadata rather than inventing owner descriptions
+or rewriting signed commands. There is no runtime compatibility reader and this
+is not a general populated-alias migration. The owner cutover evidence and current
+launcher are recorded in the Apple runbook.
+
+## Independent receiving permission (schema 41)
+
+`alias_permission_upgrade.py` requires a stopped schema-40 source and a distinct
+empty local database. It snapshots and dumps the source, rehearses complete rollback,
+then applies the explicit schema-41 conversion to the copy. Original aliases,
+signed management commands/receipts and delivery evidence are preserved verbatim in
+`cs_alias_permission_cutover_evidence`, which runtime code never reads as authority.
+Existing private grants become explicitly revisioned permission; new addresses do
+not receive a lane. The current v3 replay table starts empty without rewriting old
+signatures. Pending predecessor operations must be resolved before cutover.
+
+The script checks exact address and permission conversion, route-history conversion,
+all unrelated tables/sequences, original migration history and deployment key-file
+fingerprints. `validate-alias-permission` reads the copy through checked Rust types.
+Repeat execution verifies the same prepared result without duplicate writes. It
+never accesses Keychain or edits the source or encrypted device cache. Current owner
+configuration and evidence are under `target/decoupled-owner-20261016/`.
+
+
+## Independent retained records — 19 October 2026
+
+`retained-records-upgrade` authenticates the previous local container and prepares
+independently encrypted copy/index rows. `retained-records-input.swift` supplies the
+original credential once through an anonymous pipe; sign it with the original app
+requirement. `retained_records_upgrade.py` requires the app to be stopped, holds
+its store lock, backs up the database, rehearses full rollback and applies the
+verified records atomically. Exact retries verify ciphertext without another
+credential read. Neither account state nor Keychain is written. The owner evidence
+and previous app are in `target/incremental-search-owner-20261019/`.

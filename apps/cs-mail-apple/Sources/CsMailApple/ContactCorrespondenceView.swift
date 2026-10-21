@@ -13,6 +13,7 @@ struct ContactCorrespondenceView: View {
     let reviewPolicy: (String, ConversationPolicy, PolicyAction) -> Void
     let resolve: (MessageID, UInt32) -> Void
     let decide: (Decision, RequestID) -> Void
+    @StateObject private var find = ConversationFind()
     @State private var opened: String?
     @State private var composing: ComposeTarget?
     @State private var upgradingLane = false
@@ -41,7 +42,7 @@ struct ContactCorrespondenceView: View {
                     Text("Permission you granted to \(conversation.title) expires \(Date(timeIntervalSince1970: Double(reminder.expiresAt) / 1000).formatted(date: .abbreviated, time: .shortened)).")
                     if acknowledgedExpiry != reminder.expiresAt {
                         HStack {
-                            Button("Upgrade to standing permission") { upgradingLane = true }.disabled(!ready)
+                            Button("Upgrade to standing permission") { upgradingLane = true }.disabled(!ready || model.selectedInbox != nil)
                             Button("Let it expire") { acknowledgedExpiry = reminder.expiresAt }
                         }
                     } else {
@@ -55,7 +56,7 @@ struct ContactCorrespondenceView: View {
                 let thread = conversation.threads.first { $0.id == opened }
                 let requests = conversation.requests.filter { $0.id == thread?.request }
                 SentRequestsView(model: model, requests: conversation.sentRequests.filter { $0.id == thread?.sentRequest })
-                reader(requests: requests, messages: conversation.messages.filter { $0.conversation == opened })
+                reader(requests: requests, messages: conversation.messages.filter { $0.conversation == opened && model.visibleInInbox(MailKey(transport: .native, conversation: opened), $0.id) })
                 if let policy = thread?.policy {
                     DisclosureGroup("Conversation reuse policy") {
                         Text(policy.restricted ? "Reuse is restricted to this pair." : "Wider reuse is permitted, subject to source policies.").font(.caption)
@@ -66,11 +67,17 @@ struct ContactCorrespondenceView: View {
                             case .awaitingMyApproval: Button("Approve wider reuse") { reviewPolicy(opened, policy, .approveRelaxation) }
                             }
                         } else { Button("Restrict reuse to this pair") { reviewPolicy(opened, policy, .restrict) } }
-                    }.disabled(!ready).padding(.horizontal, 24)
+                    }.disabled(!ready || model.selectedInbox != nil).padding(.horizontal, 24)
+                }
+                if model.selectedInbox != nil {
+                    HStack {
+                        Text("Showing messages received through " + model.inboxTitle + ".").font(.caption)
+                        Button("View full conversation") { model.changeInbox(nil) }
+                    }.padding(.horizontal, 24)
                 }
                 if writable {
                     HStack {
-                        Button("Reply", systemImage: "square.and.pencil") { composing = ComposeTarget(conversation: opened) }.disabled(!ready)
+                        Button("Reply", systemImage: "square.and.pencil") { composing = ComposeTarget(conversation: opened) }.disabled(!ready || model.selectedInbox != nil)
                         if !broadPermission { Text("Replying here grants no permission to start a different conversation.").font(.caption) }
                     }.padding(24)
                 } else {
@@ -81,7 +88,7 @@ struct ContactCorrespondenceView: View {
                     VStack(alignment: .leading, spacing: 20) {
                         Text("Conversations with \(conversation.title)").font(.title2)
                         if broadPermission {
-                            Button("New conversation", systemImage: "square.and.pencil") { composing = ComposeTarget(conversation: nil) }.disabled(!ready)
+                            Button("New conversation", systemImage: "square.and.pencil") { composing = ComposeTarget(conversation: nil) }.disabled(!ready || model.selectedInbox != nil)
                         } else {
                             switch conversation.requestEntry {
                             case .reviewApproaches:
@@ -104,7 +111,7 @@ struct ContactCorrespondenceView: View {
                             }
                         }
                         if conversation.threads.isEmpty { Text("No conversations yet.").foregroundStyle(.secondary) }
-                        ForEach(conversation.threads, id: \.id) { thread in
+                        ForEach(conversation.threads.filter { thread in model.selectedInbox == nil || model.scopedMailItems.contains { $0.key == MailKey(transport: .native, conversation: thread.id) } }, id: \.id) { thread in
                             Button { opened = thread.id } label: {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text(thread.label).font(.headline).lineLimit(2)
@@ -123,6 +130,9 @@ struct ContactCorrespondenceView: View {
                     }.padding(24)
                 }
             }
+        }
+        .task(id: model.openedThread) {
+            if let id = model.openedThread, conversation.threads.contains(where: { $0.id == id }) { opened = id }
         }
         .task(id: selectedRequest) {
             if let selectedRequest {
@@ -144,12 +154,57 @@ struct ContactCorrespondenceView: View {
         }
     }
     private func reader(requests: [Request], messages: [Message]) -> some View {
-        EditorialConversationView(title: opened.flatMap { id in conversation.threads.first { $0.id == id }?.label } ?? conversation.title,
-            permission: "Contact from this person: " + conversation.permission, external: conversation.external,
-            requests: requests.map { EditorialRequest(id: RequestID($0.id), className: $0.className, status: $0.status,
-                deadline: $0.deadline.map { Date(timeIntervalSince1970: Double($0) / 1000).formatted(date: .abbreviated, time: .shortened) }, awaitingDecision: $0.awaitingDecision) },
-            messages: messages.map { EditorialMessage(id: MessageID($0.id), text: ($0.outgoing ? "You\n\n" : "") + $0.text, references: $0.references) },
-            decisionsEnabled: ready, resolve: resolve,
-            accept: { decide(.accept, $0) }, reject: { decide(.reject, $0) }, expressLane: { decide(.expressLane(lifetimeMs: 604_800_000), $0) })
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 12) {
+                if let opened, let thread = conversation.threads.first(where: { $0.id == opened }) {
+                    Text(thread.label).font(.title2).textSelection(.enabled).padding(.horizontal, 24)
+                }
+                HStack {
+                    ConversationFindBar(find: find, texts: messages.flatMap { ConversationText.displayed($0.content, message: $0.id) })
+                    Button("Latest") { if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+                    if let opened { MailOrganizationMenu(model: model, key: MailKey(transport: .native, conversation: opened), displayed: messages.map(\.id)) }
+                }.padding(.horizontal, 24)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        ForEach(requests, id: \.id) { request in
+                            Text(request.className).font(.headline)
+                            Text(request.status).font(.caption)
+                            if request.awaitingDecision {
+                                if let deadline = request.deadline { Text("Decision by " + SidebarProjection.date(deadline)).font(.caption) }
+                                HStack {
+                                    Button("Accept request") { decide(.accept, RequestID(request.id)) }
+                                    Button("Seven-day express lane") { decide(.expressLane(lifetimeMs: 604_800_000), RequestID(request.id)) }
+                                    Button("Reject request") { decide(.reject, RequestID(request.id)) }
+                                }.disabled(!ready || model.selectedInbox != nil)
+                            }
+                        }
+                        ForEach(messages, id: \.id) { message in
+                            VStack(alignment: .leading, spacing: 14) {
+                                Divider()
+                                HStack {
+                                    Text(message.outgoing ? "You" : conversation.title).font(.headline)
+                                    Spacer()
+                                    if let at = message.committedAt { Text(SidebarProjection.date(at)).font(.caption).foregroundStyle(.secondary) }
+                                }
+                                if !message.outgoing, let id = message.conversation, let route = model.receivingLabel(MailKey(transport: .native, conversation: id), message.id) { Text(route).font(.caption).foregroundStyle(.secondary) }
+                                DocumentReader(content: message.content, messageID: message.id, findQuery: find.query, findSelection: find.selection) { part in resolve(MessageID(message.id), part) }
+                                if writable { Button("Reply to message") { composing = ComposeTarget(conversation: opened) }.disabled(!ready || model.selectedInbox != nil) }
+                            }.id(message.id)
+                        }
+                    }.padding(28).frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity)
+                }
+            }
+            .task(id: messages.map(\.id)) {
+                guard !Task.isCancelled else { return }
+                if let opened {
+                    model.beginReading(MailKey(transport: .native, conversation: opened))
+                    await model.displayed(key: MailKey(transport: .native, conversation: opened), ids: messages.map(\.id))
+                }
+                if let message = model.focusedMessage { proxy.scrollTo(message, anchor: .center) }
+            }
+            .onDisappear { if let opened { model.endReading(MailKey(transport: .native, conversation: opened)) } }
+            .onChange(of: opened) { _, _ in find.reset() }
+            .onChange(of: model.focusedMessage) { _, message in if let message { proxy.scrollTo(message, anchor: .center) } }
+        }
     }
 }

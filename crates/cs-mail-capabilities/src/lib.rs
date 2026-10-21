@@ -14,6 +14,7 @@ use cs_mail_privacy::ScopedHandle;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 pub mod reply;
+pub mod routes;
 
 const SIGNING_DOMAIN: &[u8] = b"cs-mail/lane-grant/v2";
 const CONTROL_SIGNING_DOMAIN: &[u8] = b"cs-mail/lane-control/v1";
@@ -44,7 +45,10 @@ impl DeclarationAuthorityConstraint {
         matches!(
             (self, authority),
             (Self::NativeSender, DeclarationAuthority::NativeSender(_))
-                | (Self::LegacyGateway, DeclarationAuthority::LegacyGateway(_))
+                | (
+                    Self::LegacyGateway,
+                    DeclarationAuthority::LegacyGateway(_) | DeclarationAuthority::GuestSmtp(_)
+                )
                 | (
                     Self::GuestGateway,
                     DeclarationAuthority::GuestGateway(_) | DeclarationAuthority::GuestSmtp(_)
@@ -66,7 +70,7 @@ impl RateLimit {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LaneGrant {
+pub struct SenderScopedGrant {
     pub id: LaneId,
     pub subject: LaneSubject,
     /// The protocol identity used by relationship state and block ordering.
@@ -88,7 +92,7 @@ pub struct LaneGrant {
     pub version: Version,
 }
 
-impl LaneGrant {
+impl SenderScopedGrant {
     fn validate(&self) -> Result<(), CapabilityError> {
         self.purpose
             .validate()
@@ -198,7 +202,7 @@ fn push_bytes(target: &mut Vec<u8>, bytes: &[u8]) -> Result<(), CapabilityError>
 /// Signature-verified grant contents. The caller obtains the recipient key from
 /// protected authority; this proof cannot be deserialized or built from a raw grant.
 #[derive(Clone, Debug)]
-pub struct VerifiedLaneGrant(LaneGrant);
+pub struct VerifiedLaneGrant(SenderScopedGrant);
 impl VerifiedLaneGrant {
     /// # Errors
     /// Rejects invalid contents or recipient signatures.
@@ -208,14 +212,14 @@ impl VerifiedLaneGrant {
     }
     /// # Errors
     /// Rejects overflow when deriving the lane horizon.
-    pub fn activate(self) -> Result<Lane, CapabilityError> {
-        Lane::from_grant(self.0)
+    pub fn activate(self) -> Result<SenderScopedLane, CapabilityError> {
+        SenderScopedLane::from_grant(self.0)
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct SignedLaneGrant {
-    pub grant: LaneGrant,
+    pub grant: SenderScopedGrant,
     #[serde(with = "cs_mail_primitives::signature_bytes")]
     pub signature: [u8; 64],
 }
@@ -312,13 +316,13 @@ pub enum LaneState {
 #[serde(try_from = "LaneRevocationRecord", into = "LaneRevocationRecord")]
 pub struct LaneRevocation {
     expected_version: Version,
-    lane: Lane,
+    lane: SenderScopedLane,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct LaneRevocationRecord {
     expected_version: Version,
-    lane: Lane,
+    lane: SenderScopedLane,
 }
 impl TryFrom<LaneRevocationRecord> for LaneRevocation {
     type Error = CapabilityError;
@@ -346,16 +350,16 @@ impl LaneRevocation {
     pub const fn expected_version(&self) -> Version {
         self.expected_version
     }
-    pub const fn lane(&self) -> &Lane {
+    pub const fn lane(&self) -> &SenderScopedLane {
         &self.lane
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "LaneRecord", into = "LaneRecord")]
-pub struct Lane {
+pub struct SenderScopedLane {
     authority: reply::LaneAuthority,
-    grant: LaneGrant,
+    grant: SenderScopedGrant,
     state: LaneState,
     last_activity: CanonicalTime,
     horizon_at: CanonicalTime,
@@ -368,7 +372,7 @@ pub struct Lane {
 #[serde(deny_unknown_fields)]
 struct LaneRecord {
     authority: reply::LaneAuthority,
-    grant: LaneGrant,
+    grant: SenderScopedGrant,
     state: LaneState,
     last_activity: CanonicalTime,
     horizon_at: CanonicalTime,
@@ -377,7 +381,7 @@ struct LaneRecord {
     version: Version,
     admitted_messages: BTreeSet<MessageId>,
 }
-impl TryFrom<LaneRecord> for Lane {
+impl TryFrom<LaneRecord> for SenderScopedLane {
     type Error = CapabilityError;
     fn try_from(r: LaneRecord) -> Result<Self, Self::Error> {
         r.grant.validate()?;
@@ -426,8 +430,8 @@ impl TryFrom<LaneRecord> for Lane {
         })
     }
 }
-impl From<Lane> for LaneRecord {
-    fn from(l: Lane) -> Self {
+impl From<SenderScopedLane> for LaneRecord {
+    fn from(l: SenderScopedLane) -> Self {
         Self {
             authority: l.authority,
             grant: l.grant,
@@ -442,8 +446,8 @@ impl From<Lane> for LaneRecord {
     }
 }
 
-impl Lane {
-    fn from_grant(grant: LaneGrant) -> Result<Self, CapabilityError> {
+impl SenderScopedLane {
+    fn from_grant(grant: SenderScopedGrant) -> Result<Self, CapabilityError> {
         grant.validate()?;
         let horizon_at = grant
             .issued_at
@@ -467,7 +471,7 @@ impl Lane {
         })
     }
 
-    pub const fn grant(&self) -> &LaneGrant {
+    pub const fn grant(&self) -> &SenderScopedGrant {
         &self.grant
     }
     pub const fn authority(&self) -> &reply::LaneAuthority {
@@ -924,8 +928,8 @@ impl std::error::Error for CapabilityError {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaneBook {
     max_records: usize,
-    lanes: BTreeMap<LaneId, Lane>,
-    operations: BTreeMap<IdempotencyKey, LaneGrant>,
+    lanes: BTreeMap<LaneId, SenderScopedLane>,
+    operations: BTreeMap<IdempotencyKey, SenderScopedGrant>,
 }
 
 impl LaneBook {
@@ -953,7 +957,7 @@ impl LaneBook {
             return if *existing == signed.grant {
                 self.lanes
                     .get(&existing.id)
-                    .map(Lane::schedule_change)
+                    .map(SenderScopedLane::schedule_change)
                     .ok_or(CapabilityError::MissingLane)
             } else {
                 Err(CapabilityError::DuplicateConflict)
@@ -975,7 +979,7 @@ impl LaneBook {
         Ok(self.lanes[&id].schedule_change())
     }
 
-    pub fn lane(&self, id: LaneId) -> Option<&Lane> {
+    pub fn lane(&self, id: LaneId) -> Option<&SenderScopedLane> {
         self.lanes.get(&id)
     }
 }
@@ -1051,7 +1055,7 @@ mod tests {
 
     fn signed_grant() -> (SignedLaneGrant, [u8; 32]) {
         let signing = SigningKey::from_bytes(&[7; 32]);
-        let grant = LaneGrant {
+        let grant = SenderScopedGrant {
             id: LaneId(1),
             subject: LaneSubject::LegacyDomain(DomainIdentity::parse_ascii("bank.com").unwrap()),
             sender: ProtocolIdentity(2),
@@ -1128,7 +1132,7 @@ mod tests {
         )
         .unwrap();
         let record = serde_json::to_value(&lane).unwrap();
-        let mut restored: Lane = serde_json::from_value(record.clone()).unwrap();
+        let mut restored: SenderScopedLane = serde_json::from_value(record.clone()).unwrap();
         assert_eq!(
             restored.consume(
                 MessageId(2),
@@ -1148,13 +1152,16 @@ mod tests {
         ] {
             let mut invalid = record.clone();
             invalid[field] = value;
-            assert!(serde_json::from_value::<Lane>(invalid).is_err(), "{field}");
+            assert!(
+                serde_json::from_value::<SenderScopedLane>(invalid).is_err(),
+                "{field}"
+            );
         }
         let mut invalid = record;
         invalid["grant"]["subject"]["LegacyDomain"] = serde_json::json!("not a domain");
-        assert!(serde_json::from_value::<Lane>(invalid).is_err());
+        assert!(serde_json::from_value::<SenderScopedLane>(invalid).is_err());
         restored.revoke().unwrap();
-        let revoked: Lane =
+        let revoked: SenderScopedLane =
             serde_json::from_value(serde_json::to_value(restored).unwrap()).unwrap();
         assert!(!revoked.is_current(CanonicalTime(21)));
         // Valid lifecycle transitions must also survive restoration: rejecting
@@ -1175,12 +1182,12 @@ mod tests {
                 assert!(!lane.is_current(CanonicalTime(1011)));
                 lane.reconfirm(CanonicalTime(1011)).unwrap();
             }
-            let restored: Lane =
+            let restored: SenderScopedLane =
                 serde_json::from_value(serde_json::to_value(&lane).unwrap()).unwrap();
             assert_eq!(restored, lane);
             assert!(restored.is_current(CanonicalTime(1011)));
             lane.reach_horizon(CanonicalTime(10_000)).unwrap();
-            let expired: Lane =
+            let expired: SenderScopedLane =
                 serde_json::from_value(serde_json::to_value(lane).unwrap()).unwrap();
             assert!(!expired.is_current(CanonicalTime(10_000)));
         }
@@ -1227,7 +1234,7 @@ mod tests {
     #[test]
     fn recipient_signature_domain_evidence_and_rate_are_enforced() {
         let (signed, key) = signed_grant();
-        let mut lane = Lane::from_grant(signed.grant.clone()).unwrap();
+        let mut lane = SenderScopedLane::from_grant(signed.grant.clone()).unwrap();
         signed.verify(&key).unwrap();
         assert!(
             !lane
@@ -1265,7 +1272,7 @@ mod tests {
     #[test]
     fn expiring_lane_requires_reconfirmation_at_horizon() {
         let (signed, _) = signed_grant();
-        let mut lane = Lane::from_grant(signed.grant).unwrap();
+        let mut lane = SenderScopedLane::from_grant(signed.grant).unwrap();
         assert_eq!(
             lane.reach_horizon(CanonicalTime(1_010)).unwrap(),
             LaneHorizonEffect::ReconfirmationRequired
@@ -1296,7 +1303,7 @@ mod tests {
     #[test]
     fn declaration_scope_mismatch_does_not_consume_lane_allowance() {
         let (signed, _) = signed_grant();
-        let mut lane = Lane::from_grant(signed.grant).unwrap();
+        let mut lane = SenderScopedLane::from_grant(signed.grant).unwrap();
         let mut wrong_purpose = legacy_declarations();
         wrong_purpose.purpose = DeclaredPurpose::Known(cs_mail_primitives::KnownPurpose::Personal);
 

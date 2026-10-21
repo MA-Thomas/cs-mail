@@ -215,6 +215,7 @@ pub fn callback_fixture(url: &str) -> cs_mail_storage_postgres::external::Reposi
         at,
     )
     .unwrap();
+    crate::fixture_inbox(&deployment, persona, key, &[21; 32], at).unwrap();
     crate::purchase_service(&deployment, scope, unit, BillingAccountId(2), key, at).unwrap();
     let record = deployment.deployment_record().unwrap().unwrap();
     let signing_scope = RecipientSigningScope {
@@ -244,7 +245,7 @@ pub fn callback_fixture(url: &str) -> cs_mail_storage_postgres::external::Reposi
     let repository = cs_mail_storage_postgres::external::Repository {
         accounts: deployment.accounts(move || at),
         deployment: record,
-        deriver: cs_mail_privacy::PrivacyDeriver::new([5; 32], [6; 32]),
+        deriver: cs_mail_privacy::PrivacyDeriver::new([5; 32], [6; 32]).into(),
         relay_key: EndpointSecretKey::from_secret_bytes(ContentKeyRef(600), &[60; 32])
             .unwrap()
             .1,
@@ -273,6 +274,7 @@ pub fn callback_fixture(url: &str) -> cs_mail_storage_postgres::external::Reposi
             operation: IdempotencyKey(id),
             signature: vec![],
             command: app::Command::Start {
+                receiving_alias: cs_mail_primitives::AliasId::new(persona.0).unwrap(),
                 mailbox: mailbox.clone(),
                 disclose_to_external_mail: true,
                 message: Box::new(message),

@@ -38,7 +38,9 @@ pub fn destination_address(
     } else if let Some(id) = local.strip_prefix("member-") {
         (id, true)
     } else {
-        return Err(Refusal::Permanent);
+        return cs_mail_accounts::directory::MemberAddress::try_from(address.to_owned())
+            .map(MailDestination::Address)
+            .map_err(|_| Refusal::Permanent);
     };
     if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(Refusal::Permanent);
@@ -55,8 +57,9 @@ pub fn destination_address(
             .map_err(|_| Refusal::Permanent)
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum MailDestination {
+    Address(cs_mail_accounts::directory::MemberAddress),
     Conversation(ConversationId),
     Member(ProtocolIdentity),
 }
@@ -94,8 +97,8 @@ impl VerifiedMail {
     pub fn mailbox(&self) -> &GuestMailbox {
         &self.mailbox
     }
-    pub const fn destination(&self) -> MailDestination {
-        self.destination
+    pub fn destination(&self) -> MailDestination {
+        self.destination.clone()
     }
     pub const fn may_notify(&self) -> bool {
         self.may_notify
@@ -106,13 +109,23 @@ impl VerifiedMail {
         deployment: &[u8; 32],
         secret: &[u8; 32],
     ) -> (ArrivalIdentity, [u8; 32]) {
-        let (tag, id) = match self.destination {
-            MailDestination::Conversation(id) => (1, id.value()),
-            MailDestination::Member(id) => (2, id.0),
+        let route = match &self.destination {
+            MailDestination::Conversation(id) => {
+                let mut r = vec![1];
+                r.extend_from_slice(&id.value().to_be_bytes());
+                r
+            }
+            MailDestination::Member(id) => {
+                let mut r = vec![2];
+                r.extend_from_slice(&id.0.to_be_bytes());
+                r
+            }
+            MailDestination::Address(address) => {
+                let mut r = vec![3];
+                r.extend_from_slice(address.as_str().as_bytes());
+                r
+            }
         };
-        let mut route = [0_u8; 17];
-        route[0] = tag;
-        route[1..].copy_from_slice(&id.to_be_bytes());
         let identity = encrypted::fingerprint(
             secret,
             b"cs-mail/smtp-arrival/v2",

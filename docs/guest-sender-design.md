@@ -9,17 +9,25 @@ Both entry paths now join through the [local external-email journey](external-em
 
 ## Purpose
 
-**Alias scope update (2026-10-14; implementation pending).** The
-[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) now distinguishes
-private aliases with automatic alias-scoped express lanes from public-facing
-aliases governed by existing sender-scoped permissions and bonded requests.
-Previously unknown specialists given a private alias can correspond under its
-lane policy without a separate sender grant or bonded request. The paid-request
-entry and unknown-sender prompt described below apply to the existing public
-request path, not the proposed private-alias path. Its authentication-failure,
-block and lifecycle policies remain open. CS-MAIL owns the infrastructure;
-Phoros will use it later. This note does not change the historical implementation
-or validation claims below.
+An alias is a receiving address; express-lane permission is granted separately.
+Private-alias creation grants no lane. A healthcare alias may be explicitly paired
+with an alias-scoped lane; an Amazon alias may instead use sender-scoped permission
+for selected authenticated domains. Private aliases have no bonded route;
+unauthorized senders may use the public approach route. The
+[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) owns these rules.
+Alias management, receiving and explicit lane pairing are implemented locally.
+The earlier transport experiments below retain their stated scope; current
+permission-transition validation is recorded in the Apple runbook.
+
+**Further alias clarification (2026-10-14; implementation pending).** One
+participant protocol identity may control multiple alias routes without public
+linkage. Sender-identity blocks apply across all receiving aliases. Private routes
+have no automatic expiry and offer Restrict, Replace, Retire. Suspicious or
+insufficiently authenticated private-alias mail is held for review without ongoing
+permission or payment. SMTP envelope recipients and authenticated native targets
+establish receiving-route evidence. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+owns these rules and remaining delivery, transition, reply and held-message contracts;
+implementation and validation records below do not establish this cutover.
 
 A **guest** is a person using an external mailbox without a cs-mail account.
 There are two entry paths: a guest approaches a member through a paid request,

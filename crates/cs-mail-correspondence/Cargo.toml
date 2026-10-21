@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+time = "0.3.55"
 cs-mail-guests = { path = "../cs-mail-guests" }
 cs-mail-protocol = { path = "../cs-mail-protocol" }
 cs-mail-consent = { path = "../cs-mail-consent" }

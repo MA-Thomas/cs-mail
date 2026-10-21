@@ -32,14 +32,9 @@ struct DirectoryView: View {
                     } else {
                         Text("Find someone and see the approaches they welcome.").foregroundStyle(.secondary)
                         HStack {
-                            TextField("Name, address or description", text: $model.query).onSubmit { search() }
+                            TextField("Name, address or shared link", text: $model.query).onSubmit { search() }
                             Button("Search") { search() }
                         }
-                        HStack {
-                            TextField("Exact address or shared request link", text: $model.reference).onSubmit { lookup() }
-                            Button("Open") { lookup() }.disabled(model.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        }
-                        Text("Unlisted addresses appear only through exact lookup or a shared link.").font(.caption).foregroundStyle(.secondary)
                         if let error = model.error { Text(error).foregroundStyle(.orange) }
                         if let page = model.screen.results.page {
                             if page.entries.isEmpty { Text("No listed addresses match this search.").foregroundStyle(.secondary) }
@@ -66,21 +61,12 @@ struct DirectoryView: View {
                 }.padding(24)
             }
             .navigationTitle("Directory")
-            .toolbar {
-                ToolbarItem {
-                    Button("Refresh directory", systemImage: "arrow.clockwise") {
-                        Task { await model.refresh() }
-                    }.disabled(model.busy)
-                    .help(model.screen.approach == nil ? "Refresh directory results" : "Refresh this profile")
-                }
-            }
             .disabled(model.busy)
             .overlay { if model.busy { ProgressView() } }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await model.loadIfNeeded() }
     }
-    private func search() { Task { await model.search() } }
-    private func lookup() { Task { await model.openReference() } }
+    private func search() { Task { await model.submit() } }
 }
 
 private struct ApproachDetail: View {
@@ -116,7 +102,7 @@ private struct ApproachDetail: View {
                         Image(systemName: selected == RequestClassID(requestClass.id) ? "checkmark.circle.fill" : "circle")
                         Text(requestClass.description)
                         Spacer()
-                        Text("Collateral \(requestClass.collateralMinorUnits)")
+                        Text("\(requestClass.collateralMinorUnits) units collateral")
                     }.padding(12)
                 }.buttonStyle(EditorialRegionButtonStyle(selected: selected == RequestClassID(requestClass.id))).disabled(!approach.covered || requestClass.conditionalMinorUnits == nil)
                     .editorialCopyableLabel(requestClass.description + "\nCollateral \(requestClass.collateralMinorUnits)")
@@ -126,11 +112,11 @@ private struct ApproachDetail: View {
                 VStack(alignment: .leading, spacing: 8) {
                     EditorialReadingView(blocks: [
                         EditorialReadingBlock(requestClass.description, style: .heading),
-                        EditorialReadingBlock("Conditional charge: \(total) minor units; processing \(processing), collateral \(requestClass.collateralMinorUnits)."),
+                        EditorialReadingBlock("Conditional charge: \(total) simulated units. Processing: \(processing); collateral: \(requestClass.collateralMinorUnits)."),
                         EditorialReadingBlock("Acceptance owes a full refund. Rejection retains processing and sends collateral into the member pool. Expiry returns collateral; cancellation before submission returns the full charge."),
-                        EditorialReadingBlock("Selecting a class grants no permission. No charge has been authorized.", style: .caption)
+                        EditorialReadingBlock("No charge until you review and authorize the request.", style: .caption)
                     ])
-                    Button("Start request · review signed quote") { reviewRequest(approach, selected) }.disabled(member.busy || member.inbox?.pendingRequest == true)
+                    Button("Review request") { reviewRequest(approach, selected) }.disabled(member.busy || member.inbox?.pendingRequest == true)
                 }.padding().background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
             }
         }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
@@ -138,84 +124,117 @@ private struct ApproachDetail: View {
     }
 }
 
-private struct ClassEditorRow: Identifiable {
+struct ClassEditorRow: Identifiable, Equatable {
     var id: RequestClassID
     var description: String
     var collateral: String
 }
+@MainActor final class ApproachEditorDraft: ObservableObject {
+    @Published var loadedRevision: UInt64?
+    @Published var classVersion: UInt64 = 0
+    @Published var name = ""
+    @Published var mailbox = ""
+    @Published var description = ""
+    @Published var image: Data?
+    @Published var listed = true
+    @Published var classes: [ClassEditorRow] = []
+    private struct Snapshot: Equatable {
+        let name: String; let mailbox: String; let description: String; let image: Data?; let listed: Bool; let classes: [ClassEditorRow]
+    }
+    private var baseline: Snapshot?
+    private var snapshot: Snapshot { Snapshot(name: name, mailbox: mailbox, description: description, image: image, listed: listed, classes: classes) }
+    var isDirty: Bool { baseline != nil && snapshot != baseline }
+    var valid: Bool { loadedRevision != nil && classVersion < UInt64.max && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !classes.contains { $0.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || UInt64($0.collateral) == nil } }
+    func load(_ settings: AddressSettings) {
+        loadedRevision = settings.revision; classVersion = settings.classVersion
+        mailbox = settings.mailbox ?? ""; name = settings.displayName; description = settings.description
+        image = settings.image; listed = settings.listed
+        classes = settings.classes.map { ClassEditorRow(id: RequestClassID($0.id), description: $0.description, collateral: String($0.collateralMinorUnits)) }
+        baseline = snapshot
+    }
+    func clear() { loadedRevision = nil; classVersion = 0; name = ""; mailbox = ""; description = ""; image = nil; listed = true; classes = []; baseline = nil }
+    func save(using model: MemberModel) async -> Bool {
+        guard !model.busy, valid, let expected = loadedRevision, model.addressSettings?.revision == expected else { return false }
+        let drafts = classes.compactMap { row -> RequestClassDraft? in
+            guard let amount = UInt64(row.collateral) else { return nil }
+            return RequestClassDraft(id: row.id.value, description: row.description, collateralMinorUnits: amount)
+        }
+        guard drafts.count == classes.count else { return false }
+        await model.publishAddress(expected: expected, classVersion: classVersion + 1, name: name, description: description, image: image, listed: listed, classes: drafts, mailbox: mailbox.isEmpty ? nil : mailbox)
+        guard model.inbox != nil, model.addressError == nil, let settings = model.addressSettings, settings.revision != expected else { return false }
+        load(settings); return true
+    }
+}
+
 struct AddressEditor: View {
     @ObservedObject var model: MemberModel
-    @State private var loadedRevision: UInt64?
-    @State private var classVersion: UInt64 = 0
-    @State private var name = ""
-    @State private var mailbox = ""
-    @State private var description = ""
-    @State private var image: Data?
-    @State private var listed = true
-    @State private var classes: [ClassEditorRow] = []
+    @ObservedObject var draft: ApproachEditorDraft
     @State private var importingImage = false
     @State private var imageError: String?
+    private var pendingChanges: Bool {
+        model.addressSettings?.pending == true || model.inbox?.pendingSetup == .directoryPublication
+    }
     var body: some View {
         NavigationStack {
             Form {
                 if let settings = model.addressSettings {
                     Section("Address") {
-                        TextField("Development address · @csqd-mail.com", text: $mailbox)
+                        TextField("Address", text: $draft.mailbox)
                             .disabled(settings.mailbox != nil)
-                        EditorialReadingView(blocks: [
-                            EditorialReadingBlock("Claiming an address is permanent in this development environment. It does not enable external email delivery.", style: .caption),
-                            EditorialReadingBlock(settings.mailbox ?? settings.address, style: .caption)
-                        ])
+                        if settings.mailbox == nil { Text("This address will remain reserved to your account.").font(.caption) }
                         ShareLink("Share request link", item: settings.link)
-                        EditorialReadingView("This publication belongs to this address. Other addresses have independent classes and visibility.", style: .caption)
                     }
                     Section("Simulated annual service") {
-                        EditorialReadingView("Development offer 1: 12,000 minor units for the fixed 2026 service period. No real payment is taken.", style: .caption)
+                        EditorialReadingView("12,000 units for 2026. Simulated payments; no real money is taken.", style: .caption)
                         if settings.covered { Text("Simulated service coverage is active.").font(.caption) }
                         else { Button("Activate simulated service") { Task { await model.purchaseDevelopmentService() } } }
                     }
                     Section("Public profile") {
-                        TextField("Display name", text: $name)
-                        TextField("Description", text: $description, axis: .vertical).lineLimit(3...8)
-                        PublicImage(bytes: image)
+                        TextField("Display name", text: $draft.name)
+                        TextField("Description", text: $draft.description, axis: .vertical).lineLimit(3...8)
+                        PublicImage(bytes: draft.image)
                         Button("Choose profile image…") { importingImage = true }
-                        if image != nil { Button("Remove image") { image = nil } }
+                        if draft.image != nil { Button("Remove image") { draft.image = nil } }
                         if let imageError { Text(imageError).foregroundStyle(.orange) }
-                        EditorialReadingView("These details are your public statements, separate from enrollment evidence.", style: .caption)
                     }
                     Section("Directory visibility") {
-                        Toggle("Include this address in directory searches", isOn: $listed)
-                        Text(listed ? "Publishing will include this profile in name, address and description searches." : "Anyone with the exact address or shared link can still view your publication. It will be absent from searches and browsing.").font(.caption).fixedSize(horizontal: false, vertical: true)
+                        Toggle("Include this address in directory searches", isOn: $draft.listed)
+                        Text(draft.listed ? "Publishing will include this profile in name, address and description searches." : "Anyone with the exact address or shared link can still view your publication. It will be absent from searches and browsing.").font(.caption).fixedSize(horizontal: false, vertical: true)
                     }
-                    Section("Ways to approach me · up to eight") {
-                        if classes.isEmpty { EditorialReadingView("No paid request route will be offered. You can publish a profile without classes.", style: .caption) }
-                        ForEach($classes) { $row in
+                    Section("Ways to approach me") {
+                        if draft.classes.isEmpty { EditorialReadingView("You are not offering paid requests.", style: .caption) }
+                        ForEach($draft.classes) { $row in
                             VStack(alignment: .leading) {
                                 TextField("Approach description", text: $row.description)
-                                TextField("Collateral · minor units", text: $row.collateral)
-                                Button("Remove class", role: .destructive) { classes.removeAll { $0.id == row.id } }
+                                TextField("Collateral · simulated units", text: $row.collateral)
+                                Button("Remove approach", role: .destructive) { draft.classes.removeAll { $0.id == row.id } }
                             }
                         }
-                        if classes.count < 8 {
-                            Button("Add request class") { classes.append(ClassEditorRow(id: RequestClassID(String(UInt64.random(in: 1...UInt64.max))), description: "", collateral: settings.collateralMin.map(String.init) ?? "")) }
+                        if draft.classes.count < 8 {
+                            Button("Add approach") { draft.classes.append(ClassEditorRow(id: RequestClassID(String(UInt64.random(in: 1...UInt64.max))), description: "", collateral: settings.collateralMin.map(String.init) ?? "")) }
                         }
                         if let min = settings.collateralMin, let max = settings.collateralMax,
                            let processing = settings.processingMinorUnits {
-                            Text("Collateral must be \(min)–\(max) minor units. CSQD adds \(processing) processing units to each conditional charge. Classes do not grant contact permission.").font(.caption).fixedSize(horizontal: false, vertical: true)
+                            Text("Collateral: \(min)–\(max) simulated units. Processing fee: \(processing) units per request.").font(.caption).fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     Section {
-                        Button(settings.revision == 0 ? "Publish approach page" : "Save publication") { save() }
-                            .disabled(loadedRevision == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || classes.contains { $0.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || UInt64($0.collateral) == nil })
-                        Button("Reload current publication") { Task { await model.loadAddressSettings(); loadDraft() } }
-                        Button("Retry interrupted publication") { Task { await model.retry(); await model.loadAddressSettings(); loadDraft() } }
+                        if draft.isDirty { Text("Unsaved changes").font(.caption).foregroundStyle(.orange) }
+                        Button(settings.revision == 0 ? "Publish approach page" : "Save changes") { save() }
+                            .disabled(pendingChanges || draft.loadedRevision != settings.revision || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.classes.contains { $0.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || UInt64($0.collateral) == nil })
+                        if let loadedRevision = draft.loadedRevision, loadedRevision != settings.revision {
+                            Text("Your page has changed since you began editing. Your edits are still here.").foregroundStyle(.orange)
+                            Button("Discard edits and load saved page") { loadDraft() }
+                        }
+                        if pendingChanges {
+                            Text("Your last change has not been confirmed.").foregroundStyle(.orange)
+                            Button("Check saved changes") { Task { await model.retry(); await model.loadAddressSettings(); if !draft.isDirty { loadDraft() } } }
+                        }
                         if let error = model.addressError { Text(error).foregroundStyle(.orange) }
-                        if let notice = model.notice { Text(notice).foregroundStyle(.secondary) }
                     }
                 } else {
-                    Text("Loading address configuration…")
+                    if model.addressError == nil { ProgressView("Loading your page…") }
                     if let error = model.addressError { Text(error).foregroundStyle(.orange) }
-                    Button("Reload") { Task { await model.loadAddressSettings(); loadDraft() } }
                 }
             }
             .formStyle(.grouped)
@@ -223,7 +242,10 @@ struct AddressEditor: View {
             .disabled(model.busy)
             .overlay { if model.busy { ProgressView() } }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task { await model.loadAddressSettings(); loadDraft() }
+        .task { await model.loadAddressSettings(); if draft.loadedRevision == nil { loadDraft() } }
+        .onChange(of: model.addressSettings?.revision) { _, _ in
+            if draft.loadedRevision == nil { loadDraft() }
+        }
         .fileImporter(isPresented: $importingImage, allowedContentTypes: [.image]) { result in
             do {
                 let url = try result.get(); let access = url.startAccessingSecurityScopedResource()
@@ -236,27 +258,10 @@ struct AddressEditor: View {
                 guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { throw ClientError.InvalidData }
                 CGImageDestinationAddImage(destination, thumbnail, nil)
                 guard CGImageDestinationFinalize(destination), output.length <= 262_144 else { throw ClientError.InvalidData }
-                image = output as Data; imageError = nil
+                draft.image = output as Data; imageError = nil
             } catch { imageError = "This image could not be prepared. Choose a smaller image." }
         }
     }
-    private func loadDraft() {
-        guard let settings = model.addressSettings else { return }
-        loadedRevision = settings.revision; classVersion = settings.classVersion
-        mailbox = settings.mailbox ?? ""
-        name = settings.displayName; description = settings.description; image = settings.image; listed = settings.listed
-        classes = settings.classes.map { ClassEditorRow(id: RequestClassID($0.id), description: $0.description, collateral: String($0.collateralMinorUnits)) }
-    }
-    private func save() {
-        guard let expected = loadedRevision, classVersion < UInt64.max else { return }
-        let drafts = classes.compactMap { row -> RequestClassDraft? in
-            guard let amount = UInt64(row.collateral) else { return nil }
-            return RequestClassDraft(id: row.id.value, description: row.description, collateralMinorUnits: amount)
-        }
-        guard drafts.count == classes.count else { return }
-        Task {
-            await model.publishAddress(expected: expected, classVersion: classVersion + 1, name: name, description: description, image: image, listed: listed, classes: drafts, mailbox: mailbox.isEmpty ? nil : mailbox)
-            if model.addressError == nil { loadDraft() }
-        }
-    }
+    private func loadDraft() { if let settings = model.addressSettings { draft.load(settings) } }
+    private func save() { Task { _ = await draft.save(using: model) } }
 }

@@ -3,6 +3,7 @@
 //! An adapter: it validates input, invokes application use cases and renders outcomes. It
 //! makes no domain decisions and obtains trusted time only inside application decisions.
 
+mod aliases;
 mod blocking;
 mod callbacks;
 mod config;

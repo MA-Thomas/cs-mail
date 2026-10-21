@@ -4,10 +4,12 @@ pub mod external;
 mod image;
 mod policy;
 mod selection;
+mod subject;
 pub use document::*;
 pub use image::*;
 pub use policy::*;
 pub use selection::*;
+pub use subject::*;
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

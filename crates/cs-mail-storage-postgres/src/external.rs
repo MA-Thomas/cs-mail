@@ -24,7 +24,7 @@ use std::fmt::Write;
 pub struct Repository {
     pub accounts: PostgresAccountRepository,
     pub deployment: DeploymentBootstrap,
-    pub deriver: PrivacyDeriver,
+    pub deriver: std::sync::Arc<PrivacyDeriver>,
     pub relay_key: EndpointPublicKey,
 }
 fn authority(
@@ -177,42 +177,40 @@ impl Repository {
             member_key,
         })
     }
-    fn open_relationship(
-        &self,
-        tx: &mut Transaction<'_>,
-        member: ProtocolIdentity,
-        mailbox: &GuestMailbox,
-        now: CanonicalTime,
-    ) -> Result<String, StorageError> {
-        let deployment = self.scope().deployment_domain;
-        let guest = mailbox.synthetic_protocol_identity(&deployment);
-        guests::register_subject(tx, guest, &SenderSubject::Guest(mailbox.clone()), now)?;
-        let address = RelationshipAddress::derive(&self.deriver, &deployment, guest, member)?;
-        let evidence = HistoryEvidence::Mailbox(mailbox.clone());
-        let history = guests::linked_history(tx, member, &evidence)?.map_or_else(
-            || {
-                self.deriver
-                    .guest_request_history_ref(1, &deployment, guest, member)
-            },
-            |h| h.reference,
-        );
-        bootstrap_in(
-            tx,
-            address.aggregate_key(),
-            &address.initial_state(history, now),
-            self.deployment.record().unit,
-        )?;
-        tx.execute("INSERT INTO cs_guest_email_bindings(aggregate_key,binding) VALUES($1,$2) ON CONFLICT DO NOTHING",
+}
+fn open_guest_relationship(
+    tx: &mut Transaction<'_>,
+    deriver: &PrivacyDeriver,
+    deployment_record: &DeploymentBootstrap,
+    member: ProtocolIdentity,
+    mailbox: &GuestMailbox,
+    now: CanonicalTime,
+) -> Result<String, StorageError> {
+    let deployment = deployment_record.record().deployment_domain;
+    let guest = mailbox.synthetic_protocol_identity(&deployment);
+    guests::register_subject(tx, guest, &SenderSubject::Guest(mailbox.clone()), now)?;
+    let address = RelationshipAddress::derive(deriver, &deployment, guest, member)?;
+    let evidence = HistoryEvidence::Mailbox(mailbox.clone());
+    let history = guests::linked_history(tx, member, &evidence)?.map_or_else(
+        || deriver.guest_request_history_ref(1, &deployment, guest, member),
+        |h| h.reference,
+    );
+    bootstrap_in(
+        tx,
+        address.aggregate_key(),
+        &address.initial_state(history, now),
+        deployment_record.record().unit,
+    )?;
+    tx.execute("INSERT INTO cs_guest_email_bindings(aggregate_key,binding) VALUES($1,$2) ON CONFLICT DO NOTHING",
             &[&address.aggregate_key(), &Json(address.public())])?;
-        let history_bytes = super::scoped_key(history.derivation_version(), history.as_bytes());
-        let history_text = history_bytes.iter().fold(String::new(), |mut s, b| {
-            write!(s, "{b:02x}").expect("writing a string");
-            s
-        });
-        tx.execute("INSERT INTO cs_guest_history_links(recipient,evidence,history,linked_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+    let history_bytes = super::scoped_key(history.derivation_version(), history.as_bytes());
+    let history_text = history_bytes.iter().fold(String::new(), |mut s, b| {
+        write!(s, "{b:02x}").expect("writing a string");
+        s
+    });
+    tx.execute("INSERT INTO cs_guest_history_links(recipient,evidence,history,linked_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
             &[&member.0.to_string(), &evidence.key(), &history_text, &super::to_i64(now.0)?])?;
-        Ok(address.aggregate_key().to_owned())
-    }
+    Ok(address.aggregate_key().to_owned())
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Preparation {
@@ -260,8 +258,10 @@ impl Store for Repository {
             }
             Some(_) => return Err(Error::Unauthorized.into()),
             None => match &request.command {
-                Command::Start { mailbox, .. } => self.open_relationship(
+                Command::Start { mailbox, .. } => open_guest_relationship(
                     &mut tx,
+                    &self.deriver,
+                    &self.deployment,
                     request.persona,
                     mailbox,
                     self.accounts.clock.now(),
@@ -279,7 +279,14 @@ impl Store for Repository {
                     provider_events: tx.query("SELECT record FROM cs_external_provider_events WHERE message=$1 ORDER BY received_at,id", &[&row.try_get::<_, Json<Message>>(1)?.0.manifest.message().0.to_string()])?.into_iter().map(|r| r.try_get::<_, Json<cs_mail_correspondence::external::delivery::ProviderEvent>>(0).map(|j| j.0)).collect::<Result<Vec<_>, _>>()? });
             }
         }
+        let receiving_inbox = match &request.command {
+            Command::Start {
+                receiving_alias, ..
+            } => super::aliases::receiving_context(&mut tx, *receiving_alias)?,
+            _ => None,
+        };
         let context = Context {
+            receiving_inbox,
             scope: self.scope(),
             authority,
             billing: billing::identity_account(&mut tx, request.persona)?,
@@ -319,13 +326,15 @@ fn persist_changes(
     tx.execute("INSERT INTO cs_external_conversations(id,member,account,aggregate_key,record) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record",
                 &[&id,&request.persona.0.to_string(),&request.account.0.to_string(),&key,&Json(changes.conversation)])?;
     if let Some(p) = changes.delivery {
-        let message = Message {
-            manifest: p.manifest,
-            sender_key: p.sender_key,
-            member_copy: p.member_copy,
-            direction: Direction::MemberToGuest,
-            committed_at: at,
-        };
+        let message = Message::new(
+            cs_mail_application::correspondence::external::MessageFields {
+                manifest: p.manifest,
+                sender_key: p.sender_key,
+                member_copy: p.member_copy,
+                direction: Direction::MemberToGuest,
+                committed_at: at,
+            },
+        )?;
         tx.execute(
             "INSERT INTO cs_external_messages(id,conversation,record) VALUES($1,$2,$3)",
             &[
@@ -346,20 +355,61 @@ fn persist_changes(
     Ok(())
 }
 
-/// Incoming processing does not hold signing, relay-decryption, or derivation secrets.
+/// Incoming processing holds no signing or relay-decryption secrets.
+/// Optional host-provisioned registration can open a previously unknown guest pair.
 pub struct IncomingRepository {
     pub accounts: PostgresAccountRepository,
     pub scope: cs_mail_security::RecipientSigningScope,
+    registration: Option<IncomingRegistration>,
 }
+struct IncomingRegistration {
+    deriver: std::sync::Arc<PrivacyDeriver>,
+    deployment: DeploymentBootstrap,
+}
+
 impl Repository {
     pub fn incoming(&self) -> IncomingRepository {
         IncomingRepository {
             accounts: self.accounts.clone(),
             scope: self.scope(),
+            registration: Some(IncomingRegistration {
+                deriver: self.deriver.clone(),
+                deployment: self.deployment.clone(),
+            }),
         }
     }
 }
 impl IncomingRepository {
+    pub fn new(
+        accounts: PostgresAccountRepository,
+        scope: cs_mail_security::RecipientSigningScope,
+    ) -> Self {
+        Self {
+            accounts,
+            scope,
+            registration: None,
+        }
+    }
+    /// Optional host capability for opening a previously unknown authenticated guest pair.
+    /// It carries no provider signing, content decryption or payment authority.
+    /// # Errors
+    /// Rejects a registrar for a different deployment or provider.
+    pub fn with_registration(
+        mut self,
+        deriver: PrivacyDeriver,
+        deployment: DeploymentBootstrap,
+    ) -> Result<Self, StorageError> {
+        if deployment.record().deployment_domain != self.scope.deployment_domain
+            || deployment.record().provider != self.scope.provider
+        {
+            return Err(Error::Invalid.into());
+        }
+        self.registration = Some(IncomingRegistration {
+            deriver: deriver.into(),
+            deployment,
+        });
+        Ok(self)
+    }
     /// A sealed DMARC pass may queue a bounded instruction notice, never admit
     /// unknown-sender content. The original text is not retained.
     /// # Errors
@@ -472,12 +522,10 @@ impl IncomingRepository {
         let reply = Reply {
             mailbox: authenticated.mailbox().clone(),
             conversation: authenticated.conversation(),
-            message: Message {
+            message: cs_mail_application::correspondence::external::IncomingMessage {
                 manifest: authenticated.manifest().clone(),
                 sender_key: authenticated.sender_key(),
                 member_copy: authenticated.member_copy().clone(),
-                direction: Direction::GuestToMember,
-                committed_at: authenticated.member_copy().created_at,
             },
             delivery_digest: authenticated.delivery_digest(),
             evidence: IncomingEvidence {
@@ -510,11 +558,18 @@ impl IncomingRepository {
             if let Some((c, key, account)) = conversation(&mut tx, reply.conversation)? {
                 (c, key, account, false)
             } else {
-                let cs_mail_smtp_gateway::incoming::MailDestination::Member(member) =
-                    authenticated.destination()
-                else {
-                    return Err(Error::Unavailable.into());
+                let alias = match authenticated.destination() {
+                    cs_mail_smtp_gateway::incoming::MailDestination::Member(member) => {
+                        public_inbox(&mut tx, member)?
+                    }
+                    cs_mail_smtp_gateway::incoming::MailDestination::Address(address) => {
+                        alias_by_address(&mut tx, &address)?
+                    }
+                    cs_mail_smtp_gateway::incoming::MailDestination::Conversation(_) => {
+                        return Err(Error::Unavailable.into());
+                    }
                 };
+                let member = alias.owner();
                 let account = member_account(&mut tx, member)?;
                 let (key, r) = mailbox_relationship(
                     &mut tx,
@@ -527,6 +582,7 @@ impl IncomingRepository {
                 let c = ExternalConversation::inbound(
                     reply.conversation,
                     member,
+                    alias.id(),
                     reply.mailbox.clone(),
                     self.scope.deployment_domain,
                     &r,
@@ -557,7 +613,7 @@ impl IncomingRepository {
                 &[&key],
             )?
             .map(|row| {
-                row.try_get::<_, Json<cs_mail_capabilities::Lane>>(0)
+                row.try_get::<_, Json<cs_mail_capabilities::SenderScopedLane>>(0)
                     .map(|j| j.0)
             })
             .transpose()?;
@@ -567,8 +623,48 @@ impl IncomingRepository {
         }
         let billing = billing::identity_account(&mut tx, c.member())?;
         let now = self.accounts.clock.now();
-        let next_lane = admit_reply(
+        let receiving = match authenticated.destination() {
+            cs_mail_smtp_gateway::incoming::MailDestination::Address(address) => {
+                let alias = alias_by_address(&mut tx, &address)?;
+                if alias.owner() != c.member() {
+                    return Err(Error::Unauthorized.into());
+                }
+                let scope = super::aliases::sender_scope(&mut tx, c.guest(), c.member())?;
+                let evidence = cs_mail_capabilities::LaneEvidence::GuestMailbox(c.guest());
+                match cs_mail_application::aliases::admit(
+                    &cs_mail_application::aliases::AdmissionContext {
+                        alias: &alias,
+                        authentication:
+                            cs_mail_application::aliases::SenderAuthentication::Authenticated(
+                                c.guest(),
+                            ),
+                        relationship: Some(&r),
+                        sender_scope: scope.as_ref(),
+                        lane: lane.as_ref(),
+                        declarations: &reply.message.member_copy.binding.declarations,
+                        lane_evidence: Some(&evidence),
+                        domain_evidence: Some(&reply.evidence.authentication),
+                        covered: billing.covers(now),
+                        review_required: false,
+                        conversation: c.id(),
+                    },
+                    now,
+                ) {
+                    cs_mail_application::aliases::RouteDecision::Authorize(a) => Some(a),
+                    _ => return Err(Error::Unauthorized.into()),
+                }
+            }
+            _ => None,
+        };
+        let reply_alias = super::aliases::receiving_context(&mut tx, c.receiving_alias())?
+            .filter(|a| a.owner() == c.member())
+            .ok_or(Error::Unavailable)?;
+        let admitted = admit_reply(
             ReplyContext {
+                destination: match receiving {
+                    Some(route) => cs_mail_application::correspondence::external::ReplyDestination::Address(route),
+                    None => cs_mail_application::correspondence::external::ReplyDestination::Conversation(&reply_alias),
+                },
                 conversation: &c,
                 relationship: &r,
                 lane,
@@ -579,8 +675,6 @@ impl IncomingRepository {
             &reply,
             now,
         )?;
-        let mut message = reply.message.clone();
-        message.committed_at = now;
         if create {
             let id = c.id().value().to_string();
             tx.execute(
@@ -590,11 +684,17 @@ impl IncomingRepository {
             tx.execute("INSERT INTO cs_external_conversations(id,member,account,aggregate_key,record) VALUES($1,$2,$3,$4,$5)",
                 &[&id, &c.member().0.to_string(), &account.0.to_string(), &key, &Json(&c)])?;
         }
+        let delivered_route = admitted.receiving().clone();
+        let (message, next_lane) = admitted.into_parts();
+        message.validate(&c, &r)?;
         tx.execute("INSERT INTO cs_external_messages(id,conversation,record,inbound_digest,inbound_evidence,incoming_message_id) VALUES($1,$2,$3,$4,$5,$6)",
             &[&id.0.to_string(), &reply.conversation.value().to_string(), &Json(message), &digest.as_slice(), &Json(&reply.evidence), &authenticated.rfc_message_id()])?;
         if let Some(lane) = next_lane {
-            super::upsert_lane(&mut tx, &key, &lane, now)?;
-            super::persist_schedules(&mut tx, &key, &[lane.schedule_change()])?;
+            let paired = super::aliases::persist_paired_lane(&mut tx, &delivered_route, &lane)?;
+            if !paired {
+                super::upsert_lane(&mut tx, &key, &lane, now)?;
+                super::persist_schedules(&mut tx, &key, &[lane.schedule_change()])?;
+            }
         }
         tx.commit()?;
         Ok(id)
@@ -807,6 +907,7 @@ pub(super) fn paid_conversation_in(
     let conversation = ExternalConversation::inbound(
         id,
         *member,
+        public_inbox(tx, *member)?.id(),
         notice.recipient.clone(),
         deployment.record().deployment_domain,
         &relationship,
@@ -839,6 +940,9 @@ impl IncomingRepository {
         secret: &[u8; 32],
     ) -> Result<Option<IncomingPreparation>, StorageError> {
         use cs_mail_smtp_gateway::incoming::MailDestination;
+        if let MailDestination::Address(address) = mail.destination() {
+            return self.prepare_alias(mail, &address, secret).map(Some);
+        }
         let MailDestination::Member(member) = mail.destination() else {
             return self
                 .prepare(
@@ -912,7 +1016,7 @@ impl IncomingRepository {
                 &[&key],
             )?
             .map(|r| {
-                r.try_get::<_, Json<cs_mail_capabilities::Lane>>(0)
+                r.try_get::<_, Json<cs_mail_capabilities::SenderScopedLane>>(0)
                     .map(|j| j.0.grant().id)
             })
             .transpose()?;
@@ -920,6 +1024,7 @@ impl IncomingRepository {
             conversation: ExternalConversation::inbound(
                 id,
                 member,
+                public_inbox(&mut tx, member)?.id(),
                 mail.mailbox().clone(),
                 self.scope.deployment_domain,
                 &r,
@@ -962,7 +1067,7 @@ impl IncomingRepository {
                 &[&key],
             )?
             .map(|r| {
-                r.try_get::<_, Json<cs_mail_capabilities::Lane>>(0)
+                r.try_get::<_, Json<cs_mail_capabilities::SenderScopedLane>>(0)
                     .map(|j| j.0.grant().id)
             })
             .transpose()?;
@@ -1040,4 +1145,153 @@ impl Repository {
         tx.commit()?;
         Ok(())
     }
+}
+
+fn alias_by_address(
+    tx: &mut Transaction<'_>,
+    address: &cs_mail_accounts::directory::MemberAddress,
+) -> Result<cs_mail_accounts::aliases::Alias, StorageError> {
+    let id = tx
+        .query_opt(
+            "SELECT id FROM cs_alias_routes WHERE address=$1 FOR UPDATE",
+            &[&address.as_str()],
+        )?
+        .ok_or(Error::Unavailable)?
+        .try_get::<_, String>(0)?;
+    super::aliases::receiving_context(
+        tx,
+        cs_mail_primitives::AliasId::new(id.parse().map_err(|_| Error::Invalid)?)
+            .map_err(|_| Error::Invalid)?,
+    )?
+    .ok_or(Error::Unavailable.into())
+}
+impl IncomingRepository {
+    #[allow(clippy::too_many_lines)] // One protected preparation, including exact historical redelivery.
+    fn prepare_alias(
+        &self,
+        mail: &cs_mail_smtp_gateway::incoming::VerifiedMail,
+        address: &cs_mail_accounts::directory::MemberAddress,
+        secret: &[u8; 32],
+    ) -> Result<IncomingPreparation, StorageError> {
+        let mut db = self
+            .accounts
+            .client
+            .lock()
+            .map_err(|_| StorageError::LockPoisoned)?;
+        let mut tx = db.transaction()?;
+        ingress::require_drained(&mut tx)?;
+        let alias = alias_by_address(&mut tx, address)?;
+        let owner = alias.owner();
+        let guest = mail
+            .mailbox()
+            .synthetic_protocol_identity(&self.scope.deployment_domain);
+        let id = mail.conversation_id(&self.scope.deployment_domain, secret);
+        let (arrival, digest) = mail.fingerprints(&self.scope.deployment_domain, secret);
+        if let Some(row) = tx.query_opt(
+            "SELECT conversation,inbound_digest FROM cs_external_messages WHERE id=$1",
+            &[&arrival.message_id().0.to_string()],
+        )? {
+            if row.try_get::<_, Option<Vec<u8>>>(1)?.as_deref() != Some(digest.as_slice())
+                || row.try_get::<_, String>(0)? != id.value().to_string()
+            {
+                return Err(Error::Conflict.into());
+            }
+            drop(tx);
+            drop(db);
+            return self.prepare(id, mail.mailbox());
+        }
+        let account = member_account(&mut tx, owner)?;
+        let control = authority(&mut tx, account, owner)?;
+        let billing = billing::identity_account(&mut tx, owner)?;
+        let now = self.accounts.clock.now();
+        let existing = mailbox_relationship(&mut tx, guest, owner)?;
+        let scope = super::aliases::sender_scope(&mut tx, guest, owner)?;
+        let lane = existing
+            .as_ref()
+            .map(|(key, _)| ingress::load_current_lane(&mut tx, key))
+            .transpose()?
+            .flatten();
+        // Preparation checks the same owner, lifecycle and identity-level block.
+        // Actual message evidence and allowance are evaluated again at commit.
+        let declarations = cs_mail_primitives::MessageDeclarations {
+            purpose: cs_mail_primitives::DeclaredPurpose::Unspecified,
+            origin: cs_mail_primitives::OriginDeclaration {
+                mode: cs_mail_primitives::OriginMode::LegacyOrUnspecified,
+                authority: cs_mail_primitives::DeclarationAuthority::GuestSmtp(self.scope.provider),
+            },
+            payload_schema: None,
+        };
+        let evidence = cs_mail_capabilities::LaneEvidence::GuestMailbox(guest);
+        if !matches!(
+            cs_mail_application::aliases::admit(
+                &cs_mail_application::aliases::AdmissionContext {
+                    alias: &alias,
+                    authentication:
+                        cs_mail_application::aliases::SenderAuthentication::Authenticated(guest),
+                    relationship: existing.as_ref().map(|(_, r)| r),
+                    sender_scope: scope.as_ref(),
+                    lane: lane.as_ref(),
+                    declarations: &declarations,
+                    lane_evidence: Some(&evidence),
+                    domain_evidence: Some(mail.authentication()),
+                    covered: control.control.allows_service() && billing.covers(now),
+                    review_required: false,
+                    conversation: id,
+                },
+                now
+            ),
+            cs_mail_application::aliases::RouteDecision::Authorize(_)
+        ) {
+            return Err(Error::Unauthorized.into());
+        }
+        let (key, relationship) = if let Some(existing) = existing {
+            existing
+        } else {
+            let registration = self.registration.as_ref().ok_or(Error::Unavailable)?;
+            let key = open_guest_relationship(
+                &mut tx,
+                &registration.deriver,
+                &registration.deployment,
+                owner,
+                mail.mailbox(),
+                now,
+            )?;
+            let r = relationship(&mut tx, &key)?;
+            (key, r)
+        };
+        let handle = tx
+            .query_one(
+                "SELECT binding FROM cs_guest_email_bindings WHERE aggregate_key=$1",
+                &[&key],
+            )?
+            .try_get::<_, Json<cs_mail_application::members::RelationshipHandle>>(0)?
+            .0;
+        let result = IncomingPreparation {
+            conversation: ExternalConversation::inbound(
+                id,
+                owner,
+                alias.id(),
+                mail.mailbox().clone(),
+                self.scope.deployment_domain,
+                &relationship,
+                now,
+            )?,
+            member_key: member_key(&mut tx, owner)?,
+            relationship: handle,
+            lane: lane.map(|l| l.grant().id),
+        };
+        tx.commit()?;
+        Ok(result)
+    }
+}
+
+fn public_inbox(
+    tx: &mut Transaction<'_>,
+    owner: ProtocolIdentity,
+) -> Result<cs_mail_accounts::aliases::Alias, StorageError> {
+    let aliases = super::aliases::owned_aliases(tx, owner)?;
+    cs_mail_accounts::aliases::AliasPortfolio::new(owner, &aliases)?
+        .current_public()
+        .cloned()
+        .ok_or_else(|| Error::Unavailable.into())
 }

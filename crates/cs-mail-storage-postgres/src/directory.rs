@@ -59,11 +59,11 @@ impl Store for PostgresDeployment {
         };
         let mailbox_available = match mailbox {
             Some(mailbox) => tx
-                .query_opt(
-                    "SELECT address FROM cs_address_directory WHERE mailbox=$1",
-                    &[&mailbox],
+                .query_one(
+                    "SELECT NOT EXISTS(SELECT 1 FROM cs_alias_routes WHERE address=$1) AND NOT EXISTS(SELECT 1 FROM cs_address_directory WHERE mailbox=$1 AND address<>$2)",
+                    &[&mailbox, &address],
                 )?
-                .is_none_or(|r| r.get::<_, String>(0) == address),
+                .get::<_, bool>(0),
             None => true,
         };
         let (response, effects, record) = decide(Context {

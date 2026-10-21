@@ -39,7 +39,7 @@ public enum MemberArea: String, CaseIterable, Identifiable, Sendable {
         case .home: return "house"
         case .communications: return "bubble.left.and.bubble.right"
         case .relationships: return "person.2"
-        case .lanes: return "arrow.up.right"
+        case .lanes: return "arrow.up"
         case .economics: return "chart.bar"
         case .notes: return "note.text"
         }
@@ -60,13 +60,13 @@ public enum MemberArea: String, CaseIterable, Identifiable, Sendable {
 /// Selecting a route establishes no communication or disclosure authority.
 public enum MemberDestination: Equatable, Sendable {
     case home, communications, relationships, lanes, economics, notes
-    case directory, address, questions, externalEmails
+    case directory, address, addresses, questions, externalEmails
     case correspondence(MemberArea)
     public var area: MemberArea {
         switch self {
         case .home: return .home
         case .communications, .externalEmails: return .communications
-        case .relationships, .directory, .address: return .relationships
+        case .relationships, .directory, .address, .addresses: return .relationships
         case .lanes: return .lanes
         case .economics, .questions: return .economics
         case .notes: return .notes

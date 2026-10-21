@@ -10,6 +10,22 @@ use cs_mail_primitives::AccountId;
 
 const ROUTE: &str = "v1/correspondence/commands";
 impl Member {
+    pub(super) fn native_receiving_alias(
+        &self,
+        owner: cs_mail_primitives::ProtocolIdentity,
+    ) -> Result<cs_mail_primitives::AliasId, String> {
+        let published: cs_mail_application::aliases::PublicReceivingAlias = serde_json::from_value(
+            self.api
+                .get(&format!("v1/addresses/{}/receiving-alias", owner.0))
+                .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        if published.owner != owner {
+            return Err("receiving owner mismatch".into());
+        }
+        Ok(published.id)
+    }
+
     fn native_signed(&self, command: Command) -> Result<SignedRequest, String> {
         let deployment = self.deployment()?;
         SignedRequest {
@@ -61,12 +77,30 @@ impl Member {
                 .map_err(|_| "invalid conversation identifier")?
         };
         let id = ConversationId::new(id).map_err(|e| e.to_string())?;
+        let packet_key = format!("{step}:prepared-packet");
+        if !self.state().values.contains_key(&packet_key) {
+            let packet = self.native_packet(to, id, text)?;
+            self.store.state.values.insert(packet_key.clone(), packet);
+            self.store.save()?;
+        }
+        let packet = self.state().values[&packet_key].clone();
+        let prepared: SignedRequest =
+            serde_json::from_value(packet.clone()).map_err(|e| e.to_string())?;
+        let Command::Send {
+            package: ref message,
+            ..
+        } = prepared.command
+        else {
+            return Err("invalid prepared send".into());
+        };
+        let subject = message.manifest.subject().ok_or("missing shared subject")?;
         if conversation.is_none() {
             let answer = self.journaled(
                 &format!("{step}:create"),
                 ROUTE,
                 |member| {
                     serde_json::to_value(member.native_signed(Command::Create {
+                        subject,
                         id,
                         other: ProtocolIdentity(to),
                     })?)
@@ -82,7 +116,7 @@ impl Member {
         let answer = self.journaled(
             &format!("{step}:send"),
             ROUTE,
-            |member| member.native_packet(to, id, text),
+            |_| Ok(packet.clone()),
             false,
         )?;
         match decode::<Response>(answer, "send")? {
@@ -96,6 +130,50 @@ impl Member {
             }
             _ => Err("message delivery was not confirmed".into()),
         }
+    }
+    pub(super) fn native_subject(
+        &self,
+        id: ConversationId,
+    ) -> Result<cs_mail_correspondence::ConversationSubject, String> {
+        let (secret, public) = self.content_key()?;
+        let keys = EndpointKeys {
+            owner: self.persona()?,
+            secret: &secret,
+            public,
+        };
+        let mut after = 0;
+        loop {
+            let Response::Mailbox {
+                entries,
+                next_after,
+            } = self.native_call(Command::Mailbox { after, limit: 100 })?
+            else {
+                return Err("invalid mailbox".into());
+            };
+            for (_, record) in entries {
+                if record.manifest.conversation() != id {
+                    continue;
+                }
+                if let Response::Message(view) = self.native_call(Command::Fetch {
+                    message: record.manifest.message(),
+                })? {
+                    return open(&keys, &view, record.sender_key)
+                        .map_err(|e| e.to_string())?
+                        .subject()
+                        .cloned()
+                        .ok_or("missing shared subject".into());
+                }
+            }
+            if next_after <= after {
+                break;
+            }
+            after = next_after;
+        }
+        let mut entropy = [0; 32];
+        entropy[..16].copy_from_slice(&identifier()?.to_be_bytes());
+        entropy[16..].copy_from_slice(&identifier()?.to_be_bytes());
+        cs_mail_correspondence::ConversationSubject::new("", now(), 0, entropy)
+            .map_err(|e| e.to_string())
     }
     fn native_packet(
         &self,
@@ -125,8 +203,9 @@ impl Member {
             return Err("foreign endpoint key".into());
         }
         let (secret, public) = self.content_key()?;
-        let document =
-            compose(vec![DocumentPart::Text(text.to_owned())]).map_err(|e| e.to_string())?;
+        let document = compose(vec![DocumentPart::Text(text.to_owned())])
+            .map_err(|e| e.to_string())?
+            .with_subject(self.native_subject(conversation)?);
         let at = now();
         let until = at
             .checked_add(CONTENT_LIFETIME)
@@ -158,8 +237,11 @@ impl Member {
             (at, until),
         )
         .map_err(|e| e.to_string())?;
-        serde_json::to_value(self.native_signed(Command::Send(Box::new(package)))?)
-            .map_err(|e| e.to_string())
+        serde_json::to_value(self.native_signed(Command::Send {
+            alias: self.native_receiving_alias(cs_mail_primitives::ProtocolIdentity(to))?,
+            package: Box::new(package),
+        })?)
+        .map_err(|e| e.to_string())
     }
     pub fn native_read(&self, other: u128) -> Result<(), String> {
         let mut after = 0;

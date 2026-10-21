@@ -333,3 +333,97 @@ pub mod external;
 pub mod smtp2go;
 
 pub mod requests;
+
+/// A fixture's explicit public receiving inbox. Does not broaden its permissions.
+pub fn fixture_inbox(
+    deployment: &cs_mail_storage_postgres::PostgresDeployment,
+    owner: ProtocolIdentity,
+    key: OperationalKeyRef,
+    secret: &[u8; 32],
+    at: CanonicalTime,
+) -> Result<AliasId, StorageError> {
+    use cs_mail_application::aliases::{AliasCreation, AliasService, Command, SignedCommand};
+    if let Some(alias) = deployment.public_receiving_alias(owner)? {
+        return Ok(alias.id);
+    }
+    let record = deployment
+        .deployment_record()?
+        .ok_or(StorageError::SchemaNotReady)?;
+    let scope = cs_mail_security::RecipientSigningScope {
+        deployment_domain: record.record().deployment_domain,
+        provider: record.record().provider,
+    };
+    let id = AliasId::new(owner.0).map_err(|_| StorageError::NumericRange)?;
+    let repository = deployment.accounts(move || at);
+    let account = repository.persona_account(owner)?;
+    let product = record.record().identity.product.clone();
+    let state = deployment.account_state(account)?;
+    let recipient_seed;
+    let (key, secret) = if state
+        .registry
+        .active_verifying_key(key, cs_mail_protocol::ActorRef::Recipient(owner), at)
+        .is_ok()
+    {
+        (key, secret)
+    } else {
+        let reference = OperationalKeyRef((1_u128 << 127) | owner.0);
+        recipient_seed =
+            sha2::Sha256::digest([b"fixture/inbox-key".as_slice(), secret.as_slice()].concat())
+                .into();
+        let command = cs_mail_accounts::control::SignedAccountCommand {
+            account,
+            operational_key: key,
+            expected_revision: state.control.revision(),
+            idempotency_key: IdempotencyKey(u128::MAX - owner.0),
+            product: product.clone(),
+            command: cs_mail_accounts::control::AccountCommand::RegisterKey(
+                cs_mail_accounts::control::NewOperationalKey::prove(
+                    account,
+                    &product,
+                    reference,
+                    cs_mail_protocol::ActorRef::Recipient(owner),
+                    &recipient_seed,
+                )
+                .map_err(|_| StorageError::InvalidStoredProtocolState)?,
+            ),
+            signature: vec![],
+        }
+        .sign(secret)
+        .map_err(|_| StorageError::InvalidStoredProtocolState)?;
+        cs_mail_application::accounts::operations::AccountService::new(&repository, &|| at)
+            .execute_command(&command)?;
+        (reference, &recipient_seed)
+    };
+    let request = SignedCommand {
+        scope,
+        product: record.record().identity.product.clone(),
+        account,
+        owner,
+        key,
+        operation: IdempotencyKey(u128::MAX - owner.0),
+        command: Command::Create {
+            id,
+            creation: AliasCreation::Public {
+                address: format!("fixture-{}@inbox.test", owner.0)
+                    .try_into()
+                    .map_err(|_| StorageError::NumericRange)?,
+            },
+        },
+        signature: vec![],
+    }
+    .sign(secret)?;
+    AliasService(&repository).handle(&request, scope, "inbox.test", &|| Ok([1; 16]))?;
+    if deployment.public_receiving_alias(owner)?.is_none() {
+        return Err(StorageError::InvalidStoredProtocolState);
+    }
+    Ok(id)
+}
+/// Native fixture commands always name the destination inbox explicitly.
+pub fn fixture_native_send(
+    package: Box<cs_mail_application::correspondence::PreparedMessage>,
+) -> cs_mail_application::correspondence::Command {
+    cs_mail_application::correspondence::Command::Send {
+        alias: AliasId::new(package.recipient_copy.binding.recipient.0).expect("fixture inbox"),
+        package,
+    }
+}

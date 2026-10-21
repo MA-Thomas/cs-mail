@@ -1,3 +1,1501 @@
+## Conversation find — 19 October 2026
+
+Native and external readers keep messages visible, highlight literal
+case-insensitive text matches, distinguish the current occurrence and provide
+previous/next controls with a count. Navigation wraps. Matching includes displayed
+quotations and shared copies, respects the receiving-inbox scope and never follows
+references. Clear restores the unhighlighted text. Find state is local presentation
+state; encrypted storage and mailbox indexing are unchanged.
+
+The canonical build passed and is installed and running with the original signing
+requirement; build/installed UUID `69C62FD7-A6D6-3FB7-9060-EE719A948F1B`. Focused experiments
+using the actual matcher and find model passed Unicode range fidelity, formatted
+excerpts, scope removal, occurrence counts, wrapping and clear/restart. Evidence is
+in `target/conversation-find-20261019/`. Rust/database suites were not rerun for this
+presentation change. iOS and live external-reader inspection are not established.
+Running-app inspection verified all-match highlighting, the distinct current match,
+counts, navigation within/across messages, scrolling, wrapping in both directions,
+no-match controls and clearing. Inspection exposed and corrected native scrolling
+that initially changed the current match without bringing it into view. Daniel's
+conversation is left open with find cleared.
+
+## Required receiving inboxes — 19 October 2026
+
+Every received native or external message now carries a checked receiving-inbox
+assignment. Rust delivery effects keep that assignment with the message and its
+content; checked restoration and database constraints preserve the binding.
+Receiving history is derived from those records. The aggregate mailbox derives
+received correspondence from alias inboxes, with sent copies represented separately.
+The Inbox screen excludes sent-only conversations.
+
+Ordinary native sends and initial requests sign the destination's public alias.
+Explicit alias sends retain their selected destination. External conversations
+record their receiving alias at creation, including for later token replies.
+Alias selection establishes a destination; existing permission rules still decide
+whether delivery is allowed. Development assignments cannot grant alias permission.
+
+Marcus approved assigning the existing received placeholders to
+`marcus.thomas@c-sqdmail.com`. The preservation-checked cutover records that decision
+explicitly, archives original evidence and verifies authenticated retained content,
+rollback and exact retry. The original account, Keychain entry, addresses, message
+content and admission history are preserved. The signed helper read the existing
+credential once and made no Keychain writes.
+
+The current owner service/config is `target/required-inboxes-owner-20261019/`,
+started by its `start.sh` at the existing 9693 endpoint. The previous
+`target/subject-search-owner-20261019/` database remains an untouched checkpoint.
+The previous signed app and encrypted device backup are under
+`target/required-inboxes-device-owner-20261019/`. Use the new owner copy for subsequent
+work; rollback must pair the app, device store and backend, and must account for
+any activity committed since cutover.
+
+The canonical signed app is installed and running on the original account;
+built/installed UUID `82036424-B0FD-3AE1-95A9-479FF3904405` and the original signing
+requirement match (`target/required-inboxes-20261019/apple-final.log`,
+`running-app.json`). Running-app checks verified all five received placeholders in
+the public inbox, an empty private inbox, reading and device-scoped body search
+with the service stopped, and successful refresh after restoring the owner service.
+The final presentation also loads current receiving metadata when connected,
+without requiring a successful cached projection first. The public inbox is left open.
+
+The complete native SQLite/FFI journey passed, including native and external
+delivery, mixed-alias membership, aggregate/alias message-ID agreement, scoped
+search, read state, retirement history and reopening (`native-complete.log`).
+All eight local quality-gate checks passed, including PostgreSQL integration
+suites (`quality-complete.log`); logs are in `target/required-inboxes-20261019/`.
+Existing experiments were extended; no automated test cases were added. Earlier
+attempts exposed missing fixture inboxes, a fixture-domain mismatch and the cached
+projection ordering issue; their logs remain separate. This work does not establish
+iOS behavior, real-provider delivery, real power-loss recovery or new performance
+measurements. Cloud indexing and WASM remain deferred.
+
+The earlier checkpoints below retain their original validation and deployment
+evidence; they do not identify the current server or app build.
+
+## Incremental encrypted search storage — 19 October 2026
+
+Retained copies and per-message index records are independently encrypted SQLite
+rows. One transaction commits the affected copy, index record and progress marker;
+only committed changes enter the session index. A failed or uncertain commit
+invalidates that cached index so the next operation reloads durable state. Rebuilding
+updates index records without rewriting copies. The replaced whole-mailbox reader
+and writer are removed; the 64 MiB limit now applies per record.
+
+Unlock builds the in-memory word lookup from index records without opening message
+copies. Queries select candidate IDs directly; snippets and readers retrieve selected
+copies. Result pages load as they come into view. Known expiry/removal, query/scope
+binding and reader-return context remain enforced. Downloads release the index lock
+before network waits, and cannot repopulate a session cleared while they were waiting.
+
+Validation extended existing experiments; no automated test cases were added.
+Seven local quality-gate checks passed; PostgreSQL suites were explicitly skipped
+because no server contract changed (`target/incremental-search-20261019/quality-ready.log`).
+Final focused client and lint checks passed (`client-installed.log`, `lint-installed.log`).
+The native SQLite/FFI journey passed transaction-failure rollback, stale revisions,
+aggregate storage beyond 64 MiB, native/external indexing, alias search and session
+clearing (`native-ready.log`). Earlier native attempts exposed assumptions about
+scan cursors and cleared alias sessions; those logs are retained separately.
+
+The optimized synthetic experiment reached 100,000 records: selective warm search
+about 0.04 ms, no-match search about 0.004 ms and cold index opening about 0.9 s,
+with no message-body reads during cold opening. The largest checkpoint in that
+fixture stayed 2,438 bytes (`scale-release.log`). These are component measurements
+using a memory-backed store and simple 1 KiB text records, not SQLite or full-app
+latencies. Cold opening and memory use still grow with the index; phrase checks
+may retrieve word-matching candidates. Images and realistic mixed-mailbox workloads
+were not benchmarked. Other account/receiving-metadata snapshots retain their bounds.
+
+The canonical signed app is installed and running on the original account; the
+built/installed UUID is `8F765FCA-0B91-3C09-94CB-BA9B25CAA346`, with the original
+signing requirement preserved (`apple-complete.log`). Running-app checks with the
+service offline verified subject/body search over the ten retained copies, reading,
+return to results, lock/unlock and saved receiving-inbox scope. Search layout was
+visually inspected. The existing owner service was restored at 9693 and All inboxes
+left open. SwiftPM products now explicitly relink the external Rust archive.
+
+The one-time conversion verified authenticated copies, exact text, account binding,
+rollback and exact retry. Account cache, drafts and personal-state ciphertext were
+unchanged by conversion; Keychain was never written. The helper made one credential
+read using the original app signing requirement. The former app and device backup
+are in `target/incremental-search-owner-20261019/`; conversion evidence is
+`owner-upgrade.log`. Backend schema, keys and addresses were unchanged.
+
+Not covered: iOS, real power loss, a full appearance/accessibility matrix or public
+provider delivery. Cloud indexing and WASM remain separate design discussions.
+
+## Earlier subjects and offline-search checkpoint — 19 October 2026
+
+New native conversations and initial requests accept a shared subject, fixed for
+both participants. Blank input receives `Default subject: October-19-2026, 3:42 PM`
+using the sender's local date/time. Replies inherit it. Subjects are encrypted;
+conversation lists, readers and device-local search display them alongside the
+correspondent's name. Existing development placeholders received date/time subjects.
+
+Rust retains authenticated copies and a rebuildable word index in one encrypted
+SQLite record. After unlock, search and readers use local copies without the
+service. Connected background downloads extend coverage in bounded batches.
+Results distinguish not-downloaded, unavailable and remaining content; known expiry
+and removal apply before matches or snippets appear. Saved receiving evidence
+restores alias inboxes offline. Lock clears transient results.
+
+Validation: all eight local quality-gate checks passed, including PostgreSQL
+(`target/search-subjects-20261019/quality.log`). Extended existing experiments
+challenged subject substitution, retry, offline reopening, expiry/removal, failed
+index checkpoints and plaintext leakage; no automated test cases were added.
+The complete native SQLite/FFI journey passed, including shared subjects through
+replies and reopening, subject search, caller-only removal and retained-store
+transaction failure (`native-final.log` in the same directory).
+
+The canonical signed app is installed and running on the preserved owner account.
+Built/installed executable UUIDs match `F0004EA1-A501-3F53-85E4-D1767F3B0288`;
+the original designated signing requirement is retained. Running-app checks with
+the service stopped verified quit/reopen, lock/unlock, saved alias inboxes, subject
+search over all ten retained messages, local reading and return to search results.
+Screenshots checked subject/correspondent rows and the reader heading. The service
+was restored and All inboxes left open (`apple-ready.log` records the final build).
+
+The pinned owner service is `target/subject-search-owner-20261019/start.sh`, using
+`cs_mail_subject_search_owner_20261019` at the unchanged 9693 endpoint. The verified
+rehearsal copy was adopted without a second credential conversion. The schema-41
+source remains offline at `cs_mail_decoupled_owner_20261016`; original device backup
+and encrypted upgrade artifacts remain in
+`target/subject-search-preservation-check-20261019/`. Rollback, exact retry, original
+evidence archival and unrelated table/key fingerprints passed. The original
+Keychain entry, account association and four requested addresses were preserved.
+
+Limits: the initial word/phrase index has a 64 MiB encrypted-record bound. Large
+mailboxes and the proposed FTS5/SQLCipher comparison remain unevaluated; this does
+not settle the long-term engine choice. iOS, graphical subject creation, real power
+loss, a full appearance/accessibility matrix and public/live-provider delivery
+were not validated. External mail does not gain native shared subjects.
+
+## Communications heading — 16 October 2026
+
+The aggregate Inbox main-space heading is “All inboxes”, without the redundant
+“· Inbox”. Other mailbox/address headings keep their scope. The canonical signed
+build was installed and reopened on the preserved account, and the running
+accessibility tree confirmed the heading. Build and diff checks passed; no new
+tests, unrelated Rust/database checks or screenshots were used. Build log:
+`/tmp/cs-mail-all-inboxes-heading-build.log`.
+
+## Navigation glass surfaces — 16 October 2026
+
+Column B and the Column A hover box use native regular-material frosting beneath
+their original background colors at 82% opacity. Column B retains its canvas
+color; the hover box retains its original area-specific background and inverted
+appearance for text and controls. No extra area wash is applied to Column B.
+Reduce Transparency restores each original opaque background. Interior gradients
+remain absent; perimeter palette values and lighting rendering are unchanged.
+The canonical signed app was built, installed and reopened on the preserved
+account with Relationships restored for owner assessment. Build and diff checks
+passed. No screenshot capture was used, so rendered glass/contrast, Reduce
+Transparency, dark and compact/iOS layouts were not visually checked.
+No automated tests or unrelated Rust/database checks were run. Build log:
+`/tmp/cs-mail-original-glass-colors-build.log`.
+
+## Relationships sidebar — 16 October 2026
+
+Relationships' Column B contains a Your relationships link above the Manage links,
+returning to the main relationships page through the existing guarded area
+navigation. This resets return history, so selecting the root does not add a
+redundant Back button there. Management pages retain their return controls.
+It omits the people search,
+permission groups or contact list. Their unused grouping preference and search
+checkpoint state were removed. Selecting Relationships in Column A still opens
+the main overview, whose Map/List layout control remains available. The canonical
+signed build was installed and reopened on the preserved account, and the running
+accessibility tree confirmed the sidebar links and return from My aliases to the
+main relationships page without a Back button, including repeated root selection.
+No screenshot capture or unrelated Rust/database tests were used. Build log:
+`/tmp/cs-mail-relationships-root-navigation-build.log`.
+
+## Column A label — 16 October 2026
+
+The “cs” label and its header spacing were removed from Column A. The canonical
+signed app was built, installed and reopened on the preserved account; its
+accessibility tree confirms the rail starts with Home. No screenshot was taken,
+to avoid reintroducing the system capture indicator. Build log:
+`/tmp/cs-mail-remove-rail-mark-build.log`. No automated tests or unrelated
+Rust/database checks were run for this presentation change.
+
+## Column A divider spacing — 16 October 2026
+
+Column B and the Column A layout preview retain the reduced gap from
+the Column A divider, with a four-point rightward adjustment to clear the Mac
+title-bar control area. The shared spacer is 10.75 points, alongside the native
+sidebar's existing eight-point gutter. The signed canonical build was installed
+and reopened on the preserved account; screenshot inspection confirmed both edges
+remain aligned and clear the visible purple system sharing indicator. The ordinary
+traffic-light buttons were not visually verified: macOS displayed its sharing
+indicator in their place during inspection. Strict signature verification passed and
+built/installed UUIDs match `28B5F797-62DF-3419-BD0E-831EC76BD1E6`.
+Build log: `/tmp/cs-mail-window-clearance-build.log`. Validation was the native build,
+changed-screen inspection and diff checks; no new tests or unrelated Rust/database
+suites were run. Compact/iOS and dark layouts were not separately exercised.
+
+## Column A transient layout preview — 16 October 2026
+
+Selecting a Column A icon navigates without pinning its layout preview. Pointer
+previews remain only while the pointer is over the icon or popup; interacting with
+the popup does not pin it. The redundant Close button and pinned session state
+were removed. Right Arrow still opens keyboard controls and Escape dismisses them.
+Initial pointer dwell is now 750 milliseconds.
+The signed canonical app was rebuilt, installed and reopened on the preserved
+account for this timing change. Build log:
+`/tmp/cs-mail-hover-750ms-build.log`. Build and diff checks passed; exact pointer
+timing was not measured, and no screenshot capture or new tests were used.
+
+The canonical signed app was built, installed and reopened on the preserved owner
+account. Strict signature verification passed, the original signing requirement
+was retained, and built/installed UUIDs match
+`E0446B58-9A03-318F-89A7-3966C29A7029`. Running-app checks confirmed navigation
+without a pinned box, clicking an icon dismisses its keyboard-opened preview,
+Right Arrow opens controls without an X, and Escape dismisses them. Screenshot
+inspection checked the simplified popup. Build log:
+`/tmp/cs-mail-hover-unpin-build.log`. No automated tests were added or Rust/database
+suites run for this presentation change. Pointer transit timing, iOS and compact/dark
+layouts were not separately exercised.
+
+## Decoupled receiving permission — 16 October 2026
+
+Private alias creation now establishes an address without lane authority. The
+separately validated `ReceivingPermission` has a distinct `PermissionRevision`.
+Signed v3 management supports opening, restricting and removing a broad lane and
+atomic replacement with selected signed sender grants. Restrictions freeze exact
+admitted conversations; removal and sender replacement do not grandfather them.
+Address lifecycle remains separate. Ordinary relationship permission remains an
+independently checked authority for its explicitly named receiving scope.
+
+Sender-restricted receiving uses existing `SenderScopedLane` validity and allowance
+rules. Native evidence binds the known sender; SMTP binds verified author-domain
+evidence to selected legacy-domain scopes while preserving the actual mailbox
+identity and its blocks. Chosen grant state, receiving evidence, message copies,
+allowance and receipts commit under the existing receipt-order barrier. Historical
+retry never reactivates a superseded permission, and private refusal has no bonded
+fallback. Swift separates permission from address status and groups lanes by their
+actual scope. New aliases start unpaired; the existing two private owner routes keep
+their recorded broad authority through explicit preservation conversion.
+
+Validation: the full eight-check local quality gate passed, including all 106
+PostgreSQL checks (`/tmp/cs-mail-decouple-quality-final.log`). The focused real-SMTP
+experiment also passed preparation/removal fencing, authenticated domain mismatch,
+allowance and exact redelivery (`/tmp/cs-mail-decouple-smtp-final.log`); targeted strict
+lint passed (`/tmp/cs-mail-decouple-stale-preparation-lint.log`). The complete native
+SQLite/FFI/isolated-Keychain journey passed, including unpaired creation, restricted
+existing versus new conversations, removal and native sender replacement, read/search
+scope, retained-copy removal, request/reuse/recovery and external consent
+(`/tmp/cs-mail-decouple-native-complete.log`). Existing experiments were extended;
+no automated test cases were added. Earlier attempts retain their logs: one had a
+superseded replacement-lane expectation; another launched a production-only helper
+after a shared build overwrote it. Final native validation pins both helper binaries
+under `target/decoupled-native-tools-20261016/` and uses separate databases on
+10073–10075. The isolated test services were stopped after the checks.
+
+The current owner server is pinned at `target/decoupled-owner-20261016/start.sh`,
+serving the unchanged 9693 endpoint against `cs_mail_decoupled_owner_20261016`.
+The schema-40 source `cs_mail_alias_assessment_owner_20261016` remains offline and
+untouched as the rollback checkpoint. Rehearsal, complete rollback and exact rerun
+checks passed. All 111 unrelated table/sequence fingerprints and configured key
+files matched. Original address records, command receipts and route evidence were
+archived verbatim before explicit conversion; no runtime predecessor reader was
+added. Owner account/persona/registered keys and all four requested addresses were
+preserved. The original encrypted device files were backed up and verified unchanged
+before reopening; the maintenance tool never accesses Keychain.
+
+The final signed build is installed at the canonical app path and running on the
+preserved owner account. Built and installed executable UUIDs match
+`F2C3D959-DCB9-3F18-9716-49DD22F081B2`; strict signature verification passed and the
+original designated requirement is retained. Running-app inspection verified both
+private alias lanes, separate address and permission controls, restrict/remove
+confirmation meanings, sender replacement contacts/domains/expiry/daily limit,
+and the new-alias explanation that creation grants no lane. Changed controls were
+visually inspected; owner permission confirmations were cancelled. Brooklyn-Lab-Co
+inbox was restored after inspection. Build log:
+`/tmp/cs-mail-decouple-apple-ready.log`.
+
+Not covered: permission mutations on the actual owner account (covered in isolated
+native fixtures), iOS, a full accessibility or
+appearance/layout matrix, public/live-provider delivery, held-mail release,
+outbound alias selection, real power loss or large-mailbox performance.
+
+## Address and lane management boundary
+
+Rust separates address lifecycle from independently revisioned receiving permission.
+Private creation grants no lane. Explicit signed actions open, restrict or remove
+an alias-scoped lane, or atomically replace access with selected signed sender
+grants. The existing alias transaction commits permission and its exact-operation
+receipt together. Native and SMTP admission recheck current permission; domain
+matching uses authenticated evidence while correspondence and blocks retain the
+actual sender identity. Swift groups lanes by permission and exposes pairing
+controls. The schema-41 cutover preserves original evidence and the owner account
+in an offline checked copy, with no runtime predecessor reader.
+
+## Popup close focus appearance — 16 October 2026
+
+The shared Close button disables its system focus effect, removing the blue
+perimeter around its enlarged target while retaining keyboard focus, accessibility
+and Escape. The canonical signed build installed and reopened on the original
+account; strict verification passed and built/installed UUIDs match
+`58B6EA72-CF46-33CF-B4DA-D855BC48CFA6`. In the running Comms popup, keyboard traversal
+focused Close and screenshot inspection confirmed no blue outline. An offset click
+inside the 44-point target still dismissed it. Brooklyn-Lab-Co/Inbox was restored.
+Build log: `/tmp/cs-mail-popup-close-focus-build.log`. Diff checks pass. Validation
+was limited to the native build and changed macOS control; no new tests or
+unrelated Rust/PostgreSQL suites were run, and iOS/dark/compact layouts were not
+separately exercised.
+
+## Popup close target — 16 October 2026
+
+The shared layout popup Close button now places its small xmark inside a
+44 × 44-point label with an explicit rectangular content shape. The clickable
+space belongs to the button, rather than padding outside it. Header insets retain
+the icon's position and compact header. All six area popups use this one control;
+the accessible Close name and Escape shortcut remain.
+
+The canonical build installed with its original signing requirement, passed strict
+signature verification, and matches the built executable UUID
+`4F0BCB6C-3FF1-3817-8D1A-3414EDBAAB6B`. After quit/reopen through the original
+account, the Comms popup dismissed when clicked 15 points right and below the
+glyph center, inside the enlarged target and outside the former target. Screenshot
+inspection confirmed the click location and retained inbox. Build log:
+`/tmp/cs-mail-popup-close-target-build.log`. Diff checks pass. No new tests or
+unrelated Rust/PostgreSQL suites were run; iOS, compact/dark layouts and every
+popup instance were not separately exercised for this shared presentation change.
+
+## All-area layout controls — 16 October 2026
+
+Every column-A popup now contains presentation controls: Home cards/list within
+the existing permission sections; Comms receiving-inbox/mailbox section order;
+Relationships grouping and map/list; Express lanes private-alias/sender section
+order; Economics newest/oldest/name record order; Notes reading width for its
+current informational page. Notes creation/saving remains unimplemented. Choices
+are non-sensitive device-local AppStorage values; no domain facts or authorities
+are changed. All icons now share configuration pinning, Escape/Close/outside-click
+dismissal and preservation of current detail when clicking the selected area.
+
+After owner signing approval, the canonical build installed with the original
+designated signing requirement. Strict signature verification passed; built and
+installed executable UUIDs match `D35BC58E-4365-335A-9786-2620C874098D`.
+The prior process was quit and the canonical app reopened through its existing
+account/Keychain association, without enrollment or credential replacement.
+
+Running macOS inspection verified all six popup control sets. Home changed to a
+single-column list while retaining permission sections; Comms reordered sections
+while retaining Brooklyn-Lab-Co/Inbox; Express lanes reordered while keeping the
+Brooklyn alias detail open; Economics changed newest/oldest/name order while
+retaining Daniel's financial record. Notes focused width visibly changed the
+current page. Relationships retained Name/List. Escape dismissal and the accessible
+preview action were also exercised. A second quit/reopen verified Home List,
+Comms Mailboxes first, lanes People first, Economics Name and Notes Focused.
+The app is left in Comms/All inboxes with its layout popup open for assessment.
+
+Build log: `/tmp/cs-mail-all-layout-controls-build.log`; pre-pass source snapshots:
+`target/all-layout-controls-baseline-20261016/`. Diff checks pass. No new tests or
+unrelated Rust/PostgreSQL suites were run. This presentation pass covered the
+Apple build, signature/executable checks and affected running screens; iOS,
+compact/dark layouts, large datasets, exact hover timing, every keyboard traversal
+and every filtered navigation permutation remain unexercised.
+
+## Relationships layout controls — 16 October 2026
+
+The Relationships column-A popup now changes organization rather than repeating
+the workspace description. People in column B can be grouped by Permission,
+ordered by Name, or ordered by Recent correspondence. The main overview switches
+between Map and List using the same existing relationship summaries. Clicking
+Relationships opens its workspace and pins the controls; clicking it while already
+there preserves the current detail and search. Escape, Close and outside content
+click dismiss the controls. Other area popups remain orientation aids in this pass.
+
+The two non-sensitive layout preferences persist locally in AppStorage. They do
+not alter permissions or member records and are not reverted by history Back.
+Recent ordering uses available message/request timestamps with stable name and
+identity tie-breakers. No message content or search query is added to preferences.
+
+Validation: canonical Apple build, strict signature verification, matching built
+and installed executable UUID `ACF9C70A-47A4-3337-9913-155C000F2DDC`, diff checks
+and running macOS inspection. All three organizer choices and Map/List changed
+immediately. With Daniel Reed open and a Daniel search active, changing both
+preferences retained the detail and query. Escape dismissed the popup. Quit/reopen
+through the original account retained Name/List; the app is left there with the
+popup open and the assessment search cleared. The original signing requirement
+was preserved; no enrollment or credential replacement occurred.
+
+Evidence: `/tmp/cs-mail-relationship-layout-build.log`; pre-pass source snapshots:
+`target/relationship-layout-baseline-20261016/`. No new tests or unrelated
+Rust/PostgreSQL suites were run. iOS, compact/dark layouts, keyboard traversal of
+every control, large datasets and all navigation permutations were not exercised
+in this presentation-only pass.
+
+## Workspace-linked interior top tint — 16 October 2026
+
+Every actual column-B organizer now uses one background wrapper, including Comms.
+A neutral, opaque canvas prevents the native sidebar surface from supplying an
+unrelated hue beneath the subtle tint. The existing EditorialColumnTopTint uses
+the same EditorialAreaPalette as the perimeter: turquoise Comms, dark-gold
+Relationships, silver-blue Express lanes and olive Economics. Its 120-point
+height, gradient stops and appearance-dependent opacity are unchanged. The middle
+and lower background are neutral. Hover previews keep their separate contrasting
+surface; navigation and domain behavior are unchanged.
+
+The canonical build installed with its original signing requirement; strict
+signature verification passed. Installed/built executable UUIDs match
+`C6B6F143-2F8F-3692-B80A-39A135DC78A3`. After quit/reopen on the original account,
+running macOS screenshots verified all four top tints in light appearance and
+Comms in dark appearance. The gradient follows the workspace palette and fades to
+the neutral column interior. Light appearance was restored, and the app was left
+in NYC-Hospital/Inbox, matching its pre-install receiving selection. No enrollment,
+credential, permission, message or financial changes were performed.
+
+Validation: canonical Apple build, signature/executable checks, diff checks and
+changed-screen inspection. Evidence: `/tmp/cs-mail-column-area-tint-build.log`;
+pre-pass source snapshots: `target/column-area-tint-baseline-20261016/`. No new
+tests or unrelated Rust/PostgreSQL suites were run. iOS, compact layouts and every
+dark workspace were not visually exercised in this presentation-only pass.
+
+## Shared return navigation and captured context — 16 October 2026
+
+The Brooklyn-Lab-Co inbox → Manage permissions route recorded an origin but the
+Express lanes detail exposed no history return action. The main-space owner now
+supplies a labeled Back action whenever history exists and the rendered detail
+has no existing equivalent. This covers lane/financial details, Directory, the
+approach editor, alias management, nested mailbox views and unavailable native
+details. Native correspondence and external-email readers retain their established
+return controls. Alias management retains its separate collection-return action;
+the origin-return control now comes from the shared main-space owner.
+
+Navigation checkpoints capture a MailboxNavigation context (folder, query, sort,
+bulk selection and stable list/search anchors) plus relationship/financial/lane
+filters and alias-management selection. Back restores the captured values, not
+whatever happened to remain in the mutable workspace after an intervening route.
+Existing receiving scope, selected person/thread/message and the protected-edit
+Save/Discard/Stay guard remain part of the return path. Explicit Inbox/mailbox
+selection continues to start the intended fresh context. No Rust domain, cache,
+credential, message, permission or financial contract changed.
+
+Validation challenged the actual reported route before the repair, then the
+installed fix: Brooklyn-Lab-Co/Inbox → Manage permissions → Back restored that
+inbox. A stronger nested journey began in Brooklyn-Lab-Co/Unread with A–Z enabled
+and a search query, opened permissions, used View inbox (which intentionally reset
+the mailbox), then returned twice. Unread, query and sort were restored exactly.
+Permissions → Manage alias → Back restored the selected Brooklyn lane and its
+receiving filter; the next Back restored Brooklyn-Lab-Co/Inbox. No alias mutation,
+message send, charge or permanent deletion was performed. The app was left in
+Brooklyn-Lab-Co/Inbox with the assessment query cleared.
+
+The canonical build installed with the unchanged original signing requirement,
+passed strict signature verification, and matches the built executable UUID
+`91A769EC-BC4D-358D-9F81-A00C4E831C5B`. The app was quit/reopened through its original
+account/Keychain association without enrollment or credential replacement.
+Evidence: `/tmp/cs-mail-navigation-return-build.log`; source snapshots are under
+`target/navigation-return-baseline-20261016/`.
+
+Validation scope: native build, signature/executable checks, diff checks and the
+running macOS journeys above. No new tests or unrelated Rust/PostgreSQL suites
+were run. iOS, dark/compact layouts, long-list scroll/selection restoration,
+unavailable-reader states and every possible navigation permutation were not
+manually exercised. These checks establish the local navigation repair, not public
+mail delivery.
+
+## Stable workspace organizers — 16 October 2026
+
+Column A selects a workspace; its contrasting hover/focus previews now explain
+that workspace briefly, without duplicating its lists or management controls.
+Column B remains persistent and owns organization within each workspace. The
+approved colors, continuous spill and absent sidebar hide control remain.
+
+Comms separates receiving inbox scope from mailbox selection. Inbox, Unread,
+Flagged, Archive, Trash, Sent and Outbox are selected in column B; the main-space
+mailbox picker is removed. Sent/Outbox remain All-inboxes views, as before. Drafts
+is available in the organizer. Mailbox selection uses the existing navigation
+owner and scoped Rust projections. Explicit mailbox changes clear search/selection;
+opening correspondence preserves the originating mailbox/search return context.
+No unread counts or route membership are inferred from sender addresses.
+
+Relationships has a searchable, unique correspondent list, with pending incoming
+decisions and existing Rust permission projections grouped separately. Permission
+subtitles explicitly describe contact from that person, not outgoing authority.
+Outgoing-only/unclassified correspondents have their own section. Directory,
+My aliases and My approach page form a separate management section. That organizer
+stays present while aliases are listed and managed in the main space.
+
+Express lanes retains distinct private-alias and sender-lane groups, adds search,
+and keeps direction/receiving-address filters without resetting the opened detail.
+Economics organizes existing request records by direction and issuance month,
+with name/class search and a record count. It displays Rust-supplied financial
+outcomes and does not derive charges, refunds or financial totals from text.
+The superseded multi-area sidebar-list renderer and projection are removed.
+
+This is a Swift presentation change. Saved searches, additional financial
+categories/totals/distributions and Notes organization are not implemented by this
+pass. Existing backend permissions, recovery contracts, encrypted caches and
+original account/Keychain association are unchanged.
+
+The canonical build installed after owner signing-key approval, retaining the
+original designated signing requirement. Strict signature verification passed;
+installed and built executable UUIDs match
+`F9C8ADBE-4E49-390F-AE2E-DFB1726EB797`. The prior app was quit and the canonical
+app reopened through the original account/Keychain association, without enrollment
+or credential replacement. All three requested receiving aliases and the existing
+correspondence remained available.
+
+Running macOS inspection verified the concise Relationships preview, Comms Sent
+selection and correspondence round trip, a Daniel relationship search retained
+through correspondence/back and alias management, and the main-space alias list
+while the same relationship organizer remained visible. Economics direction and
+month filters changed the record list while preserving the opened Jules record;
+Express lanes direction switching likewise preserved Elena's incoming detail.
+Dark appearance verified the lane organizer and contrasting light Comms preview.
+A clean reopen reset assessment-only navigation filters. NYC-Hospital/Unread
+retained its receiving scope and excluded Sent/Outbox; Drafts opened from B and
+showed all three existing unsent drafts. Light appearance was restored and the app
+was left in All inboxes/Inbox. No messages, permissions or financial mutations were
+submitted during this inspection.
+
+Validation: canonical Apple build, strict signature and executable checks, diff
+checks and the affected running macOS journeys above. Build log:
+`/tmp/cs-mail-stable-organizer-build.log`. Pre-pass source snapshots are under
+`target/stable-organizer-baseline-20261016/` (the superseded multi-area renderer
+and projection remain recoverable through Git). No new tests or unrelated Rust or
+PostgreSQL suites were run. iOS, compact layouts, full VoiceOver, very large lists,
+all dark-area combinations, unseen pending/outgoing-only relationship groups and
+pointer dwell/dismiss timing were not exercised. This is local UI evidence, not
+public mail delivery validation.
+
+## Column B restored after layout assessment — 16 October 2026
+
+At Marcus's request, the column-free navigation assessment was reverted. The four
+changed Swift files exactly match their pre-removal snapshots in
+`target/navigation-popup-baseline-20261016/`. Persistent column B, ordinary rail
+click navigation, transient previews and the alias-management sidebar are restored.
+The approved contrasting previews, turquoise Comms palette, continuous spill and
+removed sidebar hide button remain. New utility for column B is undecided.
+
+The canonical build installed using the original signing identity and unchanged
+designated requirement. Strict signature verification passed; installed and built
+executable UUIDs match `7D98BFE9-3389-3CB8-BCCC-C1B17FA7EE3B`. The earlier process
+was quit and the canonical app reopened on the original account without enrollment
+or credential changes. Running macOS inspection confirmed Comms/All inboxes with
+persistent column B, existing correspondence, all three requested alias inboxes,
+turquoise perimeter lighting and no sidebar hide control. The app was left there.
+Evidence: `/tmp/cs-mail-column-b-restored-build.log`.
+
+Validation: canonical Apple build, strict signature and executable checks, exact
+source-restoration comparison, diff checks and running macOS inspection. No new
+tests or unrelated Rust/PostgreSQL suites were run. iOS, compact layouts and a fresh
+full dark-mode/hover matrix were not checked for this restoration.
+
+## Contrasting navigation previews and continuous spill — 16 October 2026
+
+The native column-B Hide Sidebar toolbar item is removed at its sidebar owner.
+Column A previews now use a darker area-tinted surface in light appearance and a
+lighter surface in dark appearance, with matching text/control appearance and an
+explicit contrasting Close control. The preview and receiving column share one
+palette: Comms uses inky turquoise, Relationships dark gold, Express lanes a
+visible silver-blue and Economics olive. Main-space reading surfaces stay neutral;
+non-Comms column interiors retain their top-only tint.
+
+The twelve discrete spill bands are replaced by one blurred perimeter stroke,
+clipped outside the column, using continuous shadow-style falloff. Initial spill
+opacity compensates for each color's relative luminance against an approximate
+appearance background. This provides a consistent starting-contrast target and
+shared falloff, not a claim of perceptually exact equality on every display.
+The old separate surface parameter and ring implementation are removed.
+
+The canonical build used the installed Command Line Tools toolchain because the
+selected Xcode toolchain currently reports an unaccepted license; no license or
+system developer selection was changed. The original signing identity was used,
+the build script verified unchanged designated requirements, and final strict
+signature verification passed with access to the normal signing/trust services.
+Installed and built executable UUIDs match
+`0A7C6BC3-183B-3C13-9DCF-11EA93F6D0EE`. The app was quit/reopened at the canonical
+path on its existing account without enrollment or Keychain changes. Existing
+correspondence and the requested public/private alias inboxes remained visible.
+
+Running macOS inspection covered turquoise, gold, silver-blue and olive lighting,
+dark appearance for silver-blue/olive, dark previews in light appearance and a
+light Relationships preview in dark appearance. Native shadow and earlier ring
+rendering were visually compared before replacement; the new falloff is smoother,
+without claiming an exact reproduction of macOS's window-shadow kernel. Final
+inspection confirmed no sidebar hide item, readable preview Close, successful
+Close dismissal and the original alias inboxes. Light appearance was restored and
+the final app was left in All inboxes. Build evidence:
+`/tmp/cs-mail-color-pass-build.log`; source snapshots before this pass are under
+`target/color-pass-baseline-20261016/`.
+
+Validation scope: canonical Apple build, strict signature verification, matching
+executable UUIDs, diff checks and changed-screen inspection. No new tests or
+unrelated Rust/PostgreSQL suites were run. iOS, compact layouts, full VoiceOver,
+all color/appearance combinations and pointer dwell/dismiss timing were not
+validated in this pass. Search and rich message formatting are separate work.
+
+## Current top-only column tint — 16 October 2026
+
+Visual comparison confirmed the earlier non-Comms gradient incorrectly tinted the
+full column. It has been replaced by `EditorialColumnTopTint`: a vertical fade
+confined to the top 120 points, ending fully transparent with no painted base or
+bottom color stop. The middle and bottom retain the native sidebar background.
+Relationships uses dark gold, Economics olive and Express lanes blue-grey. Comms
+and column-A navigation previews remain on their original rendering paths.
+
+The canonical build installed after Marcus approved the existing signing key.
+Strict signature verification passed, the original signing requirement is retained,
+and installed/built executable UUIDs match
+(`38397DFF-6C72-36F4-8B91-E9D0485580EB`). After quit/reopen on the original account,
+macOS screenshots were inspected for Economics, Relationships and Express lanes:
+the tint is restricted to the top, with neutral middle/lower interiors. The app was
+left on Economics. Evidence: `/tmp/cs-mail-column-top-tint-build.log`. Diff checks
+passed. No new tests or unrelated Rust/PostgreSQL suites were run for this
+presentation-only correction. Dark mode and iOS were not inspected in this pass.
+
+## Earlier column-interior scope correction — 16 October 2026
+
+Marcus clarified that Comms column B must remain as it was and that column-A
+navigation hover boxes were outside this change. The navigation wrapper now leaves
+Comms and every preview on their original rendering path, without the added
+gradient, foreground override or expansion frame. Only actual non-Comms column-B
+interiors receive the shared color wash. The requested dark-gold Relationships
+palette is retained. This supersedes the broader preview/Comms treatment below.
+
+The canonical build installed, retained the original designated signing requirement,
+passed strict signature verification and matches the final built executable
+(`72BB0374-7ED4-38E8-9668-AB9026FFBCB0`). After quit/reopen on the original account,
+running visual inspection confirmed the Relationships hover preview's restored
+neutral interior and Comms' restored native background with the alias scenario
+intact. The app was left in Comms/All inboxes. Evidence:
+`/tmp/cs-mail-column-scope-restored-build.log`. Diff checks passed. No new tests or
+unrelated Rust/PostgreSQL suites were run; iOS and all dark/preview combinations
+were not inspected in this correction.
+
+## Column interior implementation, before scope correction — 16 October 2026
+
+All column-B content now uses one shared interior gradient treatment, with its
+color drawn from the same palette as perimeter lighting: Comms blue, Relationships
+dark gold (`0.68, 0.46, 0.10`), Express lanes blue-grey, and Economics olive.
+Relationships' former cream lighting is replaced by dark gold at Marcus's request.
+Tint fades across the interior over the existing canvas, with reduced strength in
+dark mode. It no longer depends on wallpaper/native-sidebar blending. The shared
+navigation-column wrapper covers the inbox selector, other area lists, My aliases
+and navigation previews; the old opaque list background was removed.
+
+The canonical build installed successfully with the original designated signing
+requirement. Strict signature verification passed and installed/built executable
+UUIDs match (`EFE0F3BE-83EF-39E3-9DD2-67152CD912C1`). The app was quit/reopened on the
+preserved owner account and alias scenario. Running macOS visual inspection covered
+all four area interiors in light mode, My aliases, the gold Relationships preview,
+and a Relationships dark-mode readability check. Light appearance was restored and
+the app was left on Relationships. No account, permission or correspondence records
+were intentionally changed. Evidence: `/tmp/cs-mail-column-interior-final-build.log`.
+
+Validation scope was the native build, signature checks, diff checks and changed
+screen inspection. No new tests or unrelated Rust/PostgreSQL suites were run for
+this presentation-only change. iOS, compact layouts, every preview and every dark
+area combination were not manually inspected.
+
+## Current owner alias scenario — 16 October 2026
+
+At Marcus's explicit request, the existing owner account now displays protocol
+address `mtallis62831@c-sqdmail.com`, public alias `marcus.thomas@c-sqdmail.com`,
+and two active private aliases: `mat7771@c-sqdmail.com` (NYC-Hospital) and
+`m11a33t@c-sqdmail.com` (Brooklyn-Lab-Co). Addresses use the existing lowercase
+canonicalization. The private routes were explicitly supplied local development
+fixtures, constructed through the checked AliasPortfolio domain contract; ordinary
+private-alias creation continues generating addresses. No alternate member app,
+owner account, client adapter or runtime mode was introduced.
+
+The current launcher is `target/alias-assessment-owner-20261016/start.sh`, at the
+existing 9693 endpoint, against `cs_mail_alias_assessment_owner_20261016`. It uses
+the pinned existing server binary, original deployment keys and unchanged account,
+persona and registered operational/content keys. The prior schema-40 source and
+`target/alias-inboxes-owner-20261016/start.sh` are retained offline as a checkpoint;
+do not revert to them after new activity on the current copy. The directory/SMTP
+namespace in the current configuration is `c-sqdmail.com`; this is local configuration,
+not DNS/MX ownership or live-provider delivery.
+
+The explicit offline tool and wrapper in `tools/development-continuity/` preserved
+the source database, recorded the old directory entry and scenario plan, and changed
+only the owner directory mailbox/revision and three checked alias records in one
+transaction. No signed historical command or receipt was rewritten or fabricated.
+112 other table/sequence fingerprints and every configured key file were identical.
+Both rehearsal and owner-copy checks passed rollback after all writes and exact
+retry without duplicates. The original encrypted device store was backed up and
+confirmed unchanged before reopening. Neither tool accesses or writes Keychain.
+
+The existing signed canonical app reopened through its original Keychain identity
+without enrollment. Running inspection verified all three inboxes, each private
+lane's exact address and Active status, inbox-to-permissions and lane-to-inbox links,
+the public-facing alias in My aliases, and the requested replacement address in
+My approach page. Existing correspondence remains in All inboxes; the new inboxes
+are empty, with no invented historical routing or sample messages. The app was left
+in All inboxes with all three alias selections visible.
+
+Validation: maintenance binary build, targeted clippy with warnings denied,
+PostgreSQL preservation/rollback/retry experiments and running macOS inspection.
+Evidence: `/tmp/cs-mail-alias-assessment-check.log`,
+`/tmp/cs-mail-alias-assessment-owner.log`, and the current deployment's
+`verified.json`/`scenario-plan.json`. No product implementation, schema or Swift
+presentation code changed, so no new app build or unrelated full quality gate was
+needed. Populated alias correspondence, iOS and live mail delivery were not checked
+in this fixture pass. Alias-aware public approach-page publication remains unfinished:
+My approach page still uses the existing protocol-address directory publication.
+
+## Alias inboxes and receiving evidence — 16 October 2026
+
+Comms column B now selects All inboxes or an alias inbox, using owner-only purpose
+labels, unread counts and a historical-inbox section. The main space browses and
+reads that selection; search binds to the same scope. A conversation can appear
+in several inboxes while retaining one identity. Alias readers show and acknowledge
+only matching received messages, with an explicit full-conversation action. All
+inboxes retains earlier mail with no recorded alias; no sender/address heuristic
+backfills membership. Conversation-wide organization controls remain in All
+inboxes; custom unions and independent per-alias organization are later work.
+Express lanes separates People and organizations from Private aliases, exposes
+explicit receiving scopes and connects alias permission details with its inbox.
+
+Rust's application layer owns historical DeliveredRoute facts and coordinates
+explicit signed native alias targets or authenticated SMTP envelope addresses
+with the existing deterministic alias admission owner. Storage commits receiving
+evidence with the message, copies, conversation, allowance effects and terminal
+receipt. Identity-addressed delivery stays distinct and gains no inferred alias.
+Recipient account activity and both billing records are protected inputs; service
+coverage is evaluated at the application's decision timestamp. The portable client
+checks receiving evidence against incoming headers, derives inbox/count projections
+without fetching message content, and binds retained-text search and read/unread
+actions to an explicit scope. There is no inbox aggregate in the request kernel.
+
+The existing native journey passed receiving through two private aliases in one
+conversation, separate unread counts, rejection of a cross-scope read request,
+scoped search and cursor binding, retirement history, refused retired delivery,
+and cross-alias blocking. Existing request, recovery, organization, deletion,
+source-reuse and external journeys also passed. A pre-existing funding experiment
+now accepts an immediate definite refusal from a fast simulator while still
+requiring exactly voided funding and no delivery. No test cases were added.
+The existing real SMTP experiment passed misleading To-header routing, interrupted
+message/evidence rollback, a new authenticated guest, canonical address case,
+exact redelivery after retirement and refusal of fresh mail after retirement.
+Evidence: `/tmp/cs-mail-alias-inboxes-native-checks-complete.log` and
+`/tmp/cs-mail-alias-inboxes-smtp-test.log`. The full local quality gate passed: identity pins, dependency direction, formatting,
+workspace and production lint, workspace tests, PostgreSQL suites and application
+binaries. Evidence: `/tmp/cs-mail-alias-inboxes-quality-complete.log`.
+
+The schema-39 owner service was offline when checked. The explicit upgrade created
+a fresh schema-40 copy and preserved all 114 original table/sequence fingerprints,
+original migration history and configured key files. No owner Keychain credential,
+account association, address or local v3 cache was replaced. The current pinned
+owner launcher is `target/alias-inboxes-owner-20261016/start.sh`, with
+`owner-ready/verified.json` and `server.sha256`, serving the original 9693 endpoint.
+The original schema-39 database and launcher remain the rollback checkpoint.
+The existing app reconnected and refreshed successfully through its original
+credential. Evidence: `/tmp/cs-mail-alias-inboxes-preservation.log`.
+
+The final signed Apple build installed at the canonical path with the original
+designated signing requirement. Strict signature verification passed and the
+installed executable's UUID matches the final build. The app was quit and reopened
+on the original account. Running-app inspection verified Inboxes/All inboxes,
+Jules correspondence and its return path, Manage aliases and its return path,
+Express lanes' separate sections, Elena's sender-lane details with explicitly
+unrecorded alias scope, and lane-to-correspondence-to-lane navigation. The owner
+profile still shows marcus@csqd-mail.com. No owner profile was published, alias
+created, message sent, permission changed or retained copy removed. The owner has
+no managed aliases; populated alias rows/readers were exercised through native
+contracts rather than invented in the owner account. The app was left in All
+inboxes. Evidence: `/tmp/cs-mail-alias-inboxes-apple-final.log`.
+
+Current limits: this establishes local receiving contracts, not public MX or
+SMTP2GO delivery. Native alias-send contracts require an explicit known participant
+and alias target; normal address resolution/composer selection and outbound/reply
+alias addressing remain separate work. Public alias approach-page publication and
+held-mail release are not implemented here. A standalone MX host needs the explicit
+optional registration capability to open previously unknown guest pairs. Inbox
+routing observations are session-local; durable offline alias metadata, very large
+mailbox performance, iOS, dark/compact layouts and full VoiceOver assessment are
+not established by these checks.
+
+## Navigation context and protected edits — 15 October 2026
+
+Correspondence now returns to its actual origin: retained search results, the
+selected mailbox, Relationships map or Directory profile. Mailbox query, sorting,
+selection and stable scroll anchors live in one presentation navigation owner;
+request and lane direction also survive a correspondence round trip. The toolbar
+Inbox and Communications root still explicitly return to a fresh Inbox. Alias
+management and lane review use the same navigation history.
+
+My approach page uses one session-local editor draft. Leaving dirty fields offers
+Save changes and continue, Discard changes and continue, or Stay. Saving continues
+only after confirmed publication; a failed save keeps the editor open. Checking a
+saved publication does not overwrite newer dirty fields. Explicit Lock uses the
+same guard. This draft is not durable across quit or automatic session locking.
+
+Inactive readers are unmounted and the model requires the matching visible reader
+context before recording read identities. Contact selection records the latest
+intent during an operation and loads it after the operation completes; stale loads
+cannot replace the selected contact. Late Directory lookups respect newer
+navigation intent. These changes remain in the Swift adapter; protocol and Rust
+domain ownership are unchanged.
+
+The final canonical signed build was installed, quit and reopened on the existing
+owner account, retaining marcus@csqd-mail.com and the original designated signing
+requirement. Strict signature verification passed. Running-app inspection verified
+search → Daniel → Search results with the query/results retained, Sent → Jules →
+Sent, Relationships → Jules → Relationships map, and Directory → Daniel profile →
+correspondence → the same profile. A temporary local display-name edit triggered
+the exit dialog; Stay retained it. The original text was restored without
+publishing, and the app was left in Inbox.
+
+The existing native integration journey was extended to challenge two conjectures:
+an inactive reader must not mark messages read, and the latest contact selection
+must survive an overlapping refresh. Both passed, as did the existing isolated
+local request, native and external journeys. No test cases were added. Evidence:
+`/tmp/cs-mail-navigation-native-checks.log` and
+`/tmp/cs-mail-navigation-final-build.log`. Diff checks passed. No unrelated Rust
+or PostgreSQL suites were run. iOS, compact/dark layouts, long-list scroll precision,
+and Save/Discard against the owner profile were not manually exercised. These
+checks establish local navigation behavior, not public email delivery.
+
+## Explicit Inbox return — 15 October 2026
+
+Opened native correspondence now has an explicit Inbox back link in Communications;
+the toolbar shows a labeled Inbox action. Selecting Communications clears the
+selected contact and returns to Inbox instead of keeping that contact open.
+External correspondence has the same explicit return action. Returning clears
+the open thread/message focus and resets the mailbox view to Inbox. Other areas
+retain their existing Home return behavior. This changes navigation only.
+
+The canonical signed build installed with its original signing requirement and
+was quit/reopened on the existing account. Native inspection opened Jules Morgan
+and verified all three return paths: the conversation's Inbox back link, the
+Communications navigation item and the toolbar Inbox action. Each returned to
+Your mail with Inbox selected; the app was left there. Evidence:
+`/tmp/cs-mail-inbox-return-build.log`. Diff checks passed. No new tests or unrelated
+Rust/PostgreSQL suites were run for this presentation-only change. External and
+iOS navigation were not manually exercised.
+
+## Reading, search, organization and outgoing work — 15 October 2026
+
+Communications now opens Your mail, with Inbox, Unread, Flagged, Archive, Trash,
+Sent and Outbox. The list uses message activity with stable identity tie-breaking;
+A–Z is available. Personal read identities, flags and folder placement are encrypted
+on this device. Reading marks only the represented message snapshot; synchronization
+does not mark mail read and no sender-visible receipt is produced. Manual unread,
+archive/restore and reversible Trash have no permission or retention effects.
+Selections support bulk archive, flag, Trash and restore. Native permanent copy
+removal is separately confirmed and journaled through DeleteCopies. External
+permanent deletion is not offered.
+
+Readers separate messages by sender and service commit time and render structured
+text, retained inline images, quotations, shared copies and inert references.
+Unavailable and access-denied native copies have distinct projections. Find within
+a conversation, Latest and per-message Reply sit alongside existing request and
+relationship controls. Search retained message text opens authenticated accessible
+copies in bounded pages, reports searched/unavailable/remaining coverage and opens
+the matching conversation/message. It never follows references and has no durable
+plaintext index. Session locking clears transient results and the Rust search scope.
+The sidebar's separate field is explicitly labeled Filter contacts.
+
+Refresh observes mail without resuming mutations, reports incomplete native/external
+observations, and rolls back a failed native page's cursor and headers together.
+Swift refreshes on foreground activation and periodically while open. The last
+complete refresh time remains visible. Existing explicit recovery controls retain
+their original operation identities. Sent shows conversations containing committed
+outgoing messages. Outbox exposes submission history recorded from this version
+onward: unknown, native mailbox committed, external queued or refused. The encrypted
+history retains the exact command, originating draft revision and terminal evidence
+in the same atomic transaction as the cache and draft workspace. Relay handoff and
+provider-reported observations cross FFI as distinct typed facts. Older history is
+not fabricated; previous committed mail remains in Sent.
+
+Validation extended existing experiments without adding test cases. Six portable
+client checks passed, including later-arrival read races, malformed personal-state
+restoration, failed organization writes, no implicit submission retry on refresh,
+failed later mailbox pages, search-scope clearing, refusal/unknown outcome history
+and exact-command replay. Strict client/FFI lint, identity pins, formatting and
+diff checks passed. The native SQLite/FFI journey against isolated local PostgreSQL
+services passed third-record transaction rollback, request/native/external journeys,
+personal organization and retained-text search. Fixture-only permanent removal
+made the caller's copy unavailable while the peer retained its readable copy.
+Evidence: `/tmp/cs-mail-mailbox-tests-final.log`,
+`/tmp/cs-mail-mailbox-lint-final.log`, `/tmp/cs-mail-mailbox-native-checks.log`,
+`/tmp/cs-mail-mailbox-identity.log` and `/tmp/cs-mail-mailbox-apple-final.log`.
+
+The first canonical build installed with the original signing requirement and
+was quit/reopened on the preserved owner account. Native light-appearance inspection
+found the previously missed older text through search, opened the matching message,
+checked individual timestamps, marked a snapshot unread, archived/restored a
+conversation to Inbox, and inspected Sent and initial empty Outbox. No owner
+message was sent, charge authorized or retained copy permanently removed. Locking
+cleared search results and open mail; reopening retained the original account and
+`marcus@csqd-mail.com`. The mailbox workspace was left open. The isolated test
+services were stopped after validation. Following the second macOS signing
+authorization, the final build containing the native-page rollback refinement
+installed at the canonical path with the original signing requirement. The app
+was quit/reopened; its installed executable's build UUID matches the final build,
+and its signature verifies strictly. Native
+inspection confirmed the mailbox workspace, persisted unread/folder state and all
+three earlier unsent drafts. The final mailbox workspace is running and left open.
+
+The full quality gate and unrelated server suites were not run. iOS, dark/compact
+layouts, full VoiceOver assessment, actual power loss, very large mailboxes,
+cross-device personal state and live/public-provider delivery were not exercised.
+Populated outgoing history and external rendering were exercised through native
+contracts; the owner account's Outbox is empty and its external inbox unpopulated.
+No new provider-event ordering experiment was run; existing server delivery rules
+are unchanged. Subjects, general attachments and complete offline content search
+remain separate work.
+
+## Durable drafts and submission handoff — 15 October 2026
+
+The member application now autosaves native messages, external emails, approach
+requests and follow-ups in an encrypted device-local workspace. Communications
+offers a Drafts list that reopens the selected writing by its exact identity.
+New emails and new native conversations create independent drafts; replies resume
+their existing context. Composers show saving status, retain writing after refusal,
+offer explicit save/close and discard choices, and keep disclosure consent and
+charge approval separate from saved writing. Local saving does not wait for the
+network operation queue. Drafts are local to this device; they are not synced.
+
+Rust's client workspace owns the deterministic draft lifecycle, checked identities,
+revisions and restoration. The protocol kernel does not own drafts. Submission
+atomically moves an exact draft revision into the existing recovery journal;
+uncertain results retain that operation for exact retry, while a confirmed refusal
+restores editable writing. SQLite commits workspace and journal together. Existing
+account encryption and the original Keychain credential association are retained.
+
+Validation extended existing experiments, without adding test cases: six portable
+client recovery checks passed, including stale revisions, independent drafts,
+local saves during network work, invalid restoration, atomic handoff failure,
+refusal restoration and exact retry after reopen. The native SQLite/FFI journey
+passed against isolated local PostgreSQL services, including second-write rollback,
+request-draft reopen before charge approval, native and external submission, reuse
+policy, consent, refusal and recovery. Strict client/FFI lint, formatting, identity
+source pins and diff checks passed. Evidence:
+`/tmp/cs-mail-drafts-tests-final.log`, `/tmp/cs-mail-drafts-lint-final.log`,
+`/tmp/cs-mail-drafts-native-checks.log`, `/tmp/cs-mail-drafts-identity.log` and
+`/tmp/cs-mail-drafts-apple-build.log`.
+
+After macOS signing authorization, the canonical build installed successfully with
+the original signing requirement. The app was quit and reopened at
+`target/apple/CsMail-continuity-20261012.app`; native inspection confirmed the
+existing owner address `marcus@csqd-mail.com` and existing relationships. Two
+independent external drafts retained their distinct recipients and bodies, and a
+native reply retained its writing across a complete app restart. Native inspection
+also checked save status, the close/save choices and discard confirmation/cancel;
+it did not execute permanent discard. The three clearly labeled usability-check
+drafts remain unsent in Drafts for assessment. No owner message was sent or charge
+authorized. This canonical build also includes the preceding relationship-map
+spacing refinement, superseding its historical signing wait below.
+
+The full quality gate and unrelated suites were not run. iOS, dark/compact draft
+layouts, actual power loss and cross-device recovery were not exercised. Native
+contract checks covered request/follow-up submission; those composer screens were
+not manually inspected on the owner account. Local simulation establishes no
+SMTP2Go/public delivery. Unread flags and broader mailbox organization remain
+subsequent slices.
+
+## Relationships overview map — 14 October 2026
+
+The Relationships overview replaces Choose a request with a static incoming
+relationship map centered on You. It reuses the Rust-supplied permission summaries
+already used by Home: standing permission has a pale gold solid line, express
+lanes a cool silver dashed line, and history without standing permission a faint
+dotted line. Each person retains their supplied permission subtitle and opens the
+existing correspondence view. Closed-route history is not an active permission;
+there are no inferred connections between contacts or invented alias branches.
+Swift owns only arrangement, line styling and navigation. Nodes use generous
+click regions and perimeter-only hover feedback, with no continuous animation.
+The map scrolls as needed and uses four fixed positions per ring to make room for
+labels. Receiving-route grouping and an outgoing map remain subsequent work.
+
+The first canonical signed build and diff checks passed. Installation retained
+the original signing requirement; the app was quit/reopened on the existing owner
+account. Native inspection checked the four-contact map in light appearance and
+confirmed that Daniel's node opens Daniel's correspondence. The map was left open.
+No account or relationship data was changed. Evidence:
+`/tmp/cs-mail-relationship-map-build.log`. A subsequent refinement aligns the
+node perimeter with its hover outline and limits each ring to four fixed positions.
+It compiled successfully (`/tmp/cs-mail-relationship-map-layout-build.log`), but
+its final canonical installation is waiting at macOS signing authorization
+(`/tmp/cs-mail-relationship-map-final-build.log`). The running first build uses
+the same four-contact arrangement; the refinement is not yet installed.
+No tests or unrelated Rust/PostgreSQL suites were run for this presentation-only
+change. Empty and multi-ring layouts, pointer-hover rendering, dark appearance,
+compact layout and iOS were not visually exercised.
+
+## Generated private aliases — 14 October 2026
+
+New Alias now separates private purpose/description from public email-address
+choice. Private creation asks for owner-visible context and Rust generates an
+unpredictable 128-bit address. The list and alias-lane detail show the description
+prominently; Copy address copies only the address. Confirmed creation selects the
+alias ID from the verified outcome. Private replacement generates another address
+and preserves the description. Public creation uses a chosen address; a current
+public alias instead offers Manage public alias, where replacement is available.
+Rust owns the at-most-one-current-public-alias rule, including concurrent requests;
+Swift presents its projection and never supplies a private mailbox candidate.
+
+Signed management uses version-2 commands/acknowledgements and schema 39, without
+old-format runtime readers. The explicit offline creation upgrade refuses populated
+legacy alias metadata; it does not invent descriptions or rewrite signed history.
+The owner source had no alias records or commands. The preservation tool restored
+a fresh copy and verified all 114 original table/sequence fingerprints, original
+migration history and configured key files. Original account association and
+`marcus@csqd-mail.com` were retained; no Keychain credential was replaced or
+reenrolled. The schema-38 source and launcher remain the rollback checkpoint.
+The current pinned owner launcher is `target/alias-creation-owner-20261014/start.sh`,
+with its checked server hash and `owner-ready/verified.json`, serving the same 9693
+endpoint. Evidence: `/tmp/cs-mail-alias-creation-preservation.log`.
+
+Validation passed: scoped Rust check; the existing domain restoration and portable
+client recovery experiments; the existing PostgreSQL lifecycle/replay experiment,
+extended to race different public addresses for one owner and replace the winner;
+strict lint for the six affected Rust packages with all targets/features; identity
+source pins; formatting/diff checks; canonical signed Apple build; and the existing
+native enrollment/alias experiment against a fresh local simulation. These challenge
+invalid restoration, encrypted description storage, exact retries, atomic failure,
+public-alias cardinality, permanent reservation, Directory isolation and account/
+credential continuity. Existing experiments were adapted; no test cases were added.
+Evidence: `/tmp/cs-mail-alias-restoration-tests.log`,
+`/tmp/cs-mail-alias-recovery-tests.log`, `/tmp/cs-mail-alias-creation-postgres-final.log`,
+`/tmp/cs-mail-alias-creation-lint-final.log`,
+`/tmp/cs-mail-alias-creation-native-checks.log` and
+`/tmp/cs-mail-alias-creation-apple-build.log`.
+
+The canonical app was installed with its original signing requirement and
+quit/reopened on the preserved owner deployment. Native inspection checked both
+creation types, private draft enablement, Cancel and a fresh empty dialog. No
+owner alias was created (both alias routes and command counts remain zero).
+Populated alias screens, the existing-public-alias navigation branch, clipboard
+interaction, dark appearance and iOS were not visually exercised; native contract
+checks covered populated projections. The full quality gate and unrelated suites
+were not run. Alias mail delivery/publication and public-provider delivery remain
+outside this management change; local simulation is not evidence of live delivery.
+
+## Express lanes navigation icon — 14 October 2026
+
+Column A uses two upward arrows side by side for Express lanes, composed from
+matching native symbols. Its label, click region and navigation meaning are
+unchanged. The canonical signed build installed with the original signing
+requirement and was quit/reopened; the paired arrows were visually checked in
+light appearance. Evidence: `/tmp/cs-mail-express-arrows-build.log`. Diff checks
+passed. No tests or unrelated Rust/PostgreSQL suites were run for this icon-only
+change; compact layout, dark appearance and iOS were not visually inspected.
+
+## Matching rail and top-row canvas — 14 October 2026
+
+Column A now explicitly draws the shared canvas instead of inheriting it. The
+root canvas extends through the top safe area, and the macOS toolbar's separate
+background is hidden so the top row uses that same color: `#F7F6F2` in light
+appearance. The main space retains the same canvas. Column B's native container,
+toolbar cap, perimeter lighting and spacing remain in place. An opaque toolbar
+fill was removed during inspection because it covered the panel's top edge.
+
+The canonical signed build and diff checks passed. The app was installed with
+its original signing requirement, quit/reopened and inspected on Communications
+in light appearance: the top row, rail and main-space backgrounds match and the
+panel's full illuminated perimeter remains visible. Evidence:
+`/tmp/cs-mail-unified-canvas-build.log`. No tests or unrelated Rust/PostgreSQL
+suites were run; dark appearance, compact layout and iOS were not inspected.
+
+## Column B colors by area — 14 October 2026
+
+Column B now uses pale gold for Relationships (including its address and profile
+destinations), cool light-gray silver for Express lanes, electric blue for
+Communications and muted olive green for Economics. One presentation-owned palette
+selects the spill from the current navigation area. Communications, Relationships
+and Economics use a one-point rim in a darker shade of their wash color (65% of
+each RGB component, drawn at 55% opacity). Express lanes uses a white rim at
+32% opacity, as do contextually lit navigation previews. All cove rims now share
+one-point thickness. Each rim is centered on the panel outline,
+with color immediately adjacent to its outer edge. The wash starts at 13%
+opacity and fades quadratically over twelve
+points. The drawing surface extends fifteen points beyond its layout bounds
+on every side so the left spill has the same drawing room as the right.
+The earlier six-point near-white transition was removed
+because it made the colored spill appear detached from the rim.
+The native panel, toolbar cap, shadow, narrower column A and gutter are retained.
+Home and Notes have no column B. Navigation previews use their area's cove
+lighting only when column B is absent; otherwise they retain their original
+border and shadow. The member view passes column visibility explicitly to the
+navigation shell, including the sidebar's show/hide state. Preview lighting
+reuses `EditorialCoveLight`, with no separate palette or falloff implementation.
+
+The preview wash starts at 20% opacity rather than column B's 13%, so the muted
+colors remain discernible beside its white rim on the shared ivory canvas.
+The twelve-point quadratic fade and visibility condition are retained. The
+canonical signed build and diff checks passed, installation retained the original
+signing requirement, and the app was quit/reopened. The Economics preview over
+Home was visually checked and left open. Evidence:
+`/tmp/cs-mail-preview-wash-visibility-build.log`. No tests or unrelated
+Rust/PostgreSQL suites were run; the other palettes, dark appearance and iOS
+were not visually rechecked for this opacity adjustment.
+
+The white rims were subsequently reduced from three points to one, matching the
+tonal rims. Their colors, opacity, wash falloff and contextual preview behavior
+are unchanged. The canonical signed build and diff checks passed, installation
+retained the original signing requirement, and the app was quit/reopened.
+The Economics preview over Home and Express lanes column B were visually checked
+in light appearance. Evidence: `/tmp/cs-mail-uniform-rim-build.log`. No tests or
+unrelated Rust/PostgreSQL suites were run; dark appearance and iOS were not checked.
+
+The conditional treatment passed the canonical signed build and diff checks,
+was installed with the original signing requirement and quit/reopened, and was
+visually checked in light appearance: cove previews over Home and Notes, original
+preview shading over a visible Communications column B. Evidence:
+`/tmp/cs-mail-contextual-preview-light-build.log`. No tests or unrelated
+Rust/PostgreSQL suites were run. Manually hidden-sidebar behavior, dark appearance,
+compact layout and iOS were not visually exercised in this pass.
+
+The thinner tonal column B rims passed the canonical signed build and diff
+checks, were installed with the original signing requirement and quit/reopened,
+and all four area screens were visually inspected in light appearance, including
+the preserved Express lanes white rim. Evidence: `/tmp/cs-mail-tonal-rim-build.log`.
+The native containers, panel positions and contextual preview behavior are
+unchanged. No tests or unrelated Rust/PostgreSQL suites were run; dark appearance,
+compact layout, preview rims and iOS were not visually rechecked for this pass.
+
+The earlier unconditional preview-lighting experiment was removed: previews retained their original
+border and shading, without a cove rim or colored wash. The restoration passed
+the canonical signed build, was installed and quit/reopened, and the Communications
+preview was visually checked and dismissed with Escape. Evidence:
+`/tmp/cs-mail-restore-preview-shading-build.log`.
+
+Economics was then toned down from neon green to olive (RGB 0.55, 0.62, 0.30).
+Its white rim and wash strength/falloff remain unchanged. Lighting now has one
+presentation owner in `EditorialCoveLight`; the former private implementation was
+removed. The canonical signed build and diff checks passed, installation retained
+the original signing requirement, and the reopened Economics screen was visually
+checked in light appearance. Evidence: `/tmp/cs-mail-olive-glow-build.log`.
+No tests or unrelated Rust/PostgreSQL suites were run; dark appearance, compact
+layout and iOS were not exercised for these revisions.
+
+The canonical signed build passed, preserved the original signing requirement,
+was installed and quit/reopened, and all four area screens were visually checked
+in light appearance. Express lanes is left open. Evidence:
+`/tmp/cs-mail-area-glow-build.log`. Diff checks passed. No tests were added or
+unrelated Rust/PostgreSQL suites run. Dark appearance, compact layout and iOS
+were not visually exercised; no account, credential or domain state was changed.
+
+The rim is now one three-point stroke on the outline rather than three filled
+bands. Its outer edge defines the colored wash's origin. The canvas was expanded
+without moving either column to remove left-side clipping. The canonical signed
+build passed, retained the original signing requirement, was installed and
+quit/reopened, and both verticals, rim and corners were visually checked on
+Communications in light appearance. Evidence:
+`/tmp/cs-mail-perimeter-rim-build.log`. Diff checks passed. No tests or unrelated
+Rust/PostgreSQL suites were run; other palettes, dark appearance and iOS were
+not visually rechecked for this shared geometry correction.
+
+The wash was subsequently softened from roughly 24.5% opacity at the rim to
+13%, and shortened from a 24-point total spread to 15 points with a faster fade.
+The white rim, palette assignments, native panel and restored column spacing are
+retained. The canonical signed build and diff checks passed; the app was
+installed with its original signing requirement, quit/reopened and visually
+checked on Communications in light appearance. Evidence:
+`/tmp/cs-mail-softer-wash-build.log`. No tests or unrelated Rust/PostgreSQL suites
+were run. Other palettes, dark appearance and iOS were not visually rechecked.
+
+The adjacency correction passed the canonical signed build and diff checks,
+was installed with the original signing requirement and quit/reopened, and was
+visually checked on Communications in light appearance. The blue spill now
+touches the white rim around the panel. Evidence:
+`/tmp/cs-mail-adjacent-glow-build.log`. No tests or unrelated Rust/PostgreSQL
+suites were run. The other three palettes, dark appearance and iOS were not
+visually rechecked for this shared boundary correction.
+
+## Narrower column A — 14 October 2026
+
+The vertical navigation rail is 64.5 points wide, three quarters of its former
+86 points. Buttons retain their 64-point height and use the available rail width.
+Relationships scales modestly to remain on one line; Express lanes wraps onto
+two lines. An additional 21.5-point space after the rail preserves column B's
+original horizontal position. Preview positioning includes that space as well.
+The compact horizontal rail is unchanged.
+
+The vertical divider now stops above the window bottom, with its bottom inset
+matching the top safe-area inset. Column widths, gap and panel placement are
+unchanged; the compact horizontal divider retains its existing layout. The
+canonical signed build and diff checks passed, the app was installed with its
+original signing requirement and quit/reopened, and the divider endpoints were
+visually checked on Express lanes in light appearance. Evidence:
+`/tmp/cs-mail-divider-inset-build.log`. No tests or unrelated Rust/PostgreSQL
+suites were run; dark appearance, compact layout and iOS were not checked.
+
+The initial implementation incorrectly moved column B left with column A. The
+spacing correction restores its original position while keeping column A narrow.
+The canonical signed build passed, retained the original signing requirement,
+was installed and quit/reopened, and the larger gap and unchanged native column B
+were visually checked on Communications. Evidence:
+`/tmp/cs-mail-column-gap-build.log`. Diff checks passed. No tests or unrelated
+Rust/PostgreSQL suites were run; previews, dark appearance, compact layout and
+iOS were not rechecked for this spacing correction.
+
+The canonical signed build passed, retained the original signing requirement,
+was installed and quit/reopened, and was inspected on Express lanes. The native
+column B container, pale-gold glow and inter-column gutter were preserved. The
+Relationships preview was opened through its accessibility action, checked for
+placement and dismissed with Escape. Evidence: `/tmp/cs-mail-narrow-rail-build.log`.
+Diff checks passed. No tests or unrelated Rust/PostgreSQL suites were run;
+pointer-hover dismissal, compact layout, dark appearance and iOS were not
+exercised in this pass.
+
+## Cooler ivory canvas — 14 October 2026
+
+The shared light-appearance canvas is now `#F7F6F2`, replacing `#F7F6EF` across
+column A, column B, the main space and navigation previews. The silver lighting
+and dark palette are unchanged. The canonical signed build passed with the
+original signing requirement, was installed and quit/reopened, and the light
+Express lanes screen was visually inspected. Evidence:
+`/tmp/cs-mail-cool-ivory-build.log`. Diff checks passed. No new tests or unrelated
+Rust/PostgreSQL suites were run for this color-only change; iOS was not inspected.
+
+## Column B perimeter-lighting experiment — 14 October 2026
+
+The earlier Express lanes trial combined a thicker white edge reflection
+with a very pale gold spill around column B's whole rounded perimeter. The
+white rim holds for two points before a six-point blend into the spill; the
+24-point outward falloff and opacity are retained. Its interior remains untouched. Adjacent outward bands
+follow the measured panel bounds and include the native toolbar cap with its
+eight-point top gutter. The former flat silvery-gold tint, right-edge-only gradient
+and rejected Daniel portal trial are removed. The decoration accepts no input,
+adds no accessibility content and has no animation. This remains a local visual
+experiment, not an adopted toolkit rule.
+
+The thicker white/pale-gold revision passed the canonical signed build, was
+installed with the original signing requirement and quit/reopened, and was
+visually inspected on Express lanes in light appearance. The native panel shape,
+sizing, toolbar cap and shadow are unchanged. Evidence:
+`/tmp/cs-mail-pale-gold-rim-build.log`. Diff checks passed. No tests were added
+or unrelated Rust/PostgreSQL suites run; dark appearance and iOS were not inspected.
+
+The attempted shadow-free replacement panel was rejected and removed. The
+original native column B container, toolbar cap and sizing are restored, with
+the six-point silver reflection and lighter spill retained. The restoration
+passed the canonical signed build, preserved the signing requirement, was
+installed and quit/reopened, and was visually checked on Express lanes.
+Evidence: `/tmp/cs-mail-restore-column-build.log`. The native shadow remains.
+No automated tests or unrelated Rust/PostgreSQL suites were run for this
+presentation-only restoration; dark appearance and iOS were not inspected.
+
+The canonical signed build passed, preserved the original signing requirement,
+and was installed at `target/apple/CsMail-continuity-20261012.app`. The prior
+process was quit and the app reopened. All four illuminated edges and rounded
+corners were inspected in light appearance on the running Express lanes screen.
+No account, credential or domain state was changed. Evidence:
+`/tmp/cs-mail-silver-rim-build.log`. Diff checks passed. No tests were added
+or unrelated Rust/PostgreSQL suites run. Dark appearance, alternate window sizes
+and iOS were not visually exercised in this pass.
+
+## Visual simplicity pass — 14 October 2026
+
+The [Swift design principles](../../docs/swift-design-principles.md) now guide
+native presentation. Express lanes and My addresses no longer show independent
+reload buttons or observation timestamps. Alias metadata loads on entry and
+foreground return, and refreshes every minute while the workspace is active.
+The single toolbar Refresh targets the current workspace. Address changes still
+require a current Rust projection; failed reads retain a concise notice. Read
+cancellation preserves the active session and committed navigation, while
+submitted changes retain their existing journal/recovery semantics.
+
+Directory has one name/address/link input, with exact references validated by
+the existing Rust lookup contract and textual searches using the listed-results
+contract. The duplicate toolbar refresh is removed. My approach page uses Save
+changes and shows recovery only when a saved publication is pending. Refresh
+preserves unsaved edits; a changed saved revision requires an explicit discard
+choice before replacement. Home replaces generic scope/validity qualifications
+with the projected lane expiry. List dates are shorter; lane details retain
+exact expiry, purpose and message allowance.
+
+Creation, alias lifecycle, composer and recovery copy is shorter. Preserved
+conversations use available correspondent names and derived display labels instead
+of raw identifiers. The Rust financial presentation uses plain charge/refund
+labels without changing amounts or lifecycle decisions. Development amounts
+remain explicitly simulated units: the current contracts do not supply a
+currency code and decimal scale, so no currency conversion is inferred.
+Disclosure consent, charge authorization, permanent address reservation,
+permission limits and unfinished delivery remain visible where relevant.
+
+The canonical app was signed with its original requirement, installed at
+`target/apple/CsMail-continuity-20261012.app`, quit/reopened and inspected against
+the preserved owner account. Home, lane grouping/details, My addresses, both
+creation purposes, approach-page controls, Directory search/exact lookup,
+financial details, and empty native/external composers were inspected. Rapid
+lane-to-communications navigation retained available composing controls without
+a manual refresh. Inspection drafts were closed; no messages, address creations,
+profile changes or payment authorizations were submitted. Marcus's original
+`marcus@csqd-mail.com` publication and account/credential association remain in
+place. The existing pinned owner backend was restarted without a database or
+configuration cutover.
+
+Six existing client tests, formatting/diff checks and the final signed native
+build passed. Evidence: `/tmp/cs-mail-visual-cleanup-client-tests.log`,
+`/tmp/cs-mail-visual-cleanup-final-build.log` and
+`/tmp/cs-mail-visual-cleanup-owner.log`. No automated tests were added. Unresolved
+publication/address recovery, populated alias details, deliberately delayed
+read cancellation, iOS and public-provider delivery were not exercised in this
+pass. Unrelated PostgreSQL suites and the full quality gate were not run.
+
+## Express lane groups — 14 October 2026
+
+Column B now separates Alias-scoped express lanes from Sender-scoped express
+lanes. Incoming/Outgoing belongs only to the sender group. Sender details retain
+their scope, expiry and rate; alias rows and details show the Rust-projected
+lifecycle and link to the existing address manager. Rust classifies aliases from
+their checked grant, excludes public addresses, and retains closed lifecycle
+states. Swift never treats an alias identifier as a sender identity.
+
+The canonical signed app was installed with its original signing requirement,
+quit/reopened, and inspected against the preserved owner account. Both headings,
+the empty alias group, incoming sender details and outgoing switching were
+verified in the running app. It is left on Incoming with Elena's sender lane
+selected. No owner test aliases or credentials were created. Populated alias
+rows/details were not visually exercised in the owner account, which has no
+additional addresses; classification and closed states were exercised through
+the real isolated native bridge experiment.
+
+Six client tests, strict client/FFI lint, formatting/diff checks, the signed native
+build and the existing scoped native enrollment experiment passed. The experiment
+was extended to challenge public-address misclassification and loss of closed
+alias lifecycle state; no test cases were added. Evidence:
+`/tmp/cs-mail-lane-groups-client-tests.log`,
+`/tmp/cs-mail-lane-groups-lint.log`,
+`/tmp/cs-mail-lane-groups-native-checks.log` and
+`/tmp/cs-mail-lane-groups-build.log`. No schema or remote API change was needed.
+Unrelated PostgreSQL suites, the full quality gate, iOS and public-provider
+delivery were not run. Additional-alias mail delivery remains pending.
+
+## New Alias creation dialog — 14 October 2026
+
+A subsequent terminology pass changes the Relationships entry and workspace to
+My aliases, and aligns empty states, private/public purpose descriptions,
+alias-scoped lane details, lifecycle confirmations and pending-update recovery
+with alias wording. Email address remains the label for the actual mailbox value;
+physical-address, Directory and external-recipient wording retain their meanings.
+This pass changes presentation copy only, with no new domain rules or tests.
+
+The canonical signed build passed and installed with the original signing
+requirement. After quit/reopen, native inspection checked the Relationships entry,
+My aliases workspace and both private/public-facing creation descriptions; the
+empty public-facing dialog was left open. No alias was created. Evidence:
+`/tmp/cs-mail-alias-terminology-build.log`. Diff checks passed. Populated lifecycle
+states and mutation/recovery outcomes were reviewed in source but not exercised;
+dark appearance, iOS and unrelated Rust/PostgreSQL suites were not run.
+
+The creation control and dialog title now read New Alias, with Create alias and
+matching progress/outcome wording. The permanent-reservation/incomplete-delivery
+paragraph was removed from this dialog at the owner's request. Purpose selection,
+Rust validation and creation/recovery semantics are unchanged. The canonical
+signed build and diff checks passed, installation retained the original signing
+requirement, and the app was quit/reopened. The New Alias button and private
+creation dialog were visually inspected; no alias was created. Evidence:
+`/tmp/cs-mail-new-alias-copy-build.log`. No tests or unrelated Rust/PostgreSQL
+suites were run; mutation outcomes, public-facing selection, dark appearance
+and iOS were not exercised for this copy-only change.
+
+New address opens a dedicated creation sheet with Full address, purpose, Create
+address and Cancel. Creation is no longer an inline navigation destination or a
+focus event. Cancelling dismisses the draft without submitting it. A confirmed
+creation opens the verified record; an unknown outcome retains the original Rust
+journal and directs the member to Resume update. Closing after an attempt is
+labelled Close, not cancellation of the operation. Lock dismisses the sheet and
+session-generation checks suppress late result callbacks.
+
+The final canonical signed build was installed and quit/reopened with its original
+signing requirement and account association. Native inspection checked that the
+button opens a sheet, typing enables the separate Create action, Cancel closes
+the sheet, reload still shows no additional addresses, and a fresh dialog opens
+with an empty draft. Its layout was inspected. The app was left with the new
+dialog open. No owner address was reserved. Evidence:
+`/tmp/cs-mail-new-address-dialog-final.log`. Diff checks passed. No tests were
+added and no Rust/PostgreSQL suites were run for this Swift presentation change.
+Creation commit/recovery and iOS runtime were not re-exercised in this repair.
+
+## My addresses management — 14 October 2026
+
+The unified app has a My addresses workspace under Relationships, with an address
+list in column B and details in C; New address opens a creation sheet. Private/public purpose, lifecycle,
+transition status, available actions and preserved conversation facts come from
+Rust projections with an observation time. Swift captures user intent and revision;
+Rust validates and journals Create, Restrict, Replace and Retire. A typed refusal
+is distinct from an unknown outcome. Resume update reuses the original signed
+operation; stale snapshots disable new changes. Lock clears address presentation,
+and session generations reject late results. No account or Keychain credential
+is created or replaced by these operations.
+
+The existing primary address and My approach page remain intact. Additional
+addresses explicitly state that sending/receiving is unavailable until delivery
+integration. They do not receive public profiles, paid-request links or automatic
+permission transfers. Composition, receiving-route evidence, held-mail handling
+and alias-aware acceptance remain subsequent work.
+
+The offline `tools/development-continuity/alias_metadata_upgrade.py` restored a
+fresh schema-38 owner copy and verified all 110 original table/sequence
+fingerprints, original migration history and configured key files. The original
+schema-37 database remains untouched as a rollback checkpoint. The new pinned
+owner launcher is `target/alias-native-20261014/start.sh`, using
+`target/alias-native-20261014/owner-ready/maild.json`; its server hash and
+preservation result are retained beside it. It serves the existing 9693 endpoint.
+No reenrollment, owner-address substitution or direct canonical-record edits were
+performed.
+
+Scoped validation passed: six portable-client tests, including extended exact
+alias recovery and typed refusal; strict lint for the client/bridge with all
+targets/features; all 101 identity source pins; formatting/diff checks; Swift
+compilation; and the existing native enrollment journey extended through the
+real isolated backend for create/restrict/replace/retire, invalid transition
+refusal, retired-address reservation, Directory isolation and retained account/
+credential. No test cases were added. The native run used the explicit alias
+scope; unrelated conversation/payment branches were not run. Evidence:
+`/tmp/cs-mail-address-client-tests.log`, `/tmp/cs-mail-address-lint-final.log`,
+`/tmp/cs-mail-address-native-checks.log`, `/tmp/cs-mail-address-preservation.log`
+and `/tmp/cs-mail-address-swift-final.log`. Actual alias delivery, iOS runtime,
+held-mail release and public-provider delivery were not exercised.
+
+Installation completed at the canonical
+`target/apple/CsMail-continuity-20261012.app` path after Marcus authorized the
+original signing key directly in macOS. The build script verified the original
+signing requirement before replacement. Quit/reopen and refresh were inspected in
+the installed app: My addresses loaded its real empty list and observation time;
+private/public purpose copy and the creation confirmation were checked; the
+inspection draft was cancelled and cleared without reserving an address. The
+original `marcus@csqd-mail.com` publication, simulated coverage and saved contacts
+remain present without reenrollment or device-credential replacement. The app is
+left on My addresses. Evidence: `/tmp/cs-mail-addresses-apple-final.log`.
+
+Address-detail lifecycle controls were exercised through the real isolated native
+bridge experiment, but were not visually exercised with populated addresses in
+Marcus's account, which has no additional address records. No owner test addresses
+were created. This validation does not establish alias mail delivery.
+
+## Alias backend foundation — 14 October 2026
+
+The portable Rust client and backend now have checked alias lifecycle, explicit
+receiving scopes, signed owner management commands and encrypted exact-operation
+recovery. The native bridge understands a pending alias update so the existing
+resume path can resolve its original operation. Native alias controls and the
+native/SMTP delivery integration are pending; this build does not make aliases
+usable for mail. See the [implementation boundary](../../docs/application-persistence-boundaries.md#alias-foundation--14-october-2026).
+
+The canonical signed Apple build was installed at
+`target/apple/CsMail-continuity-20261012.app`, after comparing its original signing
+requirement. Marcus authorized macOS's existing signing-key prompt directly.
+Quit/reopen and refresh were inspected against the original pinned owner backend;
+the approach page retains `marcus@csqd-mail.com`, simulated coverage and the original
+contacts. No reenrollment or replacement device credential was introduced. The
+backend had been stopped and was restored with its existing
+`target/column-b-navigation-20261013-8a4b/start.sh` launcher. Its verified database,
+configuration and pinned executable were retained; migration 0038 was not applied
+to that owner deployment. Build evidence: `/tmp/cs-mail-alias-apple-build.log`.
+
+Backend validation uses an isolated PostgreSQL database and extends existing
+conjecture-driven experiments without adding test cases. The final gate run passed
+identity pins, dependency direction, formatting, production lint, 114 workspace
+checks/tests, 106 PostgreSQL tests and application binaries. Its aggregate result
+retains an earlier all-target lint failure from a newly extended test fixture's
+method/enum syntax. That fixture was corrected; the subsequent strict workspace,
+all-targets, all-features lint rerun passed. Formatting and diff checks were then
+rechecked. Evidence: `/tmp/cs-mail-alias-quality-gate-final.log` and
+`/tmp/cs-mail-alias-clippy-final.log`. Actual alias delivery, concurrent alias
+delivery/blocking, held-mail release, iOS and public providers are outside these
+experiments.
+
 ## Neutral contact focus in column B — 13 October 2026
 
 Sidebar rows suppress the system's blue focus effect and draw a neutral outline

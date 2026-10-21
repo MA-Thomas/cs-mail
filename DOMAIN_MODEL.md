@@ -2,7 +2,7 @@
 
 > **Design principles.** Before changing code or this design, read the [Rust-domain design principles](docs/rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
 
-Confirmed product rules, updated October 14, 2026. Start here when changing
+Confirmed product rules, updated October 19, 2026. Start here when changing
 the code or documentation. These rules record the user's confirmed clarifications.
 The [deployment profile](cs_mail_deployment_profile.tex) gives the detailed
 financial-program requirements; the [protocol specification](cs_mail_protocol_spec.tex)
@@ -66,8 +66,20 @@ not establish biological identity or satisfy Phoros's separate enrollment policy
 
 ## Aliases and express-lane scope
 
-Agreed 2026-10-14; alias infrastructure and alias-scoped admission are product
-design awaiting implementation. Existing implemented lanes are **sender-scoped**.
+Agreed 16 October 2026. Address creation and express-lane permission are separate
+product decisions. Rust owns an independently revisioned receiving permission,
+signed pairing changes and admission. Swift presents those choices through the
+same journaled client contract. The first Rust foundation implements
+checked alias ownership,
+lifecycle, conversation-specific approval, named receiving scopes, signed management,
+atomic persistence and a deterministic route-authorization contract. Native management
+now presents additional address records, lifecycle actions and exact-operation recovery.
+The receiving-inbox implementation adds explicit alias-targeted native delivery
+and authenticated SMTP envelope-address routing, with receiving evidence committed
+alongside the message. Identity-addressed delivery remains explicitly without alias
+attribution. Alias-aware publications, ordinary composer address selection, outbound
+alias/reply addressing and held-message release remain separate work. Route
+authorization is not proof that a message was delivered.
 The [aliases and express lanes memo](cs_mail_aliases_and_express_lanes.tex)
 explains the motivation and examples; this section owns the confirmed rules.
 
@@ -75,23 +87,52 @@ explains the motivation and examples; this section owns the confirmed rules.
   lifecycle management and correspondence. These capabilities must work
   independently of Phoros. Phoros Account, operated by Reservatory, PBC, will
   later use them through a linked CS-MAIL account.
-- A person may use **private aliases** for healthcare organizations and
-  **public-facing aliases** for unsolicited approaches within the same account.
-  These are communication addresses, not additional accounts or login identities.
-- Creating a private alias automatically establishes an **alias-scoped express
-  lane**. It authorizes correspondence through that receiving alias, subject to
-  its admission policy, including from previously unknown departments, vendors
-  or specialists who have been given the address. Each such sender need not first
-  obtain a separate sender-scoped grant. There is **no bonded request route**
-  through the private alias.
-- Creating a public-facing alias does not automatically grant an express lane.
-  Existing standing permission, sender-scoped lanes and other existing invitation
-  rules apply. Approaches lacking permission use the existing bonded-request
-  process. Public-facing aliases are the primary route for these requests.
-- A **sender-scoped express lane** is explicitly granted to a particular sender
-  subject under its scope and validity rules, including through request
-  acceptance. An alias-scoped lane instead authorizes contact through its named
-  receiving alias. Standing acceptance remains a separate permission.
+- Each member has **one protocol identity**, with **at most one current public-facing
+  alias** for unsolicited approaches and **multiple private aliases** for
+  providers, employers and other contexts within the same account. These are
+  communication addresses, not additional accounts or login identities.
+- CS-MAIL generates an unpredictable email address for each private alias; the
+  member supplies its **purpose/description** instead of choosing its address.
+  The purpose/description is owner-visible metadata, separate from the email
+  address, and is not disclosed unless the owner explicitly shares it.
+- The member chooses the public-facing alias's email address. It may be replaced
+  under the agreed replacement lifecycle; the previous alias remains permanently
+  reserved and may complete its explicit transition, without becoming a second
+  current public alias. The signed Rust management contract implements these
+  creation and cardinality rules; this does not establish alias mail delivery or
+  the alias-aware publication cutover.
+- A **protocol identity** identifies a communication participant whom another
+  participant can accept or block. An **alias** is a separately identified route
+  controlled by that participant. One protocol identity may control multiple
+  aliases. Creating, replacing or retiring an alias does not create or replace
+  the protocol identity, account, login or shared subject. This supersedes the
+  address-equals-protocol-identity product assumption; the existing implementation
+  still uses address/persona coupling and requires an explicit cutover.
+- Alias ownership must not automatically disclose the association between aliases
+  to correspondents. Cross-alias enforcement does not authorize public linkage.
+- A **private alias** is a receiving address, independent of express-lane
+  permission. Creating it grants no lane. The member explicitly pairs it with
+  alias-scoped or sender-scoped permission for the intended use. An unpaired
+  alias supplies no admission authority; any other permission must independently
+  authorize the named receiving route.
+- An **alias-scoped express lane** authorizes correspondence through its named
+  receiving alias, subject to admission policy, including from previously unknown
+  senders given that address. A healthcare alias can be explicitly paired with
+  this lane so referred specialists need no separate sender grant.
+- A **sender-scoped express lane** explicitly authorizes a sender subject under
+  its receiving scope and validity rules, including through request acceptance.
+  A private alias for Amazon can instead be paired with a lane whose subject is
+  a recipient-selected authenticated legacy domain. Possessing that address does
+  not authorize other senders. Existing native-identity, external-mailbox and
+  authenticated legacy-domain subjects remain distinct; a domain does not prove
+  organizational ownership, and permitted domains are never inferred from names.
+  Standing acceptance remains a separate permission.
+- A public-facing alias grants no automatic lane. Existing standing permission,
+  sender-scoped lanes and invitation rules apply. Approaches lacking permission
+  use the existing bonded-request process through the public approach route.
+  Private aliases offer **no bonded request route**, whichever permission is
+  paired with them; a permission mismatch never creates a charge automatically.
+
 - Permission through a private alias does not grant access through the account's
   public-facing or other private aliases. Restricting, retiring or replacing a
   private alias must not introduce a bonded fallback on that route.
@@ -104,14 +145,136 @@ explains the motivation and examples; this section owns the confirmed rules.
   healthcare records. Annual service, identity and member-distribution rules
   remain separate; absence of a request charge does not waive annual service.
 
-Open decisions: alias-lane lifetime and renewal; restriction and block interaction;
-handling of authentication failures and suspicious or refused correspondence;
-replacement/retirement and continuity for portal login, recovery and notices;
-outbound address selection and reply continuity; and the mapping between aliases
-and protocol identities. Exact grant, storage and wire representations and
-milestone placement are not yet agreed. Do not inherit sender-lane expiry or
-domain-matching rules as alias-lane policy without an explicit decision. Creating
-an alias lane must not be assumed to settle a pending paid request.
+### Blocking and alias lifecycle
+
+Blocking a sender protocol identity overrides standing permission, sender-scoped
+lanes, alias-scoped lanes and invitations across every alias controlled by the
+recipient. Changing the receiving alias cannot bypass the block. External sender
+identity is limited to what authenticated evidence establishes: different
+mailboxes must not be assumed to belong to the same person. Alias retirement or
+replacement preserves identity-level blocks; unblocking alone does not recreate
+previously terminated grants.
+
+Private aliases have no automatic expiry; they remain active until explicitly
+changed, subject to service coverage and current admission controls. The member
+has three distinct actions:
+
+- **Restrict:** stop new correspondents while preserving authorized existing
+  conversations that already have admitted correspondence on that alias when
+  restriction commits. Freeze those exact conversations, not a list of everyone
+  who has ever written. New conversations require explicit approval. Held mail,
+  failed attempts and prepared paid requests do not qualify. Restriction cannot
+  restore consent, extend a grant or override a sender block.
+- **Replace:** create a new alias with an explicit transition policy for the old
+  alias. Preserve identity, blocks, correspondence and original receiving-route
+  history. Do not automatically transfer unknown-sender admission from the old
+  route to the new one. Transition duration and treatment of portal login,
+  recovery messages and notices require an explicit policy.
+- **Retire:** stop all inbound delivery through that alias and preserve received
+  correspondence and history. Explain before confirmation that notices and
+  recovery messages will no longer arrive through it. A retired alias address
+  must never be reassigned to another member.
+
+### Alias-scoped lane actions
+
+Lane permission is managed separately from address lifecycle:
+
+- **Restrict lane:** stop new conversations through the broad lane while preserving
+  the exact conversations with admitted correspondence when restriction commits.
+  Held mail and failed attempts do not qualify. Other independently granted
+  permission remains separate.
+- **Remove lane:** withdraw all authority supplied by that lane for future delivery,
+  including existing conversations. Other independently valid permission may still
+  authorize delivery. Received mail remains readable under its existing retention.
+- **Replace with sender-scoped permission:** atomically withdraw broad access and
+  activate the explicitly selected sender grants for this receiving alias. Earlier
+  correspondents are not grandfathered. Native identities, exact guest mailboxes
+  and authenticated legacy domains retain their distinct subjects and evidence.
+
+The address and inbox remain in all three cases. Replacing the address is a separate
+operation; restriction and retirement of a route constrain every permission using it.
+Opening a broad lane again requires an explicit signed grant and does not release
+held or refused mail. Removal is serialized with delivery: prior committed delivery
+remains a fact; subsequent delivery needs current authority. Signed exact retries
+return their historical outcome without reactivating superseded permission. Pairing
+and its receipt commit together; allowance effects commit with message and route
+evidence. No pairing action settles requests or grants disclosure consent.
+
+Sender-restricted route grants use the existing signed sender-lane validity, scope,
+authentication and allowance rules. The member explicitly selects their expiry and
+message limit. Domain authentication establishes authorized domain use, not company
+identity; the actual mailbox identity remains available for blocks and correspondence.
+
+These actions introduce no bonded fallback on a private route. They do not erase
+history, settle a paid request or imply disclosure consent. Replacement does not
+assert that an external organization's portal or recovery address was updated.
+
+### Receiving-route evidence and held correspondence
+
+Every admitted message records the receiving alias and the permission basis used.
+For SMTP, the accepted envelope recipient establishes the route, not the visible
+`To` header. Native delivery binds the target alias into the authenticated command.
+Preserve the route through admission, storage and replies; alias changes must not
+rewrite historical delivery evidence. Outbound composition must identify the
+selected sending alias; detailed reply-address behavior remains to be designed.
+
+Admission resolves the route and its lifecycle, checks service coverage, evaluates
+sender authentication, enforces identity-level blocks and evaluates the route's
+permission policy. An unresolved sender identity must not be treated as evidence
+that the sender is unblocked. Suspicious or insufficiently authenticated
+private-alias correspondence is held separately for member review, with an
+explanation and explicit controls. A hold is not ordinary delivery, an ongoing
+permission grant or a payment invitation. It must not bypass an established block.
+Detailed holding, release, retention and refusal contracts remain to be designed;
+review or release must not silently authorize future correspondence.
+
+### Remaining design decisions and implementation boundary
+
+Sender-scoped grants and standing acceptance default to the receiving alias where
+permission is granted. A recipient may explicitly select several named aliases;
+there is no all-current-and-future-alias scope in the first implementation.
+Creating another alias never expands existing grants. A replacement offers explicit
+selection of permissions/conversations to carry forward; it does not infer transfer.
+Permission opens selected entrances; blocking closes every entrance to that sender.
+
+Still open: replacement transition policy and portal/recovery/notice continuity;
+detailed outbound and reply addressing; held-message handling; privacy-preserving
+identity references and alias-aware publication. The current cutover preserves
+original signed evidence offline and converts recorded grants explicitly, without a
+runtime predecessor reader. Do not infer all-alias permission from a sender-scoped
+grant, or reuse sender-lane domain binding or expiry as alias-scoped policy.
+Alias creation must not inherit pending-request settlement effects.
+
+## Alias inboxes
+
+Agreed 16 October 2026. Every alias has its own receiving inbox. Communications
+column B selects an alias inbox or All inboxes; the main space browses and reads
+that selection. All inboxes is a union of the same underlying correspondence,
+not another copy or another read-state owner. Custom unions and organization
+within individual alias inboxes remain later work.
+
+Membership comes from the receiving assignment recorded with each message. Never
+infer a historical alias from a sender, the current public address or a present
+permission grant.
+Every received message requires an explicit receiving-inbox assignment. All inboxes
+derives its received correspondence from those assignments; it cannot contain an
+unassigned received message. Existing development placeholders are assigned by an
+explicit migration whose provenance is distinct from historical delivery evidence.
+Retirement and replacement preserve the original alias's history. A conversation
+may appear in several inboxes, retaining one conversation identity and the exact
+receiving alias of each message. An alias-scoped reader shows and acknowledges
+only that inbox's messages; opening the full conversation is explicit. Read state
+is shared by message identity across the alias inbox and the union view.
+
+Express lanes separates People and organizations (sender-scoped permission) from
+Alias-scoped lanes (receiving-route permission). A private alias may be paired
+with either lane scope; groups describe permission, not private/public address
+classification. Receiving-alias filters use explicitly recorded grant scope.
+Mailbox membership grants no permission, and a known sender's permission never
+implies access through every alias. Shopping organizations may use private aliases
+paired with explicitly authorized
+sender-scoped lanes. An alias inbox exists independently of whether a lane is
+paired with its address; membership remains a historical delivery fact.
 
 ## Annual service purchase
 
@@ -184,9 +347,10 @@ explanations of charges, refunds, expiry and the member pool belong in the app's
 separate Q&A section, as confirmed on 12 October 2026. This presentation choice
 does not change financial terms, settlement or recorded payment outcomes.
 
-For addresses offering the bonded route, each protocol identity publishes its own
-set of up to eight user-defined request classes describing the approaches it welcomes. Addresses of
-the same account have independent sets. Each class has its own collateral `S`,
+Each alias offering the bonded route has its own publication of up to eight
+user-defined request classes describing the approaches it welcomes. Aliases of
+the same protocol identity have independent sets, authorized by that identity
+for the named alias. Each class has its own collateral `S`,
 within cs-mail-wide bounds `collateral_min <= S <= collateral_max`. CSQD, the only
 provider, sets one processing component `C` for all of cs-mail; `C` and the bounds
 form one versioned operator policy. The sender selects a class; that class and its
@@ -198,8 +362,9 @@ misclassification penalty or reputation mechanism.
 When the operator changes `C` or the bounds, issued quotes keep their terms. A
 published class whose collateral lies outside the current bounds cannot be
 quoted until the recipient republishes; it is never rewritten or clamped on the
-recipient's behalf. A publication is authorized only by a key of the address it
-concerns and is independent of any relationship. See the
+recipient's behalf. A publication must be authorized by the controlling protocol
+identity for the named alias and is independent of any relationship. The current per-persona
+publication implementation requires an explicit alias-aware cutover. See the
 [request pricing design](docs/request-pricing-design.md).
 
 The recipient may accept a request with standing directed permission or with a
@@ -306,9 +471,14 @@ evidence and cannot be opened with the new binary. They have not been reset.
   Relaxation requires both participants through the existing conversation-policy
   mechanism. Rejected or expired content retains that restriction, including
   known ancestry through quotations and shared copies.
-- Conversations have no stored titles. Clients derive a label from locally
-  decrypted content, a date or the request class, with a fallback for unavailable
-  content. Labels are presentation, not authority or canonical content metadata.
+- Native conversations have a shared subject supplied by the sender at creation,
+  visible to both participants and fixed thereafter. The subject is encrypted
+  conversation content and searchable locally; it grants no authority. Agreed
+  19 October 2026, replacing the no-stored-title rule;
+  every new conversation requires a subject. Blank input receives a default using
+  the sender’s local date and time, with an alphabetic month (for example,
+  “Default subject: October-19-2026, 3:42 PM”). Existing placeholder conversations
+  may be assigned subjects during the development cutover.
 - For crossed requests, the first submitted request takes precedence. Its
   submission cancels any unsubmitted preparation in the other direction in the
   same complete consequence. Finalized funding is returned in full; uncertain
@@ -350,11 +520,74 @@ for atomicity and concurrency claims. Previously delivered copies remain readabl
 under their existing retention/custody rules; historical replay never supplies
 new send authority.
 
+## Private writing on a device
+
+Agreed usability slice, 15 October 2026. Drafts belong to a portable client
+workspace, not the protocol relationship kernel. Saved writing is private to
+that device and is encrypted at rest. Saving, editing, restoring or discarding a
+draft establishes no contact permission, source access, disclosure consent,
+charge authorization or delivery. Native new conversations/replies, external
+email, initial relationship requests and request follow-ups have distinct draft
+targets. New-conversation drafts carry the sender's shared subject; replies
+do not change it.
+
+Submitting transfers one explicitly selected saved revision into the existing
+operation journal atomically. A later edit cannot alter or replace that submitted
+operation. Unknown outcomes retain exact retry identities; definite refusals
+restore writing for review, without automatically trying another submission.
+Request funding/cancellation continues under its existing financial lifecycle.
+Source reuse and external disclosure still require their respective authorities
+at submission; saving a source selection or recipient address is not authority.
+Draft synchronization between devices and replacement-device draft recovery are
+not established by this local workspace.
+
+## Personal reading and organization
+
+Agreed usability follow-on, 15 October 2026. The portable client owns device-local
+read state, flags, Inbox/Archive/Trash placement and outgoing submission history.
+These are private organization, not protocol states or sender-visible receipts.
+Reading changes only the exact displayed message identities; synchronization
+alone does not mark correspondence read. Manual Mark unread applies to the
+selected snapshot. Native and external conversation identities remain scoped to
+their respective streams.
+
+Trash is reversible and restoration returns to the prior Inbox/Archive placement.
+Neither Trash nor Archive changes permission, disclosure consent or content-copy
+expiry. Native permanent copy removal is a distinct confirmed, journaled action
+under the existing DeleteCopies contract. It removes the caller's endpoint and
+recovery copies while retaining provenance and the other participant's copies.
+Equivalent external permanent deletion is not established.
+
+Agreed 19 October 2026: after unlocking, members can search correspondence retained
+on that device without connecting to the service. Results explain device-local
+coverage and any incomplete or unavailable content. Known local expiry and removal
+rules apply offline, including to matches and snippets. Search does not mark mail
+read, follow references implicitly or grant access or reuse authority.
+
+The client stores authenticated copies and per-message index records independently,
+encrypted at rest. Each incremental transaction commits the affected copy, index
+record and progress marker together. Unlock reconstructs the in-memory word lookup
+from index records without opening message copies. Connected downloads extend coverage. Search covers subjects and text, supports words
+and quoted phrases, and clears transient results on lock. It distinguishes content
+not downloaded from content known unavailable; neither becomes a false complete result.
+Readers distinguish service commit time from provider-reported event time.
+
+Sent derives from committed outgoing message facts. Device submission history
+retains exact prepared commands and terminal evidence from this version onward;
+earlier history is not invented. Native mailbox commit, external queue acceptance,
+relay handoff and provider delivery observations remain distinct. Refresh observes
+mail without resuming uncertain mutations; explicit recovery reuses the original
+operation. The single unresolved mutation restriction remains in effect.
+
 ## Address publications and directory discovery
 
-Agreed 11 October 2026. Accounts own their addresses; each address independently
-owns its public presentation, up to eight request classes and directory visibility.
-The directory is a searchable view of these publications, not a second class owner.
+Agreed 11 October 2026; identity/alias ownership clarified 14 October 2026.
+Accounts retain their protocol identities; each alias controlled by an identity
+has its own public presentation, up to eight request classes where bonded requests
+are offered, and directory visibility. A private alias must not become publicly
+listed merely because it was created. The directory is a view of public-facing
+publications, not a second class owner or a directory of all an identity's aliases.
+The existing per-address/persona implementation below requires alias-aware cutover.
 
 - Public profiles contain a member-authored display name, description and optional
   image. They are public statements, never copied from verified enrollment evidence.
@@ -363,10 +596,11 @@ The directory is a searchable view of these publications, not a second class own
 - Unlisted addresses are excluded from name/partial-address searches and browsing,
   but remain accessible through an exact address or shared request link. A shared
   link locates public information; it is neither secret nor communication authority.
-- The address's active recipient key authorizes profile, visibility and class edits.
-  A key for another address, including another address of the same account, does
-  not authorize those edits. Combined saves commit profile, visibility, class
-  publication and operation evidence atomically.
+- The controlling protocol identity authorizes profile, visibility and class edits
+  explicitly for the named alias. A signed edit for alias A cannot be applied to
+  alias B, even under shared control. Common ownership alone does not authorize an
+  edit. Combined saves commit profile, visibility, class publication and operation
+  evidence atomically. Exact key-delegation and alias-binding contracts await design.
 - Suspended and closed accounts disappear from search; direct lookup returns a
   neutral unavailable result without revealing the reason. Suspension preserves
   configuration for resumption. Closed accounts cannot reopen.

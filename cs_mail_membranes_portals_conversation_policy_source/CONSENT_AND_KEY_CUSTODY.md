@@ -63,6 +63,12 @@ that cost while preserving the same consent, retention and release semantics.
 Previously delivered endpoint copies remain local disclosures: consent expiry
 cannot make already disclosed plaintext or endpoint keys disappear.
 
+The 19 October 2026 offline-search decision permits searching locally retained
+correspondence after device unlock without a fresh custody release. Known local
+expiry and removal rules still exclude content and derived search results. An
+offline device cannot observe remote changes until it reconnects. This does not
+relax the authority checks for a new custody release.
+
 ## Key-use and commit boundary
 
 `cs-mail-application::consent::ConsentService` accepts signed `Authorize`, `Revoke`,

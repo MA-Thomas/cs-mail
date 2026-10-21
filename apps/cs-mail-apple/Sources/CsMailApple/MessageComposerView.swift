@@ -125,7 +125,8 @@ struct MessageComposerView: View {
     let contact: Conversation
     let conversationID: String?
     let dismiss: () -> Void
-    @State private var text = ""
+    var savedDraft: Draft? = nil
+    @StateObject private var draft = DraftEditor()
     @State private var choosingSource = false
     @State private var sourceTitle = ""
     @State private var sourceContactID: String?
@@ -135,6 +136,7 @@ struct MessageComposerView: View {
     @State private var selectedImage: Data?
     @State private var inclusions: [Inclusion] = []
     @State private var confirmingDiscard = false
+    @State private var finishing = false
     private struct Inclusion: Identifiable {
         let id = UUID()
         let draft: SourceDraft
@@ -152,7 +154,7 @@ struct MessageComposerView: View {
                 Text(conversationID == nil ? "New conversation with \(contact.title)" : "Reply to \(contact.title)").font(.headline)
                 Spacer()
                 Button("Close") {
-                    if text.isEmpty && inclusions.isEmpty { dismiss() } else { confirmingDiscard = true }
+                    if draft.record == nil { dismiss() } else if draft.text.isEmpty && draft.subject.isEmpty && inclusions.isEmpty { Task { if await draft.discard() { dismiss() } } } else { confirmingDiscard = true }
                 }.disabled(model.busy)
             }.padding(20)
             Divider()
@@ -169,22 +171,43 @@ struct MessageComposerView: View {
             #endif
         }
         .frame(minWidth: choosingSource ? 760 : 460, idealWidth: choosingSource ? 1000 : 560, minHeight: 550, idealHeight: 700)
+        .disabled(finishing)
         .privacySensitive()
-        .interactiveDismissDisabled(!text.isEmpty || !inclusions.isEmpty || model.busy)
-        .confirmationDialog("Discard this draft?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
-            Button("Discard draft", role: .destructive) { dismiss() }
+        .interactiveDismissDisabled(!draft.text.isEmpty || !draft.subject.isEmpty || !inclusions.isEmpty || model.busy)
+        .confirmationDialog("Close this draft?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
+            Button("Save draft and close") { saveAndClose() }
+            Button("Discard draft", role: .destructive) { Task { if await draft.discard() { dismiss() } } }
             Button("Keep writing", role: .cancel) {}
         }
-        .onDisappear { model.clearSourceContact() }
+        .task {
+            await draft.open(client: model.draftClient, target: .native(other: contact.sender, conversation: conversationID), saved: savedDraft, createNew: conversationID == nil)
+            if case .native(_, let sources) = draft.record?.body {
+                inclusions = sources.map { Inclusion(draft: $0, attribution: "Saved selection", preview: "This selection will be checked against its source when sending.", image: nil) }
+            }
+        }
+        .onChange(of: draft.subject) { _, _ in draft.save(draftBody) }
+        .onChange(of: draft.text) { _, _ in draft.save(draftBody) }
+        .onChange(of: inclusions.map(\.id)) { _, _ in draft.save(draftBody) }
+        .onDisappear { draft.leave(); model.clearSourceContact() }
+    }
+    private var draftBody: DraftBody { .native(text: draft.text, sources: inclusions.map(\.draft)) }
+    private func saveAndClose() {
+        finishing = true
+        draft.save(draftBody)
+        Task { if await draft.flush() != nil { dismiss() } else { finishing = false } }
     }
     private var composer: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("To: \(contact.title)").font(.headline)
+            if conversationID == nil {
+                TextField("Subject (date and time if left blank)", text: $draft.subject).textFieldStyle(.roundedBorder).disabled(draft.record == nil)
+            }
+            DraftSaveStatus(draft: draft)
             if let conversationID, let thread = contact.threads.first(where: { $0.id == conversationID }) {
                 Text(thread.label).font(.caption).lineLimit(2)
             }
-            TextEditor(text: $text).frame(minHeight: 130).disableAutocorrection(true).accessibilityLabel("Outgoing message")
-            Button("Include an existing message…", systemImage: "text.quote") { choosingSource = true }.disabled(!ready)
+            TextEditor(text: $draft.text).disabled(draft.record == nil).frame(minHeight: 130).disableAutocorrection(true).accessibilityLabel("Outgoing message")
+            Button("Include an existing message…", systemImage: "text.quote") { choosingSource = true }.disabled(!ready || !draft.ready)
             if !inclusions.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
@@ -204,13 +227,16 @@ struct MessageComposerView: View {
                     }
                 }.frame(maxHeight: 240)
             }
-            Text("Current permission and source policies are checked when sending.").font(.caption).foregroundStyle(.secondary)
             if let error = model.memberError { Text(error).foregroundStyle(.orange) }
-            if model.inbox?.pendingSend != nil { Text("The original send is saved with an unresolved outcome. Close this window and use Retry original send.").font(.callout) }
+            if model.inbox?.pendingSend != nil { Text("We couldn’t confirm whether your message was sent. Close this window and choose Check message status.").font(.callout) }
             Button("Send message") {
-                let body = text; let sources = inclusions.map(\.draft)
-                Task { if await model.sendMessage(conversationID: conversationID, text: body, sources: sources) { text = ""; inclusions = []; dismiss() } }
-            }.buttonStyle(.borderedProminent).disabled(!ready || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && inclusions.isEmpty))
+                finishing = true
+                draft.save(draftBody)
+                Task {
+                    if let saved = await draft.flush(), await model.submitDraft(saved) { dismiss() }
+                    else { await draft.reload(); finishing = false }
+                }
+            }.buttonStyle(.borderedProminent).disabled(!ready || !draft.canSubmit || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && inclusions.isEmpty))
         }.padding(24)
     }
     @ViewBuilder private var sourcePanel: some View {

@@ -100,7 +100,7 @@ pub fn validate_message(
 #[derive(Clone, Debug)]
 pub struct FreeAdmissionPlan {
     pub message: Message,
-    pub next_lane: Option<cs_mail_capabilities::Lane>,
+    pub next_lane: Option<cs_mail_capabilities::SenderScopedLane>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdmissionPlanError {
@@ -116,7 +116,7 @@ pub fn plan_free_admission(
     state: &crate::ProtocolState,
     request: &cs_mail_capabilities::BondFreeAdmission,
     record: Option<&EncryptedContentRecord>,
-    lane: Option<&cs_mail_capabilities::Lane>,
+    lane: Option<&cs_mail_capabilities::SenderScopedLane>,
     now: CanonicalTime,
     policy: &AdmissionPolicy,
 ) -> Result<FreeAdmissionPlan, AdmissionPlanError> {
@@ -198,10 +198,10 @@ pub fn plan_free_admission(
 }
 
 fn consume_lane(
-    lane: &cs_mail_capabilities::Lane,
+    lane: &cs_mail_capabilities::SenderScopedLane,
     request: &cs_mail_capabilities::BondFreeAdmission,
     now: CanonicalTime,
-) -> Result<cs_mail_capabilities::Lane, AdmissionPlanError> {
+) -> Result<cs_mail_capabilities::SenderScopedLane, AdmissionPlanError> {
     let evidence = request
         .evidence
         .as_ref()

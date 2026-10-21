@@ -123,6 +123,7 @@ pub struct RequestProgress {
 }
 #[derive(Clone, Debug)]
 pub struct RequestQuote {
+    pub class_id: String,
     pub class_name: String,
     pub processing: u64,
     pub collateral: u64,
@@ -167,6 +168,7 @@ impl RequestJourney {
                 (
                     RequestStatus::Review,
                     Some(RequestQuote {
+                        class_id: terms.selected_class.id().0.to_string(),
                         class_name: terms.selected_class.description().into(),
                         processing: terms.processing_charge.minor_units(),
                         collateral: terms.collateral.minor_units(),
@@ -309,7 +311,7 @@ impl MemberClient {
             },
         });
         state.last_request = None;
-        storage::save(self.store.as_ref(), &keys, &state)?;
+        self.persist_request(&keys, &state)?;
         self.advance_request(&mut state, &keys)?;
         Self::request_progress_of(&state)?.ok_or(Error::InvalidData)
     }
@@ -321,6 +323,14 @@ impl MemberClient {
         &self,
         request: RequestId,
         text: &str,
+    ) -> Result<RequestProgress, Error> {
+        self.authorize_request_with_draft(request, text, None)
+    }
+    pub(super) fn authorize_request_with_draft(
+        &self,
+        request: RequestId,
+        text: &str,
+        draft: Option<(&super::Draft, ProtocolIdentity, RequestClassId)>,
     ) -> Result<RequestProgress, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
@@ -342,6 +352,11 @@ impl MemberClient {
         if (self.clock)() >= issued.terms.expires_at {
             return Err(Error::QuoteExpired);
         }
+        if let Some((_, other, class)) = draft {
+            if plan.other != other || issued.terms.selected_class.id() != class {
+                return Err(Error::InvalidData);
+            }
+        }
         let document = self.request_document(
             &state,
             &keys,
@@ -352,6 +367,7 @@ impl MemberClient {
                 conversation: ConversationId::new(identifier()?).map_err(|_| Error::InvalidData)?,
             },
             text,
+            self.new_subject(draft.map(|(draft, _, _)| draft))?,
         )?;
         let account = self.account_view(&state.profile, &keys)?;
         let command = Self::sender_command(
@@ -370,7 +386,7 @@ impl MemberClient {
             document: Box::new(document),
             work: PreparationWork::Create(command),
         };
-        storage::save(self.store.as_ref(), &keys, &state)?;
+        self.commit_draft(&keys, &state, draft.map(|(draft, _, _)| draft))?;
         self.advance_request(&mut state, &keys)?;
         Self::request_progress_of(&state)?.ok_or(Error::InvalidData)
     }
@@ -380,6 +396,7 @@ impl MemberClient {
         keys: &Secrets,
         context: DocumentContext,
         text: &str,
+        subject: cs_mail_correspondence::ConversationSubject,
     ) -> Result<SignedRequestDocument, Error> {
         if text.trim().is_empty() || text.len() > super::correspondence::MAX_TEXT_BYTES {
             return Err(Error::InvalidData);
@@ -416,7 +433,9 @@ impl MemberClient {
                 secret: &secret,
                 public,
             },
-            &compose(vec![DocumentPart::Text(text.into())]).map_err(|_| Error::InvalidData)?,
+            &compose(vec![DocumentPart::Text(text.into())])
+                .map_err(|_| Error::InvalidData)?
+                .with_subject(subject),
             context.conversation,
             self.endpoint_key(&state.profile, keys, context.other)?,
             state.profile.deployment.custody_key,
@@ -444,8 +463,13 @@ impl MemberClient {
                 relationship: context.handle.relationship,
             },
             key: state.profile.sender_key,
-            document: RequestDocument::new(context.request, content_ref, package)
-                .map_err(|_| Error::InvalidData)?,
+            document: RequestDocument::new(
+                context.request,
+                content_ref,
+                package,
+                self.receiving_alias(&state.profile, context.handle.recipient)?,
+            )
+            .map_err(|_| Error::InvalidData)?,
             certificate,
             signature: Vec::new(),
         }
@@ -501,6 +525,28 @@ impl MemberClient {
         state.requesting = None;
         true
     }
+    fn persist_request(&self, keys: &Secrets, state: &State) -> Result<(), Error> {
+        if state.requesting.is_none() {
+            let restore = state.last_request.as_ref().is_none_or(|r| {
+                !matches!(
+                    r.status,
+                    RequestStatus::Submitted | RequestStatus::FollowupSent | RequestStatus::Changed
+                )
+            });
+            self.finish_draft(
+                keys,
+                state,
+                if restore {
+                    super::drafts::DraftResolution::RestoreEditable
+                } else {
+                    super::drafts::DraftResolution::RemoveSubmitted
+                },
+                None,
+            )
+        } else {
+            storage::save(self.store.as_ref(), keys, state)
+        }
+    }
     /// Advances only already authorized work. A quote always stops for review;
     /// pending funding returns control immediately rather than polling on the UI's behalf.
     pub(super) fn advance_request(&self, state: &mut State, keys: &Secrets) -> Result<(), Error> {
@@ -513,7 +559,7 @@ impl MemberClient {
                 RequestAdvance::Wait => return Ok(()),
                 RequestAdvance::Funding(capture) => {
                     state.requesting.as_mut().ok_or(Error::InvalidData)?.funding = Some(capture);
-                    storage::save(self.store.as_ref(), keys, state)?;
+                    self.persist_request(keys, state)?;
                     return Ok(());
                 }
                 RequestAdvance::Next(next_phase) => {
@@ -542,7 +588,7 @@ impl MemberClient {
                     refused = true;
                 }
             }
-            storage::save(self.store.as_ref(), keys, state)?;
+            self.persist_request(keys, state)?;
             if refused {
                 return Err(Error::RequestRefused);
             }
@@ -833,7 +879,7 @@ impl MemberClient {
             RequestStage::Quoting { .. } | RequestStage::Quoted(_)
         ) {
             state.requesting = None;
-            storage::save(self.store.as_ref(), &keys, &state)?;
+            self.persist_request(&keys, &state)?;
             return Ok(());
         }
         if self.reconcile_before_cancel(&mut state, &keys, &plan)? {
@@ -841,12 +887,12 @@ impl MemberClient {
         }
         if matches!(plan.kind, RequestKind::Followup { .. }) {
             state.requesting = None;
-            storage::save(self.store.as_ref(), &keys, &state)?;
+            self.persist_request(&keys, &state)?;
             return Ok(());
         }
         let (request, _) = self.outbound_request(&state, &keys, &plan)?;
         if Self::record_changed_request(&mut state, &plan, &request) {
-            storage::save(self.store.as_ref(), &keys, &state)?;
+            self.persist_request(&keys, &state)?;
             return Ok(());
         }
         let command = Self::sender_command(
@@ -870,7 +916,7 @@ impl MemberClient {
             document,
             work: PreparationWork::Cancel(command),
         };
-        storage::save(self.store.as_ref(), &keys, &state)?;
+        self.persist_request(&keys, &state)?;
         self.advance_request(&mut state, &keys)
     }
     fn reconcile_before_cancel(
@@ -926,14 +972,14 @@ impl MemberClient {
                     },
                     answer.receipt,
                 );
-                storage::save(self.store.as_ref(), keys, state)?;
+                self.persist_request(keys, state)?;
                 return Ok(true);
             }
             if matches!(work, PreparationWork::Create(_))
                 && answer.receipt.payload.kind == ReceiptKind::Refused
             {
                 Self::finish_request(state, plan, RequestStatus::Refused, answer.receipt);
-                storage::save(self.store.as_ref(), keys, state)?;
+                self.persist_request(keys, state)?;
                 return Ok(true);
             }
             state.requesting.as_mut().ok_or(Error::InvalidData)?.stage = RequestStage::Preparing {
@@ -941,7 +987,7 @@ impl MemberClient {
                 document: document.clone(),
                 work: PreparationWork::Stopped,
             };
-            storage::save(self.store.as_ref(), keys, state)?;
+            self.persist_request(keys, state)?;
         }
         Ok(false)
     }
@@ -952,6 +998,15 @@ impl MemberClient {
         other: &str,
         request_id: RequestId,
         text: &str,
+    ) -> Result<RequestProgress, Error> {
+        self.send_followup_with_draft(other, request_id, text, None)
+    }
+    pub(super) fn send_followup_with_draft(
+        &self,
+        other: &str,
+        request_id: RequestId,
+        text: &str,
+        draft: Option<&super::Draft>,
     ) -> Result<RequestProgress, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
@@ -978,6 +1033,7 @@ impl MemberClient {
                 conversation,
             },
             text,
+            self.conversation_subject(&state, &keys, conversation)?,
         )?;
         let plan = RequestJourney {
             funding: None,
@@ -994,7 +1050,7 @@ impl MemberClient {
             },
         };
         state.requesting = Some(plan);
-        storage::save(self.store.as_ref(), &keys, &state)?;
+        self.commit_draft(&keys, &state, draft)?;
         self.advance_request(&mut state, &keys)?;
         Self::request_progress_of(&state)?.ok_or(Error::InvalidData)
     }

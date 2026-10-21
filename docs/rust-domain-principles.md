@@ -20,6 +20,14 @@ are different concepts—even when they concern the same person or transaction.
 Use scoped identifiers and dedicated value types so accidental substitution
 becomes difficult.
 
+Explicitly favor types that cannot express an invalid combination. Use structs
+with required fields for facts that must coexist, and enums with variant-specific
+data for meaningful alternatives. Keep construction controlled so callers cannot
+bypass these guarantees. Runtime checks establish relationships and external facts
+that types cannot establish; checked deserialization and persistence must preserve
+the resulting invariants. Independent optional fields must not represent effects
+that are required to occur together.
+
 The [product identity model](product-identity-model.md) distinguishes the shared
 subject, one durable login identity per product, and its multiple authentication
 methods. Phoros's future ceremony may adopt an existing cs-mail subject through

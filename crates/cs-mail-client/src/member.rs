@@ -1,6 +1,28 @@
 //! Portable member application slice. Server rules stay in their existing owners.
 //! All mutable device progress is serialized and committed before external effects.
+mod alias_views;
+mod aliases;
+pub use alias_views::{
+    AddressConversation, AddressKind, AddressMutation, AddressPermission, AddressState,
+    AddressUpdateResult, AddressWorkspace, ManagedAddress, PendingAddressAction,
+    PendingAddressUpdate, PermissionMutation, ReceivingLaneView,
+};
 mod correspondence;
+mod drafts;
+mod inboxes;
+mod personal;
+pub use inboxes::{AliasInbox, InboxScope, InboxWorkspace, MessageRoute, SenderLaneScope};
+mod reading;
+mod retained;
+mod retained_index;
+pub use drafts::{
+    Draft, DraftBody, DraftId, DraftIssue, DraftRevision, DraftSubmission, DraftTarget,
+};
+pub use personal::{
+    MailAction, MailFolder, MailItem, MailKey, OutgoingWork, SearchMatch, SearchPage, WorkStatus,
+};
+pub use reading::{ReadingBlock, ReadingContent, ReadingPart};
+pub use retained::RetentionProgress;
 mod directory;
 pub use correspondence::{ConversationSummary, ReplyRoute};
 mod external;
@@ -25,7 +47,10 @@ mod views;
 pub use enrollment::{EnrollmentDetails, EnrollmentStatus, LoginStart};
 pub use login::Authorization;
 pub use navigation::{NavigationContact, NavigationLane, NavigationRequest};
-pub use storage::DeviceStore;
+pub use storage::{
+    DeviceStore, RetainedCommit, RetainedCopyWrite, RetainedIndexRow, RetainedRecordId,
+    RetainedWrite,
+};
 pub use transport::{HttpTransport, Transport};
 pub use views::{
     ContactState, Conversation, Inbox, LaneExpiryReminder, Message, PendingSetup, PermissionRoute,
@@ -50,6 +75,8 @@ const MAX_CACHE: usize = 64 * 1024 * 1024;
 /// Stable, redacted errors. Never include server bodies, credentials, or message text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
+    DraftChanged,
+    CopyDeletionRefused,
     NotConfigured,
     AlreadyConfigured,
     KeyUnavailable,
@@ -193,6 +220,11 @@ pub struct MemberClient {
     transport: Arc<dyn Transport>,
     clock: Arc<dyn Fn() -> CanonicalTime + Send + Sync>,
     operation: Mutex<()>,
+    workspace: Mutex<()>,
+    search: Mutex<Option<personal::SearchSession>>,
+    receiving: Mutex<Option<inboxes::InboxCatalog>>,
+    retained: Mutex<Option<retained_index::Retained>>,
+    retained_epoch: std::sync::atomic::AtomicU64,
     login: Mutex<Option<login::Attempt>>,
 }
 impl MemberClient {
@@ -206,6 +238,11 @@ impl MemberClient {
             transport,
             clock,
             operation: Mutex::new(()),
+            workspace: Mutex::new(()),
+            search: Mutex::new(None),
+            receiving: Mutex::new(None),
+            retained: Mutex::new(None),
+            retained_epoch: std::sync::atomic::AtomicU64::new(0),
             login: Mutex::new(None),
         }
     }
@@ -267,7 +304,7 @@ impl MemberClient {
         let keys = storage::secrets(self.store.as_ref())?;
         views::inbox(&storage::open(self.store.as_ref(), &keys)?)
     }
-    fn synchronize(&self, state: &mut State, keys: &storage::Secrets) -> Result<(), Error> {
+    fn observe_inbox(&self, state: &mut State, keys: &storage::Secrets) -> Result<(), Error> {
         let deployment: Deployment = self.call(&state.profile.server, "v1/deployment", None)?;
         if deployment.scope != state.profile.deployment.scope
             || deployment.provider_key != state.profile.deployment.provider_key
@@ -286,6 +323,10 @@ impl MemberClient {
         }
         state.profile.deployment = deployment;
         state.inbox = inbox;
+        Ok(())
+    }
+    fn synchronize(&self, state: &mut State, keys: &storage::Secrets) -> Result<(), Error> {
+        self.observe_inbox(state, keys)?;
         self.sync_mailbox(state, keys)?;
         self.sync_external(state, keys)?;
         state.synchronized_at = Some((self.clock)());
@@ -297,6 +338,7 @@ impl MemberClient {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let mut state = storage::open(self.store.as_ref(), &keys)?;
+        self.finish_alias_setup(&mut state, &keys)?;
         match self.finish_device_setup(&mut state, &keys) {
             Ok(()) | Err(Error::SetupRefused) => {}
             Err(error) => return Err(error),
@@ -305,8 +347,8 @@ impl MemberClient {
             Ok(()) | Err(Error::RequestRefused) => {}
             Err(error) => return Err(error),
         }
-        match self.transmit_policy(&mut state, &keys) {
-            Ok(()) | Err(Error::PolicyRefused) => {}
+        match self.transmit_conversation_edit(&mut state, &keys) {
+            Ok(()) | Err(Error::PolicyRefused | Error::CopyDeletionRefused) => {}
             Err(error) => return Err(error),
         }
         if state.sending.is_some() {
@@ -318,6 +360,43 @@ impl MemberClient {
         self.transmit_external(&mut state, &keys)?;
         self.synchronize(&mut state, &keys)?;
         views::inbox(&state)
+    }
+    /// Refreshes observations without resuming any mutation or financial operation.
+    /// # Errors
+    /// Failed authentication, transport or durable snapshot replacement.
+    pub fn refresh_mail(&self) -> Result<MailRefresh, Error> {
+        let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
+        let keys = storage::secrets(self.store.as_ref())?;
+        let mut state = storage::open(self.store.as_ref(), &keys)?;
+        self.observe_inbox(&mut state, &keys)?;
+        let before = state.mailbox.clone();
+        let native = self.sync_mailbox(&mut state, &keys);
+        if native.is_err() {
+            state.mailbox = before;
+        }
+        let native_current = observation(native)?;
+        let external_current = observation(self.sync_external(&mut state, &keys))?;
+        if native_current && external_current {
+            state.synchronized_at = Some((self.clock)());
+        }
+        storage::save(self.store.as_ref(), &keys, &state)?;
+        Ok(MailRefresh {
+            inbox: views::inbox(&state)?,
+            native_current,
+            external_current,
+        })
+    }
+    /// Opens device-retained native correspondence without network access.
+    /// # Errors
+    /// Unavailable custody, invalid local evidence or unknown participant.
+    pub fn cached_conversation(&self, sender: &str) -> Result<Conversation, Error> {
+        let _guard = self.workspace.lock().map_err(|_| Error::Unavailable)?;
+        let keys = storage::secrets(self.store.as_ref())?;
+        let state = storage::open(self.store.as_ref(), &keys)?;
+        let sender = parse_sender(sender)?;
+        let result = self.cached_native_conversation(&state, &keys, sender)?;
+        storage::check_keys(self.store.as_ref(), &keys)?;
+        Ok(result)
     }
     /// Fetches admitted ciphertext and decrypts only in memory. Plaintext is never cached.
     /// # Errors
@@ -331,7 +410,11 @@ impl MemberClient {
             handle,
             view,
             content,
-        } = self.read(&state.profile, &keys, MemberRead::AsRecipient { sender })?
+        } = (match self.read(&state.profile, &keys, MemberRead::AsRecipient { sender }) {
+            Ok(value) => value,
+            Err(Error::Offline) => return self.cached_native_conversation(&state, &keys, sender),
+            Err(error) => return Err(error),
+        })
         else {
             return Err(Error::InvalidData);
         };
@@ -460,6 +543,7 @@ impl MemberClient {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let mut state = storage::open(self.store.as_ref(), &keys)?;
+        self.finish_alias_setup(&mut state, &keys)?;
         match self.finish_device_setup(&mut state, &keys) {
             Ok(()) | Err(Error::SetupRefused) => {}
             Err(error) => return Err(error),
@@ -468,8 +552,8 @@ impl MemberClient {
             Ok(()) | Err(Error::RequestRefused) => {}
             Err(error) => return Err(error),
         }
-        match self.transmit_policy(&mut state, &keys) {
-            Ok(()) | Err(Error::PolicyRefused) => {}
+        match self.transmit_conversation_edit(&mut state, &keys) {
+            Ok(()) | Err(Error::PolicyRefused | Error::CopyDeletionRefused) => {}
             Err(error) => return Err(error),
         }
         if state.sending.is_some() {
@@ -552,7 +636,7 @@ fn lane_grant(
     operation: IdempotencyKey,
 ) -> Result<PendingCommand, Error> {
     use cs_mail_capabilities::{
-        DeclarationAuthorityConstraint, LaneGrant, LaneMode, LaneSubject, RateLimit,
+        DeclarationAuthorityConstraint, LaneMode, LaneSubject, RateLimit, SenderScopedGrant,
         SignedLaneGrant,
     };
     use cs_mail_primitives::{
@@ -563,7 +647,7 @@ fn lane_grant(
         return Err(Error::InvalidData);
     }
     let guest = view.guest.is_some();
-    let grant = LaneGrant {
+    let grant = SenderScopedGrant {
         id: view
             .lane
             .as_ref()
@@ -631,6 +715,30 @@ impl MemberClient {
         text: &str,
         sources: &[SourceDraft],
     ) -> Result<cs_mail_primitives::MessageId, Error> {
+        self.send_message_with_draft(other, conversation, text, sources, None, None)
+    }
+    /// Send to an explicitly selected receiving alias. The host checks that the
+    /// alias belongs to `other`; this does not discover or disclose sibling aliases.
+    /// # Errors
+    /// Rejects pending work, invalid targets or a refused delivery; uncertain sends retain their journal.
+    pub fn send_message_to_alias(
+        &self,
+        other: &str,
+        alias: cs_mail_primitives::AliasId,
+        conversation: Option<u128>,
+        text: &str,
+    ) -> Result<cs_mail_primitives::MessageId, Error> {
+        self.send_message_with_draft(other, conversation, text, &[], None, Some(alias))
+    }
+    pub(super) fn send_message_with_draft(
+        &self,
+        other: &str,
+        conversation: Option<u128>,
+        text: &str,
+        sources: &[SourceDraft],
+        draft: Option<&Draft>,
+        alias: Option<cs_mail_primitives::AliasId>,
+    ) -> Result<cs_mail_primitives::MessageId, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let mut state = storage::open(self.store.as_ref(), &keys)?;
@@ -653,9 +761,33 @@ impl MemberClient {
         self.synchronize(&mut state, &keys)?;
         let other = parse_sender(other)?;
         state.last_send = None;
-        state.sending =
-            Some(self.prepare_send(&state, &keys, other, conversation, text, sources)?);
-        storage::save(self.store.as_ref(), &keys, &state)?;
+        let mut pending = self.prepare_send(
+            &state,
+            &keys,
+            correspondence::SendWriting {
+                alias,
+                other,
+                conversation,
+                text,
+                sources,
+                draft,
+            },
+        )?;
+        if let Some(alias) = alias {
+            let cs_mail_application::correspondence::Command::Send { package, .. } =
+                pending.send.command
+            else {
+                return Err(Error::InvalidData);
+            };
+            pending.create = None;
+            pending.send = Self::signed(
+                &state.profile,
+                &keys,
+                cs_mail_application::correspondence::Command::SendToAlias { alias, package },
+            )?;
+        }
+        state.sending = Some(pending);
+        self.commit_draft(&keys, &state, draft)?;
         // A known commit is a send outcome. A later view-refresh failure must not
         // turn it into an apparently failed send and invite a fresh duplicate.
         self.transmit_send(&mut state, &keys)
@@ -679,4 +811,18 @@ fn require_idle(state: &State) -> Result<(), Error> {
         return Err(Error::SetupPending);
     }
     Ok(())
+}
+
+/// A partial observation is useful mail, never evidence that pending work failed.
+pub struct MailRefresh {
+    pub inbox: Inbox,
+    pub native_current: bool,
+    pub external_current: bool,
+}
+fn observation(result: Result<(), Error>) -> Result<bool, Error> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(Error::Offline | Error::Unavailable) => Ok(false),
+        Err(error) => Err(error),
+    }
 }

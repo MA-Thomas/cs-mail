@@ -178,6 +178,7 @@ pub struct Document(DocumentRecord);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DocumentRecord {
+    subject: Option<crate::ConversationSubject>,
     version_secret: [u8; 32],
     parts: Vec<DocumentPart>,
 }
@@ -208,6 +209,7 @@ impl Document {
         version_secret: [u8; 32],
     ) -> Result<Self, CorrespondenceError> {
         DocumentRecord {
+            subject: None,
             version_secret,
             parts,
         }
@@ -215,6 +217,14 @@ impl Document {
     }
     pub fn parts(&self) -> &[DocumentPart] {
         &self.0.parts
+    }
+    #[must_use]
+    pub fn with_subject(mut self, subject: crate::ConversationSubject) -> Self {
+        self.0.subject = Some(subject);
+        self
+    }
+    pub fn subject(&self) -> Option<&crate::ConversationSubject> {
+        self.0.subject.as_ref()
     }
     fn blocks(&self) -> Vec<BlockRef<'_>> {
         self.0.parts.iter().flat_map(DocumentPart::blocks).collect()
@@ -237,9 +247,10 @@ impl Document {
             return Err(CorrespondenceError::Invalid);
         }
         let mut hash = Sha256::new();
-        hash.update(b"cs-mail/correspondence-document/v2");
+        hash.update(b"cs-mail/correspondence-document/v3");
         hash.update(bytes);
         ManifestRecord {
+            subject: self.subject().map(crate::ConversationSubject::commitment),
             message,
             conversation,
             version: MessageVersion(hash.finalize().into()),
@@ -306,6 +317,7 @@ pub struct MessageManifest(ManifestRecord);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ManifestRecord {
+    subject: Option<crate::SubjectCommitment>,
     message: MessageId,
     conversation: ConversationId,
     version: MessageVersion,
@@ -333,6 +345,9 @@ impl From<MessageManifest> for ManifestRecord {
     }
 }
 impl MessageManifest {
+    pub const fn subject(&self) -> Option<crate::SubjectCommitment> {
+        self.0.subject
+    }
     pub const fn message(&self) -> MessageId {
         self.0.message
     }

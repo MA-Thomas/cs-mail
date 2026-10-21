@@ -66,6 +66,7 @@ pub struct Conversation(ConversationRecord);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConversationRecord {
+    subject: Option<crate::SubjectCommitment>,
     id: ConversationId,
     scope: CorrespondenceRef,
     policy: ReusePolicy,
@@ -106,6 +107,7 @@ impl From<Conversation> for ConversationRecord {
 impl Conversation {
     pub fn begun_by_request(id: ConversationId, scope: CorrespondenceRef) -> Self {
         Self(ConversationRecord {
+            subject: None,
             id,
             scope,
             policy: ReusePolicy::OriginatingRelationshipOnly,
@@ -116,6 +118,7 @@ impl Conversation {
     }
     pub fn new(id: ConversationId, scope: CorrespondenceRef) -> Self {
         Self(ConversationRecord {
+            subject: None,
             id,
             scope,
             policy: ReusePolicy::AcrossRelationships,
@@ -126,6 +129,24 @@ impl Conversation {
     }
     pub const fn id(&self) -> ConversationId {
         self.0.id
+    }
+    pub const fn subject(&self) -> Option<crate::SubjectCommitment> {
+        self.0.subject
+    }
+    /// Bind the subject with the first native delivery; later deliveries cannot change it.
+    /// # Errors
+    /// Rejects missing or conflicting subject commitments.
+    pub fn bind_subject(
+        &self,
+        subject: Option<crate::SubjectCommitment>,
+    ) -> Result<Self, CorrespondenceError> {
+        let subject = subject.ok_or(CorrespondenceError::Invalid)?;
+        if self.0.subject.is_some_and(|current| current != subject) {
+            return Err(CorrespondenceError::Conflict);
+        }
+        let mut next = self.clone();
+        next.0.subject = Some(subject);
+        Ok(next)
     }
     pub const fn scope(&self) -> CorrespondenceRef {
         self.0.scope
