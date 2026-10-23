@@ -1,9 +1,9 @@
 //! Agreed conjectures: local persistence does not disclose credentials or plaintext;
 //! interruptions never replace an unresolved operation or release data after custody denial.
 use super::{
-    AddressMutation, AddressUpdateResult, Deployment, DeviceStore, EnrollmentDetails, Error,
-    LoginStart, MemberClient, Pending, PendingAddressAction, Profile, State, Transport, login,
-    storage,
+    AddressChoice, AddressMutation, AddressPolicy, AddressUpdateResult, Deployment, DeviceStore,
+    EnrollmentDetails, Error, LoginStart, MemberClient, Pending, PendingAddressAction, Profile,
+    State, Transport, login, storage,
 };
 use cs_mail_primitives as p;
 use cs_mail_security::{CommandSigner, ProviderSigner, ReceiptKind, ReceiptPayload, SigningScope};
@@ -377,7 +377,7 @@ fn lost_decision_response_and_failed_local_commit_replay_exact_operation_after_r
             .unwrap();
     let mut state = State {
         external: None,
-        format: 4,
+        format: 5,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -516,7 +516,7 @@ impl Transport for ContentNetwork {
             serde_json::to_value(response).unwrap()
         } else if route == "v1/deployment" {
             serde_json::to_value(deployment()).unwrap()
-        } else if route.ends_with("/receiving-alias") {
+        } else if route.ends_with("/correspondence-alias") {
             fixture_public_alias(route)
         } else if route.ends_with("/endpoint-key") {
             serde_json::to_value(cs_mail_security::EndpointKeyPublication {
@@ -700,7 +700,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         .unwrap();
     let state = State {
         external: None,
-        format: 4,
+        format: 5,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -1191,29 +1191,33 @@ impl Transport for DirectoryNetwork {
                 )
                 .unwrap();
             assert!(matches!(request.command, AliasCommand::Create { .. }));
-            let (address, usage) = match creation {
-                cs_mail_application::aliases::AliasCreation::Private { description } => (
-                    "p00000000000000000000000000000001@csqd-mail.com"
-                        .to_owned()
-                        .try_into()
-                        .unwrap(),
-                    cs_mail_accounts::aliases::AliasUsage::Private {
-                        description: description.clone(),
-                    },
-                ),
-                cs_mail_application::aliases::AliasCreation::Public { address } => (
-                    address.clone(),
-                    cs_mail_accounts::aliases::AliasUsage::Public,
-                ),
+            let address = match &creation.address {
+                cs_mail_application::aliases::AddressSelection::Generated { address }
+                | cs_mail_application::aliases::AddressSelection::Chosen { address } => {
+                    address.clone()
+                }
             };
             let alias = cs_mail_accounts::aliases::Alias::create(
                 id,
                 request.owner,
                 address,
-                usage,
+                creation.configuration.clone(),
                 p::CanonicalTime(100),
             )
             .unwrap();
+            let alias = if alias.policy() == cs_mail_accounts::aliases::ReceivingPolicy::AliasScoped
+            {
+                alias
+                    .with_permission(
+                        alias
+                            .permission()
+                            .open(0.into(), p::CanonicalTime(100))
+                            .unwrap(),
+                    )
+                    .unwrap()
+            } else {
+                alias
+            };
             let mut acknowledgement = Acknowledgement::sign(
                 AliasReceipt {
                     digest: request.digest().unwrap(),
@@ -1278,7 +1282,7 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
         .unwrap();
     let state = State {
         external: None,
-        format: 4,
+        format: 5,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -1318,6 +1322,7 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
     assert_eq!(
         first
             .publish_directory(
+                p::AliasId::new(1).unwrap(),
                 DirectoryRevision(0),
                 1,
                 PublicProfile::new(
@@ -1380,7 +1385,7 @@ impl Transport for ExternalNetwork {
         use cs_mail_application::correspondence::external::{
             Acknowledgement, Command, Outcome, Receipt, Response, SignedCommand,
         };
-        if route.ends_with("/receiving-alias") {
+        if route.ends_with("/correspondence-alias") {
             return Ok(serde_json::to_vec(&fixture_public_alias(route)).unwrap());
         }
         if route == "v1/external/prepare" {
@@ -1654,12 +1659,12 @@ fn challenge_draft_handoff(
     assert!(network.commands.lock().unwrap().is_empty());
     let original_workspace = store.workspace.lock().unwrap().clone().unwrap();
     let mut malformed: serde_json::Value = serde_json::from_slice(
-        &storage::decrypt(keys, &original_workspace, b"cs-mail/member-workspace/v2").unwrap(),
+        &storage::decrypt(keys, &original_workspace, b"cs-mail/member-workspace/v3").unwrap(),
     )
     .unwrap();
     malformed["drafts"][0]["revision"] = json!(0);
     *store.workspace.lock().unwrap() =
-        Some(storage::encrypt(keys, &malformed, b"cs-mail/member-workspace/v2").unwrap());
+        Some(storage::encrypt(keys, &malformed, b"cs-mail/member-workspace/v3").unwrap());
     assert!(matches!(first.drafts(), Err(Error::InvalidData)));
     *store.workspace.lock().unwrap() = Some(original_workspace);
     store.denied.store(true, Ordering::SeqCst);
@@ -1786,7 +1791,7 @@ fn external_device() -> (Arc<Store>, storage::Secrets, State) {
         .unwrap();
     let state = State {
         external: None,
-        format: 4,
+        format: 5,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -1824,7 +1829,11 @@ fn challenge_alias_client_recovery(
     // retain the exact signed operation in encrypted storage without replacing keys.
     let original_secret = store.load_secret().unwrap();
     network.lost.store(true, Ordering::SeqCst);
-    let command = AddressMutation::CreatePrivate {
+    let command = AddressMutation::Create {
+        address: AddressChoice::Generated {
+            address: "fixture482731@csqd-mail.com".to_owned(),
+        },
+        policy: AddressPolicy::AliasScoped,
         description: "Private context canary".into(),
     };
     assert_eq!(
@@ -1834,7 +1843,7 @@ fn challenge_alias_client_recovery(
     let pending = reopened.pending_address_update().unwrap().unwrap();
     assert!(matches!(
         pending.action,
-        PendingAddressAction::CreatePrivate { .. }
+        PendingAddressAction::Create { .. }
     ));
     assert!(
         !store
@@ -1874,8 +1883,14 @@ fn challenge_alias_client_recovery(
     network.lost.store(true, Ordering::SeqCst);
     let refused = cs_mail_application::aliases::Command::Create {
         id: p::AliasId::new(702).unwrap(),
-        creation: cs_mail_application::aliases::AliasCreation::Private {
-            description: "Refused context".to_owned().try_into().unwrap(),
+        creation: cs_mail_application::aliases::AliasCreation {
+            address: cs_mail_application::aliases::AddressSelection::Generated {
+                address: "fixture482731@csqd-mail.com".to_owned().try_into().unwrap(),
+            },
+            configuration: cs_mail_accounts::aliases::AliasConfiguration {
+                receiving: cs_mail_accounts::aliases::ReceivingPolicy::AliasScoped,
+                description: "Refused context".to_owned().try_into().unwrap(),
+            },
         },
     };
     assert_eq!(client.change_alias(refused).unwrap_err(), Error::Offline);
@@ -1995,7 +2010,10 @@ fn fixture_assignment(
         format!("fixture-{}@inbox.test", recipient.0)
             .try_into()
             .unwrap(),
-        cs_mail_accounts::aliases::AliasUsage::Public,
+        cs_mail_accounts::aliases::AliasConfiguration {
+            receiving: cs_mail_accounts::aliases::ReceivingPolicy::Bonded,
+            description: "Fixture route".to_owned().try_into().unwrap(),
+        },
         p::CanonicalTime(0),
     )
     .unwrap();
@@ -2014,7 +2032,7 @@ fn fixture_assignment(
 
 fn fixture_public_alias(route: &str) -> Value {
     let owner = route.split('/').nth(2).unwrap().parse::<u128>().unwrap();
-    serde_json::to_value(cs_mail_application::aliases::PublicReceivingAlias {
+    serde_json::to_value(cs_mail_application::aliases::CorrespondenceAlias {
         owner: p::ProtocolIdentity(owner),
         id: p::AliasId::new(owner).unwrap(),
         address: format!("fixture-{owner}@inbox.test").try_into().unwrap(),

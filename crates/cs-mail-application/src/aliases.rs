@@ -1,11 +1,12 @@
 //! Authenticated alias management and deterministic receiving-route admission.
 //! Management never invokes sender-lane acceptance or modifies financial state.
+pub mod generation;
 use crate::accounts::{AccountClock, operations::AccountState};
 use cs_mail_accounts::alias_permission::{PermissionRevision, PermissionState};
 use cs_mail_accounts::{
     aliases::{
-        AdmittedConversation, Alias, AliasDescription, AliasError, AliasKind, AliasPortfolio,
-        AliasUsage,
+        AdmittedConversation, Alias, AliasConfiguration, AliasError, AliasPortfolio,
+        ReceivingPolicy,
     },
     directory::MemberAddress,
 };
@@ -17,60 +18,50 @@ use cs_mail_primitives::{
 };
 use cs_mail_protocol::{Relationship, RelationshipState};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use generation::{AddressSuggestion, GenerationName, NameFragment};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A private request contains context metadata, never a member-chosen mailbox.
+/// Address selection is independent of the receiving policy and purpose.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub enum AliasCreation {
-    Private { description: AliasDescription },
-    Public { address: MemberAddress },
+pub enum AddressSelection {
+    Generated { address: MemberAddress },
+    Chosen { address: MemberAddress },
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub enum ReplacementAddress {
-    GeneratePrivate,
-    Public { address: MemberAddress },
+pub struct AliasCreation {
+    pub address: AddressSelection,
+    pub configuration: AliasConfiguration,
 }
 /// Infrastructure supplies entropy before the protected transaction; domain rules
 /// receive the resulting candidate explicitly and never obtain randomness themselves.
-pub trait PrivateAliasEntropy {
+pub trait AliasEntropy {
     /// # Errors
     /// Refuses unavailable secure randomness.
     fn sample(&self) -> Result<[u8; 16], AliasError>;
 }
-impl<F: Fn() -> Result<[u8; 16], AliasError>> PrivateAliasEntropy for F {
+impl<F: Fn() -> Result<[u8; 16], AliasError>> AliasEntropy for F {
     fn sample(&self) -> Result<[u8; 16], AliasError> {
         self()
     }
 }
-fn private_address(domain: &str, entropy: [u8; 16]) -> Result<MemberAddress, AliasError> {
-    let token = u128::from_be_bytes(entropy);
-    format!("p{token:032x}@{domain}")
-        .try_into()
-        .map_err(|_| AliasError::Invalid)
-}
 impl AliasCreation {
     fn matches(&self, alias: &Alias) -> bool {
-        match self {
-            Self::Private { description } => {
-                alias.description() == Some(description) && alias.kind() == AliasKind::Private
+        alias.configuration() == &self.configuration
+            && match &self.address {
+                AddressSelection::Generated { address } | AddressSelection::Chosen { address } => {
+                    alias.address() == address
+                }
             }
-            Self::Public { address } => {
-                alias.kind() == AliasKind::Public && alias.address() == address
-            }
-        }
     }
 }
-impl ReplacementAddress {
+impl AddressSelection {
     fn matches(&self, alias: &Alias) -> bool {
         match self {
-            Self::GeneratePrivate => alias.kind() == AliasKind::Private,
-            Self::Public { address } => {
-                alias.kind() == AliasKind::Public && alias.address() == address
-            }
+            Self::Generated { address } | Self::Chosen { address } => alias.address() == address,
         }
     }
 }
@@ -79,6 +70,14 @@ impl ReplacementAddress {
 #[serde(deny_unknown_fields)]
 pub enum Command {
     Inspect,
+    Suggest {
+        name: GenerationName,
+        fragment: Option<NameFragment>,
+    },
+    UseForCorrespondence {
+        id: AliasId,
+        expected: u64,
+    },
     Permission {
         id: AliasId,
         expected_address: u64,
@@ -97,7 +96,7 @@ pub enum Command {
         id: AliasId,
         expected: u64,
         replacement: AliasId,
-        address: ReplacementAddress,
+        address: AddressSelection,
         until: CanonicalTime,
     },
     Retire {
@@ -150,7 +149,7 @@ impl SignedCommand {
             return Err(AliasError::Invalid);
         }
         serde_json::to_vec(&(
-            "cs-mail/alias-command/v3",
+            "cs-mail/alias-command/v4",
             self.scope,
             &self.product,
             self.account,
@@ -237,6 +236,7 @@ impl SenderRouteScope {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Outcome {
     Aliases(Vec<Alias>),
+    Suggested(AddressSuggestion),
     Changed(Vec<Alias>),
     Scoped(SenderRouteScope),
     Refused(AliasError),
@@ -305,11 +305,19 @@ pub struct Context {
 pub struct Effects {
     aliases: Vec<Alias>,
     scope: Option<SenderRouteScope>,
+    correspondence: Option<AliasId>,
     receipt: Receipt,
 }
 impl Effects {
-    pub fn into_parts(self) -> (Vec<Alias>, Option<SenderRouteScope>, Receipt) {
-        (self.aliases, self.scope, self.receipt)
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<Alias>,
+        Option<SenderRouteScope>,
+        Option<AliasId>,
+        Receipt,
+    ) {
+        (self.aliases, self.scope, self.correspondence, self.receipt)
     }
 }
 pub struct Decision {
@@ -344,32 +352,15 @@ impl<S: Store> AliasService<'_, S> {
         request: &SignedCommand,
         scope: cs_mail_security::RecipientSigningScope,
         domain: &str,
-        entropy: &impl PrivateAliasEntropy,
+        entropy: &impl AliasEntropy,
     ) -> Result<Receipt, S::Error> {
-        let generated = if matches!(
-            request.command,
-            Command::Create {
-                creation: AliasCreation::Private { .. },
-                ..
-            } | Command::Replace {
-                address: ReplacementAddress::GeneratePrivate,
-                ..
-            }
-        ) {
-            Some(private_address(domain, entropy.sample()?)?)
+        let entropy = if matches!(request.command, Command::Suggest { .. }) {
+            Some(entropy.sample()?)
         } else {
             None
         };
         self.0.transact_alias(request, |context, clock| {
-            decide(
-                request,
-                &context,
-                scope,
-                domain,
-                generated.as_ref(),
-                clock.now(),
-            )
-            .map_err(Into::into)
+            decide(request, &context, scope, domain, entropy, clock.now()).map_err(Into::into)
         })
     }
 }
@@ -378,7 +369,7 @@ fn decide(
     context: &Context,
     scope: cs_mail_security::RecipientSigningScope,
     domain: &str,
-    generated: Option<&MemberAddress>,
+    entropy: Option<[u8; 16]>,
     at: CanonicalTime,
 ) -> Result<Decision, AliasError> {
     if request.scope != scope || context.participant != request.owner {
@@ -408,6 +399,26 @@ fn decide(
             effects: None,
         });
     }
+    if let Command::Suggest { name, fragment } = &request.command {
+        let outcome = match generation::suggest(
+            name,
+            fragment.as_ref(),
+            domain,
+            &context.reserved_addresses,
+            entropy.ok_or(AliasError::Invalid)?,
+        ) {
+            Ok(value) => Outcome::Suggested(value),
+            Err(error) => Outcome::Refused(error),
+        };
+        return Ok(Decision {
+            receipt: Receipt {
+                digest,
+                at,
+                outcome,
+            },
+            effects: None,
+        });
+    }
     AliasPortfolio::new(request.owner, &context.aliases)?;
     if matches!(request.command, Command::Inspect) {
         return Ok(Decision {
@@ -419,15 +430,15 @@ fn decide(
             effects: None,
         });
     }
-    let (aliases, scope, outcome) = match mutate(request, context, domain, generated, at) {
-        Ok((aliases, scope)) => {
+    let (aliases, scope, correspondence, outcome) = match mutate(request, context, domain, at) {
+        Ok((aliases, scope, correspondence)) => {
             let outcome = scope.as_ref().map_or_else(
                 || Outcome::Changed(aliases.clone()),
                 |scope| Outcome::Scoped(scope.clone()),
             );
-            (aliases, scope, outcome)
+            (aliases, scope, correspondence, outcome)
         }
-        Err(error) => (vec![], None, Outcome::Refused(error)),
+        Err(error) => (vec![], None, None, Outcome::Refused(error)),
     };
     let receipt = Receipt {
         digest,
@@ -439,6 +450,7 @@ fn decide(
         effects: Some(Effects {
             aliases,
             scope,
+            correspondence,
             receipt,
         }),
     })
@@ -452,8 +464,11 @@ fn fresh(
     if address.domain() != domain {
         return Err(AliasError::Invalid);
     }
-    if context.reserved_ids.contains(&id) || context.reserved_addresses.contains(address.as_str()) {
+    if context.reserved_ids.contains(&id) {
         return Err(AliasError::Conflict);
+    }
+    if context.reserved_addresses.contains(address.as_str()) {
+        return Err(AliasError::AddressTaken);
     }
     Ok(())
 }
@@ -474,11 +489,15 @@ fn permission_change(
         alias.lifecycle(),
         cs_mail_accounts::aliases::AliasLifecycle::Active
             | cs_mail_accounts::aliases::AliasLifecycle::Restricted { .. }
-    ) || alias.kind() != AliasKind::Private
-    {
+    ) {
         return Err(AliasError::Retired);
     }
     let permission = alias.permission();
+    if alias.policy() == ReceivingPolicy::Bonded
+        && matches!(action, PermissionAction::Open | PermissionAction::Restrict)
+    {
+        return Err(AliasError::Permission);
+    }
     let next = match action {
         PermissionAction::Open => permission.open(expected_permission, at)?,
         PermissionAction::Restrict => permission.restrict(
@@ -533,14 +552,15 @@ fn permission_change(
     alias.with_permission(next)
 }
 
+type AliasMutation = (Vec<Alias>, Option<SenderRouteScope>, Option<AliasId>);
+
 #[allow(clippy::too_many_lines)] // One exhaustive dispatch of the authenticated alias command.
 fn mutate(
     request: &SignedCommand,
     c: &Context,
     domain: &str,
-    generated: Option<&MemberAddress>,
     at: CanonicalTime,
-) -> Result<(Vec<Alias>, Option<SenderRouteScope>), AliasError> {
+) -> Result<AliasMutation, AliasError> {
     let owned = |id: AliasId| c.aliases.get(&id).ok_or(AliasError::Permission);
     let existing = |id| {
         c.existing
@@ -550,7 +570,20 @@ fn mutate(
             .collect()
     };
     let aliases = match &request.command {
-        Command::Inspect => return Err(AliasError::Invalid),
+        Command::Inspect | Command::Suggest { .. } => return Err(AliasError::Invalid),
+        Command::UseForCorrespondence { id, expected } => {
+            let alias = owned(*id)?;
+            if alias.revision() != *expected {
+                return Err(AliasError::Conflict);
+            }
+            if !matches!(
+                alias.lifecycle(),
+                cs_mail_accounts::aliases::AliasLifecycle::Active
+            ) {
+                return Err(AliasError::Retired);
+            }
+            return Ok((vec![alias.clone()], None, Some(*id)));
+        }
         Command::Permission {
             id,
             expected_address,
@@ -566,17 +599,27 @@ fn mutate(
             at,
         )?],
         Command::Create { id, creation } => {
-            let (address, usage) = match creation {
-                AliasCreation::Private { description } => (
-                    generated.ok_or(AliasError::Invalid)?.clone(),
-                    AliasUsage::Private {
-                        description: description.clone(),
-                    },
-                ),
-                AliasCreation::Public { address } => (address.clone(), AliasUsage::Public),
+            let address = match &creation.address {
+                AddressSelection::Generated { address } => {
+                    generation::generated_fragment(address).ok_or(AliasError::Invalid)?;
+                    address.clone()
+                }
+                AddressSelection::Chosen { address } => address.clone(),
             };
             fresh(c, *id, &address, domain)?;
-            vec![AliasPortfolio::new(request.owner, &c.aliases)?.create(*id, address, usage, at)?]
+            let alias = AliasPortfolio::new(request.owner, &c.aliases)?.create(
+                *id,
+                address,
+                creation.configuration.clone(),
+                at,
+            )?;
+            let alias = if alias.policy() == ReceivingPolicy::AliasScoped {
+                let permission = alias.permission().open(alias.permission().revision(), at)?;
+                alias.with_permission(permission)?
+            } else {
+                alias
+            };
+            vec![alias]
         }
         Command::Restrict { id, expected } => {
             vec![owned(*id)?.restrict(*expected, existing(*id), at)?]
@@ -589,19 +632,19 @@ fn mutate(
             until,
         } => {
             let old = owned(*id)?;
-            let address = match (old.kind(), address) {
-                (AliasKind::Private, ReplacementAddress::GeneratePrivate) => {
-                    generated.ok_or(AliasError::Invalid)?.clone()
+            let address = match address {
+                AddressSelection::Generated { address } => {
+                    generation::generated_fragment(address).ok_or(AliasError::Invalid)?;
+                    address.clone()
                 }
-                (AliasKind::Public, ReplacementAddress::Public { address }) => address.clone(),
-                _ => return Err(AliasError::Invalid),
+                AddressSelection::Chosen { address } => address.clone(),
             };
             fresh(c, *replacement, &address, domain)?;
             let new = Alias::create(
                 *replacement,
                 request.owner,
                 address,
-                old.usage().clone(),
+                old.configuration().clone(),
                 at,
             )?;
             vec![
@@ -645,10 +688,11 @@ fn mutate(
                     receiving,
                     at,
                 )?),
+                None,
             ));
         }
     };
-    Ok((aliases, None))
+    Ok((aliases, None, None))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -725,7 +769,7 @@ pub struct AdmissionContext<'a> {
     pub review_required: bool,
     pub conversation: ConversationId,
 }
-/// Deterministic routing; no payment fallback exists for a private alias. The
+/// Deterministic routing; no payment fallback exists for an alias-scoped receiving policy. The
 /// returned permission must produce delivery evidence only after full message validation,
 /// committed with ciphertext, delivery, allowance changes and the operation receipt.
 pub fn admit(c: &AdmissionContext<'_>, at: CanonicalTime) -> RouteDecision {
@@ -755,7 +799,7 @@ fn admission(c: &AdmissionContext<'_>, at: CanonicalTime) -> Result<RouteDecisio
         if matches!(
             c.alias.lifecycle(),
             cs_mail_accounts::aliases::AliasLifecycle::Active
-        ) && c.alias.kind() == AliasKind::Private
+        ) && c.alias.policy() == ReceivingPolicy::AliasScoped
         {
             return Ok(RouteDecision::Hold);
         }
@@ -769,7 +813,7 @@ fn admission(c: &AdmissionContext<'_>, at: CanonicalTime) -> Result<RouteDecisio
     }
     c.alias.check_conversation(sender, c.conversation, at)?;
     if c.review_required {
-        return if c.alias.kind() == AliasKind::Private {
+        return if c.alias.policy() == ReceivingPolicy::AliasScoped {
             Ok(RouteDecision::Hold)
         } else {
             Err(AliasError::Authentication)
@@ -791,7 +835,7 @@ fn admission(c: &AdmissionContext<'_>, at: CanonicalTime) -> Result<RouteDecisio
         basis
     } else {
         let Some(basis) = relationship_basis(c, sender, at)? else {
-            return no_permission(c.alias.kind());
+            return no_permission(c.alias.policy());
         };
         basis
     };
@@ -853,8 +897,8 @@ fn relationship_basis(
     }))
 }
 
-fn no_permission(kind: AliasKind) -> Result<RouteDecision, AliasError> {
-    if kind == AliasKind::Private {
+fn no_permission(kind: ReceivingPolicy) -> Result<RouteDecision, AliasError> {
+    if kind == ReceivingPolicy::AliasScoped {
         Err(AliasError::Permission)
     } else {
         Ok(RouteDecision::Request)
@@ -946,6 +990,15 @@ impl Receipt {
         };
         match (&request.command, &self.outcome) {
             (Command::Inspect, Outcome::Aliases(aliases)) => owned(aliases),
+            (Command::Suggest { name, fragment }, Outcome::Suggested(value)) => {
+                value.matches(name, fragment.as_ref())
+            }
+            (Command::UseForCorrespondence { id, expected }, Outcome::Changed(aliases)) => {
+                owned(aliases)
+                    && aliases.len() == 1
+                    && aliases[0].id() == *id
+                    && aliases[0].revision() == *expected
+            }
             (
                 Command::Permission {
                     id,
@@ -972,7 +1025,19 @@ impl Receipt {
                     && creation.matches(&aliases[0])
                     && aliases[0].revision() == 0
                     && aliases[0].created_at() == self.at
-                    && aliases[0].permission().revision().value() == 0
+                    && match creation.configuration.receiving {
+                        ReceivingPolicy::Bonded => {
+                            aliases[0].permission().revision().value() == 0
+                                && matches!(aliases[0].permission().state(), PermissionState::None)
+                        }
+                        ReceivingPolicy::AliasScoped => {
+                            aliases[0].permission().revision().value() == 1
+                                && matches!(
+                                    aliases[0].permission().state(),
+                                    PermissionState::Broad(_)
+                                )
+                        }
+                    }
             }
             (Command::Restrict { id, expected }, Outcome::Changed(aliases)) => {
                 owned(aliases)
@@ -1004,7 +1069,7 @@ impl Receipt {
                             && new.created_at() == self.at
                             && new.permission().revision().value() == 0
                             && address.matches(new)
-                            && new.usage() == old.usage()
+                            && new.configuration() == old.configuration()
                             && matches!(old.lifecycle(), cs_mail_accounts::aliases::AliasLifecycle::Replaced { at, replacement: target, until: deadline, .. } if *at == self.at && target == replacement && deadline == until)
                     }
                     _ => false,
@@ -1355,7 +1420,7 @@ impl DeliveredRoute {
 /// The sender-visible destination; no private alias metadata is published.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct PublicReceivingAlias {
+pub struct CorrespondenceAlias {
     pub owner: ProtocolIdentity,
     pub id: AliasId,
     pub address: MemberAddress,

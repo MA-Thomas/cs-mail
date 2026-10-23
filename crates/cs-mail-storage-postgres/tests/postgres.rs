@@ -222,7 +222,7 @@ impl TestExecute for PostgresEngine {
 
 fn native_declarations() -> MessageDeclarations {
     MessageDeclarations {
-        purpose: DeclaredPurpose::Known(KnownPurpose::Transactional),
+        purpose: DeclaredPurpose::Known(KnownPurpose::Personal),
         origin: OriginDeclaration {
             mode: OriginMode::HumanInitiated,
             authority: DeclarationAuthority::NativeSender(OperationalKeyRef(1)),
@@ -245,6 +245,10 @@ fn durable_sequence_survives_reconnect_and_outbox_leases_recover() {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
@@ -396,6 +400,10 @@ fn admission_requires_durable_correctly_scoped_ciphertext() {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(44),
                     declaration_digest: None,
@@ -546,6 +554,33 @@ fn database_row_lock_serializes_conflicting_decisions() {
     );
 }
 
+// Fixture authority names the alias explicitly; a raw lane grant alone supplies no route.
+fn fixture_lane_scope(
+    url: &str,
+    engine: &PostgresEngine,
+    signed: &SignedLaneGrant,
+    at: CanonicalTime,
+) {
+    let scope: cs_mail_application::aliases::SenderRouteScope =
+        cs_mail_application::aliases::SenderScopeRecord {
+            revision: 1,
+            established_at: at,
+            sender: SENDER,
+            recipient: RECIPIENT,
+            relationship_version: engine.snapshot().unwrap().state.relationship.version,
+            receiving: cs_mail_capabilities::routes::ReceivingScope::one(
+                cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
+            ),
+            lane: Some((signed.grant.id, signed.grant.version)),
+        }
+        .try_into()
+        .unwrap();
+    postgres::Client::connect(url, postgres::NoTls).unwrap().execute(
+            "INSERT INTO cs_alias_sender_scopes(recipient,sender,record) VALUES($1,$2,$3) ON CONFLICT(recipient,sender) DO UPDATE SET record=EXCLUDED.record",
+            &[&RECIPIENT.0.to_string(), &SENDER.0.to_string(), &postgres::types::Json(scope)],
+        ).unwrap();
+}
+
 fn signed_lane_grant() -> SignedLaneGrant {
     let recipient_signing = SigningKey::from_bytes(&[2; 32]);
     let grant = SenderScopedGrant {
@@ -559,7 +594,7 @@ fn signed_lane_grant() -> SignedLaneGrant {
         deployment_domain: DEPLOYMENT_DOMAIN,
         intended_provider: PROVIDER,
         recipient_operational_key: OperationalKeyRef(2),
-        purpose: DeclaredPurpose::Known(KnownPurpose::Transactional),
+        purpose: DeclaredPurpose::Known(KnownPurpose::Personal),
         origin: Some(OriginMode::HumanInitiated),
         declaration_authority: DeclarationAuthorityConstraint::NativeSender,
         lifetime: Duration(1_000),
@@ -617,7 +652,10 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_relationshi
             cs_mail_application::receipts::ReceivedOutcome::Lane(_)
         ));
 
-        let evidence = LaneEvidence::Native(cs_mail_privacy::ScopedHandle([1; 32]));
+        fixture_lane_scope(&url, &engine, &signed, test_time(1));
+        let evidence = LaneEvidence::Native(cs_mail_privacy::ScopedHandle(
+            *signing_scope().relationship.as_bytes(),
+        ));
         let admission = BondFreeAdmission {
             wire_version: WireVersion(1),
             sender: SENDER,
@@ -733,6 +771,10 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_relationshi
         let terms = engine.execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(99),
                     declaration_digest: None,
@@ -781,6 +823,10 @@ fn lane_admission_is_bond_free_replay_safe_and_atomically_revoked_by_relationshi
             .execute(
                 sender(
                     ProtocolCommand::IssueRequestTerms {
+                        return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                            cs_mail_primitives::AliasId::new(10).unwrap(),
+                        ),
+                        alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                         class_id: cs_mail_primitives::RequestClassId(1),
                         quote_id: QuoteId(100),
                         declaration_digest: None,
@@ -897,10 +943,15 @@ fn exercise_lane_settlement(signed: &SignedLaneGrant) {
                 .operation(),
             Some(&refund)
         );
+        fixture_lane_scope(&url, &engine, signed, test_time(at));
         let terms = engine
             .execute(
                 sender(
                     ProtocolCommand::IssueRequestTerms {
+                        return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                            cs_mail_primitives::AliasId::new(10).unwrap(),
+                        ),
+                        alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                         class_id: cs_mail_primitives::RequestClassId(999),
                         quote_id: QuoteId(99),
                         declaration_digest: None,
@@ -936,6 +987,10 @@ fn submit_initial_request(engine: &PostgresEngine) {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
@@ -1627,6 +1682,10 @@ fn policy_change_after_upload_cancels_submission_with_void_or_full_refund() {
             .execute(
                 sender(
                     ProtocolCommand::IssueRequestTerms {
+                        return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                            cs_mail_primitives::AliasId::new(10).unwrap(),
+                        ),
+                        alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                         class_id: cs_mail_primitives::RequestClassId(1),
                         quote_id: QuoteId(1),
                         declaration_digest: None,
@@ -1757,6 +1816,10 @@ fn issued_quote_remains_bound_to_its_original_signing_authority() {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
@@ -1824,6 +1887,10 @@ fn prepare_request_submission(engine: &PostgresEngine, id: u128) {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(id),
                     declaration_digest: None,
@@ -2158,6 +2225,10 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
@@ -2241,6 +2312,10 @@ fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
         .unwrap();
     let submission = sender(
         ProtocolCommand::IssueRequestTerms {
+            return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                cs_mail_primitives::AliasId::new(10).unwrap(),
+            ),
+            alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
             class_id: cs_mail_primitives::RequestClassId(1),
             quote_id: QuoteId(1),
             declaration_digest: None,
@@ -2269,6 +2344,10 @@ fn quote_replay_keeps_signed_terms_until_its_own_replay_window_expires() {
     let duplicate = engine.execute(
         sender(
             ProtocolCommand::IssueRequestTerms {
+                return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                    cs_mail_primitives::AliasId::new(10).unwrap(),
+                ),
+                alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                 class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(1),
                 declaration_digest: None,
@@ -2292,8 +2371,6 @@ mod request_pricing {
     use cs_mail_protocol::RequestTerms;
     use cs_mail_protocol::pricing::{RecipientRequestClasses, RequestClass, RequestPricingPolicy};
     use cs_mail_security::RecipientSigningScope;
-
-    const SIBLING: ProtocolIdentity = ProtocolIdentity(21);
 
     fn operator_policy(version: u64, charge: u64, min: u64, max: u64) -> RequestPricingPolicy {
         RequestPricingPolicy::new(
@@ -2329,6 +2406,7 @@ mod request_pricing {
     ) -> RecipientRequestClasses {
         RecipientRequestClasses::new(
             recipient,
+            cs_mail_primitives::AliasId::new((recipient).0).unwrap(),
             version,
             entries
                 .iter()
@@ -2368,6 +2446,10 @@ mod request_pricing {
         let outcome = engine.execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(class),
                     quote_id: QuoteId(quote),
                     declaration_digest: None,
@@ -2461,7 +2543,7 @@ mod request_pricing {
 
         let current = engine
             .deployment()
-            .request_classes(RECIPIENT)
+            .request_classes(cs_mail_primitives::AliasId::new((RECIPIENT).0).unwrap())
             .unwrap()
             .unwrap();
         let policy_now = engine
@@ -2516,6 +2598,7 @@ mod request_pricing {
         assert!(
             RecipientRequestClasses::new(
                 RECIPIENT,
+                cs_mail_primitives::AliasId::new((RECIPIENT).0).unwrap(),
                 4,
                 nine.iter()
                     .map(|(id, d, s)| {
@@ -2563,91 +2646,96 @@ mod request_pricing {
 
     #[test]
     #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
-    #[allow(clippy::too_many_lines)] // Sets up a second address before challenging authority.
-    fn publication_is_authorized_only_by_a_key_of_its_own_address() {
-        // Claim: a publication signed for one address cannot be applied to another,
-        // including another address of the same account.
+    #[allow(clippy::too_many_lines)] // Keep the two-alias authority and signature substitution experiment together.
+    fn publication_is_bound_to_its_alias_and_controlling_identity() {
+        // A controlling key may publish independently for two owned aliases;
+        // an already signed publication cannot be redirected between them.
+        use cs_mail_application::aliases::{
+            AddressSelection, AliasCreation, AliasService, Command, Outcome, SignedCommand,
+        };
         let engine = provisioned("pricing-authority", 903);
         let accounts = engine.deployment().accounts(|| test_time(1));
         let account = accounts.persona_account(RECIPIENT).unwrap();
-        let service =
-            cs_mail_application::accounts::operations::AccountService::new(&accounts, &|| {
-                test_time(1)
-            });
-        let command = |command, key: u128| {
-            cs_mail_accounts::control::SignedAccountCommand {
-                account,
-                operational_key: OperationalKeyRef(2),
-                expected_revision: accounts.account_control(account).unwrap().revision(),
-                idempotency_key: IdempotencyKey(key),
-                product: "cs-mail/test".into(),
-                command,
-                signature: vec![],
-            }
-            .sign(&[2; 32])
-            .unwrap()
-        };
-        service
-            .execute_command(&command(
-                cs_mail_accounts::control::AccountCommand::AddPersona(SIBLING),
-                70_001,
-            ))
+        let alias = cs_mail_primitives::AliasId::new(400).unwrap();
+        let creation = SignedCommand {
+            scope: scope(),
+            product: "cs-mail/test".into(),
+            account,
+            owner: RECIPIENT,
+            key: OperationalKeyRef(2),
+            operation: IdempotencyKey(70_001),
+            command: Command::Create {
+                id: alias,
+                creation: AliasCreation {
+                    address: AddressSelection::Chosen {
+                        address: "another@inbox.test".to_owned().try_into().unwrap(),
+                    },
+                    configuration: cs_mail_accounts::aliases::AliasConfiguration {
+                        description: "Another invitation".to_owned().try_into().unwrap(),
+                        receiving: cs_mail_accounts::aliases::ReceivingPolicy::Bonded,
+                    },
+                },
+            },
+            signature: vec![],
+        }
+        .sign(&[2; 32])
+        .unwrap();
+        assert!(matches!(
+            AliasService(&accounts)
+                .handle(&creation, scope(), "inbox.test", &|| Ok([4; 16]))
+                .unwrap()
+                .outcome,
+            Outcome::Changed(_)
+        ));
+        let original = engine
+            .deployment()
+            .request_classes(cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap())
             .unwrap();
-        service
-            .execute_command(&command(
-                cs_mail_accounts::control::AccountCommand::RegisterKey(
-                    cs_mail_accounts::control::NewOperationalKey::prove(
-                        account,
-                        "cs-mail/test",
-                        OperationalKeyRef(40),
-                        ActorRef::Recipient(SIBLING),
-                        &[40; 32],
-                    )
-                    .unwrap(),
-                ),
-                70_002,
-            ))
-            .unwrap();
-        let recipient_classes = engine.deployment().request_classes(RECIPIENT).unwrap();
-
-        // Each address publishes its own set with its own key.
+        let publication = RecipientRequestClasses::new(
+            RECIPIENT,
+            alias,
+            1,
+            vec![
+                RequestClass::new(
+                    cs_mail_primitives::RequestClassId(1),
+                    "Second alias".into(),
+                    Money::from_minor_units(20),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
         publish(
             &engine,
-            ActorRef::Recipient(SIBLING),
-            40,
-            40,
-            classes(SIBLING, 1, &[(1, "Sibling", 20)]),
+            ActorRef::Recipient(RECIPIENT),
+            2,
+            2,
+            publication.clone(),
             2,
         )
         .unwrap();
-        let sibling_classes = engine.deployment().request_classes(SIBLING).unwrap();
         assert_eq!(
-            sibling_classes,
-            Some(classes(SIBLING, 1, &[(1, "Sibling", 20)]))
+            engine.deployment().request_classes(alias).unwrap(),
+            Some(publication.clone())
         );
-        // The recipient's key cannot publish for its sibling address...
+        let mut redirected =
+            command_signer(ActorRef::Recipient(RECIPIENT), OperationalKeyRef(2), 2)
+                .sign_request_classes(
+                    scope(),
+                    RecipientRequestClasses::new(
+                        RECIPIENT,
+                        alias,
+                        2,
+                        publication.classes().to_vec(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        redirected.classes = classes(RECIPIENT, 2, &[(1, "Second alias", 20)]);
         assert!(
-            publish(
-                &engine,
-                ActorRef::Recipient(SIBLING),
-                2,
-                2,
-                classes(SIBLING, 2, &[(1, "Via recipient key", 30)]),
-                3,
-            )
-            .is_err()
-        );
-        // ...nor the sibling's key for the recipient, nor another account's key.
-        assert!(
-            publish(
-                &engine,
-                ActorRef::Recipient(RECIPIENT),
-                40,
-                40,
-                classes(RECIPIENT, 5, &[(1, "Via sibling key", 30)]),
-                3,
-            )
-            .is_err()
+            RequestPricingService::new(engine.deployment())
+                .publish_classes(&redirected, scope(), || test_time(3))
+                .is_err()
         );
         assert!(
             publish(
@@ -2655,22 +2743,29 @@ mod request_pricing {
                 ActorRef::Recipient(RECIPIENT),
                 1,
                 1,
-                classes(RECIPIENT, 5, &[(1, "Via sender key", 30)]),
-                3,
+                classes(RECIPIENT, 2, &[(1, "Foreign key", 30)]),
+                3
             )
             .is_err()
         );
         assert_eq!(
-            engine.deployment().request_classes(SIBLING).unwrap(),
-            sibling_classes
+            engine.deployment().request_classes(alias).unwrap(),
+            Some(publication)
         );
         assert_eq!(
-            engine.deployment().request_classes(RECIPIENT).unwrap(),
-            recipient_classes
+            engine
+                .deployment()
+                .request_classes(cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap())
+                .unwrap(),
+            original
         );
-        // Quotes to the recipient still use the recipient's own classes.
-        let terms = quote(&engine, 1, 20, 4).unwrap();
-        assert_eq!(terms.selected_class.description(), "Test class");
+        assert_eq!(
+            quote(&engine, 1, 20, 4)
+                .unwrap()
+                .selected_class
+                .description(),
+            "Test class"
+        );
     }
 
     #[test]

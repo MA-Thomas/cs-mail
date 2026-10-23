@@ -278,6 +278,7 @@ impl Fixture {
                     members.scope(),
                     cs_mail_protocol::pricing::RecipientRequestClasses::new(
                         BOB,
+                        cs_mail_primitives::AliasId::new((BOB).0).unwrap(),
                         1,
                         vec![
                             cs_mail_protocol::pricing::RequestClass::new(
@@ -293,6 +294,14 @@ impl Fixture {
                 .unwrap(),
             )
             .unwrap();
+        support::fixture_publication(
+            &PostgresDeployment::connect(&url).unwrap(),
+            BOB,
+            BOB_KEY,
+            &[21; 32],
+            clock.now(),
+        )
+        .unwrap();
         let (_, content) =
             cs_mail_content::EndpointSecretKey::from_secret_bytes(ContentKeyRef(22), &BOB_CONTENT)
                 .unwrap();
@@ -371,9 +380,14 @@ impl Fixture {
     ) -> Result<(u128, cs_mail_service::guests::GuestRequestAnswer), ServiceError> {
         let operation = self.operation();
         self.advance(1);
-        let answer =
-            self.guests
-                .request(session, BOB, RequestClassId(1), card, message, operation)?;
+        let answer = self.guests.request(
+            session,
+            cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
+            RequestClassId(1),
+            card,
+            message,
+            operation,
+        )?;
         self.work();
         Ok((operation, answer))
     }
@@ -381,7 +395,13 @@ impl Fixture {
     fn send(&mut self, session: &str, card: &str, message: &str) -> (u128, RequestId) {
         let (operation, answer) = self.prepare(session, card, message).unwrap();
         self.advance(1);
-        self.guests.submit(session, BOB, operation).unwrap();
+        self.guests
+            .submit(
+                session,
+                cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
+                operation,
+            )
+            .unwrap();
         (operation, answer.request)
     }
     fn identity(mailbox: &str) -> ProtocolIdentity {
@@ -467,7 +487,9 @@ fn changing_mailbox_while_reusing_a_card_cannot_reset_history_or_bypass_a_pendin
     // Submission moves the history up a level and starts its backoff, which binds the
     // alias too; Ana's own mailbox still holds its undecided request.
     f.advance(1);
-    f.guests.submit(&ana, BOB, op).unwrap();
+    f.guests
+        .submit(&ana, cs_mail_primitives::AliasId::new(BOB.0).unwrap(), op)
+        .unwrap();
     assert!(matches!(
         f.prepare(&alias, visa, "second"),
         Err(ServiceError::Storage(StorageError::Protocol(
@@ -489,17 +511,23 @@ fn changing_mailbox_while_reusing_a_card_cannot_reset_history_or_bypass_a_pendin
     // history and the history of Dev's card become one, and both keep using it.
     let cara = f.login("cara@guest.example");
     let (op, cara_first) = f.prepare(&cara, "5555555555554444", "cara").unwrap();
-    f.guests.cancel(&cara, BOB, op).unwrap();
+    f.guests
+        .cancel(&cara, cs_mail_primitives::AliasId::new(BOB.0).unwrap(), op)
+        .unwrap();
     let dev = f.login("dev@guest.example");
     let (op, dev_first) = f.prepare(&dev, "6011111111111117", "dev").unwrap();
-    f.guests.cancel(&dev, BOB, op).unwrap();
+    f.guests
+        .cancel(&dev, cs_mail_primitives::AliasId::new(BOB.0).unwrap(), op)
+        .unwrap();
     f.work();
     f.advance(5_000);
     let (op, merged) = f.prepare(&cara, "6011111111111117", "cara again").unwrap();
     let merged_history = merged.terms.request_history;
     assert_ne!(merged_history, cara_first.terms.request_history);
     assert_ne!(merged_history, dev_first.terms.request_history);
-    f.guests.cancel(&cara, BOB, op).unwrap();
+    f.guests
+        .cancel(&cara, cs_mail_primitives::AliasId::new(BOB.0).unwrap(), op)
+        .unwrap();
     f.work();
     f.advance(5_000);
     let (_, dev_again) = f.prepare(&dev, "6011111111111117", "dev again").unwrap();
@@ -691,7 +719,9 @@ fn a_guest_refund_goes_only_to_the_token_that_funded_the_request() {
     // Cancelled before submission: the full charge returns to Ben's token.
     let ben = f.login("ben@guest.example");
     let (op, cancelled) = f.prepare(&ben, "5555555555554444", "never sent").unwrap();
-    f.guests.cancel(&ben, BOB, op).unwrap();
+    f.guests
+        .cancel(&ben, cs_mail_primitives::AliasId::new(BOB.0).unwrap(), op)
+        .unwrap();
     f.work();
 
     // Expired: the collateral returns to Cy's token; the processing charge is kept.
@@ -756,7 +786,7 @@ fn guest_preparation_rejects_altered_retries_after_failure_and_concurrently() {
         f.guests
             .request(
                 &session,
-                BOB,
+                cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
                 RequestClassId(1),
                 card,
                 "original",
@@ -769,7 +799,7 @@ fn guest_preparation_rejects_altered_retries_after_failure_and_concurrently() {
     assert_eq!(
         guest_error(f.guests.request(
             &session,
-            BOB,
+            cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
             RequestClassId(1),
             card,
             "original",
@@ -780,10 +810,14 @@ fn guest_preparation_rejects_altered_retries_after_failure_and_concurrently() {
     let session = f.login(mailbox);
     f.client().batch_execute("DROP TRIGGER reject_guest_content ON cs_encrypted_content; DROP FUNCTION reject_guest_content()").unwrap();
     assert_eq!(
-        guest_error(
-            f.guests
-                .request(&session, BOB, RequestClassId(1), card, "changed", operation)
-        ),
+        guest_error(f.guests.request(
+            &session,
+            cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
+            RequestClassId(1),
+            card,
+            "changed",
+            operation
+        )),
         GuestError::AlteredRequest
     );
     assert_eq!(f.snapshot(mailbox), before);
@@ -791,7 +825,7 @@ fn guest_preparation_rejects_altered_retries_after_failure_and_concurrently() {
         .guests
         .request(
             &session,
-            BOB,
+            cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
             RequestClassId(1),
             card,
             "original",
@@ -802,7 +836,7 @@ fn guest_preparation_rejects_altered_retries_after_failure_and_concurrently() {
         f.guests
             .request(
                 &session,
-                BOB,
+                cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
                 RequestClassId(1),
                 card,
                 "original",
@@ -828,6 +862,7 @@ fn assert_competing_inputs_conflict(f: &mut Fixture, session: &str, mailbox: &st
         .into_iter()
         .map(|message| {
             let fingerprint = cs_mail_guests::GuestRequestInput {
+                alias: cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
                 mailbox: &mailbox,
                 recipient: BOB,
                 class: RequestClassId(1),

@@ -637,29 +637,6 @@ pub struct ReplyContext<'a> {
     pub provider: cs_mail_primitives::ProviderRef,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NewMailRoute {
-    Conversation,
-    RequestLink,
-}
-/// # Errors
-/// A general address grants no invitation. Revocation and blocks reject mail;
-/// existing standing or lane permission may create an inbound-only conversation.
-pub fn new_mail_route(
-    state: Option<RelationshipState>,
-    covered: bool,
-) -> Result<NewMailRoute, Error> {
-    if !covered {
-        return Err(Error::Unauthorized);
-    }
-    match state {
-        Some(RelationshipState::Blocked | RelationshipState::Revoked) => Err(Error::Unauthorized),
-        Some(RelationshipState::Accepted | RelationshipState::ExpressLane(_)) => {
-            Ok(NewMailRoute::Conversation)
-        }
-        _ => Ok(NewMailRoute::RequestLink),
-    }
-}
 /// # Errors
 /// Checks exact mailbox, conversation and content binding. Consumes a lane only
 /// when neither standing nor pending access authorizes this message.

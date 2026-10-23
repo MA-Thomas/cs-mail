@@ -2,16 +2,21 @@
 use super::{Error, MemberClient, State, enrollment::Setup, storage};
 use cs_mail_accounts::alias_permission::PermissionState;
 use cs_mail_accounts::{
-    aliases::{Alias, AliasKind, AliasLifecycle, AliasPortfolio},
+    aliases::{Alias, AliasConfiguration, AliasLifecycle, ReceivingPolicy},
     directory::MemberAddress,
 };
-use cs_mail_application::aliases::{AliasCreation, Command, Outcome, ReplacementAddress};
+use cs_mail_application::aliases::{AddressSelection, AliasCreation, Command, Outcome};
 use cs_mail_primitives::{AliasId, CanonicalTime};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AddressKind {
-    Private,
-    Public,
+pub enum AddressPolicy {
+    Bonded,
+    AliasScoped,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AddressChoice {
+    Generated { address: String },
+    Chosen { address: String },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AddressState {
@@ -40,7 +45,7 @@ pub struct ManagedAddress {
     pub address: String,
     pub description: Option<String>,
     pub revision: u64,
-    pub kind: AddressKind,
+    pub policy: AddressPolicy,
     pub state: AddressState,
     pub can_restrict: bool,
     pub can_replace: bool,
@@ -68,31 +73,29 @@ pub enum PermissionMutation {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AddressMutation {
+    UseForCorrespondence {
+        id: String,
+        expected: u64,
+    },
     Permission {
         id: String,
         revision: u64,
         permission_revision: u64,
         action: PermissionMutation,
     },
-    CreatePrivate {
+    Create {
         description: String,
-    },
-    CreatePublic {
-        address: String,
+        address: AddressChoice,
+        policy: AddressPolicy,
     },
     Restrict {
         id: String,
         revision: u64,
     },
-    ReplacePublic {
+    Replace {
         id: String,
         revision: u64,
-        address: String,
-        until: u64,
-    },
-    ReplacePrivate {
-        id: String,
-        revision: u64,
+        address: AddressChoice,
         until: u64,
     },
     Retire {
@@ -102,8 +105,8 @@ pub enum AddressMutation {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PendingAddressAction {
-    CreatePrivate { description: String },
-    CreatePublic { address: String },
+    Correspondence,
+    Create { description: String },
     Restrict { id: String },
     Replace { id: String },
     Retire { id: String },
@@ -118,6 +121,7 @@ pub struct PendingAddressUpdate {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AddressUpdateResult {
+    AddressUnavailable,
     Applied { created_alias: Option<String> },
     Refused { explanation: String },
 }
@@ -133,7 +137,6 @@ pub struct AddressWorkspace {
     pub sender_alias_lanes: Vec<ReceivingLaneView>,
     pub addresses: Vec<ManagedAddress>,
     pub observed_at: u64,
-    pub current_public_alias: Option<String>,
 }
 impl MemberClient {
     /// # Errors
@@ -141,16 +144,6 @@ impl MemberClient {
     pub fn address_workspace(&self) -> Result<AddressWorkspace, Error> {
         let addresses = self.aliases()?;
         let at = (self.clock)();
-        let records = addresses.iter().map(|a| (a.id(), a.clone())).collect();
-        let owner = addresses.first().map(Alias::owner);
-        let current_public_alias = owner
-            .map(|owner| {
-                AliasPortfolio::new(owner, &records)
-                    .map(|p| p.current_public().map(|a| a.id().value().to_string()))
-            })
-            .transpose()
-            .map_err(|_| Error::InvalidData)?
-            .flatten();
         Ok(AddressWorkspace {
             sender_alias_lanes: addresses
                 .iter()
@@ -159,7 +152,6 @@ impl MemberClient {
                     address: project(a, at),
                 })
                 .collect(),
-            current_public_alias,
             alias_lanes: addresses
                 .iter()
                 .filter(|a| {
@@ -188,6 +180,12 @@ impl MemberClient {
     /// Invalid inputs, unresolved existing work, unavailable transport or altered receipt.
     pub fn update_address(&self, mutation: AddressMutation) -> Result<AddressUpdateResult, Error> {
         let command = match mutation {
+            AddressMutation::UseForCorrespondence { id, expected } => {
+                Command::UseForCorrespondence {
+                    id: alias_id(&id)?,
+                    expected,
+                }
+            }
             AddressMutation::Permission {
                 id,
                 revision,
@@ -218,23 +216,28 @@ impl MemberClient {
                     action,
                 }
             }
-            AddressMutation::CreatePrivate { description } => Command::Create {
+            AddressMutation::Create {
+                description,
+                address,
+                policy,
+            } => Command::Create {
                 id: fresh_id()?,
-                creation: AliasCreation::Private {
-                    description: description.try_into().map_err(|_| Error::InvalidData)?,
-                },
-            },
-            AddressMutation::CreatePublic { address } => Command::Create {
-                id: fresh_id()?,
-                creation: AliasCreation::Public {
-                    address: member_address(address)?,
+                creation: AliasCreation {
+                    address: address_selection(address)?,
+                    configuration: AliasConfiguration {
+                        description: description.try_into().map_err(|_| Error::InvalidData)?,
+                        receiving: match policy {
+                            AddressPolicy::Bonded => ReceivingPolicy::Bonded,
+                            AddressPolicy::AliasScoped => ReceivingPolicy::AliasScoped,
+                        },
+                    },
                 },
             },
             AddressMutation::Restrict { id, revision } => Command::Restrict {
                 id: alias_id(&id)?,
                 expected: revision,
             },
-            AddressMutation::ReplacePublic {
+            AddressMutation::Replace {
                 id,
                 revision,
                 address,
@@ -243,20 +246,7 @@ impl MemberClient {
                 id: alias_id(&id)?,
                 expected: revision,
                 replacement: fresh_id()?,
-                address: ReplacementAddress::Public {
-                    address: member_address(address)?,
-                },
-                until: CanonicalTime(until),
-            },
-            AddressMutation::ReplacePrivate {
-                id,
-                revision,
-                until,
-            } => Command::Replace {
-                id: alias_id(&id)?,
-                expected: revision,
-                replacement: fresh_id()?,
-                address: ReplacementAddress::GeneratePrivate,
+                address: address_selection(address)?,
                 until: CanonicalTime(until),
             },
             AddressMutation::Retire { id, revision } => Command::Retire {
@@ -285,24 +275,31 @@ fn fresh_id() -> Result<AliasId, Error> {
     getrandom::fill(&mut bytes).map_err(|_| Error::Unavailable)?;
     AliasId::new(u128::from_be_bytes(bytes) | 1).map_err(|_| Error::InvalidData)
 }
-fn view_kind(kind: AliasKind) -> AddressKind {
-    match kind {
-        AliasKind::Private => AddressKind::Private,
-        AliasKind::Public => AddressKind::Public,
+fn view_policy(policy: ReceivingPolicy) -> AddressPolicy {
+    match policy {
+        ReceivingPolicy::Bonded => AddressPolicy::Bonded,
+        ReceivingPolicy::AliasScoped => AddressPolicy::AliasScoped,
     }
 }
+fn address_selection(choice: AddressChoice) -> Result<AddressSelection, Error> {
+    Ok(match choice {
+        AddressChoice::Generated { address } => AddressSelection::Generated {
+            address: member_address(address)?,
+        },
+        AddressChoice::Chosen { address } => AddressSelection::Chosen {
+            address: member_address(address)?,
+        },
+    })
+}
+
 fn pending(state: &State) -> Result<Option<PendingAddressUpdate>, Error> {
     let Some(Setup::Alias(request)) = &state.setup else {
         return Ok(None);
     };
     let action = match &request.command {
-        Command::Create { creation, .. } => match creation {
-            AliasCreation::Private { description } => PendingAddressAction::CreatePrivate {
-                description: description.as_str().into(),
-            },
-            AliasCreation::Public { address } => PendingAddressAction::CreatePublic {
-                address: address.as_str().into(),
-            },
+        Command::UseForCorrespondence { .. } => PendingAddressAction::Correspondence,
+        Command::Create { creation, .. } => PendingAddressAction::Create {
+            description: creation.configuration.description.as_str().into(),
         },
         Command::Restrict { id, .. } => PendingAddressAction::Restrict {
             id: id.value().to_string(),
@@ -320,7 +317,7 @@ fn pending(state: &State) -> Result<Option<PendingAddressUpdate>, Error> {
         Command::Permission { id, .. } => PendingAddressAction::Permission {
             id: id.value().to_string(),
         },
-        Command::Inspect => return Err(Error::InvalidData),
+        Command::Inspect | Command::Suggest { .. } => return Err(Error::InvalidData),
     };
     Ok(Some(PendingAddressUpdate {
         operation: request.operation.0.to_string(),
@@ -332,13 +329,14 @@ fn result(outcome: &Outcome) -> Result<AddressUpdateResult, Error> {
     use cs_mail_accounts::aliases::AliasError;
     match outcome {
         Outcome::Changed(aliases) => Ok(AddressUpdateResult::Applied {
-            created_alias: aliases.iter().find(|a| a.revision() == 0 && a.permission().revision().value() == 0).map(|a| a.id().value().to_string()),
+            created_alias: aliases.iter().find(|a| a.revision() == 0).map(|a| a.id().value().to_string()),
         }),
         Outcome::Scoped(_) => Ok(AddressUpdateResult::Applied { created_alias: None }),
-        Outcome::Aliases(_) => Err(Error::InvalidData),
+        Outcome::Aliases(_) | Outcome::Suggested(_) => Err(Error::InvalidData),
+        Outcome::Refused(AliasError::AddressTaken) => Ok(AddressUpdateResult::AddressUnavailable),
         Outcome::Refused(error) => Ok(AddressUpdateResult::Refused {
             explanation: match error {
-                AliasError::PublicAliasExists => "You already have a public-facing alias. Replace it to choose a different address.",
+                AliasError::AddressTaken => "This address is no longer available. Generate another address.",
                 AliasError::Conflict => {
                     "The address is reserved or the alias has changed. Refresh before making a new update."
                 }
@@ -417,9 +415,9 @@ pub(super) fn project(alias: &Alias, at: CanonicalTime) -> ManagedAddress {
         permission_expires_at,
         id: alias.id().value().to_string(),
         address: alias.address().as_str().into(),
-        description: alias.description().map(|d| d.as_str().to_owned()),
+        description: Some(alias.description().as_str().to_owned()),
         revision: alias.revision(),
-        kind: view_kind(alias.kind()),
+        policy: view_policy(alias.policy()),
         can_restrict: matches!(state, AddressState::Active),
         can_replace: matches!(state, AddressState::Active | AddressState::Restricted),
         can_retire: !matches!(state, AddressState::Retired),

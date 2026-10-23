@@ -35,8 +35,8 @@ impl RequestSite {
         }
         Ok(Self(url))
     }
-    pub fn member(&self, member: cs_mail_primitives::ProtocolIdentity) -> String {
-        format!("{}r/{}", self.0, member.0)
+    pub fn alias(&self, member: cs_mail_primitives::AliasId) -> String {
+        format!("{}r/{}", self.0, member.value())
     }
 }
 impl DkimIdentity {

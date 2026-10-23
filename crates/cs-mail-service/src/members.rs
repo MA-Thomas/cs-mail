@@ -331,7 +331,7 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
     /// Storage failures.
     pub fn offer(
         &self,
-        recipient: ProtocolIdentity,
+        recipient: cs_mail_primitives::AliasId,
     ) -> Result<Option<cs_mail_protocol::pricing::SenderOffer>, ServiceError> {
         Ok(
             match (
@@ -361,11 +361,11 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
     }
     /// # Errors
     /// Storage failure or invalid receiving ownership.
-    pub fn public_receiving_alias(
+    pub fn correspondence_alias(
         &self,
         persona: ProtocolIdentity,
-    ) -> Result<Option<cs_mail_application::aliases::PublicReceivingAlias>, ServiceError> {
-        Ok(self.deployment.public_receiving_alias(persona)?)
+    ) -> Result<Option<cs_mail_application::aliases::CorrespondenceAlias>, ServiceError> {
+        Ok(self.deployment.correspondence_alias(persona)?)
     }
     /// Answers an authenticated member read, limited to the reader's own records.
     /// # Errors
@@ -469,10 +469,7 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
             if let Some(view) = self.view(&address)? {
                 let recipient_name = self
                     .deployment
-                    .directory_lookup(
-                        cs_mail_accounts::directory::DirectoryReference::Protocol(stored.recipient),
-                        || self.clock.now(),
-                    )?
+                    .correspondence_profile(stored.recipient, || self.clock.now())?
                     .map(|p| p.entry.profile().display_name().to_owned());
                 views.push(cs_mail_application::members::OutgoingRelationshipView {
                     relationship: view,
@@ -504,10 +501,7 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
         if view.guest.is_none() {
             view.display_name = self
                 .deployment
-                .directory_lookup(
-                    cs_mail_accounts::directory::DirectoryReference::Protocol(address.sender()),
-                    || self.clock.now(),
-                )?
+                .correspondence_profile(address.sender(), || self.clock.now())?
                 .map(|p| p.entry.profile().display_name().to_owned());
         }
         Ok(Some(view))

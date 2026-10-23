@@ -38,6 +38,7 @@ pub(super) struct RequestJourney {
 }
 #[derive(Clone, Copy)]
 struct DocumentContext {
+    alias: cs_mail_primitives::AliasId,
     other: ProtocolIdentity,
     handle: RelationshipHandle,
     request: RequestId,
@@ -51,6 +52,7 @@ enum RequestKind {
 #[derive(Clone, Deserialize, Serialize)]
 enum RequestStage {
     Quoting {
+        alias: cs_mail_primitives::AliasId,
         class: RequestClassId,
         quote: QuoteId,
         command: SignedCommandBytes,
@@ -123,6 +125,7 @@ pub struct RequestProgress {
 }
 #[derive(Clone, Debug)]
 pub struct RequestQuote {
+    pub alias: String,
     pub class_id: String,
     pub class_name: String,
     pub processing: u64,
@@ -168,6 +171,7 @@ impl RequestJourney {
                 (
                     RequestStatus::Review,
                     Some(RequestQuote {
+                        alias: terms.receiving_alias.value().to_string(),
                         class_id: terms.selected_class.id().0.to_string(),
                         class_name: terms.selected_class.description().into(),
                         processing: terms.processing_charge.minor_units(),
@@ -277,6 +281,7 @@ impl MemberClient {
         &self,
         other: &str,
         class: RequestClassId,
+        alias: cs_mail_primitives::AliasId,
     ) -> Result<RequestProgress, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
@@ -293,6 +298,10 @@ impl MemberClient {
             &keys,
             handle,
             ProtocolCommand::IssueRequestTerms {
+                return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                    self.receiving_alias(&state.profile, state.profile.persona)?,
+                ),
+                alias,
                 class_id: class,
                 quote_id: quote,
                 declaration_digest: Some(declaration_digest),
@@ -305,6 +314,7 @@ impl MemberClient {
             request: RequestId(identifier()?),
             kind: RequestKind::Initial,
             stage: RequestStage::Quoting {
+                alias,
                 class,
                 quote,
                 command,
@@ -330,7 +340,12 @@ impl MemberClient {
         &self,
         request: RequestId,
         text: &str,
-        draft: Option<(&super::Draft, ProtocolIdentity, RequestClassId)>,
+        draft: Option<(
+            &super::Draft,
+            ProtocolIdentity,
+            RequestClassId,
+            cs_mail_primitives::AliasId,
+        )>,
     ) -> Result<RequestProgress, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
@@ -352,8 +367,11 @@ impl MemberClient {
         if (self.clock)() >= issued.terms.expires_at {
             return Err(Error::QuoteExpired);
         }
-        if let Some((_, other, class)) = draft {
-            if plan.other != other || issued.terms.selected_class.id() != class {
+        if let Some((_, other, class, alias)) = draft {
+            if plan.other != other
+                || issued.terms.selected_class.id() != class
+                || issued.terms.receiving_alias != alias
+            {
                 return Err(Error::InvalidData);
             }
         }
@@ -361,13 +379,14 @@ impl MemberClient {
             &state,
             &keys,
             DocumentContext {
+                alias: issued.terms.receiving_alias,
                 other: plan.other,
                 handle: plan.handle,
                 request: plan.request,
                 conversation: ConversationId::new(identifier()?).map_err(|_| Error::InvalidData)?,
             },
             text,
-            self.new_subject(draft.map(|(draft, _, _)| draft))?,
+            self.new_subject(draft.map(|(draft, _, _, _)| draft))?,
         )?;
         let account = self.account_view(&state.profile, &keys)?;
         let command = Self::sender_command(
@@ -386,7 +405,7 @@ impl MemberClient {
             document: Box::new(document),
             work: PreparationWork::Create(command),
         };
-        self.commit_draft(&keys, &state, draft.map(|(draft, _, _)| draft))?;
+        self.commit_draft(&keys, &state, draft.map(|(draft, _, _, _)| draft))?;
         self.advance_request(&mut state, &keys)?;
         Self::request_progress_of(&state)?.ok_or(Error::InvalidData)
     }
@@ -463,13 +482,8 @@ impl MemberClient {
                 relationship: context.handle.relationship,
             },
             key: state.profile.sender_key,
-            document: RequestDocument::new(
-                context.request,
-                content_ref,
-                package,
-                self.receiving_alias(&state.profile, context.handle.recipient)?,
-            )
-            .map_err(|_| Error::InvalidData)?,
+            document: RequestDocument::new(context.request, content_ref, package, context.alias)
+                .map_err(|_| Error::InvalidData)?,
             certificate,
             signature: Vec::new(),
         }
@@ -626,6 +640,7 @@ impl MemberClient {
         match &plan.stage {
             RequestStage::Quoted(_) => Ok(RequestAdvance::Wait),
             RequestStage::Quoting {
+                alias,
                 class,
                 quote,
                 command,
@@ -674,12 +689,20 @@ impl MemberClient {
                     .verify(&state.profile.deployment.provider_key)
                     .map_err(|_| Error::InvalidData)?;
                 let terms = &issued.terms;
-                if terms != raw_terms.as_ref()
+                let envelope = cs_mail_wire::decode_command_envelope(&command.payload)
+                    .map_err(|_| Error::InvalidData)?;
+                let ProtocolCommand::IssueRequestTerms { return_route, .. } = envelope.command
+                else {
+                    return Err(Error::InvalidData);
+                };
+                if terms.return_route != return_route
+                    || terms != raw_terms.as_ref()
                     || terms.sender != state.profile.persona
                     || terms.recipient != plan.other
                     || terms.relationship != plan.handle.relationship
                     || terms.quote_id != *quote
                     || terms.selected_class.id() != *class
+                    || terms.receiving_alias != *alias
                     || terms.recipient_provider != state.profile.deployment.scope.provider
                     || terms.protocol_version != state.profile.deployment.policy.protocol_version
                     || terms.declaration_digest
@@ -1027,6 +1050,7 @@ impl MemberClient {
             &state,
             &keys,
             DocumentContext {
+                alias: request.terms.receiving_alias,
                 other,
                 handle,
                 request: request_id,

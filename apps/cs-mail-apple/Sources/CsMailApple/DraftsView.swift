@@ -108,7 +108,7 @@ struct DraftsView: View {
         switch draft.target {
         case .native(let other, let conversation): return (conversation == nil ? "New conversation with " : "Reply to ") + name(other)
         case .external: if case .external(let mailbox, _) = draft.body { return mailbox.isEmpty ? "External email" : "Email to " + mailbox }; return "External email"
-        case .request(let other, _): return "Relationship request to " + name(other)
+        case .request(_, let other, _): return "Relationship request to " + name(other)
         case .followup(let other, _): return "Follow-up to " + name(other)
         }
     }
@@ -135,15 +135,15 @@ private struct DraftDestinationView: View {
                         ExternalEmailComposer(model: model, thread: thread, completed: { _ in close() }, savedDraft: draft)
                     } else { loading }
                 } else { ExternalEmailComposer(model: model, thread: nil, completed: { _ in close() }, savedDraft: draft) }
-            case .request(let other, let requestClass):
+            case .request(let alias, let other, let requestClass):
                 VStack {
-                    RequestComposerView(model: model, other: SenderReference(other), name: contact?.title ?? "saved contact", requestClass: RequestClassID(requestClass), close: close, savedDraft: draft)
+                    RequestComposerView(model: model, other: SenderReference(other), name: contact?.title ?? "saved contact", requestClass: RequestClassID(requestClass), receivingAlias: alias, close: close, savedDraft: draft)
                 }.interactiveDismissDisabled(true)
             case .followup(let other, let request): FollowupComposer(model: model, other: other, request: request, close: close, savedDraft: draft)
             }
         }.task {
             switch draft.target {
-            case .native(let other, _), .request(let other, _):
+            case .native(let other, _), .request(_, let other, _):
                 contact = model.presentationContacts.first { $0.sender == other }
                 if contact == nil { await model.select(SenderReference(other)); contact = model.conversation }
                 unavailable = contact == nil

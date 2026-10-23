@@ -14,6 +14,7 @@ pub enum DraftTarget {
         conversation: Option<String>,
     },
     Request {
+        alias: String,
         other: String,
         class: String,
     },
@@ -48,7 +49,13 @@ impl TryFrom<DraftTarget> for core::DraftTarget {
             DraftTarget::External { conversation: id } => Self::External {
                 conversation: conversation(id)?,
             },
-            DraftTarget::Request { other, class } => Self::Request {
+            DraftTarget::Request {
+                other,
+                class,
+                alias,
+            } => Self::Request {
+                alias: cs_mail_primitives::AliasId::new(number(&alias)?)
+                    .map_err(|_| ClientError::InvalidData)?,
                 other: ProtocolIdentity(number(&other)?),
                 class: RequestClassId(number(&class)?),
             },
@@ -72,7 +79,12 @@ impl From<&core::DraftTarget> for DraftTarget {
             core::DraftTarget::External { conversation } => Self::External {
                 conversation: conversation.map(|c| c.value().to_string()),
             },
-            core::DraftTarget::Request { other, class } => Self::Request {
+            core::DraftTarget::Request {
+                other,
+                class,
+                alias,
+            } => Self::Request {
+                alias: alias.value().to_string(),
                 other: other.0.to_string(),
                 class: class.0.to_string(),
             },

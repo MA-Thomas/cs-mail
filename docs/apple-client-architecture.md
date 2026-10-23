@@ -340,38 +340,37 @@ separate decision.
 
 ## First implementation slice and validation
 
-**Alias creation refinement (2026-10-14).** Each member
-has one protocol identity, one current public-facing alias and multiple private
-aliases. Private creation asks for a **purpose/description**; Rust generates the
-unpredictable email address, which Swift presents for copying. The description is
-owner-visible metadata and is not disclosed unless explicitly shared. Public
-creation asks for a member-chosen email address. Rust enforces the single-current
-public-alias rule; replacement preserves permanent reservation and the previous
-alias's explicit transition. This replaces manual private-address entry in the
-native management flow. The owner-visible list shows purpose/description above
-the generated address; Copy address copies only that address. Confirmed creation
-navigates using the alias ID in the verified Rust outcome, not a guessed address
-or list difference. Exact-operation recovery retains the original signed request.
-This management flow does not establish alias mail delivery or publication.
+**Unified alias creation implementation (21 October 2026).**
+Use one New alias journey. Collect owner-visible purpose/description, a chosen
+address or a request for generation, and an explicit receiving-policy choice:
+Require a bonded request, or Allow contact through this address. A bonded alias
+has its own profile and request classes; directory visibility is a separate choice.
+Offer explicit sender grants where useful. Do not infer policy or authentication
+from labels such as Hospital or Amazon. There is no public/private selector or
+single-current-public-alias rule in the revised product model.
 
-An alias is a receiving address; express-lane permission is separately granted.
-Private creation collects purpose/description and presents Rust's generated address,
-without implying lane authority. Pairing controls must explicitly offer alias-scoped
-permission (for referred healthcare senders) or sender-scoped permission (for selected
-authenticated Amazon domains), and present the named receiving scope. Changing a
-lane is distinct from address restriction, replacement or retirement. Rust owns the
-authorization and complete atomic effects; Swift collects intent and presents the
-verified result. Private aliases have no bonded fallback; unauthorized senders may
-use the public approach route. Local alias management, receiving, separate permission revisions and these native
-controls share the existing signed command/recovery contract. The
-[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) owns the rules;
-Phoros will later consume CS-MAIL's infrastructure.
+Rust owns validation, authority, generation, revision checks, complete consequences
+and exact-operation recovery. Swift collects intent, preserves unfinished work and
+navigation context, and presents the verified result in plain language. Address
+possession and purpose grant no permission. Alias-scoped creation explicitly
+authorizes its lane and Rust commits both atomically; a deliberately staged journey
+must preserve and explain partial outcomes without asking the member to manage
+internal operations. A pending outcome must not invite duplicate creation.
+
+The unified flow replaces generated-private/chosen-public controls and the
+single-public-alias limit. Alias-scoped creation commits its explicit lane atomically;
+a bonded alias then receives its own profile, classes and explicit visibility choice.
+The Apple runbook records validation and running-app status. Fee collection is future work: a nominal
+alias charge associated with the annual utility cycle is a direction only, with
+amount, recurrence, timing and failure treatment unresolved. Do not display or
+collect an invented fee. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
+owns the rules and open policy-switch, lifecycle and billing decisions.
 
 **Further alias clarification (2026-10-14; implementation pending).** One
 participant protocol identity may control multiple alias routes without public
-linkage. Sender-identity blocks apply across all receiving aliases. Private routes
+linkage. Sender-identity blocks apply across all receiving aliases. Aliases
 have no automatic expiry and offer Restrict, Replace, Retire. Suspicious or
-insufficiently authenticated private-alias mail is held for review without ongoing
+insufficiently authenticated alias mail is held for review without ongoing
 permission or payment. SMTP envelope recipients and authenticated native targets
 establish receiving-route evidence. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
 owns these rules and remaining delivery, transition, reply and held-message contracts;
@@ -637,3 +636,21 @@ signing, relay-decryption or migration authority. Without that optional capabili
 a new guest pair is unavailable rather than derived under a different secret.
 Alias-aware public approach links and detailed held-mail/reply contracts remain
 separate from this receiving-inbox implementation.
+
+
+## Readable alias previews — 21 October 2026
+
+`cs-mail-application::aliases::generation` owns name normalization, fragment
+construction, occupancy preference, unbiased suffix selection, length bounds and
+bounded collision retries. It receives randomness and reservation facts explicitly.
+The existing alias transaction supplies protected namespace facts and authenticates
+non-reserving suggestions. Generated creation and replacement sign the exact
+reviewed candidate; the old server-selected 128-bit address path is removed.
+
+The portable client verifies the signed suggestion and keeps mutations in the
+existing encrypted exact-operation journal. A confirmed address collision is distinct
+from a stale revision or uncertain response. Swift holds unfinished name, fragment
+and preview intent across sheet closure; changing name/fragment invalidates the old
+preview and fences delayed results. It never implements generation rules. Both
+receiving policies use the same generator. No account, credential, schema or existing
+address conversion is involved.

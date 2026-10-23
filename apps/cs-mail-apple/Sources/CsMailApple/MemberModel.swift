@@ -41,6 +41,8 @@ actor ClientWorker {
 }
 
 @MainActor public final class MemberModel: ObservableObject {
+    let aliasCreationDraft = AliasCreationDraft()
+    @Published var editingAlias: String?
     @Published private(set) var addressWorkspace: AddressWorkspace?
     @Published private(set) var pendingAddressUpdate: PendingAddressUpdate?
     @Published private(set) var addressUpdateResult: AddressUpdateResult?
@@ -95,7 +97,13 @@ actor ClientWorker {
     private var pendingSelection: SenderReference?
     private var drainingSelection = false
     private var readingContext: MailKey?
-    let approachDraft = ApproachEditorDraft()
+    private var publicationDrafts: [String: ApproachEditorDraft] = [:]
+    private let emptyPublicationDraft = ApproachEditorDraft()
+    var approachDraft: ApproachEditorDraft {
+        guard let alias = editingAlias else { return emptyPublicationDraft }
+        if let draft = publicationDrafts[alias] { return draft }
+        let draft = ApproachEditorDraft(); publicationDrafts[alias] = draft; return draft
+    }
     private var retaining: Task<Void, Never>?
     private var searchGeneration = 0
     let directory: DirectoryModel
@@ -183,7 +191,7 @@ actor ClientWorker {
         navigationContacts = nil; navigationError = nil
         addressSettings = nil; addressWorkspace = nil; pendingAddressUpdate = nil; addressUpdateResult = nil; addressesCurrent = false; directory.clear()
         clearSourceContact(); reference = nil; externalInbox = nil; sentExternalConversation = nil; inbox = nil; conversation = nil; selectedSender = nil
-        pendingSelection = nil; readingContext = nil; approachDraft.clear()
+        pendingSelection = nil; readingContext = nil; publicationDrafts.removeAll(); emptyPublicationDraft.clear(); editingAlias = nil; aliasCreationDraft.clear()
         searchQuery = ""; searchComplete = true
         mailItems = []; aliasInboxes = []; senderLaneScopes = []; selectedInbox = nil; outgoingWork = []; mailboxError = nil
         searchGeneration += 1; searchMatches = []; searchStatus = nil; searchContext = nil; searching = false
@@ -320,7 +328,7 @@ actor ClientWorker {
         await perform(.purchase) {
             let covered = try await self.call { try $0.purchaseService(offer: 1) }
             self.inbox = try await self.call { try $0.sync() }
-            self.addressSettings = try await self.call { try $0.addressSettings() }
+            if let alias = self.editingAlias { self.addressSettings = try await self.call { try $0.addressSettings(alias: alias) } }
             self.notice = covered ? "Simulated service coverage is active." : "Simulated purchase recorded. Refresh after collection finishes."
         }
     }
@@ -339,6 +347,14 @@ actor ClientWorker {
             self.addressWorkspace = try await self.call { try $0.addressWorkspace() }
             self.addressesCurrent = true
         }
+    }
+    func suggestAlias(name: String, fragment: String?) async -> AliasSuggestion? {
+        let started = generation
+        var suggestion: AliasSuggestion?
+        await perform(.aliasLoad) {
+            suggestion = try await self.call { try $0.suggestAlias(name: name, fragment: fragment) }
+        }
+        return generation == started ? suggestion : nil
     }
     @discardableResult
     func updateAddress(_ mutation: AddressMutation) async -> AddressUpdateResult? {
@@ -369,15 +385,21 @@ actor ClientWorker {
         addressesCurrent = true
     }
     func loadAddressSettings() async {
-        await perform(.addressLoad) { self.addressSettings = try await self.call { try $0.addressSettings() } }
+        guard let alias = editingAlias else { addressSettings = nil; return }
+        await perform(.addressLoad) {
+            let settings = try await self.call { try $0.addressSettings(alias: alias) }
+            guard self.editingAlias == alias else { return }
+            self.addressSettings = settings
+        }
     }
-    func publishAddress(expected: UInt64, classVersion: UInt64, name: String, description: String,
+    func publishAddress(alias: String, expected: UInt64, classVersion: UInt64, name: String, description: String,
                         image: Data?, listed: Bool, classes: [RequestClassDraft], mailbox: String?) async {
 
         await perform(.publication) {
-            try await self.call { try $0.publishAddress(expected: expected, classVersion: classVersion,
+            try await self.call { try $0.publishAddress(alias: alias, expected: expected, classVersion: classVersion,
                 displayName: name, description: description, image: image, listed: listed, classes: classes, mailbox: mailbox) }
-            self.addressSettings = try await self.call { try $0.addressSettings() }
+            let settings = try await self.call { try $0.addressSettings(alias: alias) }
+            if self.editingAlias == alias { self.addressSettings = settings }
             self.notice = "Changes saved."
             await self.directory.refresh()
         }
@@ -419,9 +441,9 @@ actor ClientWorker {
         }
     }
     func clearReference() { referenceGeneration += 1; reference = nil }
-    package func quoteRequest(other: SenderReference, requestClass: RequestClassID) async {
+    package func quoteRequest(other: SenderReference, requestClass: RequestClassID, alias: String) async {
         await perform(.request) {
-            _ = try await self.call { try $0.quoteRequest(other: other.value, class: requestClass.value) }
+            _ = try await self.call { try $0.quoteRequest(other: other.value, class: requestClass.value, alias: alias) }
             self.inbox = try await self.call { try $0.cachedInbox() }
         }
     }
@@ -687,6 +709,7 @@ actor ClientWorker {
         case .AddressUnavailable: return "This address is currently unavailable."
         case .DecisionRefused: return "The service refused the decision. Refresh to see the current request."
         case .StorageUnavailable: return "Local storage is unavailable or open in another process."
+        case .InvalidAliasName: return "Enter a name or initials with at least two Latin letters, using your preferred spelling. Names may contain up to 120 characters."
         case .InvalidData: return "This information could not be verified. Try Refresh; if the problem continues, contact support."
         case .Unavailable: return "This couldn’t be completed. Check its status before trying again."
         }

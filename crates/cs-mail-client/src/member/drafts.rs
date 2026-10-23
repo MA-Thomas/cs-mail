@@ -66,6 +66,7 @@ pub enum DraftTarget {
         conversation: Option<ConversationId>,
     },
     Request {
+        alias: cs_mail_primitives::AliasId,
         other: ProtocolIdentity,
         class: RequestClassId,
     },
@@ -462,7 +463,7 @@ impl Workspace {
         })
     }
 }
-const CONTEXT: &[u8] = b"cs-mail/member-workspace/v2";
+const CONTEXT: &[u8] = b"cs-mail/member-workspace/v3";
 
 impl MemberClient {
     /// Local reads and writes use a separate short lock; they never wait for network work.
@@ -647,11 +648,18 @@ impl MemberClient {
                 )?;
                 Ok(DraftSubmission::External { conversation })
             }
-            (DraftTarget::Request { other, class }, DraftBody::Request { text }) => {
+            (
+                DraftTarget::Request {
+                    other,
+                    class,
+                    alias,
+                },
+                DraftBody::Request { text },
+            ) => {
                 self.authorize_request_with_draft(
                     reviewed_request.ok_or(Error::InvalidData)?,
                     text,
-                    Some((&draft, *other, *class)),
+                    Some((&draft, *other, *class, *alias)),
                 )?;
                 Ok(DraftSubmission::Request {
                     request: reviewed_request.ok_or(Error::InvalidData)?,

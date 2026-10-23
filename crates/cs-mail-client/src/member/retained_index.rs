@@ -17,7 +17,7 @@ use std::{
     ops::{Deref, DerefMut},
     sync::MutexGuard,
 };
-const META: &[u8] = b"cs-mail/retained-metadata/v2";
+const META: &[u8] = b"cs-mail/retained-metadata/v3";
 fn context(kind: &[u8], id: RetainedRecordId) -> Vec<u8> {
     [kind, id.bytes()].concat()
 }

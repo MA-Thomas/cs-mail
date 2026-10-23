@@ -18,7 +18,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-const NOW: CanonicalTime = CanonicalTime(1_000);
+const fn correspondence_time(offset: u64) -> CanonicalTime {
+    CanonicalTime(44_582_400_000 + offset)
+}
+const NOW: CanonicalTime = correspondence_time(1_000);
 static NEXT_SCHEMA: AtomicU64 = AtomicU64::new(1);
 fn key(n: u8) -> [u8; 32] {
     SigningKey::from_bytes(&[n; 32]).verifying_key().to_bytes()
@@ -130,12 +133,54 @@ impl Fixture {
                 NOW,
             )
             .unwrap();
+            cs_mail_test_support::purchase_service(
+                host.deployment(),
+                scope,
+                SettlementUnit(1),
+                BillingAccountId(id),
+                OperationalKeyRef(id),
+                NOW,
+            )
+            .unwrap();
             clients.push(NativeClient::new(
                 ActorRef::Sender(persona(i)),
                 OperationalKeyRef(id),
                 &[n; 32],
                 ContentKeyRef(id),
             ));
+        }
+        // These fixtures start with directed standing grants at one named inbox.
+        // Being in the correspondence graph alone supplies no receiving authority.
+        let mut sql = Client::connect(&url, NoTls).unwrap();
+        for a in 0..3 {
+            for b in 0..3 {
+                if a == b {
+                    continue;
+                }
+                let scope: cs_mail_application::aliases::SenderRouteScope =
+                    cs_mail_application::aliases::SenderScopeRecord {
+                        revision: 1,
+                        established_at: NOW,
+                        sender: persona(a),
+                        recipient: persona(b),
+                        relationship_version: cs_mail_primitives::RelationshipVersion(0),
+                        receiving: cs_mail_capabilities::routes::ReceivingScope::one(
+                            cs_mail_primitives::AliasId::new(persona(b).0).unwrap(),
+                        ),
+                        lane: None,
+                    }
+                    .try_into()
+                    .unwrap();
+                sql.execute(
+                    "INSERT INTO cs_alias_sender_scopes(recipient,sender,record) VALUES($1,$2,$3)",
+                    &[
+                        &persona(b).0.to_string(),
+                        &persona(a).0.to_string(),
+                        &postgres::types::Json(scope),
+                    ],
+                )
+                .unwrap();
+            }
         }
         let repository = Self::configured_repository(&url);
         Self {
@@ -185,7 +230,7 @@ impl Fixture {
             Command::Create {
                 subject: cs_mail_correspondence::ConversationSubject::new(
                     "Fixture conversation",
-                    cs_mail_primitives::CanonicalTime(0),
+                    correspondence_time(0),
                     0,
                     [19; 32],
                 )
@@ -209,7 +254,7 @@ impl Fixture {
                 doc.with_subject(
                     cs_mail_correspondence::ConversationSubject::new(
                         "Fixture conversation",
-                        cs_mail_primitives::CanonicalTime(0),
+                        correspondence_time(0),
                         0,
                         [19; 32],
                     )
@@ -243,10 +288,10 @@ impl Fixture {
                     },
                     payload_schema: None,
                 },
-                message_valid_until: MessageValidityUntil(CanonicalTime(100_000)),
+                message_valid_until: MessageValidityUntil(correspondence_time(100_000)),
                 capability: self.capability.get(),
             },
-            (NOW, CanonicalTime(100_000)),
+            (NOW, correspondence_time(100_000)),
         )
         .unwrap()
     }
@@ -935,7 +980,7 @@ fn mailbox_and_live_authority_do_not_inherit_permission_from_correspondence_scop
         })
     ));
     exercise_native_lane(&h);
-    let late = PostgresAccountRepository::connect(&h.url, || CanonicalTime(100_000)).unwrap();
+    let late = PostgresAccountRepository::connect(&h.url, || correspondence_time(100_000)).unwrap();
     assert_eq!(
         CorrespondenceService::new(&late)
             .handle(&h.request(
@@ -973,7 +1018,7 @@ fn exercise_native_lane(h: &Fixture) {
     use ed25519_dalek::Signer;
     let grant = SenderScopedGrant {
         id: LaneId(800),
-        subject: LaneSubject::Native(cs_mail_privacy::ScopedHandle([8; 32])),
+        subject: LaneSubject::Native(cs_mail_privacy::ScopedHandle(*relation(1, 0).as_bytes())),
         sender: persona(1),
         recipient: persona(0),
         protocol_version: ProtocolVersion(2),
@@ -991,7 +1036,7 @@ fn exercise_native_lane(h: &Fixture) {
         mode: LaneMode::Expiring,
         issued_at: NOW,
         not_before: NOW,
-        not_after: CanonicalTime(10_000),
+        not_after: correspondence_time(10_000),
         version: Version(1),
     };
     let signed = SignedLaneGrant {
@@ -1007,6 +1052,7 @@ fn exercise_native_lane(h: &Fixture) {
     let mut db = Client::connect(&h.url, NoTls).unwrap();
     db.execute("INSERT INTO cs_capability_lanes(aggregate_key,lane_id,lane,updated_at) VALUES('pair-1-0','800',$1,1000)", &[&postgres::types::Json(&lane)]).unwrap();
     db.execute("UPDATE cs_relationship_aggregates SET relationship_state=jsonb_set(relationship_state,'{relationship,state}',$1) WHERE aggregate_key='pair-1-0'", &[&postgres::types::Json(RelationshipState::ExpressLane(LaneId(800)))]).unwrap();
+    db.batch_execute("UPDATE cs_alias_sender_scopes SET record=jsonb_set(record,'{lane}','[800,1]'::jsonb) WHERE recipient='1' AND sender='2'").unwrap();
     h.create(50, 1, 0);
     let no_capability = h.prepare(
         1,

@@ -153,7 +153,7 @@ pub fn router(state: AppState) -> Router {
             post(crate::members::publish_endpoint_key),
         )
         .route(
-            "/v1/addresses/{persona}/receiving-alias",
+            "/v1/addresses/{persona}/correspondence-alias",
             get(crate::members::receiving_alias),
         )
         .route("/v1/addresses/{persona}/offer", get(crate::members::offer))

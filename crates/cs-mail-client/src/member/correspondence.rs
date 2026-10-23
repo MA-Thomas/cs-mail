@@ -212,9 +212,9 @@ impl MemberClient {
         profile: &Profile,
         owner: ProtocolIdentity,
     ) -> Result<cs_mail_primitives::AliasId, Error> {
-        let published: cs_mail_application::aliases::PublicReceivingAlias = self.call(
+        let published: cs_mail_application::aliases::CorrespondenceAlias = self.call(
             &profile.server,
-            &format!("v1/addresses/{}/receiving-alias", owner.0),
+            &format!("v1/addresses/{}/correspondence-alias", owner.0),
             None,
         )?;
         if published.owner != owner {
@@ -455,12 +455,56 @@ impl MemberClient {
                 Command::Send {
                     alias: match alias {
                         Some(id) => id,
-                        None => self.receiving_alias(profile, other)?,
+                        None => self.conversation_destination(state, other, conversation)?,
                     },
                     package: Box::new(package),
                 },
             )?,
         })
+    }
+    fn conversation_destination(
+        &self,
+        state: &State,
+        other: ProtocolIdentity,
+        conversation: ConversationId,
+    ) -> Result<cs_mail_primitives::AliasId, Error> {
+        if let Some(record) = state
+            .mailbox
+            .records
+            .iter()
+            .map(|(_, r)| r)
+            .filter(|r| {
+                r.manifest.conversation() == conversation
+                    && r.author == state.profile.persona
+                    && r.receiving.recipient() == other
+            })
+            .max_by_key(|r| r.committed_at)
+        {
+            return Ok(record.receiving.alias());
+        }
+        for record in state
+            .mailbox
+            .records
+            .iter()
+            .map(|(_, r)| r)
+            .filter(|r| r.manifest.conversation() == conversation && r.author == other)
+        {
+            if let cs_mail_protocol::AdmissionBasis::InitialRequest { request } = record.admission {
+                if let Some(terms) = state
+                    .inbox
+                    .iter()
+                    .flat_map(|v| &v.requests)
+                    .find(|r| r.id == request)
+                    .map(|r| &r.terms)
+                {
+                    if let cs_mail_protocol::RequestReturnRoute::Native(alias) = terms.return_route
+                    {
+                        return Ok(alias);
+                    }
+                }
+            }
+        }
+        self.receiving_alias(&state.profile, other)
     }
     fn plan_conversation(
         state: &State,

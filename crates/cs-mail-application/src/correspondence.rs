@@ -1023,6 +1023,7 @@ fn execute(
     let mut lane_write = None;
     let mut delete_copies = None;
     let mut policy_revisions = BTreeMap::new();
+    let mut direct_authorization = direct_alias_authority(request, context, now);
     let response = match &request.command {
         Command::ReceivingRoutes { messages } => {
             if messages.len() > 100 {
@@ -1071,7 +1072,9 @@ fn execute(
         }
         Command::Policy { id } => Response::Conversation(owned(context, *id, actor)?.clone()),
         Command::Assess { manifest } => assess(context, manifest, actor, now)?,
-        Command::SendToAlias { alias, package } => {
+        Command::SendToAlias { alias, package } | Command::Send { alias, package }
+            if direct_authorization.is_some() =>
+        {
             let route = context
                 .routed
                 .as_ref()
@@ -1098,26 +1101,9 @@ fn execute(
                     *r.key.reference.as_bytes(),
                 ))
             });
-            let crate::aliases::RouteDecision::Authorize(authorization) = crate::aliases::admit(
-                &crate::aliases::AdmissionContext {
-                    alias: &route.alias,
-                    authentication: crate::aliases::SenderAuthentication::Authenticated(actor),
-                    relationship: context.contact.as_ref(),
-                    sender_scope: route.sender_scope.as_ref(),
-                    lane: context.lane.as_ref(),
-                    declarations: &package.recipient_copy.binding.declarations,
-                    lane_evidence: evidence.as_ref(),
-                    domain_evidence: None,
-                    covered: route.recipient_active
-                        && route.sender_billing.covers(now)
-                        && route.recipient_billing.covers(now),
-                    review_required: false,
-                    conversation: id,
-                },
-                now,
-            ) else {
-                return Err(CorrespondenceError::Unauthorized);
-            };
+            let authorization = direct_authorization
+                .take()
+                .ok_or(CorrespondenceError::Unauthorized)?;
             let relationship = context
                 .contact
                 .as_ref()
@@ -1173,7 +1159,7 @@ fn execute(
                     if lane
                         .consume(
                             package.manifest.message(),
-                            Some(*id),
+                            package.recipient_copy.binding.capability,
                             &package.recipient_copy.binding.declarations,
                             evidence.as_ref().ok_or(CorrespondenceError::Unauthorized)?,
                             now,
@@ -1224,6 +1210,7 @@ fn execute(
             )?);
             Response::Committed(package.manifest.message())
         }
+        Command::SendToAlias { .. } => return Err(CorrespondenceError::Unauthorized),
         Command::Send { alias, package } => {
             let manifest = &package.manifest;
             if context.messages.contains_key(&manifest.message()) {
@@ -1238,11 +1225,11 @@ fn execute(
                 .as_ref()
                 .filter(|r| r.alias.id() == *alias && r.alias.owner() == destination)
                 .ok_or(CorrespondenceError::Unauthorized)?;
-            if receiving_alias.alias.kind() != cs_mail_accounts::aliases::AliasKind::Public
-                || receiving_alias
-                    .sender_scope
-                    .as_ref()
-                    .is_some_and(|scope| !scope.receiving().contains(*alias))
+            if context
+                .contact
+                .as_ref()
+                .and_then(|r| answer_basis(context, r, manifest.conversation(), actor, destination))
+                .is_none()
             {
                 return Err(CorrespondenceError::Unauthorized);
             }
@@ -1413,5 +1400,53 @@ fn resolve(
             )?;
             Ok(fetch(context, source.message(), actor, now))
         }
+    }
+}
+
+fn direct_alias_authority(
+    request: &SignedRequest,
+    c: &Context,
+    at: CanonicalTime,
+) -> Option<crate::aliases::ReceivingAuthorization> {
+    let (Command::Send { alias, package } | Command::SendToAlias { alias, package }) =
+        &request.command
+    else {
+        return None;
+    };
+    let route = c.routed.as_ref().filter(|r| r.alias.id() == *alias)?;
+    let evidence = c.contact.as_ref().map(|r| {
+        cs_mail_capabilities::LaneEvidence::Native(cs_mail_privacy::ScopedHandle(
+            *r.key.reference.as_bytes(),
+        ))
+    });
+    match crate::aliases::admit(
+        &crate::aliases::AdmissionContext {
+            alias: &route.alias,
+            authentication: crate::aliases::SenderAuthentication::Authenticated(request.persona),
+            relationship: c.contact.as_ref(),
+            sender_scope: route.sender_scope.as_ref(),
+            lane: c.lane.as_ref(),
+            declarations: &package.recipient_copy.binding.declarations,
+            lane_evidence: evidence.as_ref(),
+            domain_evidence: None,
+            covered: route.recipient_active
+                && route.sender_billing.covers(at)
+                && route.recipient_billing.covers(at),
+            review_required: false,
+            conversation: package.manifest.conversation(),
+        },
+        at,
+    ) {
+        crate::aliases::RouteDecision::Authorize(value) => {
+            if let crate::aliases::RouteBasis::SenderLane { id, .. } = value.basis()
+                && package.recipient_copy.binding.capability != Some(*id)
+            {
+                // A confined answer may use its own conversation authority below.
+                // It must not silently consume a sender lane absent from signed intent.
+                return None;
+            }
+            Some(value)
+        }
+        _ => None,
     }
 }

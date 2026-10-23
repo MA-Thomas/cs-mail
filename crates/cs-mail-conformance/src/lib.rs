@@ -58,6 +58,7 @@ mod tests {
             .configure_request_classes(
                 RecipientRequestClasses::new(
                     RECIPIENT,
+                    cs_mail_primitives::AliasId::new((RECIPIENT).0).unwrap(),
                     version,
                     vec![
                         RequestClass::new(
@@ -159,6 +160,10 @@ mod tests {
                 ProtocolVersion(2),
                 IdempotencyKey(1),
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
@@ -200,6 +205,10 @@ mod tests {
             .execute(
                 sender(
                     ProtocolCommand::IssueRequestTerms {
+                        return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                            cs_mail_primitives::AliasId::new(10).unwrap(),
+                        ),
+                        alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                         class_id: cs_mail_primitives::RequestClassId(1),
                         quote_id: QuoteId(1),
                         declaration_digest: None,
@@ -264,6 +273,10 @@ mod tests {
                 sender_as(
                     old_sender,
                     ProtocolCommand::IssueRequestTerms {
+                        return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                            cs_mail_primitives::AliasId::new(10).unwrap(),
+                        ),
+                        alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                         class_id: cs_mail_primitives::RequestClassId(1),
                         quote_id: QuoteId(1),
                         declaration_digest: None,
@@ -351,6 +364,10 @@ mod tests {
             sender_as(
                 new_sender,
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(2),
                     declaration_digest: None,
@@ -371,6 +388,10 @@ mod tests {
                 sender_as(
                     new_sender,
                     ProtocolCommand::IssueRequestTerms {
+                        return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                            cs_mail_primitives::AliasId::new(10).unwrap(),
+                        ),
+                        alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                         class_id: cs_mail_primitives::RequestClassId(1),
                         quote_id: QuoteId(2),
                         declaration_digest: None,

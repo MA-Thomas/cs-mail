@@ -12,7 +12,10 @@ struct ManagedAddressView: View {
     @ObservedObject var model: MemberModel
     @Binding var destination: ManagedAddressDestination
     let create: () -> Void
+    @State private var showingPublication = false
+    @State private var generateReplacement = true
     @State private var replacementAddress = ""
+    @StateObject private var replacementGeneration = AliasGenerationDraft()
     @State private var transitionEnd = Date()
     @State private var confirmation: AddressMutation?
     private var transitionTime: UInt64? { UInt64(exactly: (transitionEnd.timeIntervalSince1970 * 1000).rounded(.down)) }
@@ -46,8 +49,8 @@ struct ManagedAddressView: View {
                         Button { destination = .address(address.id) } label: {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(address.description ?? address.address).font(.headline)
-                                if address.description != nil { Text(address.address).font(.caption) }
-                                Text((address.kind == .private ? "Private · " : "Public-facing · ") + addressStateTitle(address.state)).font(.caption)
+                                if let description = address.description, description != address.address { Text(address.address).font(.caption) }
+                                Text((address.policy == .bonded ? "Bonded requests · " : "Contact through address · ") + addressStateTitle(address.state)).font(.caption)
                             }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
                         }.buttonStyle(EditorialRegionButtonStyle()).editorialCopyableLabel(address.address)
                     }
@@ -59,19 +62,31 @@ struct ManagedAddressView: View {
                 if let result = model.addressUpdateResult {
                     switch result {
                     case .applied: Text("Alias update confirmed.")
+                    case .addressUnavailable: EditorialReadingView("This address is no longer available. Generate another address before trying again.", style: .warning)
                     case .refused(let explanation): EditorialReadingView("Update refused. " + explanation, style: .warning)
                     }
                 }
                 if model.pendingAddressUpdate == nil, let error = model.addressManagementError { EditorialReadingView(error, style: .warning) }
             }.padding(32).frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity)
         }
+        .sheet(isPresented: $showingPublication) { AddressEditor(model: model, draft: model.approachDraft) }
         .confirmationDialog(confirmationTitle, isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
             if let mutation = confirmation {
-                Button(confirmationTitle) { confirmation = nil; Task { await model.updateAddress(mutation) } }
+                Button(confirmationTitle) {
+                    confirmation = nil
+                    Task {
+                        let outcome = await model.updateAddress(mutation)
+                        if case .addressUnavailable? = outcome,
+                           case .replace(_, _, .generated, _) = mutation {
+                            replacementGeneration.invalidate()
+                            await replacementGeneration.generate(using: model)
+                        }
+                    }
+                }
             }
             Button("Cancel", role: .cancel) { confirmation = nil }
         } message: { Text(confirmationExplanation) }
-        .onChange(of: destination) { _, _ in replacementAddress = ""; confirmation = nil }
+        .onChange(of: destination) { _, _ in replacementAddress = ""; replacementGeneration.clear(); confirmation = nil }
     }
     @ViewBuilder private var recovery: some View {
         if let pending = model.pendingAddressUpdate {
@@ -83,7 +98,7 @@ struct ManagedAddressView: View {
         VStack(alignment: .leading, spacing: 18) {
             Text(value.address).textSelection(.enabled)
             Button("Copy address") { EditorialClipboard.copy(value.address) }
-            Text((value.kind == .private ? "Private · " : "Public-facing · ") + addressStateTitle(value.state)).font(.headline)
+            Text((value.policy == .bonded ? "Bonded requests · " : "Contact through address · ") + addressStateTitle(value.state)).font(.headline)
             if case .replaced(let replacement, let until, let ended) = value.state {
                 let next = model.addressWorkspace?.addresses.first { $0.id == replacement }?.address ?? "Replacement alias"
                 EditorialReadingView("Replaced by " + next + ". " + (ended ? "The old alias’s transition has ended." : "Existing admitted conversations remain eligible until " + SidebarProjection.date(until) + "."))
@@ -99,25 +114,35 @@ struct ManagedAddressView: View {
             } else if case .restricted = value.state {
                 Text("No existing conversations. New conversations need your approval.")
             }
-            if value.kind == .private { ReceivingPermissionControls(model: model, address: value) }
+            if value.policy == .bonded {
+                Button("Profile and request classes") {
+                    model.editingAlias = value.id
+                    Task { await model.loadAddressSettings(); showingPublication = true }
+                }.buttonStyle(EditorialButtonStyle())
+            }
+            Button("Use for ordinary correspondence") { Task { await model.updateAddress(.useForCorrespondence(id: value.id, expected: value.revision)) } }.disabled(!model.canStartAddressUpdate || !value.canReplace)
+            EditorialReadingView("This selects the receiving address used by ordinary contact workflows. It grants no sender permission and does not change existing delivery history.", style: .caption)
+            ReceivingPermissionControls(model: model, address: value)
             if value.canRestrict {
                 Button("Restrict address") { confirmation = .restrict(id: value.id, revision: value.revision) }.disabled(!model.canStartAddressUpdate)
             }
             if value.canReplace {
                 DisclosureGroup("Replace this alias") {
                     VStack(alignment: .leading, spacing: 14) {
-                        if value.kind == .public {
-                            TextField("New email address", text: $replacementAddress).textFieldStyle(.roundedBorder)
-                        } else {
-                            EditorialReadingView("A new email address will be generated. Your purpose/description stays the same.", style: .caption)
-                        }
+                        Toggle("Generate a new address", isOn: $generateReplacement)
+                        if generateReplacement { AliasGenerationControls(model: model, draft: replacementGeneration) }
+                        else { TextField("New email address", text: $replacementAddress).textFieldStyle(.roundedBorder) }
                         DatePicker("Old alias transition ends", selection: $transitionEnd)
                         EditorialReadingView("Existing conversations can continue at the old alias until this date. Update any websites and recovery settings that use it. Permissions do not transfer to the new alias.", style: .caption)
                         Button("Replace") {
-                            if let until = transitionTime {
-                                confirmation = value.kind == .private ? .replacePrivate(id: value.id, revision: value.revision, until: until) : .replacePublic(id: value.id, revision: value.revision, address: replacementAddress, until: until)
-                            }
-                        }.disabled(!model.canStartAddressUpdate || (value.kind == .public && replacementAddress.isEmpty) || transitionTime == nil)
+                            guard let until = transitionTime else { return }
+                            let address: AddressChoice
+                            if generateReplacement {
+                                guard let suggestion = replacementGeneration.suggestion else { return }
+                                address = .generated(address: suggestion.address)
+                            } else { address = .chosen(address: replacementAddress) }
+                            confirmation = .replace(id: value.id, revision: value.revision, address: address, until: until)
+                        }.disabled(!model.canStartAddressUpdate || (generateReplacement ? replacementGeneration.suggestion == nil : replacementAddress.isEmpty) || transitionTime == nil)
                     }.padding(.top, 12)
                 }
             }
@@ -130,9 +155,10 @@ struct ManagedAddressView: View {
         guard let confirmation else { return "Update alias" }
         switch confirmation {
         case .permission: return "Update permission"
-        case .createPrivate, .createPublic: return "Create alias"
+        case .useForCorrespondence: return "Use this address"
+        case .create: return "Create alias"
         case .restrict: return "Restrict alias"
-        case .replacePrivate, .replacePublic: return "Replace alias"
+        case .replace: return "Replace alias"
         case .retire: return "Retire alias"
         }
     }
@@ -140,11 +166,10 @@ struct ManagedAddressView: View {
         guard let confirmation else { return "" }
         switch confirmation {
         case .permission: return "Change who may contact you through this address. Your address and received mail remain."
-        case .createPublic(let address): return "Reserve \(address) within your existing account. The alias will not be reassigned to another member. Receiving requires the appropriate permission. Publishing an approach page for this alias is not available yet."
-        case .createPrivate: return "Generate a private alias for this purpose/description."
-        case .replacePrivate(_, _, let until): return "Generate a new address with the same purpose/description. Existing conversations may continue at the old alias until \(SidebarProjection.date(until)). Permissions are not copied. Update external websites and recovery settings separately."
+        case .create: return "Create the alias using the selected receiving policy."
+        case .useForCorrespondence: return "Select this address for ordinary correspondence. This grants no permission."
         case .restrict: return "Allow only existing conversations and conversations you explicitly approve. Held messages and failed attempts do not count as existing conversations."
-        case .replacePublic(_, _, let address, let until): return "Create \(address). Confine the old alias to its admitted conversations until \(SidebarProjection.date(until)), then stop its incoming delivery. Permissions are not copied. External portal and recovery settings are not updated by this action."
+        case .replace: return "Create the selected replacement address. Preserve history; update external websites and recovery settings separately. Existing permissions are not copied."
         case .retire: return "Stop all incoming delivery through this alias, including notices and recovery messages. Keep correspondence history and permanently reserve the alias. This does not delete your account."
         }
     }
@@ -159,8 +184,8 @@ private func addressStateTitle(_ state: AddressState) -> String {
 }
 private func updateDescription(_ action: PendingAddressAction) -> String {
     switch action {
-    case .createPrivate(let description): return "Create private alias for " + description
-    case .createPublic(let address): return "Create " + address
+    case .create(let description): return "Create alias for " + description
+    case .correspondence: return "Select correspondence address"
     case .restrict: return "Restrict alias"
     case .replace: return "Replace alias"
     case .retire: return "Retire alias"
@@ -191,9 +216,9 @@ struct ReceivingPermissionControls: View {
             if let until = address.permissionExpiresAt {
                 Text("Valid until " + SidebarProjection.date(until)).font(.caption)
             }
-            EditorialReadingView("Your address and inbox stay in place when you change permission. Blocks still apply. Other explicitly granted permission remains separate. This private address has no paid-request route.", style: .caption)
+            EditorialReadingView("Your address and inbox stay in place when you change permission. Blocks still apply. Other explicitly granted permission remains separate. Changing a lane does not change this address’s receiving policy.", style: .caption)
             if address.canReplace {
-                if address.permission != .broad {
+                if address.policy == .aliasScoped && address.permission != .broad {
                     Button("Open alias-scoped lane") {
                         explanation = "Allow new authenticated correspondents who have this address, subject to your blocks. This can include referred providers you have not contacted."
                         action = .open

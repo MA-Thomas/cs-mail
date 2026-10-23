@@ -1,3 +1,231 @@
+## Superseded build state removed — 22 October 2026
+
+Principle 11 now requires removal of superseded build state. Obsolete compiler
+caches, copied executables, app bundles, generated bindings and source snapshots
+were removed without creating another build archive. `target` decreased from
+approximately 92 GiB to approximately 173 MiB. The next build will regenerate
+its compiler outputs. Audit: `target/build-cleanup-20261022.json`.
+
+The canonical app remains `target/apple/CsMail-continuity-20261012.app`, UUID
+`C89FEC96-BC24-3B06-BDBB-A835671F33C9`. Its executable and Info.plist, the running
+backend at `target/unified-aliases-owner-b-20261021/cs-maild`, and protected account
+configuration/key files are unchanged by checksum. The existing app and backend
+processes remained running; refreshing Communications completed successfully and
+the existing aliases remained visible. The current device database passed a
+read-only integrity check. No Keychain entry was written or replaced.
+
+Durable development state still resides under `target/apple-local-state/` and
+`target/apple-continuity-state-20261012/`; signing material remains under
+`target/apple-signing/`. Preserve these paths and the current deployment during
+future cleanup. Database/conversion evidence, validation records and the small
+encrypted removed-design writing store were retained. Do not treat all of
+`target` as disposable. Earlier dated sections record historical deployments;
+references to superseded binaries, app bundles and source backups are not an
+inventory of retained files.
+
+No runtime source or build settings changed in this cleanup. No rebuild or
+unrelated Rust/PostgreSQL suites were run; validation covered file preservation,
+device-database integrity and a live app refresh, not every application workflow.
+
+## Native column divider line removed — 21 October 2026
+
+The native macOS split-view divider is covered with the canvas before the custom
+perimeter and spill are drawn. This changes its visible line only: the native
+resize hit region, measured column bounds and eight-point bottom gutter remain.
+
+The canonical signed app is installed and running on the original account,
+UUID `C89FEC96-BC24-3B06-BDBB-A835671F33C9`. Strict signature verification passed
+and the designated signing requirement matches the original. Running-app
+inspection confirmed the extra line is absent at the top, alongside the column
+and below its rounded bottom edge, while the custom rim and eight-point gutter
+remain. Jules’s conversation was reopened afterward. Build and diff checks passed;
+no new tests or unrelated Rust/PostgreSQL suites were run. Dark appearance,
+other areas/window sizes, resizing interaction and iOS were not rechecked.
+Build log: `target/column-b-divider-20261021.log`.
+
+## Eight-point bottom gap restored — 21 October 2026
+
+At Marcus’s explicit direction, column B’s bottom gap is restored to exactly
+8 points. The canvas beneath that gutter remains; the renderer’s lighting falloff
+settings are unchanged. This supersedes the 24-point clearance described below.
+
+The canonical signed app is installed and reopened on the original account,
+UUID `74338BA3-E653-342F-8C59-313784AC357B`. Strict signature verification and
+original designated signing requirement checks passed. Running-app visual
+inspection confirmed the smaller gap in Communications, and Jules’s previously
+open conversation was restored. Build and diff checks passed. No new tests or
+unrelated Rust/PostgreSQL suites were run for this presentation change. Dark
+appearance, other areas/window sizes and iOS were not rechecked.
+Build log: `target/column-b-eight-point-20261021.log`.
+
+## Column B bottom gutter — 21 October 2026
+
+The initial eight-point gutter below did not preserve the full bottom lighting
+falloff. The correction uses `EditorialCoveLight.spillExtent` (24 points), shared
+with the renderer, for bottom clearance. The gutter uses the app canvas beneath
+the glow, replacing the exposed native sidebar background strip.
+
+The final canonical signed app is installed and running with the original account
+and designated signing requirement, UUID `CFEF10C0-65A1-3D70-9DC7-7DCC441A625F`.
+Strict signature verification passed. Running-app visual inspection confirmed
+bottom spill for Relationships in light and dark appearance and Communications
+in light appearance. Light appearance was restored. The build and diff checks
+passed; no new automated tests or unrelated Rust/PostgreSQL suites were run.
+iOS, other window sizes and the remaining area/appearance combinations were not
+inspected. Evidence: `target/column-b-bottom-spill-20261021.log` and
+`target/column-b-bottom-spill-20261021.json`.
+
+The following records the superseded first gutter attempt.
+
+Column B now reserves eight points below its content, glass surface and measured
+perimeter. Content is clipped inside the column before its glass background is
+applied; the top toolbar cap and existing perimeter lighting remain in place.
+
+The canonical signed app is installed and reopened on the original account with
+UUID `1CCCED80-6BDD-39F8-8F0B-4F57BEB1F0E2`. Strict signature verification passed
+and the designated signing requirement matches the original. Running-app visual
+inspection confirmed the bottom gutter in Relationships and Communications,
+scrolling to the end of the inbox list within the perimeter, the retained Manage
+aliases action, and successful navigation to My aliases. The five active aliases,
+including Aetna 2026, remain present; the deleted old Aetna alias remains absent.
+Build evidence: `target/column-b-bottom-gutter-20261021.log`.
+Validation record: `target/column-b-bottom-gutter-20261021.json`.
+No automated tests were added and unrelated Rust/PostgreSQL suites were not run
+for this presentation change. iOS, other window sizes and dark appearance were
+not inspected in this pass.
+
+## Readable alias previews — 21 October 2026
+
+The final signed app is installed and running with UUID
+`37AEFFA6-5A4F-399E-BEEC-8B9DFF328D1F`. Signature verification passed and the
+designated signing requirement matches the original. It reopened the original
+account, displayed the final shorter name prompt, and generated a fresh preview.
+Build log: `target/readable-alias-apple-final.log`; validation record:
+`target/readable-alias-validation-20261021.json`.
+
+Generated addresses now combine a member-approved name fragment (2–8 lowercase
+Latin letters) with six random digits, including leading zeroes. The local part is
+8–14 characters. Name input is explicit and independent of purpose, identity
+records and receiving policy. The member can regenerate or choose a preferred
+fragment. The same controls support alias replacement.
+
+Rust owns generation in `crates/cs-mail-application/src/aliases/generation.rs`.
+Reserved addresses inform prefix occupancy and candidate rejection; the soft
+crowding threshold is 10,000 per prefix/domain and selection is bounded at 32
+attempts. Preview is authenticated but reserves nothing. Creation signs the exact
+reviewed address; atomic uniqueness resolves competing claims. A known collision
+requires another reviewed preview, while an uncertain result retains the original
+operation for recovery. Existing aliases are never regenerated or renamed.
+
+The owner backend remains on port 9693 with the same database, keys and account.
+Its pinned binary and checksum are in `target/unified-aliases-owner-b-20261021/`;
+the previous binary is `cs-maild.before-readable-generation`. The current Aqua
+session launchd job is `com.csqd.cs-mail.owner-readable-aliases`, invoking the
+existing `start.sh`; logs are `server-readable-aliases.log` and
+`server-readable-aliases.err`. Check that job before starting another server.
+At Marcus’s subsequent explicit request, the unused old Aetna Insurance alias
+was completely deleted, including its address reservation and two command
+receipts, without creating a backup. A transaction rechecked every other public
+table for dependencies before deleting that exact retired development fixture.
+This is an explicitly authorized development-data exception, not a change to
+normal retirement semantics. The four requested addresses and the newer
+`thoma973837@c-sqdmail.com` (Aetna 2026) remain active. Running-app inspection
+confirmed that the old entry is absent and the newer Aetna alias remains.
+No Keychain credential was written or replaced.
+
+Validation adapted existing experiments without adding automated test entry cases:
+required name fragments, bounded collision exhaustion, crowded-prefix selection,
+non-reserving previews, concurrent claims, and exact retry/reopen recovery.
+Workspace all-target checking and strict all-feature lint passed, as did four
+PostgreSQL directory tests, six portable-client runtime tests, six affected SMTP
+integration checks, and the full native SQLite/FFI journey. Native checks create
+the exact preview and exercise replacement. Evidence is in
+`target/readable-alias-{check-final,clippy-next,directory,client-runtime,smtp,native-check}.log`.
+Running-owner inspection verified regeneration, fragment selection, initials,
+preview invalidation, creation readiness under both policies, and draft retention
+across closing/reopening; no owner alias was created during inspection.
+The full quality gate, iOS and public/live-provider delivery were not run for this
+change. These local checks do not establish public email delivery.
+
+## Main-space return navigation — 21 October 2026
+
+The return button now occupies a fixed layout row above the detail viewport.
+Scrolling content is clipped to that viewport, so titles and controls cannot draw
+over the return action or enter the window-toolbar region. This replaces the
+transparent safe-area inset; navigation history and return actions are unchanged.
+
+The canonical signed app is installed and running with its original signing
+requirement and account association; build/installed UUID
+`EB8995BF-B4C3-3E03-A271-23B33B1A91B5`. Running-app inspection reproduced the overlap,
+then verified scrolling in both directions and successful return navigation after
+the fix. All five current owner aliases, including the newly created Aetna Insurance
+alias, remain present. Evidence: `target/navigation-scroll-build-20261021.log` and
+`target/navigation-scroll-verified-20261021.json`. No automated tests were added;
+Rust/PostgreSQL suites were not rerun for this presentation change. iOS was not
+inspected. Generated address length and readable format remain under discussion;
+the generator and all existing addresses are unchanged.
+
+## Unified aliases — 21 October 2026
+
+The Rust model, signed commands, PostgreSQL schema 44, portable client and unified
+Apple application now use one alias type. Address choice, owner-visible purpose,
+receiving policy and directory visibility are independent. Creation requires an
+explicit choice between Bonded and an alias-scoped express lane. Each bonded alias
+owns its profile and request classes. First publication requires an explicit
+visibility choice. Multiple bonded aliases are supported.
+
+Sender lanes and standing permission apply to named receiving aliases. Explicit
+renewal retains that selection; creating another alias never expands it. Request
+terms freeze the recipient alias and the sender's selected return alias. Choosing
+a correspondence address supplies no receiving authority. Runtime readers accept
+only the current signed and encrypted representations; there is no legacy fallback.
+Policy switching, alias fees, privacy-preserving correspondent references and held
+mail remain deferred. Local simulation does not establish public email delivery.
+
+The preservation-checked owner deployment is
+`target/unified-aliases-owner-b-20261021/`, started by its `start.sh` on port 9693.
+The previous `target/required-inboxes-owner-20261019/` database is an untouched
+checkpoint. Backend and device conversion rehearsed rollback and exact retry,
+archived original evidence, and retained the original account association and
+Keychain entry without credential writes. Device/app checkpoints are under
+`target/unified-aliases-device-20261021/`. Rollback must account for activity since
+cutover and pair the backend, device store and signed app.
+
+All four requested addresses are retained: `mtallis62831@c-sqdmail.com`,
+`marcus.thomas@c-sqdmail.com`, `mat7771@c-sqdmail.com` (NYC-Hospital), and
+`m11a33t@c-sqdmail.com` (Brooklyn-Lab-Co). The existing publication remains attached
+to its exact `mtallis62831` receiving address; it was not copied onto the distinct
+`marcus.thomas` alias. Existing sender permissions retain their explicit scopes.
+
+The final corrected signed build (UUID `90D3C886-B1CB-3BCD-B85D-7B749B4AAE2B`)
+is installed at the canonical path and has reopened with the original account.
+Signature verification passed and its designated signing requirement matches the
+original app. Running-app inspection verified all four retained aliases, successful
+live refresh, both receiving-policy choices, independent generated/chosen address
+selection, the preserved original profile/class, and the separate bonded alias's
+empty profile/classes with an explicit first visibility choice. No extra owner
+alias was created and no publication was changed during inspection. The alias list
+is left open. Evidence: `target/alias-build-install-status.json`,
+`target/alias-validation-final.json` and `target/alias-apple-build-installed.log`.
+
+The full native SQLite/FFI journey passed in `target/alias-native-check-h.log`,
+including creation's atomic lane grant, per-alias publication, explicit quote/payment
+review, request/reply routes, source selection, lane renewal, multiple receiving
+inboxes, scoped unread/search, retirement, blocking and same-device reopening.
+Strict all-feature and production lint rechecks passed in
+`target/alias-clippy-verified.log` and `target/alias-production-clippy-verified.log`.
+The final owner backend is pinned and running (`server-final.log`); its predecessor
+binary is retained alongside it. No new automated test cases were added. PostgreSQL
+suites and workspace tests passed in `target/alias-quality-gate-verified.log`.
+That gate run recorded the earlier lint failure for the expanded publication
+experiment; both subsequent strict lint rechecks passed after the correction.
+It must not be presented as a single clean gate exit.
+iOS, public/live-provider email delivery, and the optional native external-email
+journey were not validated in this run; Rust external/SMTP integration is covered
+by the local database suites. Do not treat the historical results below as evidence
+for this cutover.
+See the [domain model](../../DOMAIN_MODEL.md#aliases-and-express-lane-scope).
+
 ## Conversation find — 19 October 2026
 
 Native and external readers keep messages visible, highlight literal

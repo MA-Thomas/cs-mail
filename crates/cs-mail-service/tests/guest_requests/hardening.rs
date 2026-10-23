@@ -84,7 +84,7 @@ fn expiry_during_tokenization_leaves_no_request_preparation_effects() {
     let worker = std::thread::spawn(move || {
         guests.request(
             &token,
-            BOB,
+            cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
             RequestClassId(1),
             "4242424242424242",
             "hello",
@@ -120,7 +120,7 @@ fn expiry_during_tokenization_leaves_no_request_preparation_effects() {
     f.guests
         .request(
             &renewed,
-            BOB,
+            cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
             RequestClassId(1),
             "4242424242424242",
             "hello",
@@ -196,7 +196,9 @@ fn expiry_across_command_content_and_status_waits_is_rechecked() {
                     DOMAIN,
                 )
                 .map_err(ServiceError::from),
-            _ => guests.status(&token, BOB).map(|_| ()),
+            _ => guests
+                .status(&token, cs_mail_primitives::AliasId::new(BOB.0).unwrap())
+                .map(|_| ()),
         });
         let waiting = wait_for_lock(&mut observer, &name);
         f.advance(SESSION_LIFETIME.0 + 1);
@@ -224,14 +226,20 @@ fn preparation_checks_expiry_after_reservation_and_history_waits() {
         let worker = std::thread::spawn(move || {
             guests.request(
                 &token,
-                BOB,
+                cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
                 RequestClassId(1),
                 "4242424242424242",
                 "hello",
                 600,
             )
         });
-        let waiting = wait_for_lock(&mut observer, &name);
+        // Alias lookup also acquires the receipt barrier. Wait for this exact
+        // relation, rather than mistaking another schema's advisory wait for it.
+        let waiting = (0..250).any(|_| {
+            let waiting: bool = observer.query_one("SELECT EXISTS(SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.application_name=$1 AND NOT l.granted AND l.relation=to_regclass($2))", &[&name, &table]).unwrap().get(0);
+            if !waiting { std::thread::sleep(std::time::Duration::from_millis(20)); }
+            waiting
+        });
         f.advance(SESSION_LIFETIME.0 + 1);
         lock.commit().unwrap();
         let result = worker.join().unwrap();
@@ -301,7 +309,10 @@ fn accepted_cancellation_and_refund_recover_after_session_expiry() {
         .unwrap();
     f.advance(SESSION_LIFETIME.0 + 1);
     assert_eq!(
-        guest_error(f.guests.status(&token, BOB)),
+        guest_error(
+            f.guests
+                .status(&token, cs_mail_primitives::AliasId::new(BOB.0).unwrap())
+        ),
         GuestError::SessionExpired
     );
     assert!(!matches!(
@@ -345,5 +356,10 @@ fn accepted_cancellation_and_refund_recover_after_session_expiry() {
         snapshot.payments[&answer.request].capture().destination
     );
     assert_eq!(snapshot.state.requests.len(), 1);
-    assert!(f.guests.status(&renewed, BOB).unwrap().is_some());
+    assert!(
+        f.guests
+            .status(&renewed, cs_mail_primitives::AliasId::new(BOB.0).unwrap())
+            .unwrap()
+            .is_some()
+    );
 }

@@ -42,6 +42,8 @@ struct EditorialAreaPalette {
 
 /// Shared, continuous perimeter lighting for column B and navigation previews.
 public struct EditorialCoveLight: View {
+    /// Space around the rim reserved for the complete soft lighting falloff.
+    public static let spillExtent: CGFloat = 24
     private let area: MemberArea
     private let bounds: CGRect
     private let cornerRadius: CGFloat
@@ -56,12 +58,11 @@ public struct EditorialCoveLight: View {
     public var body: some View {
         Canvas { context, _ in
             // Continuous shadow-style blur; the column interior stays unpainted.
-            context.translateBy(x: 24, y: 24)
+            context.translateBy(x: Self.spillExtent, y: Self.spillExtent)
             let palette = EditorialAreaPalette.palette(for: area)
             let outline = Path(roundedRect: bounds, cornerRadius: cornerRadius)
             if let palette {
-                var exterior = Path(CGRect(x: bounds.minX - 24, y: bounds.minY - 24,
-                    width: bounds.width + 48, height: bounds.height + 48))
+                var exterior = Path(bounds.insetBy(dx: -Self.spillExtent, dy: -Self.spillExtent))
                 exterior.addPath(outline)
                 var glow = context
                 glow.clip(to: exterior, style: FillStyle(eoFill: true))
@@ -73,7 +74,7 @@ public struct EditorialCoveLight: View {
             let rim = scheme == .dark ? palette?.wash ?? .white : palette?.rim ?? .gray
             context.stroke(outline, with: .color(rim.opacity(scheme == .dark ? 0.55 : 0.65)), lineWidth: 1)
         }
-        .padding(-24)
+        .padding(-Self.spillExtent)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

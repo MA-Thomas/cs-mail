@@ -24,7 +24,7 @@ pub struct SignedRequestClasses {
 impl SignedRequestClasses {
     fn bytes(&self) -> Result<Vec<u8>, SecurityError> {
         serde_json::to_vec(&(
-            "cs-mail/recipient-request-classes/v2",
+            "cs-mail/alias-request-classes/v3",
             self.scope,
             self.operational_key,
             &self.classes,

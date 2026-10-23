@@ -542,11 +542,31 @@ fn apply_protocol(
             now,
         )?;
     }
-    let pricing = if let ProtocolCommand::IssueRequestTerms { class_id, .. } = authorized.command()
+    let pricing = if let ProtocolCommand::IssueRequestTerms {
+        return_route,
+        alias,
+        class_id,
+        ..
+    } = authorized.command()
     {
+        let sender = aggregate.state.relationship.key.sender;
+        match return_route {
+            cs_mail_protocol::RequestReturnRoute::Native(id) => {
+                let route = super::aliases::load_alias(transaction, *id)?;
+                if route.owner() != sender {
+                    return Err(ProtocolError::InvalidState.into());
+                }
+            }
+            cs_mail_protocol::RequestReturnRoute::GuestMailbox => {
+                if !super::guests::is_guest(transaction, sender)? {
+                    return Err(ProtocolError::InvalidState.into());
+                }
+            }
+        }
         pricing::resolve_price(
             transaction,
             aggregate.state.relationship.key.recipient,
+            *alias,
             *class_id,
         )?
     } else {
@@ -616,7 +636,15 @@ fn apply_protocol(
     };
     let document =
         super::request_documents::submission(transaction, aggregate_key, authorized.command())?;
+    let request_permission = request_permission(
+        transaction,
+        &snapshot,
+        authorized,
+        now,
+        policy.recipient_provider,
+    )?;
     let context = TransitionContext {
+        request_permission,
         request_delivery: cs_mail_protocol::RequestDeliveryRoute::GuestRelay,
         admission,
         now,
@@ -625,14 +653,17 @@ fn apply_protocol(
         policy,
         pricing,
     };
-    let (manifest, opposite, delivery) = cs_mail_application::requests::RequestDecision::decide(
-        &snapshot,
-        &counterparty,
-        authorized,
-        &context,
-        document.as_ref(),
-    )?
-    .into_effects();
+    let (manifest, opposite, delivery, scopes) =
+        cs_mail_application::requests::RequestDecision::decide(
+            &snapshot,
+            &counterparty,
+            authorized,
+            &context,
+            document.as_ref(),
+            &receiving_scopes(transaction, &snapshot.state.relationship)?,
+        )?
+        .into_effects();
+    persist_receiving_scopes(transaction, &scopes)?;
     // Charged terms must name the configured payment arrangement's processor. Checked only
     // when the kernel requires a charge, as before the pricing cutover.
     if matches!(
@@ -793,6 +824,7 @@ fn apply_grant(
     );
     snapshot.lane = load_current_lane(transaction, aggregate_key)?;
     let context = TransitionContext {
+        request_permission: cs_mail_protocol::RequestPermission::NotRequested,
         request_delivery: cs_mail_protocol::RequestDeliveryRoute::GuestRelay,
         admission: Ok(()),
         now,
@@ -824,15 +856,18 @@ fn apply_grant(
         snapshot.state.relationship.key.sender,
         snapshot.state.relationship.key.recipient,
     )?;
-    let (manifest, opposite, delivery) =
+    let (manifest, opposite, delivery, scopes) =
         cs_mail_application::requests::RequestDecision::coordinate_acceptance(
             &snapshot,
             &counterparty,
             forward,
             None,
             &context,
+            Some((lane.grant().id, lane.grant().version)),
+            &receiving_scopes(transaction, &snapshot.state.relationship)?,
         )?
         .into_effects();
+    persist_receiving_scopes(transaction, &scopes)?;
     if delivery.is_some() {
         return Err(StorageError::VersionConflict);
     }
@@ -1502,4 +1537,118 @@ pub(super) fn record_received(
         return Err(StorageError::VersionConflict);
     }
     Ok(tx.query_one("INSERT INTO cs_received_commands (aggregate_key,idempotency_key,digest,deployment,received_at,operation,policy,replay_fingerprint,authority,content_available) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING position", &[&key,&facts.id.0.to_string(),&facts.digest.as_slice(),&facts.deployment.as_slice(),&at,&Json(facts.operation),&Json(facts.policy),&facts.replay.fingerprint.as_slice(),&Json(facts.authority),&facts.content_available])?.get(0))
+}
+
+fn persist_receiving_scopes(
+    tx: &mut Transaction<'_>,
+    scopes: &[cs_mail_application::aliases::SenderScopeRecord],
+) -> Result<(), StorageError> {
+    for scope in scopes {
+        tx.execute("INSERT INTO cs_alias_sender_scopes(recipient,sender,record) VALUES($1,$2,$3) ON CONFLICT(recipient,sender) DO UPDATE SET record=EXCLUDED.record", &[&scope.recipient.0.to_string(), &scope.sender.0.to_string(), &Json(scope)])?;
+    }
+    Ok(())
+}
+
+/// Resolve receiving authority for the signed alias under the same receipt lock.
+fn request_permission(
+    tx: &mut Transaction<'_>,
+    snapshot: &SettlementSnapshot,
+    authorized: &KernelCommand<ProtocolCommand>,
+    at: CanonicalTime,
+    provider: cs_mail_primitives::ProviderRef,
+) -> Result<cs_mail_protocol::RequestPermission, StorageError> {
+    use cs_mail_protocol::{ProtocolCommand, RequestPermission};
+    let id = match authorized.command() {
+        ProtocolCommand::IssueRequestTerms { alias, .. } => *alias,
+        ProtocolCommand::CreateRequest { terms, .. } => terms.receiving_alias,
+        ProtocolCommand::SubmitRequestToRecipient { request_id, .. } => {
+            snapshot
+                .state
+                .requests
+                .get(request_id)
+                .ok_or(ProtocolError::MissingRecord)?
+                .terms
+                .receiving_alias
+        }
+        _ => return Ok(RequestPermission::NotRequested),
+    };
+    let route = super::aliases::load_alias(tx, id)?;
+    let relationship = &snapshot.state.relationship;
+    if route.owner() != relationship.key.recipient {
+        return Err(ProtocolError::InvalidState.into());
+    }
+    let scope =
+        super::aliases::sender_scope(tx, relationship.key.sender, relationship.key.recipient)?;
+    let guest = super::guests::is_guest(tx, relationship.key.sender)?;
+    let declarations = cs_mail_primitives::MessageDeclarations {
+        purpose: if guest {
+            cs_mail_primitives::DeclaredPurpose::Unspecified
+        } else {
+            cs_mail_primitives::DeclaredPurpose::Known(cs_mail_primitives::KnownPurpose::Personal)
+        },
+        origin: cs_mail_primitives::OriginDeclaration {
+            mode: if guest {
+                cs_mail_primitives::OriginMode::LegacyOrUnspecified
+            } else {
+                cs_mail_primitives::OriginMode::HumanInitiated
+            },
+            authority: if guest {
+                cs_mail_primitives::DeclarationAuthority::GuestSmtp(provider)
+            } else {
+                cs_mail_primitives::DeclarationAuthority::NativeSender(authorized.operational_key())
+            },
+        },
+        payload_schema: None,
+    };
+    let evidence = if guest {
+        cs_mail_capabilities::LaneEvidence::GuestMailbox(relationship.key.sender)
+    } else {
+        cs_mail_capabilities::LaneEvidence::Native(cs_mail_privacy::ScopedHandle(
+            *relationship.key.reference.as_bytes(),
+        ))
+    };
+    match cs_mail_application::aliases::admit(
+        &cs_mail_application::aliases::AdmissionContext {
+            alias: &route,
+            authentication: cs_mail_application::aliases::SenderAuthentication::Authenticated(
+                relationship.key.sender,
+            ),
+            relationship: Some(relationship),
+            sender_scope: scope.as_ref(),
+            lane: snapshot.lane.as_ref(),
+            declarations: &declarations,
+            lane_evidence: Some(&evidence),
+            domain_evidence: None,
+            covered: true,
+            review_required: false,
+            conversation: cs_mail_correspondence::ConversationId::new(id.value())?,
+        },
+        at,
+    ) {
+        cs_mail_application::aliases::RouteDecision::Authorize(_) => {
+            Ok(RequestPermission::DirectContact)
+        }
+        cs_mail_application::aliases::RouteDecision::Request => {
+            Ok(RequestPermission::BondedRequest)
+        }
+        _ => Err(ProtocolError::ContactBlocked.into()),
+    }
+}
+
+fn receiving_scopes(
+    tx: &mut Transaction<'_>,
+    relationship: &cs_mail_protocol::Relationship,
+) -> Result<cs_mail_application::requests::ReceivingScopes, StorageError> {
+    Ok(cs_mail_application::requests::ReceivingScopes {
+        forward: super::aliases::sender_scope(
+            tx,
+            relationship.key.sender,
+            relationship.key.recipient,
+        )?,
+        opposite: super::aliases::sender_scope(
+            tx,
+            relationship.key.recipient,
+            relationship.key.sender,
+        )?,
+    })
 }

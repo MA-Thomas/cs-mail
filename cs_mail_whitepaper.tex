@@ -17,7 +17,7 @@
     urlcolor=blue
 }
 
-\title{\textit{cs-mail}: Permissioned Communication\\\large Private Aliases, Public Approaches, and Express Lanes}
+\title{\textit{cs-mail}: Permissioned Communication\\\large Aliases, Bonded Approaches, and Express Lanes}
 \author{C-SQD}
 \date{Draft 0.9 --- 14 October 2026}
 
@@ -31,13 +31,17 @@
 \begin{abstract}
 \textit{cs-mail} makes permission to communicate explicit. Accepted contacts
 write without protocol message charges under their providers' service terms.
-A private alias is a receiving address with separately granted permission. A member
-can pair it with an alias-scoped lane for referred healthcare correspondents or
-with a sender-scoped lane for selected authenticated shopping domains. Creation
-grants no lane. Private aliases offer no bonded route; public-facing aliases
-retain the existing permission and bonded-request process.
+Each alias has a selected receiving policy, independent of directory visibility
+and whether its address is chosen or generated. A bonded alias owns its profile
+and request classes; senders without permission explicitly authorize a request.
+Selected sender grants or standing permission can permit direct contact. Alternatively,
+an explicitly authorized alias-scoped lane allows new senders given the address,
+subject to authentication, blocks and admission controls, without a bonded fallback.
+Public/private is no longer an alias kind. The 21 October 2026 local implementation
+uses these receiving and publication contracts; the Apple runbook records validation
+and owner-install status.
 
-A sender approaching the public route without permission may submit
+A sender approaching a bonded alias without permission may submit
 one relationship request, accompanied by a communication and a conditional
 charge under a recipient-defined request class. Acceptance grants standing
 permission or an express lane and produces a full refund; expiry retains the processing amount;
@@ -98,54 +102,38 @@ service retroactively. Once coverage ends, new communication requires funded cov
 existing permission records, refunds, and finalized member obligations retain
 their separate lifecycles.
 
-\section{A Private Alias for a Healthcare Organization}
+\section{Aliases for Different Receiving Needs}
 
-A member creates a private alias for their hospital, explicitly pairs it with
-an \emph{alias-scoped express lane}, and supplies the address during registration.
-Creating the address alone supplies no permission. The hospital can write without
-a bonded request. A previously unknown
-specialist who receives the alias can also write through that route, subject to
-its admission policy, without first obtaining a separate sender-scoped grant.
+A healthcare or government alias can explicitly allow contact through its address
+using an alias-scoped lane. A referred specialist need not receive an individual
+grant first. Authentication, blocks and admission controls still apply; possessing
+the address proves neither affiliation nor who shared it. The policy has no bonded
+fallback and is never inferred merely from the member's purpose label.
 
-The route identifies which alias received the correspondence; it does not prove
-organizational identity or who shared the address. Sender authentication remains
-separate evidence. Permission through this alias does not grant access through
-other private aliases or the member's public-facing address. Restriction or
-retirement does not introduce a bonded fallback.
+A shopping or newsletter alias can require bonded requests from senders without
+permission. Selected authenticated domains or mailboxes can receive sender-scoped
+lanes or standing permission under explicitly named receiving scopes. Each bonded
+alias owns its profile and request classes. Directory listing and chosen/generated
+address are independent choices; an unlisted bonded alias works by exact address
+or direct link. There is no single-current-public-alias limit.
 
-For Amazon, the member can instead pair a private alias with a sender-scoped
-lane restricted to selected authenticated domains. Other senders gain no permission
-by obtaining that address and may approach through the public request route.
-Separate address/lane pairing is implemented locally. CS-MAIL owns the alias
-infrastructure independently of Phoros Account, which will later consume it
-through a linked account. Detailed lifecycle and admission policies remain open
-in the \href{DOMAIN_MODEL.md}{domain model}; the
-\href{cs_mail_aliases_and_express_lanes.tex}{aliases and express lanes memo}
-explains the motivation and boundaries. Annual service and external-email
-disclosure requirements remain separate.
+All aliases preserve one account and protocol identity, cross-alias blocks and
+separate route history without disclosing common ownership. Restrict, Replace and
+Retire retain distinct meanings. Switching receiving policy requires explicit
+transition rules for pending requests and grants; those rules, detailed replies
+and held-message release remain open. Rust and Swift implement independent alias
+creation choices, per-alias publication and explicit receiving scope. See the \href{DOMAIN_MODEL.md}{domain model}.
 
-The agreed participant/route model allows one protocol identity to control
-multiple aliases without automatically revealing their association. Blocking a
-sender protocol identity overrides permission across every recipient alias;
-external mailbox evidence does not establish equivalence between different
-mailboxes. Private aliases have no automatic expiry. Restrict stops new
-correspondents while preserving authorized existing conversations; Replace creates
-a new route with an explicit transition and no automatic transfer of unknown-sender
-admission; Retire stops all inbound delivery while preserving history. Retired
-addresses are never reassigned to another member. Suspicious or insufficiently
-authenticated private-alias mail is held for explicit review without ongoing
-permission or payment. SMTP envelope recipients and authenticated native targets
-establish route evidence, retained with each admitted message's permission basis.
-Restriction preserves exact admitted conversations; sender and standing grants
-default to one receiving alias, with explicit selection of several permitted.
-New aliases never expand grants. Transition, reply and held-message contracts
-remain open in the domain model. This design
-awaits implementation and does not change historical settlements.
+Future direction is a nominal charge for each new alias associated with the annual
+utility cycle. Pricing and collection semantics remain undecided; no alias fee is
+currently enabled by this design. Request settlement and member distributions
+retain their separate rules.
+
 
 \section{Alice Requests a Relationship with Bob}
 
-Professor Bob publishes a public-facing alias; its creation grants no automatic
-lane. Alice wants to propose research collaboration to Bob, who has not
+Professor Bob publishes a bonded alias with its own profile and request classes;
+its creation alone grants no lane. Alice wants to propose research collaboration to Bob, who has not
 accepted her. Bob publishes research, press, and other request classes, choosing
 lower collateral for research than press. Alice selects research and, in this example, sees a quote
 with processing component $0.50$ and collateral $5.00$, totaling $5.50$. She reviews the
@@ -303,13 +291,13 @@ adding another financial component.
 
 \section{Express Lanes: Alias-Scoped and Sender-Scoped}
 
-An alias-scoped lane authorizes correspondence through one private receiving
-alias when explicitly granted. A sender-scoped lane explicitly authorizes a
-particular sender subject under its grant and receiving scope. Private aliases
-can be paired with either scope; creation grants neither. Standing acceptance
+An alias-scoped lane authorizes correspondence through one receiving alias
+when explicitly granted. A sender-scoped lane authorizes a particular sender
+subject under its grant and receiving scope, including direct access through a
+bonded alias. Creation alone grants neither. Standing acceptance
 remains distinct. The existing bounded
 relationship lanes described below are sender-scoped; their expiry and domain
-binding rules do not automatically become policy for private aliases.
+binding rules do not automatically become alias-scoped lane policy.
 
 Some wanted correspondence is narrower than standing personal acceptance. A
 member may want a bank's fraud alerts or an airline's itinerary notices without

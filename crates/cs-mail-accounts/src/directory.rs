@@ -59,7 +59,7 @@ impl MemberAddress {
 /// Exact directory references select a public identity without granting contact authority.
 #[derive(Clone, Debug)]
 pub enum DirectoryReference {
-    Protocol(ProtocolIdentity),
+    Alias(cs_mail_primitives::AliasId),
     Mailbox(MemberAddress),
 }
 
@@ -172,6 +172,7 @@ pub struct DirectoryEntry(EntryRecord);
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EntryRecord {
+    alias: cs_mail_primitives::AliasId,
     address: ProtocolIdentity,
     mailbox: Option<MemberAddress>,
     revision: DirectoryRevision,
@@ -199,13 +200,14 @@ impl DirectoryEntry {
     pub fn replace(
         current: Option<&Self>,
         address: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
         expected: DirectoryRevision,
         profile: PublicProfile,
         visibility: DiscoveryVisibility,
         mailbox: Option<MemberAddress>,
     ) -> Result<Self, AccountError> {
         if current.map_or(DirectoryRevision(0), Self::revision) != expected
-            || current.is_some_and(|entry| entry.address() != address)
+            || current.is_some_and(|entry| entry.address() != address || entry.alias() != alias)
             || current
                 .and_then(Self::mailbox)
                 .is_some_and(|old| Some(old) != mailbox.as_ref())
@@ -214,6 +216,7 @@ impl DirectoryEntry {
         }
         EntryRecord {
             address,
+            alias,
             mailbox,
             revision: DirectoryRevision(
                 expected
@@ -225,6 +228,9 @@ impl DirectoryEntry {
             visibility,
         }
         .try_into()
+    }
+    pub const fn alias(&self) -> cs_mail_primitives::AliasId {
+        self.0.alias
     }
     pub const fn address(&self) -> ProtocolIdentity {
         self.0.address

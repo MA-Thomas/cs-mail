@@ -133,22 +133,29 @@ globally comparable identifier.
 
 \subsection{Alias-scoped and sender-scoped permission}
 
-An alias is a receiving address, independent of express-lane permission.
-Private-alias creation \MUSTNOT{} automatically establish a lane. The member
-explicitly authorizes \emph{alias-scoped} or \emph{sender-scoped} permission for
-that route. An alias-scoped lane may admit previously unknown authenticated
-senders given the address. A sender-scoped lane admits only its authorized subject
-under the grant's receiving scope and validity rules, including recipient-selected
-authenticated legacy domains. Possession of the address alone supplies no authority.
-Permission through one route \MUSTNOT{} establish permission through another.
+An alias is a receiving address controlled by a protocol identity. Public/private
+is not an alias kind. Each alias has an explicitly selected receiving policy,
+independent of directory visibility and chosen/generated address. These rules
+were agreed on 21 October 2026; current runtime contracts require an explicit
+cutover and the documentation revision is not implementation evidence.
 
-Public-alias creation grants no lane. Standing acceptance and invitations remain
-separate permissions. Public approaches lacking permission use the existing
-bonded-request process. A private alias \MUSTNOT{} offer a bonded fallback,
-regardless of its paired lane; unauthorized senders may use the public approach
-route. Restriction, retirement or lane changes \MUSTNOT{} silently create a paid
-request. Lane changes are distinct from address lifecycle; an active address alone
-does not establish admission authority.
+A bonded alias has its own profile and request classes. A sender without applicable
+permission \MUST{} use that alias's eligible bonded-request process with explicit
+class selection and payment authorization. A sender-scoped grant or standing
+permission may authorize direct contact under its named receiving scope.
+Alternatively, a member may explicitly authorize an alias-scoped lane, permitting
+new authenticated correspondents who obtain that address, subject to admission
+controls. That policy \MUSTNOT{} supply a bonded fallback. Possession alone proves
+neither organizational affiliation nor sender identity.
+
+Creation alone \MUSTNOT{} grant a lane. A creation action explicitly configuring
+permission \MUST{} declare the complete effects and commit them atomically with
+its receipt. An unlisted bonded alias remains approachable by exact address or
+direct link. Permission through one alias \MUSTNOT{} extend to another implicitly.
+Blocks override both receiving policies. Refusal, sender mismatch, restriction,
+retirement or lane changes \MUSTNOT{} silently create a charge or switch policy.
+Policy switching needs an explicit transition contract for existing requests,
+terms, profiles/classes and grants; those semantics remain open.
 
 Separate address and lane management, alias management and receiving are locally
 implemented through signed commands and independently revisioned permission. The
@@ -172,17 +179,17 @@ Other independently valid permission remains separate. These actions preserve
 the address, inbox and retained correspondence. Delivery after the transition
 requires current permission; exact historical replay supplies no new authority.
 
-\subsection{Alias lifecycle and route evidence (agreed; implementation pending)}
+\subsection{Alias lifecycle and route evidence}
 
-Private aliases have no automatic expiry. Restrict stops new correspondents while
+Aliases have no automatic expiry. Restrict stops new correspondents while
 preserving authorized existing conversations; only conversations with already admitted correspondence qualify,
 and new conversations require explicit approval. Replace creates a new alias with an explicit old-route transition,
 preserving identity, blocks and historical correspondence without automatically
 transferring unknown-sender admission. Retire stops all inbound delivery through
 that alias and preserves received correspondence; the member must be told that
 notices and recovery messages will stop arriving. Retired addresses \MUSTNOT{}
-be reassigned to another member. None of these actions introduces a private-route
-bonded fallback or settles an existing paid request.
+be reassigned to another member. None of these actions changes the selected
+receiving policy, creates a paid request or settles an existing one.
 
 Every admitted message \MUST{} retain its receiving alias and permission basis.
 SMTP route evidence is the accepted envelope recipient, not the visible To header;
@@ -656,13 +663,14 @@ creation with explicit sender authorization. If a request already exists but a
 follow-up is refused, the last branch is unavailable. Capability mismatch never
 silently converts a message into a charged request.
 
-Private-alias admission evaluates the explicitly authorized permission for the
-receiving route. An alias-scoped lane needs no individual sender grant; a
-sender-scoped lane requires its authenticated subject to match. Neither path may
-fall through to a bonded request on that private alias. Resolve the alias
+Alias admission evaluates the selected receiving policy and explicitly granted
+permission. An alias-scoped lane needs no individual sender grant; a sender-scoped
+lane requires its authenticated subject to match. Without applicable permission,
+a bonded alias offers only its eligible, explicitly authorized request process;
+an alias-scoped route has no bonded fallback. Resolve the alias
 and lifecycle, check coverage, evaluate authentication, enforce identity-level
 blocks and evaluate route permission. An unresolved identity does not establish
-absence of a block. Suspicious or insufficiently authenticated private-alias mail
+absence of a block. Suspicious or insufficiently authenticated alias mail
 is held separately for member review; holding or releasing it grants no ongoing
 permission and cannot bypass an established block.
 

@@ -7,6 +7,8 @@ struct RequestComposerView: View {
     let other: SenderReference
     let name: String
     let requestClass: RequestClassID?
+    var receivingAlias: String? = nil
+    private var selectedAlias: String? { receivingAlias ?? model.inbox?.requestProgress?.quote?.alias }
     var close: (() -> Void)? = nil
     var savedDraft: Draft? = nil
     @State private var discardingDraft = false
@@ -59,12 +61,12 @@ struct RequestComposerView: View {
                         }.disabled(model.busy)
                         EditorialReadingView("A submitted request cannot be cancelled. If its status is uncertain, we check it first. Refunds stay pending until confirmed.", style: .caption)
                     } else if let requestClass {
-                        Button("Review a new quote") { Task { await model.quoteRequest(other: other, requestClass: requestClass) } }.disabled(model.busy)
+                        Button("Review a new quote") { Task { if let alias = selectedAlias { await model.quoteRequest(other: other, requestClass: requestClass, alias: alias) } } }.disabled(model.busy)
                     }
                 } else if model.inbox?.pendingRequest == true {
                     Text("A request to another contact is unfinished. Open the saved request from the communication space to review or resume it.")
                 } else if let requestClass {
-                    Button("Review a quote") { Task { await model.quoteRequest(other: other, requestClass: requestClass) } }.disabled(model.busy)
+                    Button("Review a quote") { Task { if let alias = selectedAlias { await model.quoteRequest(other: other, requestClass: requestClass, alias: alias) } } }.disabled(model.busy)
                 }
                 if let error = model.memberError { Text(error).foregroundStyle(.orange) }
                 if let notice = model.notice { Text(notice).font(.caption) }
@@ -80,11 +82,11 @@ struct RequestComposerView: View {
         .onDisappear { draft.leave() }
         .task(id: model.inbox?.requestProgress?.quote?.classId) {
             if let classID = requestClass?.value ?? model.inbox?.requestProgress?.quote?.classId,
-               model.inbox?.requestProgress?.other == other.value || requestClass != nil {
-                await draft.open(client: model.draftClient, target: .request(other: other.value, class: classID), saved: savedDraft)
+               (model.inbox?.requestProgress?.other == other.value || requestClass != nil), let alias = selectedAlias {
+                await draft.open(client: model.draftClient, target: .request(alias: alias, other: other.value, class: classID), saved: savedDraft)
             }
             if let requestClass, model.inbox?.pendingRequest != true {
-                await model.quoteRequest(other: other, requestClass: requestClass)
+                if let alias = selectedAlias { await model.quoteRequest(other: other, requestClass: requestClass, alias: alias) }
             }
         }
         .confirmationDialog("Authorize this request’s charge?", isPresented: $confirming, titleVisibility: .visible) {

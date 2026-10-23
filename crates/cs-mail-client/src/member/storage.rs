@@ -7,7 +7,7 @@ use chacha20poly1305::{
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-const CONTEXT: &[u8] = b"cs-mail/apple-member-cache/v4";
+const CONTEXT: &[u8] = b"cs-mail/apple-member-cache/v5";
 
 /// Opaque storage address; it is neither a message identity nor an encryption key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -158,7 +158,7 @@ pub(super) fn open_device(store: &dyn DeviceStore, keys: &Secrets) -> Result<Dev
             .map_err(|_| Error::InvalidData)?,
     );
     let state: DeviceState = serde_json::from_slice(&plain).map_err(|_| Error::InvalidData)?;
-    if matches!(&state, DeviceState::Active(s) if s.format != 4) {
+    if matches!(&state, DeviceState::Active(s) if s.format != 5) {
         return Err(Error::InvalidData);
     }
     if let DeviceState::Active(active) = &state {

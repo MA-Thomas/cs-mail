@@ -33,10 +33,11 @@ impl Store for PostgresDeployment {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
         ingress::lock_receipt_order(&mut tx)?;
-        let address = request.address.0.to_string();
+        let address = request.alias.value().to_string();
+        let alias = super::aliases::load_alias(&mut tx, request.alias)?;
         let prior = tx
             .query_opt(
-                "SELECT receipt FROM cs_directory_commands WHERE address=$1 AND operation=$2",
+                "SELECT receipt FROM cs_directory_commands WHERE alias=$1 AND operation=$2",
                 &[&address, &request.operation.0.to_string()],
             )?
             .map(|r| r.get::<_, Json<Response>>(0).0);
@@ -45,11 +46,11 @@ impl Store for PostgresDeployment {
         let policy = pricing::current_policy(&mut tx, pricing::RowLock::Share)?;
         let current = tx
             .query_opt(
-                "SELECT entry FROM cs_address_directory WHERE address=$1 FOR UPDATE",
+                "SELECT entry FROM cs_address_directory WHERE alias=$1 FOR UPDATE",
                 &[&address],
             )?
             .map(|r| r.get::<_, Json<DirectoryEntry>>(0).0);
-        let classes = pricing::current_classes(&mut tx, request.address, pricing::RowLock::Update)?;
+        let classes = pricing::current_classes(&mut tx, request.alias, pricing::RowLock::Update)?;
         let existing_classes = classes.clone();
         let mailbox = match &request.command {
             directory::Command::Publish { mailbox, .. } => mailbox
@@ -60,13 +61,14 @@ impl Store for PostgresDeployment {
         let mailbox_available = match mailbox {
             Some(mailbox) => tx
                 .query_one(
-                    "SELECT NOT EXISTS(SELECT 1 FROM cs_alias_routes WHERE address=$1) AND NOT EXISTS(SELECT 1 FROM cs_address_directory WHERE mailbox=$1 AND address<>$2)",
+                    "SELECT NOT EXISTS(SELECT 1 FROM cs_alias_routes WHERE address=$1 AND id<>$2) AND NOT EXISTS(SELECT 1 FROM cs_address_directory WHERE mailbox=$1 AND alias<>$2)",
                     &[&mailbox, &address],
                 )?
                 .get::<_, bool>(0),
             None => true,
         };
         let (response, effects, record) = decide(Context {
+            alias,
             authority,
             current,
             classes,
@@ -79,10 +81,10 @@ impl Store for PostgresDeployment {
             if existing_classes.as_ref() != Some(&e.classes.classes) {
                 pricing::persist_classes(&mut tx, &e.classes, &e.classes.classes, e.receipt.at)?;
             }
-            tx.execute("INSERT INTO cs_address_directory(address,entry,listed,search_name,search_description,mailbox) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(address) DO UPDATE SET entry=EXCLUDED.entry,listed=EXCLUDED.listed,search_name=EXCLUDED.search_name,search_description=EXCLUDED.search_description,mailbox=EXCLUDED.mailbox", &[&address, &Json(&e.entry), &(e.entry.visibility() == cs_mail_accounts::directory::DiscoveryVisibility::Listed), &e.entry.profile().display_name().to_lowercase(), &e.entry.profile().description().to_lowercase(), &e.entry.mailbox().map(cs_mail_accounts::directory::MemberAddress::as_str)])?;
+            tx.execute("INSERT INTO cs_address_directory(alias,address,entry,listed,search_name,search_description,mailbox) VALUES($1,$7,$2,$3,$4,$5,$6) ON CONFLICT(alias) DO UPDATE SET entry=EXCLUDED.entry,listed=EXCLUDED.listed,search_name=EXCLUDED.search_name,search_description=EXCLUDED.search_description,mailbox=EXCLUDED.mailbox", &[&address, &Json(&e.entry), &(e.entry.visibility() == cs_mail_accounts::directory::DiscoveryVisibility::Listed), &e.entry.profile().display_name().to_lowercase(), &e.entry.profile().description().to_lowercase(), &e.entry.mailbox().map(cs_mail_accounts::directory::MemberAddress::as_str), &request.address.0.to_string()])?;
         }
         if record {
-            tx.execute("INSERT INTO cs_directory_commands(address,operation,request,receipt) VALUES($1,$2,$3,$4)", &[&address, &request.operation.0.to_string(), &Json(request), &Json(&response)])?;
+            tx.execute("INSERT INTO cs_directory_commands(alias,operation,request,receipt) VALUES($1,$2,$3,$4)", &[&address, &request.operation.0.to_string(), &Json(request), &Json(&response)])?;
         }
         tx.commit()?;
         Ok(response)
@@ -112,12 +114,12 @@ impl PostgresDeployment {
         ingress::lock_receipt_order(&mut tx)?;
         let policy = pricing::current_policy(&mut tx, pricing::RowLock::Share)?;
         let (column, value) = match reference {
-            DirectoryReference::Protocol(address) => ("address", address.0.to_string()),
+            DirectoryReference::Alias(alias) => ("alias", alias.value().to_string()),
             DirectoryReference::Mailbox(mailbox) => ("mailbox", mailbox.as_str().to_owned()),
         };
         // The column is selected solely by the typed reference, never caller text.
         let sql = format!(
-            "SELECT d.entry,a.control,b.record,c.classes FROM cs_address_directory d JOIN cs_persona_owners o ON o.identity=d.address JOIN cs_product_accounts a ON a.id=o.account JOIN cs_billing_accounts b ON b.id=a.billing LEFT JOIN cs_recipient_request_classes c ON c.recipient=d.address WHERE d.{column}=$1"
+            "SELECT d.entry,a.control,b.record,c.classes FROM cs_address_directory d JOIN cs_persona_owners o ON o.identity=d.address JOIN cs_product_accounts a ON a.id=o.account JOIN cs_billing_accounts b ON b.id=a.billing LEFT JOIN cs_recipient_request_classes c ON c.alias=d.alias JOIN cs_alias_routes r ON r.id=d.alias WHERE d.{column}=$1 AND r.record->'configuration'->>'receiving'='Bonded' AND (r.record->>'lifecycle'='Active' OR r.record->'lifecycle' ? 'Restricted')"
         );
         let row = tx.query_opt(&sql, &[&value])?;
         let at = clock();
@@ -138,7 +140,7 @@ impl PostgresDeployment {
         let mut tx = client.transaction()?;
         ingress::lock_receipt_order(&mut tx)?;
         let policy = pricing::current_policy(&mut tx, pricing::RowLock::Share)?;
-        let rows = tx.query("SELECT d.entry,a.control,b.record,c.classes FROM cs_address_directory d JOIN cs_persona_owners o ON o.identity=d.address JOIN cs_product_accounts a ON a.id=o.account JOIN cs_billing_accounts b ON b.id=a.billing LEFT JOIN cs_recipient_request_classes c ON c.recipient=d.address WHERE d.listed AND a.control->>'status'='Active' AND (strpos(d.search_name,$1)>0 OR strpos(d.search_description,$1)>0 OR strpos(d.address,$1)>0 OR strpos(d.mailbox,$1)>0) ORDER BY d.search_name COLLATE \"C\",d.address COLLATE \"C\" LIMIT 21 OFFSET $2", &[&query.text().to_lowercase(), &i64::from(query.offset())])?;
+        let rows = tx.query("SELECT d.entry,a.control,b.record,c.classes FROM cs_address_directory d JOIN cs_persona_owners o ON o.identity=d.address JOIN cs_product_accounts a ON a.id=o.account JOIN cs_billing_accounts b ON b.id=a.billing LEFT JOIN cs_recipient_request_classes c ON c.alias=d.alias JOIN cs_alias_routes r ON r.id=d.alias WHERE r.record->'configuration'->>'receiving'='Bonded' AND (r.record->>'lifecycle'='Active' OR r.record->'lifecycle' ? 'Restricted') AND d.listed AND a.control->>'status'='Active' AND (strpos(d.search_name,$1)>0 OR strpos(d.search_description,$1)>0 OR strpos(d.address,$1)>0 OR strpos(d.mailbox,$1)>0) ORDER BY d.search_name COLLATE \"C\",d.alias COLLATE \"C\" LIMIT 21 OFFSET $2", &[&query.text().to_lowercase(), &i64::from(query.offset())])?;
         let at = clock();
         let mut entries = rows
             .iter()
@@ -154,5 +156,21 @@ impl PostgresDeployment {
             entries,
             next_offset,
         })
+    }
+}
+
+impl PostgresDeployment {
+    /// Public name selected explicitly for correspondence, never an arbitrary owned alias.
+    /// # Errors
+    /// Invalid route state or storage failure.
+    pub fn correspondence_profile(
+        &self,
+        owner: cs_mail_primitives::ProtocolIdentity,
+        clock: impl FnOnce() -> CanonicalTime,
+    ) -> Result<Option<Approach>, StorageError> {
+        let Some(route) = self.correspondence_alias(owner)? else {
+            return Ok(None);
+        };
+        self.directory_lookup(DirectoryReference::Alias(route.id), clock)
     }
 }

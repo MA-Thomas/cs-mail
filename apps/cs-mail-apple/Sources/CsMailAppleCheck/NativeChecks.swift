@@ -34,7 +34,23 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         self.bytes = bytes
     }
 }
+private final class FixtureRoutes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var routes: [String: String] = [:]
+    func route(for owner: String) -> String? { lock.withLock { routes[owner] } }
+    func record(_ route: String, for owner: String) { lock.withLock { routes[owner] = route } }
+}
 @main struct NativeChecks {
+    private static let fixtureRoutes = FixtureRoutes()
+    /// Isolated fixtures select their correspondence entrance explicitly.
+    static func fixtureAlias(_ client: AppleClient) throws -> String {
+        let owner = try client.cachedInbox().persona
+        if let route = fixtureRoutes.route(for: owner) { return route }
+        guard case .applied(let id) = try client.updateAddress(mutation: .create(description: "Native check publication", address: .generated(address: try client.suggestAlias(name: "Marcus Thomas", fragment: nil).address), policy: .bonded)), let id else { throw CheckFailure(code: "fixture-bonded-route") }
+        guard case .applied = try client.updateAddress(mutation: .useForCorrespondence(id: id, expected: 0)) else { throw CheckFailure(code: "fixture-correspondence-route") }
+        fixtureRoutes.record(id, for: owner)
+        return id
+    }
     static func main() async throws {
         setbuf(stdout, nil)
         try durableReplacementAndExclusiveOwnership()
@@ -126,20 +142,24 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         let token = UUID().uuidString.lowercased()
         let description = "Native private context " + token
         let baseline = try client.addressWorkspace().addresses.count
-        guard case .applied(let createdID) = try client.updateAddress(mutation: .createPrivate(description: description)),
+        let preview = try client.suggestAlias(name: "Marcus Thomas", fragment: "mthom")
+        try require(preview.address.hasPrefix("mthom") && preview.fragments.contains("mtmt"), "name-derived-preview")
+        try require(try client.addressWorkspace().addresses.count == baseline, "preview-created-alias")
+
+        guard case .applied(let createdID) = try client.updateAddress(mutation: .create(description: description, address: .generated(address: preview.address), policy: .aliasScoped)),
               let created = try client.addressWorkspace().addresses.first(where: { $0.id == createdID }) else { throw CheckFailure(code: "alias-create-record") }
-        try require(created.description == description && created.address.hasPrefix("p") && !created.address.contains(token), "private-description-address-separation")
-        try require(created.state == .active && created.kind == .private && created.canRestrict && created.permission == .unpaired, "alias-active-projection")
-        guard case .applied = try client.updateAddress(mutation: .permission(id: created.id, revision: created.revision, permissionRevision: 0, action: .open)) else { throw CheckFailure(code: "explicit-alias-lane") }
+        try require(created.address == preview.address && created.description == description && created.address.split(separator: "@")[0].count <= 14 && !created.address.contains(token), "private-description-address-separation")
+        try require(created.state == .active && created.policy == .aliasScoped && created.canRestrict && created.permission == .broad, "alias-active-projection")
+        guard case .applied = try client.updateAddress(mutation: .permission(id: created.id, revision: created.revision, permissionRevision: created.permissionRevision, action: .open)) else { throw CheckFailure(code: "explicit-alias-lane") }
         try require(try client.directorySearch(text: created.address, offset: 0).entries.isEmpty, "alias-public-linkage")
         try require(try client.directorySearch(text: description, offset: 0).entries.isEmpty, "private-description-publication")
         guard case .applied = try client.updateAddress(mutation: .restrict(id: created.id, revision: created.revision)) else { throw CheckFailure(code: "alias-restrict") }
         guard let restricted = try client.addressWorkspace().addresses.first(where: { $0.id == created.id }) else { throw CheckFailure(code: "alias-restricted-record") }
         try require(restricted.state == .restricted && restricted.conversations.isEmpty && !restricted.canRestrict, "alias-restriction-is-not-delivery")
-        guard case .refused = try client.updateAddress(mutation: .replacePrivate(id: restricted.id, revision: restricted.revision, until: 0)) else { throw CheckFailure(code: "alias-invalid-transition-not-refused") }
+        guard case .refused = try client.updateAddress(mutation: .replace(id: restricted.id, revision: restricted.revision, address: .generated(address: try client.suggestAlias(name: "Marcus Thomas", fragment: nil).address), until: 0)) else { throw CheckFailure(code: "alias-invalid-transition-not-refused") }
         try require(try client.pendingAddressUpdate() == nil, "alias-refusal-not-resolved")
         let until = UInt64(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000)
-        guard case .applied(let replacementID) = try client.updateAddress(mutation: .replacePrivate(id: restricted.id, revision: restricted.revision, until: until)) else { throw CheckFailure(code: "alias-replace") }
+        guard case .applied(let replacementID) = try client.updateAddress(mutation: .replace(id: restricted.id, revision: restricted.revision, address: .generated(address: try client.suggestAlias(name: "Marcus Thomas", fragment: nil).address), until: until)) else { throw CheckFailure(code: "alias-replace") }
         let workspace = try client.addressWorkspace()
         guard let old = workspace.addresses.first(where: { $0.id == restricted.id }),
               let replacement = workspace.addresses.first(where: { $0.id == replacementID }) else { throw CheckFailure(code: "alias-replacement-records") }
@@ -150,13 +170,13 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         guard case .applied = try client.updateAddress(mutation: .retire(id: replacement.id, revision: replacement.revision)) else { throw CheckFailure(code: "alias-retire") }
         guard let retired = try client.addressWorkspace().addresses.first(where: { $0.id == replacement.id }) else { throw CheckFailure(code: "alias-retired-record") }
         try require(retired.state == .retired && !retired.canRetire && !retired.canReplace, "alias-retired-projection")
-        guard case .refused = try client.updateAddress(mutation: .createPublic(address: replacement.address)) else { throw CheckFailure(code: "alias-retired-reused") }
+        guard case .addressUnavailable = try client.updateAddress(mutation: .create(description: "Reserved address challenge", address: .chosen(address: replacement.address), policy: .bonded)) else { throw CheckFailure(code: "alias-retired-reused") }
         try require(try client.addressWorkspace().addresses.count == baseline + 2, "alias-refused-created-record")
         let publicAddress = "native-public-" + token + "@csqd-mail.com"
-        guard case .applied(let publicID) = try client.updateAddress(mutation: .createPublic(address: publicAddress)) else { throw CheckFailure(code: "public-alias-create") }
-        try require(try client.addressWorkspace().currentPublicAlias == publicID, "current-public-alias")
-        guard case .refused = try client.updateAddress(mutation: .createPublic(address: "second-" + publicAddress)) else { throw CheckFailure(code: "second-public-alias") }
-        guard case .applied = try client.updateAddress(mutation: .createPrivate(description: "Another private context " + token)) else { throw CheckFailure(code: "multiple-private-aliases") }
+        guard case .applied(let publicID) = try client.updateAddress(mutation: .create(description: "Bonded alias", address: .chosen(address: publicAddress), policy: .bonded)) else { throw CheckFailure(code: "public-alias-create") }
+        try require(try client.addressWorkspace().addresses.contains { $0.id == publicID && $0.policy == .bonded }, "bonded-alias-created")
+        guard case .applied = try client.updateAddress(mutation: .create(description: "Second bonded alias", address: .chosen(address: "second-" + publicAddress), policy: .bonded)) else { throw CheckFailure(code: "second-public-alias") }
+        guard case .applied = try client.updateAddress(mutation: .create(description: "Another private context " + token, address: .generated(address: try client.suggestAlias(name: "Marcus Thomas", fragment: nil).address), policy: .aliasScoped)) else { throw CheckFailure(code: "multiple-private-aliases") }
         let lanes = try client.addressWorkspace().aliasLanes
         try require(lanes.contains { $0.address.id == created.id }, "alias-lane-missing")
         try require(!lanes.contains { $0.address.address == publicAddress }, "public-alias-presented-as-express-lane")
@@ -199,20 +219,20 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         client = try open()
         try require(try client!.cachedInbox().account == account, "cached-account-changed")
         try require(try client!.sync().account == account, "canonical-account-changed")
-        let settings = try client!.addressSettings()
-        try require(settings.revision == 0 && settings.listed, "directory-initial-state")
+        let settings = try client!.addressSettings(alias: try fixtureAlias(client!))
+        try require(settings.revision == 0 && !settings.listed, "directory-initial-state")
         let publicName = "Native Directory Canary"
         let image = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aNQAAAABJRU5ErkJggg==")!
-        try client!.publishAddress(expected: settings.revision, classVersion: settings.classVersion + 1,
+        try client!.publishAddress(alias: try fixtureAlias(client!), expected: settings.revision, classVersion: settings.classVersion + 1,
             displayName: publicName, description: "A member-authored public profile", image: image, listed: true, classes: [], mailbox: nil)
-        let published = try client!.addressSettings()
+        let published = try client!.addressSettings(alias: try fixtureAlias(client!))
         try require(published.revision == 1 && published.image == image, "directory-image-publication")
         try require(try client!.directorySearch(text: publicName, offset: 0).entries.count == 1, "directory-discovery")
         client = nil
         client = try open()
-        let afterReopen = try client!.addressSettings()
+        let afterReopen = try client!.addressSettings(alias: try fixtureAlias(client!))
         try require(afterReopen.revision == 1 && afterReopen.displayName == publicName, "directory-reopen")
-        try client!.publishAddress(expected: afterReopen.revision, classVersion: afterReopen.classVersion + 1,
+        try client!.publishAddress(alias: try fixtureAlias(client!), expected: afterReopen.revision, classVersion: afterReopen.classVersion + 1,
             displayName: publicName, description: afterReopen.description, image: image, listed: false, classes: [], mailbox: nil)
         try require(try client!.directorySearch(text: publicName, offset: 0).entries.isEmpty, "directory-unlisting")
         try require(try client!.directoryLookup(reference: afterReopen.link).displayName == publicName, "unlisted-shared-link")
@@ -242,8 +262,8 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
     // scoped answers survive rejection and a later request; refusal resolves a send;
     // native reuse keeps its provenance and neither device cache receives plaintext.
     private static func nativeWorkflows(bob: AppleClient, bobDirectory: URL, server: String) async throws {
-        let settings = try bob.addressSettings()
-        try bob.publishAddress(expected: settings.revision, classVersion: settings.classVersion + 1,
+        let settings = try bob.addressSettings(alias: try fixtureAlias(bob))
+        try bob.publishAddress(alias: try fixtureAlias(bob), expected: settings.revision, classVersion: settings.classVersion + 1,
             displayName: settings.displayName, description: settings.description, image: settings.image, listed: false,
             classes: [RequestClassDraft(id: "1", description: "A native introduction", collateralMinorUnits: 1000)], mailbox: nil)
         _ = try bob.purchaseService(offer: 1)
@@ -257,20 +277,20 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         try require(try alice!.finishLogin(callback: await approve(login, subject: "alice")) == .ready, "alice-enrollment")
         _ = try alice!.purchaseService(offer: 1)
         for _ in 0..<80 {
-            if try alice!.addressSettings().covered && bob.addressSettings().covered { break }
+            if try alice!.addressSettings(alias: try fixtureAlias(alice!)).covered && bob.addressSettings(alias: try fixtureAlias(bob)).covered { break }
             try await Task.sleep(nanoseconds: 250_000_000)
         }
-        try require(try alice!.addressSettings().covered && bob.addressSettings().covered, "native-service-funding")
-        let aliceProfile = try alice!.addressSettings()
-        try alice!.publishAddress(expected: aliceProfile.revision, classVersion: aliceProfile.classVersion + 1,
+        try require(try alice!.addressSettings(alias: try fixtureAlias(alice!)).covered && bob.addressSettings(alias: try fixtureAlias(bob)).covered, "native-service-funding")
+        let aliceProfile = try alice!.addressSettings(alias: try fixtureAlias(alice!))
+        try alice!.publishAddress(alias: try fixtureAlias(alice!), expected: aliceProfile.revision, classVersion: aliceProfile.classVersion + 1,
             displayName: "Alice Native Canary", description: "Published profile for the pending-request entry check", image: nil, listed: false, classes: [], mailbox: nil)
         let aliceID = try alice!.cachedInbox().persona
-        guard case .applied = try alice!.updateAddress(mutation: .createPublic(address: "alice-" + aliceID + "@csqd-mail.com")) else { throw CheckFailure(code: "alice-receiving-inbox") }
+        guard case .applied = try alice!.updateAddress(mutation: .create(description: "Additional Alice bonded route", address: .chosen(address: "alice-" + aliceID + "@csqd-mail.com"), policy: .bonded)) else { throw CheckFailure(code: "alice-receiving-inbox") }
         let bobID = try bob.cachedInbox().persona
-        let quote = try alice!.quoteRequest(other: bobID, class: "1")
+        let quote = try alice!.quoteRequest(other: bobID, class: "1", alias: try fixtureAlias(bob))
         try require(quote.status == .review && quote.quote?.total == 1050, "native-signed-quote")
         try require(try alice!.conversation(sender: bobID).sentRequests.isEmpty, "quote-created-charge")
-        let writing = try alice!.openDraft(target: .request(other: bobID, class: "1"))
+        let writing = try alice!.openDraft(target: .request(alias: try fixtureAlias(bob), other: bobID, class: "1"))
         let savedWriting = try alice!.saveDraft(id: writing.id, revision: writing.revision, body: .request(text: "draft-before-charge-canary"), subject: "", localOffsetSeconds: 0)
         alice = nil; alice = try openAlice()
         try require(try alice!.requestProgress()?.request == quote.request, "quote-reopen-identity")
@@ -286,14 +306,14 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         _ = try bob.sync()
         print("OBSERVE definite setup refusal resolved without blocking synchronization")
         print("OBSERVE native reviewed quote and exact same-device reopening")
-        _ = try submitDraftForCheck(alice!, target: .request(other: bobID, class: "1"), body: .request(text: marker), reviewedRequest: quote.request, subject: "Native shared subject canary")
+        _ = try submitDraftForCheck(alice!, target: .request(alias: try fixtureAlias(bob), other: bobID, class: "1"), body: .request(text: marker), reviewedRequest: quote.request, subject: "Native shared subject canary")
         try await waitForSubmitted(alice!)
         print("OBSERVE native funding and document submission acknowledged")
         _ = try bob.sync()
         var receiving = try bob.conversation(sender: aliceID)
         // Conjecture: the projection cannot offer a crossed relationship request
         // while the received request awaits decision, or confuse it with our own request.
-        try require(try bob.directoryLookup(reference: aliceID).requestEntry == .incomingPending(request: quote.request), "directory-crossed-request-entry-offered")
+        try require(try bob.directoryLookup(reference: aliceProfile.link).requestEntry == .incomingPending(request: quote.request), "directory-crossed-request-entry-offered")
         try require(receiving.requestEntry == .incomingPending(request: quote.request), "crossed-request-entry-offered")
         try require(try alice!.conversation(sender: bobID).requestEntry == .outgoingPending(request: quote.request), "outgoing-request-entry-confused")
         let original = try unwrap(receiving.threads.first(where: { $0.request == quote.request }), "native-request-thread")
@@ -317,7 +337,7 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         print("OBSERVE rejected request retains its reply route")
         _ = try bob.sendMessage(other: aliceID, conversation: original.id, text: "answer-after-rejection-canary", sources: [])
         try await Task.sleep(nanoseconds: 1_200_000_000)
-        let second = try alice!.quoteRequest(other: bobID, class: "1")
+        let second = try alice!.quoteRequest(other: bobID, class: "1", alias: try fixtureAlias(bob))
         _ = try alice!.authorizeRequest(request: second.request, text: "second-native-request-private-canary")
         try await waitForSubmitted(alice!)
         print("OBSERVE second request submitted")
@@ -331,6 +351,7 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         // Conjecture: native highlighting preserves exact Unicode ranges and Rust refuses
         // invalid/version-substituted selections rather than disclosing extra source content.
         let openedSource = try bob.sourceMessage(message: source.id)
+        print("OBSERVE retained native source opened for selection")
         let textBlock = try unwrap(openedSource.blocks.compactMap { block -> (UInt32, String)? in
             if case .text(let index, let text) = block { return (index, text) }; return nil
         }.first, "native-source-block")
@@ -342,6 +363,7 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         try require(crossing.preview == "α😀\n\né" && crossing.elements == [.textRange(block: 0, start: 9, end: 15), .textRange(block: 1, start: 0, end: 2)], "native-cross-block-coordinates")
         let quoteDraft = SourceDraft(message: source.id, version: openedSource.version, elements: selection.elements, mode: .quotation)
         _ = try submitDraftForCheck(bob, target: .native(other: aliceID, conversation: original.id), body: .native(text: "explicit quotation", sources: [quoteDraft]))
+        print("OBSERVE selected quotation committed")
         let quoted = try unwrap(try alice!.conversation(sender: bobID).messages.first(where: { $0.text.contains("explicit quotation") }), "native-quotation-delivery")
         try require(quoted.text.contains(excerpt) && !quoted.text.contains("excluded-private-canary") && !quoted.text.contains("BEFORE"), "native-quotation-expanded")
         let invalid = SourceDraft(message: source.id, version: openedSource.version, elements: [.textRange(block: textBlock.0, start: UInt32(marker.utf8.count - 1), end: UInt32(marker.utf8.count + 1))], mode: .reference)
@@ -353,8 +375,11 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         let emojiStart = UInt32(marker[..<emojiRange.lowerBound].utf8.count)
         try refuses { _ = try bob.sendMessage(other: aliceID, conversation: original.id, text: "split-utf8-selection", sources: [SourceDraft(message: source.id, version: openedSource.version, elements: [.textRange(block: textBlock.0, start: emojiStart + 1, end: emojiStart + 2)], mode: .reference)]) }
         try require(try bob.cachedInbox().pendingSend == nil, "invalid-selection-journaled")
+        print("OBSERVE invalid native selections refused without pending work")
         _ = try bob.sendMessage(other: aliceID, conversation: nil, text: "explicit shared copy", sources: [SourceDraft(message: source.id, version: openedSource.version, elements: selection.elements, mode: .sharing)])
+        print("OBSERVE selected shared copy committed")
         _ = try bob.sendMessage(other: aliceID, conversation: nil, text: "explicit reference", sources: [SourceDraft(message: source.id, version: openedSource.version, elements: selection.elements, mode: .reference)])
+        print("OBSERVE selected reference committed")
         let referenced = try unwrap(try alice!.conversation(sender: bobID).messages.first(where: { $0.text.contains("explicit reference") }), "native-reference-message")
         let part = try unwrap(referenced.references.first, "native-reference-part")
         guard case .readable(let resolved) = try alice!.resolveReference(message: referenced.id, part: part) else { throw CheckFailure(code: "native-reference-not-readable") }
@@ -399,7 +424,7 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
         try require(finalContact == aliceID, "latest-contact-selection-lost-during-refresh")
         print("OBSERVE inactive readers retain unread state and the latest contact selection survives refresh")
         print("OBSERVE native presentation discovers retained sources and reloads the same contact")
-        let noCharge = try alice!.quoteRequest(other: bobID, class: "1")
+        let noCharge = try alice!.quoteRequest(other: bobID, class: "1", alias: try fixtureAlias(bob))
         try require(noCharge.status == .communicationAvailable && alice!.cachedInbox().pendingRequest == false, "standing-permission-created-charge")
         let policy = try unwrap(try alice!.conversation(sender: bobID).threads.first(where: { $0.id == original.id })?.policy, "native-conversation-policy")
         try alice!.changeConversationPolicy(conversation: original.id, revision: policy.revision, action: .proposeRelaxation)
@@ -448,7 +473,7 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
             _ = try bob.controlRelationship(sender: aliceID, control: .revoke)
             try simulatorCommand("\"ClearDirectives\"")
             try simulatorCommand("{\"QueueDirectives\":[{\"unavailable\":false,\"outcome\":\"Failed\",\"lose_response\":false}]}")
-            let failed = try alice!.quoteRequest(other: bobID, class: "1")
+            let failed = try alice!.quoteRequest(other: bobID, class: "1", alias: try fixtureAlias(bob))
             // A fast processor may report the definite refusal before this call
             // returns. The following assertions still require the exact voided outcome.
             do { _ = try alice!.authorizeRequest(request: failed.request, text: "voided-funding-must-not-deliver") }
@@ -499,8 +524,9 @@ private final class TestVault: CredentialVault, @unchecked Sendable {
     // sharing read acknowledgements; lifecycle changes preserve delivery history.
     private static func aliasInboxWorkflows(sender: AppleClient, recipient: AppleClient, owner: String, senderID: String) throws {
         func create(_ description: String) throws -> String {
-            guard case .applied(let id) = try recipient.updateAddress(mutation: .createPrivate(description: description)), let id else { throw CheckFailure(code: "inbox-alias-creation") }
-            guard case .applied = try recipient.updateAddress(mutation: .permission(id: id, revision: 0, permissionRevision: 0, action: .open)) else { throw CheckFailure(code: "inbox-alias-permission") }
+            guard case .applied(let id) = try recipient.updateAddress(mutation: .create(description: description, address: .generated(address: try recipient.suggestAlias(name: "Marcus Thomas", fragment: nil).address), policy: .aliasScoped)), let id else { throw CheckFailure(code: "inbox-alias-creation") }
+            let created = try unwrap(try recipient.addressWorkspace().addresses.first { $0.id == id }, "inbox-alias-created")
+            try require(created.permission == .broad && created.permissionRevision == 1, "inbox-alias-permission")
             return id
         }
         let first = try create("Clinical team")

@@ -68,6 +68,7 @@ impl PolicySnapshot {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TransitionContext {
+    pub request_permission: RequestPermission,
     pub request_delivery: RequestDeliveryRoute,
     /// Result of the host's content and policy checks at canonical receipt time.
     pub admission: Result<(), admission::AdmissionFailure>,
@@ -78,6 +79,13 @@ pub struct TransitionContext {
     /// The host's resolution of the class requested by `IssueRequestTerms`, against the
     /// current pricing policy and the recipient's current publication.
     pub pricing: pricing::QuotePricing,
+}
+/// Current permission for the exact receiving alias, independently of pricing.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum RequestPermission {
+    NotRequested,
+    BondedRequest,
+    DirectContact,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum RequestDeliveryRoute {
@@ -168,6 +176,8 @@ pub enum ProtocolCommand {
         expected_policy_version: Version,
     },
     IssueRequestTerms {
+        return_route: RequestReturnRoute,
+        alias: cs_mail_primitives::AliasId,
         class_id: cs_mail_primitives::RequestClassId,
         quote_id: QuoteId,
         declaration_digest: Option<MessageDeclarationDigest>,
@@ -530,6 +540,7 @@ fn validate_snapshot(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // Exhaustive command dispatch keeps its atomic transition boundary together.
 fn apply_command(
     manifest: &mut ManifestBuilder,
     context: &TransitionContext,
@@ -566,11 +577,21 @@ fn apply_command(
             context.admission,
         )?,
         ProtocolCommand::IssueRequestTerms {
+            return_route,
+            alias,
             class_id,
             quote_id,
             declaration_digest,
         } => {
-            issue_terms(manifest, context, *class_id, *quote_id, *declaration_digest)?;
+            issue_terms(
+                manifest,
+                context,
+                return_route.clone(),
+                *alias,
+                *class_id,
+                *quote_id,
+                *declaration_digest,
+            )?;
         }
         ProtocolCommand::CreateRequest {
             payment_method,
@@ -695,6 +716,8 @@ fn authorize(
 fn issue_terms(
     manifest: &mut ManifestBuilder,
     context: &TransitionContext,
+    return_route: RequestReturnRoute,
+    alias: cs_mail_primitives::AliasId,
     class_id: cs_mail_primitives::RequestClassId,
     quote_id: QuoteId,
     declaration_digest: Option<MessageDeclarationDigest>,
@@ -707,24 +730,15 @@ fn issue_terms(
         manifest.event(ProtocolEventKind::TermsIssued);
         return Ok(());
     }
-    match manifest.next.relationship.state {
-        state
-            if state != RelationshipState::Blocked
-                && manifest
-                    .lane
-                    .as_ref()
-                    .is_some_and(|l| l.provides_relationship_access(context.now)) =>
-        {
+    if manifest.next.relationship.state == RelationshipState::Blocked {
+        return Err(ProtocolError::ContactBlocked);
+    }
+    match context.request_permission {
+        RequestPermission::NotRequested => return Err(ProtocolError::IncompleteSnapshot),
+        RequestPermission::DirectContact => {
             manifest.terms = Some(TermsOutcome::NoChargeRequired);
         }
-        RelationshipState::Accepted => {
-            manifest.terms = Some(TermsOutcome::NoChargeRequired);
-        }
-        RelationshipState::Blocked => return Err(ProtocolError::ContactBlocked),
-        RelationshipState::Unknown
-        | RelationshipState::Rejected
-        | RelationshipState::Revoked
-        | RelationshipState::ExpressLane(_) => {
+        RequestPermission::BondedRequest => {
             if manifest.history.pending_submission.is_some() {
                 return Err(ProtocolError::RequestAlreadyExists);
             }
@@ -747,6 +761,8 @@ fn issue_terms(
                 return Err(ProtocolError::PolicyInvalid);
             }
             let terms = RequestTerms {
+                return_route,
+                receiving_alias: alias,
                 reply_lane: RequestReplyAgreement::Agreed(policy.reply_lane.clone()),
                 selected_class: price.selected().clone(),
                 pricing_policy_version: price.policy_version(),
@@ -811,20 +827,13 @@ fn create_request(
     if terms.reply_lane.agreed().is_none() {
         return Err(ProtocolError::PolicyInvalid);
     }
-    match manifest.next.relationship.state {
-        RelationshipState::Accepted => return Err(ProtocolError::RelationshipAccepted),
-        RelationshipState::Blocked => return Err(ProtocolError::ContactBlocked),
-        RelationshipState::Unknown
-        | RelationshipState::Rejected
-        | RelationshipState::Revoked
-        | RelationshipState::ExpressLane(_) => {}
+    if manifest.next.relationship.state == RelationshipState::Blocked {
+        return Err(ProtocolError::ContactBlocked);
     }
-    if manifest
-        .lane
-        .as_ref()
-        .is_some_and(|l| l.provides_relationship_access(context.now))
-    {
-        return Err(ProtocolError::RelationshipAccepted);
+    match context.request_permission {
+        RequestPermission::NotRequested => return Err(ProtocolError::IncompleteSnapshot),
+        RequestPermission::DirectContact => return Err(ProtocolError::RelationshipAccepted),
+        RequestPermission::BondedRequest => (),
     }
     let submission_deadline = validate_request_terms(manifest, context, terms)?;
     if manifest.next.requests.contains_key(&request_id)
@@ -996,7 +1005,9 @@ fn submit_request_to_recipient(
             Err(ProtocolError::AlreadyTerminal)
         };
     }
-    if let Some(reason) = submission_failure(manifest, &request, submission)? {
+    if let Some(reason) =
+        submission_failure(manifest, &request, submission, context.request_permission)?
+    {
         cancel_submission(manifest, request_id, reason)?;
         return Ok(());
     }
@@ -1070,15 +1081,14 @@ fn submission_failure(
     manifest: &ManifestBuilder,
     request: &RelationshipRequest,
     submission: RequestSubmissionInput,
+    permission: RequestPermission,
 ) -> Result<Option<ReservedCancellation>, ProtocolError> {
     let preparation = request
         .lifecycle
         .submission_preparation()
         .ok_or(ProtocolError::InvalidState)?;
     Ok(
-        if manifest.next.relationship.state == RelationshipState::Accepted
-            || manifest.now > preparation.deadline
-        {
+        if permission == RequestPermission::DirectContact || manifest.now > preparation.deadline {
             Some(ReservedCancellation::Ordinary)
         } else if manifest.now > submission.message_valid_until.0 {
             Some(ReservedCancellation::MessageValidityClosed)
@@ -1253,6 +1263,7 @@ fn relationship_decision(
     }
     if matches!(decision, Decision::Accept)
         && manifest.next.relationship.state == RelationshipState::Accepted
+        && manifest.next.active_request().is_none()
     {
         return Err(ProtocolError::InvalidState);
     }
@@ -1771,6 +1782,7 @@ mod tests {
             rejection_cooldown: Duration(90),
         };
         let context = TransitionContext {
+            request_permission: RequestPermission::BondedRequest,
             request_delivery: RequestDeliveryRoute::GuestRelay,
             admission: Ok(()),
             now: CanonicalTime(1),
@@ -1781,6 +1793,10 @@ mod tests {
         };
         let command = KernelCommand::new(
             ProtocolCommand::IssueRequestTerms {
+                return_route: crate::RequestReturnRoute::Native(
+                    cs_mail_primitives::AliasId::new(10).unwrap(),
+                ),
+                alias: cs_mail_primitives::AliasId::new(20).unwrap(),
                 class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(1),
                 declaration_digest: None,

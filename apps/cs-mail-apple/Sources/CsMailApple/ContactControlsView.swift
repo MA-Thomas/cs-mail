@@ -27,6 +27,7 @@ struct ContactControlsView: View {
                     }
                 }
                 Section("Permission for contact from this person") {
+                    EditorialReadingView("Standing permission and sender lanes apply within this contact’s named receiving aliases. Creating an alias does not expand that scope. You can give this sender access through another address in My aliases.", style: .caption)
                     EditorialReadingView(blocks: [EditorialReadingBlock(conversation.permission)] +
                         (conversation.controls.lane.map { [EditorialReadingBlock($0, style: .caption)] } ?? []))
                     if conversation.controls.state == .blocked {

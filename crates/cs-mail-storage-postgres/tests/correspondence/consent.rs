@@ -65,7 +65,7 @@ fn authorize(h: &Fixture, id: u128, usage: GrantUse) -> SignedConsentRequest {
             id: grant(id),
             scope: scope(&[100]),
             usage,
-            expires_at: CanonicalTime(5000),
+            expires_at: correspondence_time(5000),
         },
     )
 }
@@ -176,7 +176,7 @@ fn replacement_device_recovers_only_after_fresh_scoped_consent() {
             id: grant(2),
             scope: scope(&[100]),
             usage: display_usage(&replacement, 12),
-            expires_at: CanonicalTime(5000),
+            expires_at: correspondence_time(5000),
         }))
         .unwrap();
     // Restart both persistence and local custody, restoring only the host's root.
@@ -327,7 +327,7 @@ fn processing_requires_its_own_exact_scope_and_active_user_consent() {
         service.handle(&worker(read(2, 100, purpose.clone()))),
         Err(StorageError::Consent(ConsentError::Revoked))
     ));
-    let late = PostgresAccountRepository::connect(&h.url, || CanonicalTime(5000)).unwrap();
+    let late = PostgresAccountRepository::connect(&h.url, || correspondence_time(5000)).unwrap();
     assert!(matches!(
         ConsentService::new(&late, &custody).handle(&device(
             &h,
@@ -345,12 +345,12 @@ fn processing_requires_its_own_exact_scope_and_active_user_consent() {
                 id: grant(4),
                 scope: scope(&[100]),
                 usage: display_usage(&h.clients[1], 2),
-                expires_at: CanonicalTime(200_000),
+                expires_at: correspondence_time(200_000),
             },
         ))
         .unwrap();
     let expired_content =
-        PostgresAccountRepository::connect(&h.url, || CanonicalTime(100_000)).unwrap();
+        PostgresAccountRepository::connect(&h.url, || correspondence_time(100_000)).unwrap();
     assert!(matches!(
         ConsentService::new(&expired_content, &custody).handle(&device(
             &h,

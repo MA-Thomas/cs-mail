@@ -3,9 +3,9 @@
 > A copy of this document is kept at `identity-model/docs/rust-domain-principles.md`. Keep the two in step; only their relative links differ.
 
 Shared architectural guidance for **cs-mail** and **identity-model**, agreed on
-2026-09-20. This is the canonical reference for the ten principles discussed
-during the refactoring review. These principles guide future work; they do not
-assert that every existing component already satisfies them.
+2026-09-20, with principle 11 added on 2026-10-22. This is the canonical
+reference for the eleven principles. They guide future work; they do not assert
+that every existing component already satisfies them.
 
 Make domain meaning explicit in types, express decisions as deterministic rules,
 and enforce authority and consistency at the boundary where state changes become
@@ -99,6 +99,26 @@ result would matter. Prefer scenarios that seriously challenge the claim. Passin
 tests mean that these attempts did not falsify it; they do not prove it universally.
 Do not add tests merely to accompany code, increase coverage, or preserve superseded
 behavior.
+
+## 11. Remove superseded build state
+
+Retain the artifacts needed for the current supported build. When a build or
+implementation is replaced, remove its obsolete generated outputs as part of
+completing that work. Historical builds require an explicit owner-approved
+retention reason and removal condition; keeping every prior build is not the
+default.
+
+Keep rebuildable compiler caches bounded. Account for platform-specific debug
+object retention and separate dependency, feature and profile variants: replacing
+an executable does not necessarily remove the objects or caches that produced
+it. Reclaim superseded variants and temporary build bundles instead of carrying
+them forward as historical debt.
+
+Separate durable application state from disposable build output. Cleanup must
+preserve the current deployment, user work, unresolved operations, account and
+credential continuity, and evidence with a current retention requirement. Verify
+those boundaries before deletion; a directory name such as `target` does not
+establish that every file within it is disposable.
 
 ## The role of tests in development
 

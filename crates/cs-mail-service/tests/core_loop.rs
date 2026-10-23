@@ -265,6 +265,7 @@ impl Loop {
                     gateway.scope(),
                     cs_mail_protocol::pricing::RecipientRequestClasses::new(
                         BOB,
+                        cs_mail_primitives::AliasId::new((BOB).0).unwrap(),
                         1,
                         vec![
                             cs_mail_protocol::pricing::RequestClass::new(
@@ -280,6 +281,7 @@ impl Loop {
                 .unwrap(),
             )
             .unwrap();
+        support::fixture_publication(&deployment, BOB, BOB_KEY, &[21; 32], at).unwrap();
         Self {
             url,
             clock,
@@ -341,6 +343,10 @@ impl Loop {
                 &self.alice,
                 key,
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(ALICE.0).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
                     class_id: RequestClassId(1),
                     quote_id: QuoteId(key),
                     declaration_digest: Some(message_declaration_digest(&declarations()).unwrap()),
@@ -726,6 +732,7 @@ fn acceptance_commits_permission_and_the_full_refund_together_or_not_at_all() {
             RefundView::Confirmed(amount) => assert_eq!(amount, charge),
             RefundView::None => panic!("acceptance without its refund obligation"),
         }
+        challenge_alias_request_scope(f);
     };
     let fail = |f: &Loop, table: &str, event: &str, condition: &str| {
         f.sql(&format!(
@@ -1076,4 +1083,101 @@ fn challenge_temporary_verification(f: &Loop, key: &str) {
         matches!(result, std::task::Poll::Ready(Err(ServiceError::Dmarc(e))) if e.is_temporary())
     );
     assert_eq!(engine.snapshot().unwrap(), before);
+}
+
+// Conjecture: accepting one alias cannot waive the bond at a different alias;
+// quoting the latter must bind its own terms without creating payment work.
+fn challenge_alias_request_scope(f: &Loop) {
+    use cs_mail_application::aliases::{
+        AddressSelection, AliasCreation, Command, Outcome, SignedCommand,
+    };
+    use cs_mail_primitives::AliasId;
+    let id = AliasId::new(90_001).unwrap();
+    let at = f.clock.now();
+    let repository = f.gateway.deployment().accounts(move || at);
+    let command = SignedCommand {
+        scope: f.gateway.scope(),
+        product: "cs-mail/test".into(),
+        account: repository.persona_account(BOB).unwrap(),
+        owner: BOB,
+        key: BOB_KEY,
+        operation: IdempotencyKey(90_001),
+        command: Command::Create {
+            id,
+            creation: AliasCreation {
+                address: AddressSelection::Chosen {
+                    address: "second@inbox.test".to_owned().try_into().unwrap(),
+                },
+                configuration: cs_mail_accounts::aliases::AliasConfiguration {
+                    description: "Independent receiving scope".to_owned().try_into().unwrap(),
+                    receiving: cs_mail_accounts::aliases::ReceivingPolicy::Bonded,
+                },
+            },
+        },
+        signature: vec![],
+    }
+    .sign(&[21; 32])
+    .unwrap();
+    assert!(matches!(
+        f.gateway
+            .alias_command(&command, "inbox.test")
+            .unwrap()
+            .receipt
+            .outcome,
+        Outcome::Changed(_)
+    ));
+    let classes = cs_mail_protocol::pricing::RecipientRequestClasses::new(
+        BOB,
+        id,
+        1,
+        vec![
+            cs_mail_protocol::pricing::RequestClass::new(
+                RequestClassId(1),
+                "Second alias class".into(),
+                Money::from_minor_units(support::FIXTURE_COLLATERAL),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    f.gateway
+        .publish_classes(
+            &f.bob
+                .sign_request_classes(f.gateway.scope(), classes)
+                .unwrap(),
+        )
+        .unwrap();
+    let quote = |alias, operation| {
+        let answer = f
+            .send(&f.sign(
+                &f.alice,
+                operation,
+                ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        AliasId::new(ALICE.0).unwrap(),
+                    ),
+                    alias,
+                    class_id: RequestClassId(1),
+                    quote_id: QuoteId(operation),
+                    declaration_digest: None,
+                },
+            ))
+            .unwrap();
+        let ReceivedOutcome::Protocol(result) = answer.outcome else {
+            panic!("quote refused: {:?}", answer.outcome)
+        };
+        result.transition.terms_outcome.unwrap()
+    };
+    assert!(matches!(
+        quote(AliasId::new(BOB.0).unwrap(), 90_002),
+        TermsOutcome::NoChargeRequired
+    ));
+    let before = f.refund_work();
+    f.advance(2_000); // The pair's existing request-history backoff also applies here.
+    let TermsOutcome::ChargeRequired(terms) = quote(id, 90_003) else {
+        panic!("foreign scope waived bond")
+    };
+    assert_eq!(terms.receiving_alias, id);
+    assert_eq!(terms.selected_class.description(), "Second alias class");
+    assert_eq!(f.refund_work(), before);
 }

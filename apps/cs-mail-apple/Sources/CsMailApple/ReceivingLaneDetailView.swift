@@ -27,7 +27,7 @@ struct ReceivingLaneDetailView: View {
                     EditorialReadingBlock(lane.address.address, style: .caption),
                     EditorialReadingBlock(lane.address.permission == .unpaired ? "No lane paired" : lane.address.permission == .senders ? "Sender-scoped express lane" : "Alias-scoped express lane", style: .caption),
                     EditorialReadingBlock("Address · " + AliasLanePresentation.summary(lane.address.state)),
-                    EditorialReadingBlock("A private alias has no automatic expiry or paid-request route. Blocked people remain blocked across all your aliases.", style: .caption),
+                    EditorialReadingBlock("Aliases have no automatic expiry. The receiving policy determines whether a bonded-request route is offered; blocks apply across all your aliases.", style: .caption),
                     EditorialReadingBlock("Receiving permission does not establish the sender’s organizational identity.", style: .caption)
                 ])
                 if case .restricted = lane.address.state {

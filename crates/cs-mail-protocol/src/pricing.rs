@@ -220,12 +220,14 @@ impl RequestClass {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "ClassesInput")]
 pub struct RecipientRequestClasses {
+    alias: cs_mail_primitives::AliasId,
     recipient: ProtocolIdentity,
     version: u64,
     classes: Vec<RequestClass>,
 }
 #[derive(Deserialize)]
 struct ClassesInput {
+    alias: cs_mail_primitives::AliasId,
     recipient: ProtocolIdentity,
     version: u64,
     classes: Vec<RequestClass>,
@@ -233,7 +235,7 @@ struct ClassesInput {
 impl TryFrom<ClassesInput> for RecipientRequestClasses {
     type Error = String;
     fn try_from(v: ClassesInput) -> Result<Self, Self::Error> {
-        Self::new(v.recipient, v.version, v.classes).map_err(|e| format!("{e:?}"))
+        Self::new(v.recipient, v.alias, v.version, v.classes).map_err(|e| format!("{e:?}"))
     }
 }
 impl RecipientRequestClasses {
@@ -241,6 +243,7 @@ impl RecipientRequestClasses {
     /// Rejects missing owner/version, duplicate IDs, or more than eight classes.
     pub fn new(
         recipient: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
         version: u64,
         classes: Vec<RequestClass>,
     ) -> Result<Self, crate::ProtocolError> {
@@ -253,10 +256,14 @@ impl RecipientRequestClasses {
             return Err(crate::ProtocolError::PolicyInvalid);
         }
         Ok(Self {
+            alias,
             recipient,
             version,
             classes,
         })
+    }
+    pub const fn alias(&self) -> cs_mail_primitives::AliasId {
+        self.alias
     }
     pub const fn recipient(&self) -> ProtocolIdentity {
         self.recipient

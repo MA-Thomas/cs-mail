@@ -405,34 +405,43 @@ an invitation cannot silently remove it.
 \section{SMTP and Express-Lane Migration}
 
 \paragraph{Alias and lane scope.}
-The \href{DOMAIN_MODEL.md}{domain model} separates receiving addresses from lane
-permission. Private-alias creation grants no lane. A member may explicitly pair a
-healthcare alias with alias-scoped permission or an Amazon alias with sender-scoped
-permission for selected authenticated domains. The private address has no bonded
-route under either pairing; unauthorized senders may use the public request route.
-The sequence below does not turn private-alias mail into a payment invitation.
-Separate lane pairing uses signed commands and exact-operation recovery. Alias lifecycle, transition,
-reply and held-message rules belong to the domain model. This design changes
-neither annual service charges nor pool allocation and distribution rules. See
-the \href{cs_mail_aliases_and_express_lanes.tex}{alias memo}.
+The \href{DOMAIN_MODEL.md}{domain model}, revised 21 October 2026, separates
+receiving policy, address choice, listing and permission. Each bonded alias owns
+its profile and request classes; senders without applicable permission explicitly
+authorize a request through that alias. Selected sender grants or standing
+permission allow direct contact within their named receiving scopes. Alternatively,
+an explicitly granted alias-scoped lane admits new authenticated senders given
+the address, subject to blocks and admission controls, without a bonded fallback.
+Public/private classification and one-current-public cardinality are superseded.
+Rust and Swift implement these receiving and publication contracts. The Apple
+runbook distinguishes current local validation from earlier transport evidence. Refusal or mismatch never authorizes a charge.
+
+Future direction is a nominal charge for each new alias, associated with the annual
+utility-fee cycle. Amount, allowance, recurrence, mid-cycle treatment, collection,
+failed creation, replacement/refunds and revenue classification remain undecided.
+This does not authorize collection or change the implemented annual utility price,
+request settlements or member distribution rules. Any later charge requires an
+explicit billing obligation and idempotent reconciliation distinct from creation.
+
 
 The agreed participant/route model allows one protocol identity to control
 multiple aliases without automatically revealing their association. Blocking a
 sender protocol identity overrides permission across every recipient alias;
 external mailbox evidence does not establish equivalence between different
-mailboxes. Private aliases have no automatic expiry. Restrict stops new
+mailboxes. Aliases have no automatic expiry. Restrict stops new
 correspondents while preserving authorized existing conversations; Replace creates
 a new route with an explicit transition and no automatic transfer of unknown-sender
 admission; Retire stops all inbound delivery while preserving history. Retired
 addresses are never reassigned to another member. Suspicious or insufficiently
-authenticated private-alias mail is held for explicit review without ongoing
+authenticated alias mail is held for explicit review without ongoing
 permission or payment. SMTP envelope recipients and authenticated native targets
 establish route evidence, retained with each admitted message's permission basis.
 Restriction preserves exact admitted conversations; sender and standing grants
 default to one receiving alias, with explicit selection of several permitted.
 New aliases never expand grants. Transition, reply and held-message contracts
-remain open in the domain model. This design
-awaits implementation and does not change historical settlements.
+remain open in the domain model. Receiving policy, alias-bound publication and route evidence are implemented locally.
+Held-message review and privacy-preserving correspondent references remain deferred;
+historical settlements are unchanged.
 
 SMTP is a visibly identified compatibility route because its gateway may handle
 plaintext. A native message's end-to-end confidentiality must not be claimed for

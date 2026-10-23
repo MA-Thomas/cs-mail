@@ -144,7 +144,8 @@ pub async fn offer(
     Path(persona): Path<u128>,
 ) -> Result<Json<Value>, ApiError> {
     let offer = run(&state, move |g| {
-        g.offer(ProtocolIdentity(persona)).map_err(refused)
+        g.offer(cs_mail_primitives::AliasId::new(persona).map_err(|_| ApiError::unavailable())?)
+            .map_err(refused)
     })
     .await?;
     match offer {
@@ -304,7 +305,7 @@ pub async fn receiving_alias(
     Path(persona): Path<u128>,
 ) -> Result<Json<Value>, ApiError> {
     let alias = run(&state, move |g| {
-        g.public_receiving_alias(ProtocolIdentity(persona))
+        g.correspondence_alias(ProtocolIdentity(persona))
             .map_err(refused)
     })
     .await?

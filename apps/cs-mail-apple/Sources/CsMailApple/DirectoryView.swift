@@ -28,7 +28,7 @@ struct DirectoryView: View {
                             model.returnToResults()
                         }
                         if let error = model.error { Text(error).foregroundStyle(.orange) }
-                        ApproachDetail(approach: approach, member: member, openCorrespondence: openCorrespondence, reviewRequest: reviewRequest).id(approach.address)
+                        ApproachDetail(approach: approach, member: member, openCorrespondence: openCorrespondence, reviewRequest: reviewRequest).id(approach.alias)
                     } else {
                         Text("Find someone and see the approaches they welcome.").foregroundStyle(.secondary)
                         HStack {
@@ -130,6 +130,8 @@ struct ClassEditorRow: Identifiable, Equatable {
     var collateral: String
 }
 @MainActor final class ApproachEditorDraft: ObservableObject {
+    @Published var alias: String?
+    @Published var visibilityChosen = false
     @Published var loadedRevision: UInt64?
     @Published var classVersion: UInt64 = 0
     @Published var name = ""
@@ -144,23 +146,24 @@ struct ClassEditorRow: Identifiable, Equatable {
     private var baseline: Snapshot?
     private var snapshot: Snapshot { Snapshot(name: name, mailbox: mailbox, description: description, image: image, listed: listed, classes: classes) }
     var isDirty: Bool { baseline != nil && snapshot != baseline }
-    var valid: Bool { loadedRevision != nil && classVersion < UInt64.max && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !classes.contains { $0.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || UInt64($0.collateral) == nil } }
+    var valid: Bool { alias != nil && visibilityChosen && loadedRevision != nil && classVersion < UInt64.max && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !classes.contains { $0.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || UInt64($0.collateral) == nil } }
     func load(_ settings: AddressSettings) {
+        alias = settings.alias; visibilityChosen = settings.revision != 0
         loadedRevision = settings.revision; classVersion = settings.classVersion
         mailbox = settings.mailbox ?? ""; name = settings.displayName; description = settings.description
         image = settings.image; listed = settings.listed
         classes = settings.classes.map { ClassEditorRow(id: RequestClassID($0.id), description: $0.description, collateral: String($0.collateralMinorUnits)) }
         baseline = snapshot
     }
-    func clear() { loadedRevision = nil; classVersion = 0; name = ""; mailbox = ""; description = ""; image = nil; listed = true; classes = []; baseline = nil }
+    func clear() { alias = nil; visibilityChosen = false; loadedRevision = nil; classVersion = 0; name = ""; mailbox = ""; description = ""; image = nil; listed = true; classes = []; baseline = nil }
     func save(using model: MemberModel) async -> Bool {
-        guard !model.busy, valid, let expected = loadedRevision, model.addressSettings?.revision == expected else { return false }
+        guard !model.busy, valid, let alias, let expected = loadedRevision, model.addressSettings?.alias == alias, model.addressSettings?.revision == expected else { return false }
         let drafts = classes.compactMap { row -> RequestClassDraft? in
             guard let amount = UInt64(row.collateral) else { return nil }
             return RequestClassDraft(id: row.id.value, description: row.description, collateralMinorUnits: amount)
         }
         guard drafts.count == classes.count else { return false }
-        await model.publishAddress(expected: expected, classVersion: classVersion + 1, name: name, description: description, image: image, listed: listed, classes: drafts, mailbox: mailbox.isEmpty ? nil : mailbox)
+        await model.publishAddress(alias: alias, expected: expected, classVersion: classVersion + 1, name: name, description: description, image: image, listed: listed, classes: drafts, mailbox: mailbox.isEmpty ? nil : mailbox)
         guard model.inbox != nil, model.addressError == nil, let settings = model.addressSettings, settings.revision != expected else { return false }
         load(settings); return true
     }
@@ -177,7 +180,7 @@ struct AddressEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let settings = model.addressSettings {
+                if let settings = model.addressSettings, settings.alias == model.editingAlias {
                     Section("Address") {
                         TextField("Address", text: $draft.mailbox)
                             .disabled(settings.mailbox != nil)
@@ -198,7 +201,11 @@ struct AddressEditor: View {
                         if let imageError { Text(imageError).foregroundStyle(.orange) }
                     }
                     Section("Directory visibility") {
-                        Toggle("Include this address in directory searches", isOn: $draft.listed)
+                        Picker("Directory visibility", selection: Binding<Bool?>(get: { draft.visibilityChosen ? draft.listed : nil }, set: { value in if let value { draft.listed = value; draft.visibilityChosen = true } })) {
+                            Text("Choose visibility").tag(Optional<Bool>.none)
+                            Text("Listed in directory searches").tag(Optional(true))
+                            Text("Unlisted · exact address or link only").tag(Optional(false))
+                        }
                         Text(draft.listed ? "Publishing will include this profile in name, address and description searches." : "Anyone with the exact address or shared link can still view your publication. It will be absent from searches and browsing.").font(.caption).fixedSize(horizontal: false, vertical: true)
                     }
                     Section("Ways to approach me") {
@@ -221,7 +228,7 @@ struct AddressEditor: View {
                     Section {
                         if draft.isDirty { Text("Unsaved changes").font(.caption).foregroundStyle(.orange) }
                         Button(settings.revision == 0 ? "Publish approach page" : "Save changes") { save() }
-                            .disabled(pendingChanges || draft.loadedRevision != settings.revision || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.classes.contains { $0.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || UInt64($0.collateral) == nil })
+                            .disabled(pendingChanges || !draft.valid || draft.loadedRevision != settings.revision || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.classes.contains { $0.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || UInt64($0.collateral) == nil })
                         if let loadedRevision = draft.loadedRevision, loadedRevision != settings.revision {
                             Text("Your page has changed since you began editing. Your edits are still here.").foregroundStyle(.orange)
                             Button("Discard edits and load saved page") { loadDraft() }
@@ -242,7 +249,7 @@ struct AddressEditor: View {
             .disabled(model.busy)
             .overlay { if model.busy { ProgressView() } }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task { await model.loadAddressSettings(); if draft.loadedRevision == nil { loadDraft() } }
+        .task(id: model.editingAlias) { if model.editingAlias == nil { await model.loadManagedAddresses() }; await model.loadAddressSettings(); if draft.loadedRevision == nil { loadDraft() } }
         .onChange(of: model.addressSettings?.revision) { _, _ in
             if draft.loadedRevision == nil { loadDraft() }
         }

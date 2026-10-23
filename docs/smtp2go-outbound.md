@@ -65,21 +65,27 @@ the per-conversation `reply+<conversation>@<mail_domain>` address. General incom
 authority or queues a bounded request-page prompt. Reply-To retains conversation
 continuity. Human-readable aliases remain later work.
 
-An alias is a receiving address; express-lane permission is granted separately.
-Private-alias creation grants no lane. A healthcare alias may be explicitly paired
-with an alias-scoped lane; an Amazon alias may instead use sender-scoped permission
-for selected authenticated domains. Private aliases have no bonded route;
-unauthorized senders may use the public approach route. The
-[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) owns these rules.
-Alias management, receiving and explicit lane pairing are implemented locally.
-The earlier transport experiments below retain their stated scope; current
-permission-transition validation is recorded in the Apple runbook.
+An alias has an explicitly selected receiving policy, independent of address
+choice and directory visibility. A bonded alias has its own profile and request
+classes; senders without applicable permission must explicitly authorize a bonded
+request. Selected sender-scoped lanes or standing permission allow direct contact
+under their named receiving scopes. Alternatively, the member can explicitly grant
+an alias-scoped lane so new senders who obtain that address can correspond without
+a bonded request, subject to authentication, blocks and admission controls. That
+policy has no bonded fallback. Public/private is no longer a product alias kind.
+The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) owns the rules.
+
+The 21 October 2026 Rust and Swift implementation uses these separate choices,
+per-alias publications and frozen request/reply routes. Earlier dated validation
+below remains historical. Current validation and owner-install status are recorded
+in the [Apple runbook](../apps/cs-mail-apple/README.md). Alias fees and receiving-policy
+switching remain deferred; no alias fee is charged.
 
 **Further alias clarification (2026-10-14; implementation pending).** One
 participant protocol identity may control multiple alias routes without public
-linkage. Sender-identity blocks apply across all receiving aliases. Private routes
+linkage. Sender-identity blocks apply across all receiving aliases. Aliases
 have no automatic expiry and offer Restrict, Replace, Retire. Suspicious or
-insufficiently authenticated private-alias mail is held for review without ongoing
+insufficiently authenticated alias mail is held for review without ongoing
 permission or payment. SMTP envelope recipients and authenticated native targets
 establish receiving-route evidence. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
 owns these rules and remaining delivery, transition, reply and held-message contracts;

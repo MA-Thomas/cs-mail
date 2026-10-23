@@ -111,6 +111,7 @@ fn priced(store: &cs_mail_application::InMemoryStore) {
         .configure_request_classes(
             pricing::RecipientRequestClasses::new(
                 ProtocolIdentity(20),
+                cs_mail_primitives::AliasId::new((ProtocolIdentity(20)).0).unwrap(),
                 1,
                 vec![
                     pricing::RequestClass::new(
@@ -233,6 +234,10 @@ impl Fixture {
         let result = self
             .sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(20).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(id),
                     declaration_digest: None,
@@ -358,6 +363,10 @@ fn one_request_one_charge_and_quote_cannot_be_reused() {
     let result = f
         .sender(
             ProtocolCommand::IssueRequestTerms {
+                return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                    cs_mail_primitives::AliasId::new(10).unwrap(),
+                ),
+                alias: cs_mail_primitives::AliasId::new(20).unwrap(),
                 class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(2),
                 declaration_digest: None,
@@ -453,6 +462,10 @@ fn rejection_exports_pending_forfeiture_and_starts_cooldown() {
     assert!(matches!(
         f.sender(
             ProtocolCommand::IssueRequestTerms {
+                return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                    cs_mail_primitives::AliasId::new(10).unwrap()
+                ),
+                alias: cs_mail_primitives::AliasId::new(20).unwrap(),
                 class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(2),
                 declaration_digest: None
@@ -671,6 +684,10 @@ fn unauthorized_decisions_and_invalid_policy_are_rejected() {
     assert!(matches!(
         f.sender(
             ProtocolCommand::IssueRequestTerms {
+                return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                    cs_mail_primitives::AliasId::new(10).unwrap()
+                ),
+                alias: cs_mail_primitives::AliasId::new(20).unwrap(),
                 class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(2),
                 declaration_digest: None
@@ -717,6 +734,10 @@ fn concurrent_creations_commit_only_one_charge_intent() {
     let issued = f
         .sender(
             ProtocolCommand::IssueRequestTerms {
+                return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                    cs_mail_primitives::AliasId::new(10).unwrap(),
+                ),
+                alias: cs_mail_primitives::AliasId::new(20).unwrap(),
                 class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(1),
                 declaration_digest: None,
@@ -970,6 +991,10 @@ fn concurrent_aliases_reserve_exactly_one_pending_submission() {
         let result = f
             .sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(10).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(20).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(1),
                     declaration_digest: None,
@@ -1172,6 +1197,7 @@ fn initial_message_refusal_cancels_request_submission_with_void_or_full_refund()
             IdempotencyKey(99),
         );
         let context = TransitionContext {
+            request_permission: cs_mail_protocol::RequestPermission::BondedRequest,
             request_delivery: cs_mail_protocol::RequestDeliveryRoute::GuestRelay,
             now: CanonicalTime(3),
             journal_position: JournalPosition(99),
@@ -1245,6 +1271,7 @@ fn refused_followup_preserves_request_awaiting_decision_and_its_finances() {
         IdempotencyKey(99),
     );
     let context = TransitionContext {
+        request_permission: cs_mail_protocol::RequestPermission::BondedRequest,
         request_delivery: cs_mail_protocol::RequestDeliveryRoute::GuestRelay,
         now: CanonicalTime(5),
         journal_position: JournalPosition(99),
@@ -1334,6 +1361,10 @@ fn altered_retries_under_an_existing_operation_identity_are_rejected() {
         sender,
         500,
         ProtocolCommand::IssueRequestTerms {
+            return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                cs_mail_primitives::AliasId::new(10).unwrap(),
+            ),
+            alias: cs_mail_primitives::AliasId::new(20).unwrap(),
             class_id: RequestClassId(1),
             quote_id: QuoteId(1),
             declaration_digest: None,
@@ -1431,7 +1462,8 @@ fn challenge_alias_conversation_boundaries() {
         id,
         owner,
         MemberAddress::try_from("hospital@example.test".to_owned()).unwrap(),
-        cs_mail_accounts::aliases::AliasUsage::Private {
+        cs_mail_accounts::aliases::AliasConfiguration {
+            receiving: cs_mail_accounts::aliases::ReceivingPolicy::AliasScoped,
             description: "Hospital".to_owned().try_into().unwrap(),
         },
         CanonicalTime(10),
@@ -1618,7 +1650,8 @@ fn challenge_alias_public_scope(
             id,
             owner,
             MemberAddress::try_from("fixture@example.test".to_owned()).unwrap(),
-            cs_mail_accounts::aliases::AliasUsage::Private {
+            cs_mail_accounts::aliases::AliasConfiguration {
+                receiving: cs_mail_accounts::aliases::ReceivingPolicy::AliasScoped,
                 description: "Hospital".to_owned().try_into().unwrap(),
             },
             CanonicalTime(10),
@@ -1639,7 +1672,10 @@ fn challenge_alias_public_scope(
         cs_mail_primitives::AliasId::new(803).unwrap(),
         owner,
         MemberAddress::try_from("research@example.test".to_owned()).unwrap(),
-        cs_mail_accounts::aliases::AliasUsage::Public,
+        cs_mail_accounts::aliases::AliasConfiguration {
+            receiving: cs_mail_accounts::aliases::ReceivingPolicy::Bonded,
+            description: "Fixture route".to_owned().try_into().unwrap(),
+        },
         CanonicalTime(10),
     )
     .unwrap();
@@ -1730,7 +1766,8 @@ fn challenge_alias_replacement(
         other_id,
         owner,
         MemberAddress::try_from("new-hospital@example.test".to_owned()).unwrap(),
-        cs_mail_accounts::aliases::AliasUsage::Private {
+        cs_mail_accounts::aliases::AliasConfiguration {
+            receiving: cs_mail_accounts::aliases::ReceivingPolicy::AliasScoped,
             description: "Hospital".to_owned().try_into().unwrap(),
         },
         CanonicalTime(40),

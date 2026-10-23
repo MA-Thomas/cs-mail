@@ -54,6 +54,7 @@ pub enum Command {
 pub struct SignedRequest {
     pub scope: RecipientSigningScope,
     pub address: ProtocolIdentity,
+    pub alias: cs_mail_primitives::AliasId,
     pub key: OperationalKeyRef,
     pub operation: IdempotencyKey,
     pub command: Command,
@@ -65,9 +66,10 @@ impl SignedRequest {
             return Err(Error::Invalid);
         }
         serde_json::to_vec(&(
-            "cs-mail/address-directory/v1",
+            "cs-mail/alias-directory/v2",
             self.scope,
             self.address,
+            self.alias,
             self.key,
             self.operation,
             &self.command,
@@ -120,6 +122,7 @@ pub enum Response {
     Refused { digest: [u8; 32], error: Error },
 }
 pub struct Context {
+    pub alias: cs_mail_accounts::aliases::Alias,
     pub authority: AuthoritySnapshot,
     pub current: Option<DirectoryEntry>,
     pub classes: Option<RecipientRequestClasses>,
@@ -207,6 +210,7 @@ fn decide(
         other => other,
     }
 }
+#[allow(clippy::too_many_lines)] // Publication authority, alias binding and atomic effects form one decision.
 fn decide_checked(
     request: &SignedRequest,
     c: Context,
@@ -214,6 +218,12 @@ fn decide_checked(
     now: CanonicalTime,
 ) -> Result<Decision, Error> {
     if request.scope != scope {
+        return Err(Error::Unauthorized);
+    }
+    if c.alias.id() != request.alias
+        || c.alias.owner() != request.address
+        || !c.alias.is_bonded_route()
+    {
         return Err(Error::Unauthorized);
     }
     let digest = request.digest()?;
@@ -268,7 +278,10 @@ fn decide_checked(
             {
                 return Err(Error::Conflict);
             }
-            if classes.classes.recipient() != request.address {
+            if classes.classes.recipient() != request.address
+                || classes.classes.alias() != request.alias
+                || mailbox.as_ref() != Some(c.alias.address())
+            {
                 return Err(Error::Invalid);
             }
             crate::request_pricing::decide_classes(
@@ -291,6 +304,7 @@ fn decide_checked(
             let entry = DirectoryEntry::replace(
                 c.current.as_ref(),
                 request.address,
+                request.alias,
                 *expected,
                 profile.clone(),
                 *visibility,

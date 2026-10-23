@@ -169,6 +169,13 @@ pub fn provision(
             record.reference,
             at,
         )?;
+        fixture_inbox(
+            engine.deployment(),
+            persona,
+            record.reference,
+            &[u8::try_from(record.reference.0).unwrap(); 32],
+            at,
+        )?;
     }
     // Fixture hosts own both directions just as the real member gateway does.
     let pair = engine.snapshot()?.state.relationship.key;
@@ -216,13 +223,25 @@ pub fn provision(
             at,
         )?;
     }
-    if engine.deployment().request_classes(recipient)?.is_none() {
+    if engine
+        .deployment()
+        .request_classes(AliasId::new(recipient.0).unwrap())?
+        .is_none()
+    {
         let record = all_keys
             .records()
             .find(|r| r.actor == cs_mail_protocol::ActorRef::Recipient(recipient))
             .unwrap();
+        fixture_inbox(
+            engine.deployment(),
+            recipient,
+            record.reference,
+            &[u8::try_from(record.reference.0).unwrap(); 32],
+            at,
+        )?;
         let classes = cs_mail_protocol::pricing::RecipientRequestClasses::new(
             recipient,
+            cs_mail_primitives::AliasId::new((recipient).0).unwrap(),
             1,
             vec![cs_mail_protocol::pricing::RequestClass::new(
                 RequestClassId(1),
@@ -342,8 +361,8 @@ pub fn fixture_inbox(
     secret: &[u8; 32],
     at: CanonicalTime,
 ) -> Result<AliasId, StorageError> {
-    use cs_mail_application::aliases::{AliasCreation, AliasService, Command, SignedCommand};
-    if let Some(alias) = deployment.public_receiving_alias(owner)? {
+    use cs_mail_application::aliases::{AliasService, Command, SignedCommand};
+    if let Some(alias) = deployment.correspondence_alias(owner)? {
         return Ok(alias.id);
     }
     let record = deployment
@@ -403,17 +422,31 @@ pub fn fixture_inbox(
         operation: IdempotencyKey(u128::MAX - owner.0),
         command: Command::Create {
             id,
-            creation: AliasCreation::Public {
-                address: format!("fixture-{}@inbox.test", owner.0)
-                    .try_into()
-                    .map_err(|_| StorageError::NumericRange)?,
+            creation: cs_mail_application::aliases::AliasCreation {
+                address: cs_mail_application::aliases::AddressSelection::Chosen {
+                    address: format!("fixture-{}@inbox.test", owner.0)
+                        .try_into()
+                        .map_err(|_| StorageError::NumericRange)?,
+                },
+                configuration: cs_mail_accounts::aliases::AliasConfiguration {
+                    description: "Fixture route".to_owned().try_into().unwrap(),
+                    receiving: cs_mail_accounts::aliases::ReceivingPolicy::Bonded,
+                },
             },
         },
         signature: vec![],
     }
     .sign(secret)?;
     AliasService(&repository).handle(&request, scope, "inbox.test", &|| Ok([1; 16]))?;
-    if deployment.public_receiving_alias(owner)?.is_none() {
+    let selection = SignedCommand {
+        command: Command::UseForCorrespondence { id, expected: 0 },
+        operation: IdempotencyKey(u128::MAX - owner.0 - 100_000),
+        signature: vec![],
+        ..request
+    }
+    .sign(secret)?;
+    AliasService(&repository).handle(&selection, scope, "inbox.test", &|| Ok([1; 16]))?;
+    if deployment.correspondence_alias(owner)?.is_none() {
         return Err(StorageError::InvalidStoredProtocolState);
     }
     Ok(id)
@@ -425,5 +458,65 @@ pub fn fixture_native_send(
     cs_mail_application::correspondence::Command::Send {
         alias: AliasId::new(package.recipient_copy.binding.recipient.0).expect("fixture inbox"),
         package,
+    }
+}
+
+/// Publishes an existing fixture route with its independently signed classes.
+/// # Errors
+/// Refuses missing classes, route authority or publication conflicts.
+pub fn fixture_publication(
+    deployment: &cs_mail_storage_postgres::PostgresDeployment,
+    owner: ProtocolIdentity,
+    key: OperationalKeyRef,
+    secret: &[u8; 32],
+    at: CanonicalTime,
+) -> Result<(), StorageError> {
+    use cs_mail_accounts::directory::{DirectoryRevision, DiscoveryVisibility, PublicProfile};
+    use cs_mail_application::directory::{Command, DirectoryService, Response, SignedRequest};
+    let alias = fixture_inbox(deployment, owner, key, secret, at)?;
+    let record = deployment
+        .deployment_record()?
+        .ok_or(StorageError::SchemaNotReady)?;
+    let scope = cs_mail_security::RecipientSigningScope {
+        deployment_domain: record.record().deployment_domain,
+        provider: record.record().provider,
+    };
+    let classes = deployment
+        .request_classes(alias)?
+        .ok_or(StorageError::SchemaNotReady)?;
+    let classes = cs_mail_security::CommandSigner::from_secret_bytes(
+        cs_mail_protocol::ActorRef::Recipient(owner),
+        key,
+        secret,
+    )
+    .sign_request_classes(scope, classes)?;
+    let request = SignedRequest {
+        scope,
+        address: owner,
+        alias,
+        key,
+        operation: IdempotencyKey(u128::MAX - owner.0 - 200_000),
+        command: Command::Publish {
+            expected: DirectoryRevision(0),
+            profile: PublicProfile::new(
+                "Fixture recipient".into(),
+                "Explicit fixture publication".into(),
+                None,
+            )
+            .map_err(|_| StorageError::NumericRange)?,
+            mailbox: Some(
+                format!("fixture-{}@inbox.test", owner.0)
+                    .try_into()
+                    .map_err(|_| StorageError::NumericRange)?,
+            ),
+            visibility: DiscoveryVisibility::Unlisted,
+            classes: Box::new(classes),
+        },
+        signature: vec![],
+    }
+    .sign(secret)?;
+    match DirectoryService(deployment).handle(&request, scope, Some("inbox.test"), || at)? {
+        Response::Published(_) => Ok(()),
+        _ => Err(StorageError::InvalidStoredProtocolState),
     }
 }

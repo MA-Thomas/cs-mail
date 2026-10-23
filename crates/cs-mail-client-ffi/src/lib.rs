@@ -11,6 +11,7 @@ pub use addresses::*;
 
 #[derive(Debug, uniffi::Error)]
 pub enum ClientError {
+    InvalidAliasName,
     DraftChanged,
     CopyDeletionRefused,
     NotConfigured,
@@ -50,6 +51,7 @@ impl std::error::Error for ClientError {}
 impl From<core::Error> for ClientError {
     fn from(error: core::Error) -> Self {
         match error {
+            core::Error::InvalidAliasName => Self::InvalidAliasName,
             core::Error::CopyDeletionRefused => Self::CopyDeletionRefused,
             core::Error::DraftChanged => Self::DraftChanged,
             core::Error::ExternalPending => Self::ExternalPending,
@@ -760,6 +762,7 @@ pub struct DirectoryClass {
 }
 #[derive(uniffi::Record)]
 pub struct AddressSettings {
+    pub alias: String,
     pub covered: bool,
     pub address: String,
     pub mailbox: Option<String>,
@@ -778,6 +781,7 @@ pub struct AddressSettings {
 }
 #[derive(uniffi::Record)]
 pub struct Approach {
+    pub alias: String,
     pub request_entry: RequestEntry,
     pub address: String,
     pub mailbox: Option<String>,
@@ -791,6 +795,7 @@ pub struct Approach {
 impl From<cs_mail_application::directory::Approach> for Approach {
     fn from(value: cs_mail_application::directory::Approach) -> Self {
         Self {
+            alias: value.entry.alias().value().to_string(),
             request_entry: RequestEntry::Unverified,
             address: value.entry.address().0.to_string(),
             mailbox: value.entry.mailbox().map(|m| m.as_str().to_owned()),
@@ -830,16 +835,22 @@ pub struct DirectoryPage {
 impl AppleClient {
     /// # Errors
     /// Missing custody, server authority or directory configuration.
-    pub fn address_settings(&self) -> Result<AddressSettings, ClientError> {
-        let (address, link, pending) = self.0.directory_identity()?;
-        let settings = self.0.directory_settings()?;
+    pub fn address_settings(&self, alias: String) -> Result<AddressSettings, ClientError> {
+        let alias =
+            cs_mail_primitives::AliasId::new(alias.parse().map_err(|_| ClientError::InvalidData)?)
+                .map_err(|_| ClientError::InvalidData)?;
+        let route = self
+            .0
+            .aliases()?
+            .into_iter()
+            .find(|a| a.id() == alias)
+            .ok_or(ClientError::InvalidData)?;
+        let (address, link, pending) = self.0.directory_identity(alias)?;
+        let settings = self.0.directory_settings(alias)?;
         Ok(AddressSettings {
+            alias: alias.value().to_string(),
             covered: self.0.service_covered()?,
-            mailbox: settings
-                .entry
-                .as_ref()
-                .and_then(|e| e.mailbox())
-                .map(|m| m.as_str().to_owned()),
+            mailbox: Some(route.address().as_str().to_owned()),
             address,
             link,
             pending,
@@ -860,7 +871,7 @@ impl AppleClient {
                 .entry
                 .as_ref()
                 .and_then(|e| e.profile().image().map(|i| i.bytes().to_vec())),
-            listed: settings.entry.as_ref().is_none_or(|e| {
+            listed: settings.entry.as_ref().is_some_and(|e| {
                 e.visibility() == cs_mail_accounts::directory::DiscoveryVisibility::Listed
             }),
             classes: settings.classes.map_or_else(Vec::new, |c| {
@@ -898,6 +909,7 @@ impl AppleClient {
     #[allow(clippy::too_many_arguments)] // Foreign interface accepts the reviewed publication as owned fields.
     pub fn publish_address(
         &self,
+        alias: String,
         expected: u64,
         class_version: u64,
         display_name: String,
@@ -907,10 +919,20 @@ impl AppleClient {
         classes: Vec<RequestClassDraft>,
         mailbox: Option<String>,
     ) -> Result<(), ClientError> {
-        let mailbox = mailbox
-            .map(cs_mail_accounts::directory::MemberAddress::try_from)
-            .transpose()
-            .map_err(|_| ClientError::InvalidData)?;
+        let id =
+            cs_mail_primitives::AliasId::new(alias.parse().map_err(|_| ClientError::InvalidData)?)
+                .map_err(|_| ClientError::InvalidData)?;
+        let route = self
+            .0
+            .aliases()?
+            .into_iter()
+            .find(|a| a.id() == id)
+            .ok_or(ClientError::InvalidData)?;
+        let mailbox = Some(match mailbox {
+            Some(value) => cs_mail_accounts::directory::MemberAddress::try_from(value)
+                .map_err(|_| ClientError::InvalidData)?,
+            None => route.address().clone(),
+        });
         let image = image
             .map(cs_mail_accounts::directory::ProfileImage::try_from)
             .transpose()
@@ -933,6 +955,10 @@ impl AppleClient {
             .collect::<Result<Vec<_>, _>>()?;
         self.0
             .publish_directory(
+                cs_mail_primitives::AliasId::new(
+                    alias.parse().map_err(|_| ClientError::InvalidData)?,
+                )
+                .map_err(|_| ClientError::InvalidData)?,
                 cs_mail_accounts::directory::DirectoryRevision(expected),
                 class_version,
                 profile,
@@ -1290,6 +1316,7 @@ impl From<core::RequestStatus> for RequestStatus {
 }
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct RequestQuote {
+    pub alias: String,
     pub class_id: String,
     pub class_name: String,
     pub processing: u64,
@@ -1306,6 +1333,7 @@ pub struct RequestQuote {
 impl From<core::RequestQuote> for RequestQuote {
     fn from(value: core::RequestQuote) -> Self {
         Self {
+            alias: value.alias,
             class_id: value.class_id,
             class_name: value.class_name,
             processing: value.processing,
@@ -1349,6 +1377,7 @@ impl AppleClient {
         &self,
         other: String,
         class: String,
+        alias: String,
     ) -> Result<RequestProgress, ClientError> {
         let class = cs_mail_primitives::RequestClassId(
             class.parse().map_err(|_| ClientError::InvalidData)?,
@@ -1357,7 +1386,14 @@ impl AppleClient {
             return Err(ClientError::InvalidData);
         }
         self.0
-            .quote_request(&other, class)
+            .quote_request(
+                &other,
+                class,
+                cs_mail_primitives::AliasId::new(
+                    alias.parse().map_err(|_| ClientError::InvalidData)?,
+                )
+                .map_err(|_| ClientError::InvalidData)?,
+            )
             .map(Into::into)
             .map_err(Into::into)
     }

@@ -1,3 +1,34 @@
+## Unified-alias preservation — 21 October 2026
+
+`unified_aliases_upgrade.py`, `src/bin/unified-alias-device.rs` and
+`unified-alias-input.swift` implement the explicit local schema-43 to schema-44
+cutover. They are standalone maintenance tools, outside the app/server runtime.
+The backend accepts only the guarded local source scenario, copies the stopped
+source into a fresh database, archives original rows and signed evidence, rehearses
+rollback and verifies unchanged unrelated facts. Alias policy and publication
+mapping are supplied explicitly; historical public/private labels are not runtime
+permission evidence. Only terminal request history is accepted. Historical
+signatures are archived rather than invented or re-signed.
+
+The device helper requires the original signing requirement and account association,
+holds the device lock, backs up SQLite, decrypts and checks retained content, and
+atomically writes the new cache representation. The Swift input helper reads the
+existing credential without creating, replacing or deleting any Keychain entry.
+Rollback and exact retry were checked. Diagnostic attempts can read the credential
+again; no credential write is permitted. Current runtime readers accept only the
+new representation.
+
+The active owner copy is `target/unified-aliases-owner-b-20261021/`; original backend
+and device checkpoints are `target/required-inboxes-owner-20261019/` and
+`target/unified-aliases-device-20261021/`. All four requested addresses and the
+original account are retained. A subsequent checked purpose-label correction is
+archived in `cs_unified_alias_evidence`. Live activity and that correction mean the
+completed conversion's baseline verification must not be treated as an instruction
+to roll back or overwrite current records. Pair any rollback with the signed app
+and device store, after accounting for all post-cutover activity.
+
+Earlier converters and dated sections below document historical checkpoints.
+
 ## Required receiving assignments — 19 October 2026
 
 The current cutover is `inbox_assignments_upgrade.py` with the standalone

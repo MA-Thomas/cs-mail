@@ -18,6 +18,7 @@ pub enum NoticePurpose {
     },
     /// A verified sender has no permission to deliver to this member.
     RequestLink {
+        alias: cs_mail_primitives::AliasId,
         member: ProtocolIdentity,
         source: [u8; 32],
     },

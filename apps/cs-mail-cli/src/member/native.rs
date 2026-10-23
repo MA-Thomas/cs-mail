@@ -14,9 +14,9 @@ impl Member {
         &self,
         owner: cs_mail_primitives::ProtocolIdentity,
     ) -> Result<cs_mail_primitives::AliasId, String> {
-        let published: cs_mail_application::aliases::PublicReceivingAlias = serde_json::from_value(
+        let published: cs_mail_application::aliases::CorrespondenceAlias = serde_json::from_value(
             self.api
-                .get(&format!("v1/addresses/{}/receiving-alias", owner.0))
+                .get(&format!("v1/addresses/{}/correspondence-alias", owner.0))
                 .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;

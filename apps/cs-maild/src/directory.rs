@@ -3,7 +3,7 @@ use crate::http::{ApiError, AppState};
 use axum::{Json, extract::State, http::StatusCode};
 use cs_mail_accounts::directory::{DirectoryQuery, DirectoryReference};
 use cs_mail_application::directory::{DirectoryService, SignedRequest};
-use cs_mail_primitives::ProtocolIdentity;
+use cs_mail_primitives::AliasId;
 
 pub async fn command(
     State(state): State<AppState>,
@@ -60,43 +60,22 @@ pub async fn lookup(
             .map(Json)
             .ok_or_else(|| ApiError::from_status(StatusCode::NOT_FOUND, "unavailable"));
     }
-    // Numeric public persona references and existing shared request links are canonical.
-    // Also accept the deployment's generated member email address when configured.
-    let address = if let Ok(value) = input.reference.parse::<u128>() {
-        value
-    } else if let Some(value) = input.reference.strip_prefix("/r/") {
+    let value = input
+        .reference
+        .strip_prefix("/r/")
+        .unwrap_or(&input.reference);
+    let address = AliasId::new(
         value
             .parse()
-            .map_err(|_| ApiError::from_status(StatusCode::NOT_FOUND, "unavailable"))?
-    } else {
-        let mailbox = cs_mail_guests::GuestMailbox::parse(&input.reference)
-            .map_err(|_| ApiError::from_status(StatusCode::NOT_FOUND, "unavailable"))?;
-        let domain = state
-            .mail_domain
-            .as_ref()
-            .ok_or_else(|| ApiError::from_status(StatusCode::NOT_FOUND, "unavailable"))?;
-        let (local, host) = mailbox
-            .address()
-            .rsplit_once('@')
-            .map(|(l, h)| (l.to_owned(), h.to_owned()))
-            .ok_or_else(ApiError::unavailable)?;
-        if !host.eq_ignore_ascii_case(domain) {
-            return Err(ApiError::from_status(StatusCode::NOT_FOUND, "unavailable"));
-        }
-        let hex = local
-            .strip_prefix("member-")
-            .filter(|v| v.len() == 32)
-            .ok_or_else(|| ApiError::from_status(StatusCode::NOT_FOUND, "unavailable"))?;
-        u128::from_str_radix(hex, 16)
-            .map_err(|_| ApiError::from_status(StatusCode::NOT_FOUND, "unavailable"))?
-    };
+            .map_err(|_| ApiError::from_status(StatusCode::NOT_FOUND, "unavailable"))?,
+    )
+    .map_err(|_| ApiError::from_status(StatusCode::NOT_FOUND, "unavailable"))?;
     let value = state
         .blocking
         .run(move || {
-            state.deployment.directory_lookup(
-                DirectoryReference::Protocol(ProtocolIdentity(address)),
-                crate::http::now,
-            )
+            state
+                .deployment
+                .directory_lookup(DirectoryReference::Alias(address), crate::http::now)
         })
         .await
         .map_err(|_| ApiError::unavailable())??;

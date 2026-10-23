@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 pub enum AliasError {
     Invalid,
     Conflict,
-    PublicAliasExists,
+    AddressTaken,
     Retired,
     Restricted,
     Blocked,
@@ -26,9 +26,9 @@ impl std::fmt::Display for AliasError {
 }
 impl std::error::Error for AliasError {}
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum AliasKind {
-    Private,
-    Public,
+pub enum ReceivingPolicy {
+    Bonded,
+    AliasScoped,
 }
 
 /// Private context metadata. It is never an address, routing evidence or publication.
@@ -57,34 +57,21 @@ impl AliasDescription {
         &self.0
     }
 }
+/// Purpose and receiving policy are independent of address choice and publication.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub enum AliasUsage {
-    Private { description: AliasDescription },
-    Public,
+pub struct AliasConfiguration {
+    pub description: AliasDescription,
+    pub receiving: ReceivingPolicy,
 }
-impl AliasUsage {
-    pub const fn kind(&self) -> AliasKind {
-        match self {
-            Self::Private { .. } => AliasKind::Private,
-            Self::Public => AliasKind::Public,
-        }
-    }
-    pub const fn description(&self) -> Option<&AliasDescription> {
-        match self {
-            Self::Private { description } => Some(description),
-            Self::Public => None,
-        }
-    }
-}
-/// A complete protected owner snapshot owns the single-current-public-alias invariant.
+/// A complete protected owner snapshot owns the ownership invariant.
 pub struct AliasPortfolio<'a> {
     aliases: &'a BTreeMap<AliasId, Alias>,
     owner: ProtocolIdentity,
 }
 impl<'a> AliasPortfolio<'a> {
     /// # Errors
-    /// Refuses mixed ownership, substituted identifiers or multiple current public routes.
+    /// Refuses mixed ownership, substituted identifiers.
     pub fn new(
         owner: ProtocolIdentity,
         aliases: &'a BTreeMap<AliasId, Alias>,
@@ -93,28 +80,24 @@ impl<'a> AliasPortfolio<'a> {
             || aliases
                 .iter()
                 .any(|(id, a)| *id != a.id() || a.owner() != owner)
-            || aliases.values().filter(|a| a.is_current_public()).count() > 1
         {
             return Err(AliasError::Invalid);
         }
         Ok(Self { aliases, owner })
     }
-    pub fn current_public(&self) -> Option<&Alias> {
-        self.aliases.values().find(|a| a.is_current_public())
-    }
     /// # Errors
-    /// Refuses a second current public alias; private creation has no such limit.
+    /// Rejects a reused alias identity in this protected owner portfolio.
     pub fn create(
         &self,
         id: AliasId,
         address: MemberAddress,
-        usage: AliasUsage,
+        configuration: AliasConfiguration,
         at: CanonicalTime,
     ) -> Result<Alias, AliasError> {
-        if usage.kind() == AliasKind::Public && self.current_public().is_some() {
-            return Err(AliasError::PublicAliasExists);
+        if self.aliases.contains_key(&id) {
+            return Err(AliasError::Conflict);
         }
-        Alias::create(id, self.owner, address, usage, at)
+        Alias::create(id, self.owner, address, configuration, at)
     }
 }
 
@@ -236,7 +219,7 @@ struct AliasRecord {
     id: AliasId,
     owner: ProtocolIdentity,
     address: MemberAddress,
-    usage: AliasUsage,
+    configuration: AliasConfiguration,
     created_at: CanonicalTime,
     changed_at: CanonicalTime,
     revision: u64,
@@ -251,10 +234,11 @@ impl TryFrom<AliasRecord> for Alias {
             || value.permission.alias() != value.id
             || value.permission.owner() != value.owner
             || value.permission.changed_at() < value.created_at
-            || (value.usage.kind() == AliasKind::Public
-                && !matches!(
+            || (value.configuration.receiving == ReceivingPolicy::Bonded
+                && matches!(
                     value.permission.state(),
-                    crate::alias_permission::PermissionState::None
+                    crate::alias_permission::PermissionState::Broad(_)
+                        | crate::alias_permission::PermissionState::Restricted { .. }
                 ))
         {
             return Err(AliasError::Invalid);
@@ -356,14 +340,14 @@ impl Alias {
         id: AliasId,
         owner: ProtocolIdentity,
         address: MemberAddress,
-        usage: AliasUsage,
+        configuration: AliasConfiguration,
         at: CanonicalTime,
     ) -> Result<Self, AliasError> {
         AliasRecord {
             id,
             owner,
             address,
-            usage,
+            configuration,
             created_at: at,
             changed_at: at,
             revision: 0,
@@ -378,17 +362,17 @@ impl Alias {
     pub const fn owner(&self) -> ProtocolIdentity {
         self.0.owner
     }
-    pub const fn kind(&self) -> AliasKind {
-        self.0.usage.kind()
+    pub const fn policy(&self) -> ReceivingPolicy {
+        self.0.configuration.receiving
     }
-    pub const fn usage(&self) -> &AliasUsage {
-        &self.0.usage
+    pub const fn configuration(&self) -> &AliasConfiguration {
+        &self.0.configuration
     }
-    pub const fn description(&self) -> Option<&AliasDescription> {
-        self.0.usage.description()
+    pub const fn description(&self) -> &AliasDescription {
+        &self.0.configuration.description
     }
-    pub fn is_current_public(&self) -> bool {
-        self.kind() == AliasKind::Public
+    pub fn is_bonded_route(&self) -> bool {
+        self.policy() == ReceivingPolicy::Bonded
             && matches!(
                 self.lifecycle(),
                 AliasLifecycle::Active | AliasLifecycle::Restricted { .. }
@@ -500,7 +484,7 @@ impl Alias {
         if replacement.owner() != self.owner()
             || replacement.id() == self.id()
             || replacement.address() == self.address()
-            || replacement.usage() != self.usage()
+            || replacement.configuration() != self.configuration()
             || replacement.created_at() != at
             || replacement.revision() != 0
             || !matches!(replacement.lifecycle(), AliasLifecycle::Active)

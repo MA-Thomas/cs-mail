@@ -7,7 +7,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use cs_mail_primitives::{ProtocolIdentity, RequestClassId};
+use cs_mail_primitives::RequestClassId;
 use cs_mail_service::guests::{GuestGateway, Outbox};
 use cs_mail_service::{ServiceError, UnixMillisecondClock};
 use cs_mail_smtp_gateway::outbound::{DkimIdentity, OutboundMail, render_signed};
@@ -251,7 +251,15 @@ pub async fn offer(
     State(state): State<AppState>,
     Path(persona): Path<u128>,
 ) -> Result<Json<Value>, ApiError> {
-    json(&run(&state, move |g| g.offer(ProtocolIdentity(persona))).await?)
+    json(
+        &run(&state, move |g| {
+            g.offer(
+                cs_mail_primitives::AliasId::new(persona)
+                    .map_err(|_| ServiceError::RecipientNotReady)?,
+            )
+        })
+        .await?,
+    )
 }
 
 /// A guest's request. The message is encrypted on arrival and never logged.
@@ -274,7 +282,8 @@ pub async fn request(
     let answer = run(&state, move |g| {
         g.request(
             &body.session,
-            ProtocolIdentity(body.recipient),
+            cs_mail_primitives::AliasId::new(body.recipient)
+                .map_err(|_| ServiceError::RecipientNotReady)?,
             RequestClassId(body.class),
             &body.instrument,
             &body.message,
@@ -299,7 +308,8 @@ pub async fn submit(
     let view = run(&state, move |g| {
         g.submit(
             &body.session,
-            ProtocolIdentity(body.recipient),
+            cs_mail_primitives::AliasId::new(body.recipient)
+                .map_err(|_| ServiceError::RecipientNotReady)?,
             body.operation,
         )
     })
@@ -314,7 +324,8 @@ pub async fn cancel(
     let view = run(&state, move |g| {
         g.cancel(
             &body.session,
-            ProtocolIdentity(body.recipient),
+            cs_mail_primitives::AliasId::new(body.recipient)
+                .map_err(|_| ServiceError::RecipientNotReady)?,
             body.operation,
         )
     })
@@ -334,7 +345,11 @@ pub async fn status(
 ) -> Result<Json<Value>, ApiError> {
     json(
         &run(&state, move |g| {
-            g.status(&body.session, ProtocolIdentity(body.recipient))
+            g.status(
+                &body.session,
+                cs_mail_primitives::AliasId::new(body.recipient)
+                    .map_err(|_| ServiceError::RecipientNotReady)?,
+            )
         })
         .await?,
     )

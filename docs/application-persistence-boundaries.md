@@ -11,6 +11,26 @@ identity-change and encrypted-disclosure workflows into application-owned Rust.
 It replaces their earlier PostgreSQL business entry points. There are no forwarding
 methods, legacy façade aliases, or alternate implementations of the replaced workflows.
 
+## Alias-model revision — 21 October 2026
+
+The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) now separates
+receiving policy, chosen/generated address, listing, profile/classes and permission.
+Each bonded alias owns its profile and classes. The public/private discriminator
+and single-public uniqueness are removed. `AliasService` declares creation,
+permission, explicit correspondence preference and exact-retry effects; PostgreSQL
+commits them with the receipt. Alias-scoped creation includes its explicit broad
+grant in that same effect set. Bonded publication commits profile, classes and
+visibility together for the signed alias.
+
+`RequestDecision` declares receiving-scope changes with acceptance settlement and
+reverse reply-lane effects. It receives both directions' protected prior scopes;
+revisions remain monotonic. An explicit grant renewal retains the already named
+aliases; creation and unblock do not renew or expand scope. Request terms freeze
+both the receiving alias and native return route. `TransitionContext::request_permission`
+is separate from pricing and prevents permission elsewhere from waiving a bond.
+Policy switching and alias fees remain deferred. Offline preservation tools archive
+predecessor evidence; runtime readers accept only the current representation.
+
 ## Ownership
 
 | Owner | Responsibility |

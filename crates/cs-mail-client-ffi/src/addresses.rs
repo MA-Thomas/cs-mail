@@ -1,9 +1,14 @@
 //! Typed address management bridge; Rust application projections own the meanings.
 use super::{AppleClient, ClientError, core};
 #[derive(uniffi::Enum)]
-pub enum AddressKind {
-    Private,
-    Public,
+pub enum AddressPolicy {
+    Bonded,
+    AliasScoped,
+}
+#[derive(uniffi::Enum)]
+pub enum AddressChoice {
+    Generated { address: String },
+    Chosen { address: String },
 }
 #[derive(uniffi::Enum)]
 pub enum AddressState {
@@ -32,7 +37,7 @@ pub struct ManagedAddress {
     pub address: String,
     pub description: Option<String>,
     pub revision: u64,
-    pub kind: AddressKind,
+    pub policy: AddressPolicy,
     pub state: AddressState,
     pub can_restrict: bool,
     pub can_replace: bool,
@@ -90,31 +95,29 @@ impl From<core::AddressPermission> for AddressPermission {
 }
 #[derive(uniffi::Enum)]
 pub enum AddressMutation {
+    UseForCorrespondence {
+        id: String,
+        expected: u64,
+    },
     Permission {
         id: String,
         revision: u64,
         permission_revision: u64,
         action: PermissionMutation,
     },
-    CreatePrivate {
+    Create {
         description: String,
-    },
-    CreatePublic {
-        address: String,
+        address: AddressChoice,
+        policy: AddressPolicy,
     },
     Restrict {
         id: String,
         revision: u64,
     },
-    ReplacePublic {
+    Replace {
         id: String,
         revision: u64,
-        address: String,
-        until: u64,
-    },
-    ReplacePrivate {
-        id: String,
-        revision: u64,
+        address: AddressChoice,
         until: u64,
     },
     Retire {
@@ -124,8 +127,8 @@ pub enum AddressMutation {
 }
 #[derive(uniffi::Enum)]
 pub enum PendingAddressAction {
-    CreatePrivate { description: String },
-    CreatePublic { address: String },
+    Correspondence,
+    Create { description: String },
     Restrict { id: String },
     Replace { id: String },
     Retire { id: String },
@@ -140,6 +143,7 @@ pub struct PendingAddressUpdate {
 }
 #[derive(uniffi::Enum)]
 pub enum AddressUpdateResult {
+    AddressUnavailable,
     Applied { created_alias: Option<String> },
     Refused { explanation: String },
 }
@@ -153,14 +157,29 @@ pub struct AddressWorkspace {
     pub sender_alias_lanes: Vec<ReceivingLaneView>,
     pub addresses: Vec<ManagedAddress>,
     pub observed_at: u64,
-    pub current_public_alias: Option<String>,
 }
 
-impl From<core::AddressKind> for AddressKind {
-    fn from(v: core::AddressKind) -> Self {
+impl From<core::AddressPolicy> for AddressPolicy {
+    fn from(v: core::AddressPolicy) -> Self {
         match v {
-            core::AddressKind::Private => Self::Private,
-            core::AddressKind::Public => Self::Public,
+            core::AddressPolicy::Bonded => Self::Bonded,
+            core::AddressPolicy::AliasScoped => Self::AliasScoped,
+        }
+    }
+}
+impl From<AddressPolicy> for core::AddressPolicy {
+    fn from(v: AddressPolicy) -> Self {
+        match v {
+            AddressPolicy::Bonded => Self::Bonded,
+            AddressPolicy::AliasScoped => Self::AliasScoped,
+        }
+    }
+}
+impl From<AddressChoice> for core::AddressChoice {
+    fn from(v: AddressChoice) -> Self {
+        match v {
+            AddressChoice::Generated { address } => Self::Generated { address },
+            AddressChoice::Chosen { address } => Self::Chosen { address },
         }
     }
 }
@@ -193,7 +212,7 @@ impl From<core::ManagedAddress> for ManagedAddress {
             address: v.address,
             description: v.description,
             revision: v.revision,
-            kind: v.kind.into(),
+            policy: v.policy.into(),
             state: v.state.into(),
             can_restrict: v.can_restrict,
             can_replace: v.can_replace,
@@ -213,6 +232,9 @@ impl From<core::ManagedAddress> for ManagedAddress {
 impl From<AddressMutation> for core::AddressMutation {
     fn from(v: AddressMutation) -> Self {
         match v {
+            AddressMutation::UseForCorrespondence { id, expected } => {
+                Self::UseForCorrespondence { id, expected }
+            }
             AddressMutation::Permission {
                 id,
                 revision,
@@ -224,27 +246,25 @@ impl From<AddressMutation> for core::AddressMutation {
                 permission_revision,
                 action: action.into(),
             },
-            AddressMutation::CreatePrivate { description } => Self::CreatePrivate { description },
-            AddressMutation::CreatePublic { address } => Self::CreatePublic { address },
-            AddressMutation::ReplacePrivate {
-                id,
-                revision,
-                until,
-            } => Self::ReplacePrivate {
-                id,
-                revision,
-                until,
+            AddressMutation::Create {
+                description,
+                address,
+                policy,
+            } => Self::Create {
+                description,
+                address: address.into(),
+                policy: policy.into(),
             },
             AddressMutation::Restrict { id, revision } => Self::Restrict { id, revision },
-            AddressMutation::ReplacePublic {
+            AddressMutation::Replace {
                 id,
                 revision,
                 address,
                 until,
-            } => Self::ReplacePublic {
+            } => Self::Replace {
                 id,
                 revision,
-                address,
+                address: address.into(),
                 until,
             },
             AddressMutation::Retire { id, revision } => Self::Retire { id, revision },
@@ -254,10 +274,8 @@ impl From<AddressMutation> for core::AddressMutation {
 impl From<core::PendingAddressAction> for PendingAddressAction {
     fn from(v: core::PendingAddressAction) -> Self {
         match v {
-            core::PendingAddressAction::CreatePrivate { description } => {
-                Self::CreatePrivate { description }
-            }
-            core::PendingAddressAction::CreatePublic { address } => Self::CreatePublic { address },
+            core::PendingAddressAction::Correspondence => Self::Correspondence,
+            core::PendingAddressAction::Create { description } => Self::Create { description },
             core::PendingAddressAction::Restrict { id } => Self::Restrict { id },
             core::PendingAddressAction::Replace { id } => Self::Replace { id },
             core::PendingAddressAction::Retire { id } => Self::Retire { id },
@@ -272,13 +290,32 @@ impl From<core::PendingAddressAction> for PendingAddressAction {
 impl From<core::AddressUpdateResult> for AddressUpdateResult {
     fn from(v: core::AddressUpdateResult) -> Self {
         match v {
+            core::AddressUpdateResult::AddressUnavailable => Self::AddressUnavailable,
             core::AddressUpdateResult::Applied { created_alias } => Self::Applied { created_alias },
             core::AddressUpdateResult::Refused { explanation } => Self::Refused { explanation },
         }
     }
 }
+#[derive(uniffi::Record)]
+pub struct AliasSuggestion {
+    pub address: String,
+    pub fragments: Vec<String>,
+}
 #[uniffi::export]
 impl AppleClient {
+    /// # Errors
+    /// Invalid name, unavailable candidates, transport or verification failure.
+    pub fn suggest_alias(
+        &self,
+        name: String,
+        fragment: Option<String>,
+    ) -> Result<AliasSuggestion, ClientError> {
+        let value = self.0.suggest_alias(name, fragment)?;
+        Ok(AliasSuggestion {
+            address: value.address.as_str().to_owned(),
+            fragments: value.fragments.into_iter().map(Into::into).collect(),
+        })
+    }
     /// # Errors
     /// Protected owner inspection or transport failed.
     pub fn address_workspace(&self) -> Result<AddressWorkspace, ClientError> {
@@ -300,7 +337,6 @@ impl AppleClient {
                 .collect(),
             addresses: v.addresses.into_iter().map(Into::into).collect(),
             observed_at: v.observed_at,
-            current_public_alias: v.current_public_alias,
         })
     }
     /// # Errors

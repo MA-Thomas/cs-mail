@@ -252,7 +252,15 @@ impl From<RequestReplyAgreement> for Option<cs_mail_capabilities::reply::ReplyLa
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub enum RequestReturnRoute {
+    Native(cs_mail_primitives::AliasId),
+    GuestMailbox,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct RequestTerms {
+    pub return_route: RequestReturnRoute,
+    pub receiving_alias: cs_mail_primitives::AliasId,
     #[serde(deserialize_with = "explicit_reply_agreement")]
     pub reply_lane: RequestReplyAgreement,
     pub selected_class: crate::pricing::SelectedRequestClass,

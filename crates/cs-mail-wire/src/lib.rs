@@ -21,8 +21,8 @@ use cs_mail_protocol::{
 };
 use minicbor::{Decoder, Encoder};
 
-const SIGNING_DOMAIN: &str = "cs-mail/command/v6";
-const QUOTE_SIGNING_DOMAIN: &str = "cs-mail/request-terms/v6";
+const SIGNING_DOMAIN: &str = "cs-mail/command/v7";
+const QUOTE_SIGNING_DOMAIN: &str = "cs-mail/request-terms/v7";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandTarget {
@@ -257,11 +257,17 @@ fn encode_command(
                 .u64(expected_policy_version.0)?;
         }
         ProtocolCommand::IssueRequestTerms {
+            return_route,
+            alias,
             class_id,
             quote_id,
             declaration_digest,
         } => {
-            encoder.array(4)?.u8(0)?;
+            encoder.array(6)?.u8(0)?;
+            encoder.bytes(
+                &serde_json::to_vec(return_route).map_err(|_| WireError::InvalidIdentifier)?,
+            )?;
+            encode_id(encoder, alias.value())?;
             encode_id(encoder, class_id.0)?;
             encode_id(encoder, quote_id.0)?;
             encode_optional_declaration_digest(encoder, *declaration_digest)?;
@@ -388,7 +394,11 @@ fn decode_command(decoder: &mut Decoder<'_>) -> Result<ProtocolCommand, WireErro
             message_valid_until: MessageValidityUntil(CanonicalTime(decoder.u64()?)),
             expected_policy_version: Version(decoder.u64()?),
         }),
-        0 if length == 4 => Ok(ProtocolCommand::IssueRequestTerms {
+        0 if length == 6 => Ok(ProtocolCommand::IssueRequestTerms {
+            return_route: serde_json::from_slice(decoder.bytes()?)
+                .map_err(|_| WireError::InvalidIdentifier)?,
+            alias: cs_mail_primitives::AliasId::new(decode_id(decoder)?)
+                .map_err(|_| WireError::InvalidIdentifier)?,
             class_id: cs_mail_primitives::RequestClassId(decode_id(decoder)?),
             quote_id: QuoteId(decode_id(decoder)?),
             declaration_digest: decode_optional_declaration_digest(decoder)?,
@@ -461,7 +471,11 @@ fn encode_version_command(
 }
 
 fn encode_terms(encoder: &mut Encoder<Vec<u8>>, terms: &RequestTerms) -> Result<(), WireError> {
-    encoder.array(34)?;
+    encoder.array(36)?;
+    encoder.bytes(
+        &serde_json::to_vec(&terms.return_route).map_err(|_| WireError::InvalidIdentifier)?,
+    )?;
+    encode_id(encoder, terms.receiving_alias.value())?;
     encode_id(encoder, terms.selected_class.id().0)?;
     encoder.str(terms.selected_class.description())?;
     encode_id(encoder, terms.quote_id.0)?;
@@ -534,7 +548,11 @@ fn decode_financial_scope(
 }
 
 fn decode_terms(decoder: &mut Decoder<'_>) -> Result<RequestTerms, WireError> {
-    expect_array(decoder, 34)?;
+    expect_array(decoder, 36)?;
+    let return_route =
+        serde_json::from_slice(decoder.bytes()?).map_err(|_| WireError::InvalidIdentifier)?;
+    let receiving_alias = cs_mail_primitives::AliasId::new(decode_id(decoder)?)
+        .map_err(|_| WireError::InvalidIdentifier)?;
     let selected_class = cs_mail_protocol::pricing::SelectedRequestClass::new(
         cs_mail_primitives::RequestClassId(decode_id(decoder)?),
         decoder.str()?.into(),
@@ -549,6 +567,8 @@ fn decode_terms(decoder: &mut Decoder<'_>) -> Result<RequestTerms, WireError> {
     let (relationship_version, relationship_bytes) = decode_scoped_ref(decoder)?;
     let (subject_version, subject_bytes) = decode_scoped_ref(decoder)?;
     Ok(RequestTerms {
+        return_route,
+        receiving_alias,
         selected_class,
         pricing_policy_version,
         quote_id,
@@ -678,7 +698,7 @@ mod tests {
 
     fn envelope(command: ProtocolCommand) -> CanonicalCommandEnvelope {
         CanonicalCommandEnvelope {
-            wire_version: WireVersion(6),
+            wire_version: WireVersion(7),
             protocol_version: ProtocolVersion(2),
             deployment_domain: [9; 32],
             intended_provider: ProviderRef(5),
@@ -695,6 +715,10 @@ mod tests {
     fn every_command_variant_round_trips_canonically() {
         let commands = [
             ProtocolCommand::IssueRequestTerms {
+                return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                    cs_mail_primitives::AliasId::new(10).unwrap(),
+                ),
+                alias: cs_mail_primitives::AliasId::new(20).unwrap(),
                 class_id: cs_mail_primitives::RequestClassId(1),
                 quote_id: QuoteId(1),
                 declaration_digest: Some(MessageDeclarationDigest([1; 32])),
@@ -704,6 +728,10 @@ mod tests {
 
                 message_id: MessageId(4),
                 terms: Box::new(RequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(7).unwrap(),
+                    ),
+                    receiving_alias: cs_mail_primitives::AliasId::new(8).unwrap(),
                     reply_lane: cs_mail_protocol::RequestReplyAgreement::Agreed(
                         cs_mail_capabilities::reply::ReplyLaneTerms::new(
                             cs_mail_capabilities::reply::ReplyTermsRecord {

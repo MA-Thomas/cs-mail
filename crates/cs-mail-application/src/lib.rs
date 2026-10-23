@@ -125,7 +125,8 @@ struct StoreState {
     histories: BTreeMap<RequestHistoryRef, RequestHistory>,
     programs: BTreeMap<SettlementUnit, ProgramState>,
     request_pricing: Option<cs_mail_protocol::pricing::RequestPricingPolicy>,
-    request_classes: BTreeMap<ProtocolIdentity, cs_mail_protocol::pricing::RecipientRequestClasses>,
+    request_classes:
+        BTreeMap<cs_mail_primitives::AliasId, cs_mail_protocol::pricing::RecipientRequestClasses>,
 }
 #[derive(Clone)]
 struct ProgramState {
@@ -186,7 +187,7 @@ impl InMemoryStore {
                 ProtocolError::RequestClassOutsidePolicy,
             ));
         }
-        world.request_classes.insert(classes.recipient(), classes);
+        world.request_classes.insert(classes.alias(), classes);
         Ok(())
     }
     /// Registers a relationship without replacing existing history or program data.
@@ -307,6 +308,14 @@ impl InMemoryEngine {
             inner.ledger.view(),
         );
         let context = TransitionContext {
+            // This kernel fixture has one explicitly shared receiving scope.
+            request_permission: if inner.protocol.relationship.state
+                == cs_mail_protocol::RelationshipState::Accepted
+            {
+                cs_mail_protocol::RequestPermission::DirectContact
+            } else {
+                cs_mail_protocol::RequestPermission::BondedRequest
+            },
             request_delivery: cs_mail_protocol::RequestDeliveryRoute::GuestRelay,
             // This trusted kernel harness does not host ciphertext or provider policy.
             admission: Ok(()),
@@ -562,12 +571,18 @@ fn harness_price(
     relationship: cs_mail_protocol::RelationshipKey,
     command: &ProtocolCommand,
 ) -> cs_mail_protocol::pricing::QuotePricing {
-    let ProtocolCommand::IssueRequestTerms { class_id, .. } = command else {
+    let ProtocolCommand::IssueRequestTerms {
+        alias, class_id, ..
+    } = command
+    else {
         return cs_mail_protocol::pricing::QuotePricing::NotRequested;
     };
     cs_mail_protocol::pricing::QuotePricing::resolve(
         world.request_pricing.as_ref(),
-        world.request_classes.get(&relationship.recipient),
+        world
+            .request_classes
+            .get(alias)
+            .filter(|c| c.recipient() == relationship.recipient),
         *class_id,
     )
 }

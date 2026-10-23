@@ -3,8 +3,8 @@
 mod alias_views;
 mod aliases;
 pub use alias_views::{
-    AddressConversation, AddressKind, AddressMutation, AddressPermission, AddressState,
-    AddressUpdateResult, AddressWorkspace, ManagedAddress, PendingAddressAction,
+    AddressChoice, AddressConversation, AddressMutation, AddressPermission, AddressPolicy,
+    AddressState, AddressUpdateResult, AddressWorkspace, ManagedAddress, PendingAddressAction,
     PendingAddressUpdate, PermissionMutation, ReceivingLaneView,
 };
 mod correspondence;
@@ -75,6 +75,7 @@ const MAX_CACHE: usize = 64 * 1024 * 1024;
 /// Stable, redacted errors. Never include server bodies, credentials, or message text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
+    InvalidAliasName,
     DraftChanged,
     CopyDeletionRefused,
     NotConfigured,

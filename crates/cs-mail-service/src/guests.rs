@@ -61,6 +61,7 @@ pub trait InstrumentTokens: Send + Sync {
 /// windows, and whether the recipient can receive guests.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GuestOffer {
+    pub alias: cs_mail_primitives::AliasId,
     pub recipient: ProtocolIdentity,
     pub offer: cs_mail_protocol::pricing::SenderOffer,
     pub submission_window: Duration,
@@ -249,13 +250,23 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
     /// What a guest may choose when approaching `recipient`.
     /// # Errors
     /// An unknown recipient or a missing offer.
-    pub fn offer(&self, recipient: ProtocolIdentity) -> Result<GuestOffer, ServiceError> {
+    pub fn offer(&self, alias: cs_mail_primitives::AliasId) -> Result<GuestOffer, ServiceError> {
+        let publication = self
+            .members
+            .deployment()
+            .directory_lookup(
+                cs_mail_accounts::directory::DirectoryReference::Alias(alias),
+                || self.now(),
+            )?
+            .ok_or(ServiceError::RecipientNotReady)?;
+        let recipient = publication.entry.address();
         let policy = self.members.policy()?;
         let offer = self
             .members
-            .offer(recipient)?
+            .offer(alias)?
             .ok_or(ServiceError::RecipientNotReady)?;
         Ok(GuestOffer {
+            alias,
             recipient,
             offer,
             submission_window: policy.submission_window,
@@ -310,7 +321,7 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
     pub fn request(
         &self,
         token: &str,
-        recipient: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
         class: RequestClassId,
         instrument: &str,
         message: &str,
@@ -319,6 +330,15 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
         if message.is_empty() || message.len() > MAX_GUEST_MESSAGE {
             return Err(ServiceError::ContentTimeInvalid);
         }
+        let publication = self
+            .members
+            .deployment()
+            .directory_lookup(
+                cs_mail_accounts::directory::DirectoryReference::Alias(alias),
+                || self.now(),
+            )?
+            .ok_or(ServiceError::RecipientNotReady)?;
+        let recipient = publication.entry.address();
         let session = self.session(token)?;
         let now = self.now();
         let domain = self.domain();
@@ -333,6 +353,7 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
             .tokenize(instrument, session.mailbox())
             .map_err(|_| ServiceError::PaymentMethod)?;
         let input = cs_mail_guests::GuestRequestInput {
+            alias,
             mailbox: session.mailbox(),
             recipient,
             class,
@@ -382,6 +403,8 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
         let issued = Self::accepted(ingress.submit_guest(&self.command(
             &session,
             ProtocolCommand::IssueRequestTerms {
+                return_route: cs_mail_protocol::RequestReturnRoute::GuestMailbox,
+                alias,
                 class_id: class,
                 quote_id: QuoteId(step(operation, "quote")),
                 declaration_digest: Some(digest),
@@ -478,9 +501,10 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
     pub fn submit(
         &self,
         token: &str,
-        recipient: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
         operation: u128,
     ) -> Result<RelationshipView, ServiceError> {
+        let recipient = self.members.deployment().alias_owner(alias)?;
         let session = self.session(token)?;
         let identity = session
             .mailbox()
@@ -494,7 +518,7 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
         let request = view
             .requests
             .iter()
-            .find(|r| r.id == id)
+            .find(|r| r.id == id && r.terms.receiving_alias == alias)
             .ok_or(ServiceError::NoRequest)?;
         if request.money.map(|m| m.capture)
             != Some(cs_mail_finance::CaptureStatus::FundingFinalized)
@@ -529,8 +553,7 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
                 )?,
             )?,
         )?;
-        self.status(token, recipient)?
-            .ok_or(ServiceError::NoRequest)
+        self.status(token, alias)?.ok_or(ServiceError::NoRequest)
     }
     /// Cancels the guest's request before submission; the full charge is refunded.
     /// # Errors
@@ -538,9 +561,10 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
     pub fn cancel(
         &self,
         token: &str,
-        recipient: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
         operation: u128,
     ) -> Result<RelationshipView, ServiceError> {
+        let recipient = self.members.deployment().alias_owner(alias)?;
         let session = self.session(token)?;
         let identity = session
             .mailbox()
@@ -554,7 +578,7 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
         let request = view
             .requests
             .iter()
-            .find(|r| r.id == id)
+            .find(|r| r.id == id && r.terms.receiving_alias == alias)
             .ok_or(ServiceError::NoRequest)?;
         let ingress = self
             .members
@@ -569,8 +593,7 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
             },
             step(operation, "cancel"),
         )?)?)?;
-        self.status(token, recipient)?
-            .ok_or(ServiceError::NoRequest)
+        self.status(token, alias)?.ok_or(ServiceError::NoRequest)
     }
     /// The guest's own relationship with `recipient`.
     /// # Errors
@@ -578,13 +601,17 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
     pub fn status(
         &self,
         token: &str,
-        recipient: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
     ) -> Result<Option<RelationshipView>, ServiceError> {
+        let recipient = self.members.deployment().alias_owner(alias)?;
         let session = self.session(token)?;
         let identity = session
             .mailbox()
             .synthetic_protocol_identity(&self.domain());
-        let view = self.members.view(&self.address(identity, recipient)?)?;
+        let mut view = self.members.view(&self.address(identity, recipient)?)?;
+        if let Some(view) = &mut view {
+            view.requests.retain(|r| r.terms.receiving_alias == alias);
+        }
         session.authorize(self.now()).map_err(StorageError::from)?;
         Ok(view)
     }
@@ -600,7 +627,7 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
             let Some(notice) = deployment.begin_queued_notice(pending.id, || self.now())? else {
                 continue;
             };
-            let NoticePurpose::RequestLink { member, .. } = notice.purpose else {
+            let NoticePurpose::RequestLink { alias, .. } = notice.purpose else {
                 return Err(ServiceError::Outbox);
             };
             let mail = OutboundMail {
@@ -610,7 +637,7 @@ impl<C: CanonicalClock + Clone + 'static> GuestGateway<C> {
                 subject: "Request permission to contact this cs-mail member".into(),
                 body: format!(
                     "Your email was not delivered to the member. You can request permission here:\n{}\n\nMailbox verification and the displayed request terms apply.",
-                    self.request_site.member(member)
+                    self.request_site.alias(alias)
                 ),
                 message_id: notice_message_id(notice.id),
                 date: rfc5322_date(notice.created_at),

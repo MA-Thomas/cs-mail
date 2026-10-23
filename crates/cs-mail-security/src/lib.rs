@@ -342,7 +342,7 @@ impl CommandSigner {
         command: ProtocolCommand,
     ) -> Result<SignedCommandBytes, SecurityError> {
         let payload = encode_command_envelope(&CanonicalCommandEnvelope {
-            wire_version: WireVersion(6),
+            wire_version: WireVersion(7),
             protocol_version,
             deployment_domain: scope.deployment_domain,
             intended_provider: scope.intended_provider,
@@ -598,7 +598,7 @@ impl KeyRegistry {
         expected_scope: SigningScope,
     ) -> Result<VerifiedCommand, SecurityError> {
         let envelope = decode_command_envelope(&signed.payload)?;
-        if envelope.wire_version != WireVersion(6) {
+        if envelope.wire_version != WireVersion(7) {
             return Err(SecurityError::WireVersionMismatch);
         }
         if envelope.protocol_version != expected_protocol_version {

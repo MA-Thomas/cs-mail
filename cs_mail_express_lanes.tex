@@ -45,18 +45,22 @@ participants; they do not imply organizational C-SQD accounts. The
 
 \section{Two Forms of Express-Lane Permission}
 
-An alias is a receiving address; an express lane is separately granted permission.
-Private-alias creation grants no lane. The member may pair a healthcare alias with
-an \emph{alias-scoped express lane}, allowing authenticated new correspondents
-who receive the address, or an Amazon alias with a \emph{sender-scoped express
-lane} restricted to selected authenticated legacy-domain subjects. Possession of
-the latter address alone grants no permission. Grant scope names the receiving
-alias; it never expands implicitly to other aliases.
+Each alias has an explicitly selected receiving policy, independent of directory
+visibility and whether its address is chosen or generated. A bonded alias owns its
+profile and request classes. Senders without applicable permission must explicitly
+authorize a bonded request; selected sender-scoped grants or standing permission
+can allow direct contact through their named receiving scopes. Alternatively,
+the member explicitly grants an alias-scoped lane for new senders who obtain the
+address, subject to authentication, blocks and admission controls; that policy has
+no bonded fallback. Public/private is no longer an alias kind, and there is no
+single-current-public-alias limit. Address creation alone grants no lane.
 
-Private aliases have no bonded route. Unauthorized senders may approach through
-the public request route under its existing rules. Public-alias creation also
-grants no lane. Standing permission and invitations remain separate authorities.
-Neither address creation nor lane pairing changes existing request settlements.
+The 21 October implementation replaces the public/private contracts across Rust,
+PostgreSQL and the unified Apple application. The preservation-checked owner
+cutover retains the original account, credential association and requested
+addresses. Current validation evidence and limits are recorded in the
+\href{apps/cs-mail-apple/README.md}{Apple runbook}. The
+\href{DOMAIN_MODEL.md}{domain model} owns the remaining policy decisions.
 
 The remaining sections describe sender-scoped machinery, including existing
 legacy-domain matching. Its lifetime and renewal rules do not become implicit
@@ -70,19 +74,20 @@ The agreed participant/route model allows one protocol identity to control
 multiple aliases without automatically revealing their association. Blocking a
 sender protocol identity overrides permission across every recipient alias;
 external mailbox evidence does not establish equivalence between different
-mailboxes. Private aliases have no automatic expiry. Restrict stops new
+mailboxes. Aliases have no automatic expiry. Restrict stops new
 correspondents while preserving authorized existing conversations; Replace creates
 a new route with an explicit transition and no automatic transfer of unknown-sender
 admission; Retire stops all inbound delivery while preserving history. Retired
 addresses are never reassigned to another member. Suspicious or insufficiently
-authenticated private-alias mail is held for explicit review without ongoing
+authenticated alias mail is held for explicit review without ongoing
 permission or payment. SMTP envelope recipients and authenticated native targets
 establish route evidence, retained with each admitted message's permission basis.
 Restriction preserves exact admitted conversations; sender and standing grants
 default to one receiving alias, with explicit selection of several permitted.
 New aliases never expand grants. Transition, reply and held-message contracts
-remain open in the domain model. This design
-awaits implementation and does not change historical settlements.
+remain open in the domain model. Receiving policy, alias-bound publication and route evidence are implemented locally.
+Held-message review and privacy-preserving correspondent references remain deferred;
+historical settlements are unchanged.
 
 \section{A First Week with a New Bank Account}
 
@@ -97,7 +102,7 @@ urging you to confirm your login. The
 first three you wanted. The last is a phishing attempt. Every one of them arrived
 the same way: someone typed your address and pressed send.\par}
 
-On a public-facing \textit{cs-mail} alias, a stranger without other permission
+On a bonded \textit{cs-mail} alias, a stranger without other permission
 selects a published request class and authorizes one conditional charge. You can
 accept with standing permission or a lane, or
 reject. Permitted follow-ups share the charge and deadline. Your bank needs a

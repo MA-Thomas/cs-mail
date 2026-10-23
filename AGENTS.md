@@ -27,7 +27,7 @@ Working conventions:
   Read the current sections of [the Apple runbook](apps/cs-mail-apple/README.md)
   before operating the deployment; older dated sections are historical evidence.
 - Marcus's requested development protocol address is `mtallis62831@c-sqdmail.com`,
-  with public alias `marcus.thomas@c-sqdmail.com` and private aliases
+  with aliases `marcus.thomas@c-sqdmail.com`,
   `mat7771@c-sqdmail.com` (NYC-Hospital) and `m11a33t@c-sqdmail.com`
   (Brooklyn-Lab-Co). This explicitly replaces the earlier `marcus@csqd-mail.com`
   address by the owner's October 16 instruction; the original account is retained.

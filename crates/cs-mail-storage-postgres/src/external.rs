@@ -103,7 +103,11 @@ pub(super) fn request_link_still_allowed(
     record: &cs_mail_application::notices::NoticeRecord,
     clock: impl FnOnce() -> CanonicalTime,
 ) -> Result<(bool, CanonicalTime), StorageError> {
-    let cs_mail_application::notices::NoticePurpose::RequestLink { member, .. } = record.purpose
+    let cs_mail_application::notices::NoticePurpose::RequestLink {
+        member,
+        alias,
+        source,
+    } = record.purpose
     else {
         return Err(Error::Invalid.into());
     };
@@ -111,29 +115,67 @@ pub(super) fn request_link_still_allowed(
         .query_one("SELECT record FROM cs_deployment WHERE singleton", &[])?
         .try_get::<_, Json<DeploymentBootstrap>>(0)?
         .0;
+    let route = super::aliases::load_alias(tx, alias)?;
+    if route.owner() != member {
+        return Err(Error::Invalid.into());
+    }
     let account = member_account(tx, member)?;
     let control = authority(tx, account, member)?;
-    let r = mailbox_relationship(
-        tx,
-        record
-            .recipient
-            .synthetic_protocol_identity(&deployment.record().deployment_domain),
-        member,
-    )?;
+    let guest = record
+        .recipient
+        .synthetic_protocol_identity(&deployment.record().deployment_domain);
+    let relationship = mailbox_relationship(tx, guest, member)?;
+    let scope = super::aliases::sender_scope(tx, guest, member)?;
+    let lane = relationship
+        .as_ref()
+        .map(|(key, _)| ingress::load_current_lane(tx, key))
+        .transpose()?
+        .flatten();
     let billing = billing::identity_account(tx, member)?;
     let now = clock();
-    let route = cs_mail_application::correspondence::external::new_mail_route(
-        r.as_ref().map(|(_, r)| r.state),
-        control.control.allows_service() && billing.covers(now),
+    let mut id = [0; 16];
+    id.copy_from_slice(&source[..16]);
+    let declarations = cs_mail_primitives::MessageDeclarations {
+        purpose: cs_mail_primitives::DeclaredPurpose::Unspecified,
+        origin: cs_mail_primitives::OriginDeclaration {
+            mode: cs_mail_primitives::OriginMode::LegacyOrUnspecified,
+            authority: cs_mail_primitives::DeclarationAuthority::GuestSmtp(
+                deployment.record().provider,
+            ),
+        },
+        payload_schema: None,
+    };
+    let evidence = cs_mail_capabilities::LaneEvidence::GuestMailbox(guest);
+    let decision = cs_mail_application::aliases::admit(
+        &cs_mail_application::aliases::AdmissionContext {
+            alias: &route,
+            authentication: cs_mail_application::aliases::SenderAuthentication::Authenticated(
+                guest,
+            ),
+            relationship: relationship.as_ref().map(|(_, r)| r),
+            sender_scope: scope.as_ref(),
+            lane: lane.as_ref(),
+            declarations: &declarations,
+            lane_evidence: Some(&evidence),
+            domain_evidence: None,
+            covered: control.control.allows_service() && billing.covers(now),
+            review_required: false,
+            conversation: ConversationId::new(u128::from_be_bytes(id) | 1)?,
+        },
+        now,
     );
+    let has_publication = tx.query_opt("SELECT 1 FROM cs_address_directory d JOIN cs_recipient_request_classes c ON c.alias=d.alias WHERE d.alias=$1", &[&alias.value().to_string()])?.is_some();
     Ok((
-        matches!(
-            route,
-            Ok(cs_mail_application::correspondence::external::NewMailRoute::RequestLink)
-        ),
+        has_publication
+            && route.permission().changed_at() <= record.created_at
+            && matches!(
+                decision,
+                cs_mail_application::aliases::RouteDecision::Request
+            ),
         now,
     ))
 }
+
 fn member_key(
     tx: &mut Transaction<'_>,
     member: ProtocolIdentity,
@@ -414,19 +456,13 @@ impl IncomingRepository {
     /// unknown-sender content. The original text is not retained.
     /// # Errors
     /// Refuses automatic/bounce mail, changed retries, blocks and revoked access.
+    #[allow(clippy::too_many_lines)] // Protected admission, notice throttling and its durable intent commit together.
     pub fn queue_request_link(
         &self,
         mail: &cs_mail_smtp_gateway::incoming::VerifiedMail,
         secret: &[u8; 32],
     ) -> Result<(), StorageError> {
-        use cs_mail_application::{
-            correspondence::external::{NewMailRoute, new_mail_route},
-            notices::{NoticePurpose, NoticeRecord},
-        };
-        let cs_mail_smtp_gateway::incoming::MailDestination::Member(member) = mail.destination()
-        else {
-            return Err(Error::Unauthorized.into());
-        };
+        use cs_mail_application::notices::{NoticePurpose, NoticeRecord};
         if !mail.may_notify() || *secret == [0; 32] {
             return Err(Error::Unauthorized.into());
         }
@@ -438,6 +474,19 @@ impl IncomingRepository {
             .map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
         ingress::require_drained(&mut tx)?;
+        let alias = match mail.destination() {
+            cs_mail_smtp_gateway::incoming::MailDestination::Address(address) => {
+                alias_by_address(&mut tx, &address)?
+            }
+            cs_mail_smtp_gateway::incoming::MailDestination::Member(owner) => {
+                correspondence_inbox(&mut tx, owner)?
+            }
+            cs_mail_smtp_gateway::incoming::MailDestination::Conversation(_) => {
+                return Err(Error::Unauthorized.into());
+            }
+        };
+        let member = alias.owner();
+
         if let Some(row) = tx.query_opt(
             "SELECT content_digest FROM cs_request_link_receipts WHERE identity=$1",
             &[&identity.bytes().as_slice()],
@@ -460,12 +509,6 @@ impl IncomingRepository {
         }
         let account = member_account(&mut tx, member)?;
         let control = authority(&mut tx, account, member)?;
-        let r = mailbox_relationship(
-            &mut tx,
-            mail.mailbox()
-                .synthetic_protocol_identity(&self.scope.deployment_domain),
-            member,
-        )?;
         let billing = billing::identity_account(&mut tx, member)?;
         // One instruction notice per mailbox/member per day bounds amplification.
         let last = tx.query_one("SELECT max((record->>'created_at')::bigint) FROM cs_mail_notices WHERE record->>'recipient'=$1 AND record#>>'{purpose,RequestLink,member}'=$2",
@@ -477,18 +520,40 @@ impl IncomingRepository {
         {
             return Err(Error::Unauthorized.into());
         }
-        if new_mail_route(
-            r.as_ref().map(|(_, r)| r.state),
+        let decision = alias_mail_decision(
+            &mut tx,
+            &alias,
+            mail,
+            self.scope.provider,
+            &self.scope.deployment_domain,
+            secret,
             control.control.allows_service() && billing.covers(now),
-        )? != NewMailRoute::RequestLink
+            now,
+        )?;
+        if !matches!(
+            decision,
+            cs_mail_application::aliases::RouteDecision::Request
+        ) {
+            return Err(Error::Unauthorized.into());
+        }
+        let classes =
+            super::pricing::current_classes(&mut tx, alias.id(), super::pricing::RowLock::Share)?;
+        if classes.as_ref().is_none_or(|c| c.classes().is_empty())
+            || tx
+                .query_opt(
+                    "SELECT 1 FROM cs_address_directory WHERE alias=$1",
+                    &[&alias.id().value().to_string()],
+                )?
+                .is_none()
         {
-            return Err(StorageError::VersionConflict);
+            return Err(Error::Unavailable.into());
         }
         let record = NoticeRecord::new(
             &self.scope.deployment_domain,
             mail.mailbox().clone(),
             NoticePurpose::RequestLink {
                 member,
+                alias: alias.id(),
                 source: identity.bytes(),
             },
             now,
@@ -560,7 +625,7 @@ impl IncomingRepository {
             } else {
                 let alias = match authenticated.destination() {
                     cs_mail_smtp_gateway::incoming::MailDestination::Member(member) => {
-                        public_inbox(&mut tx, member)?
+                        correspondence_inbox(&mut tx, member)?
                     }
                     cs_mail_smtp_gateway::incoming::MailDestination::Address(address) => {
                         alias_by_address(&mut tx, &address)?
@@ -624,8 +689,19 @@ impl IncomingRepository {
         let billing = billing::identity_account(&mut tx, c.member())?;
         let now = self.accounts.clock.now();
         let receiving = match authenticated.destination() {
-            cs_mail_smtp_gateway::incoming::MailDestination::Address(address) => {
-                let alias = alias_by_address(&mut tx, &address)?;
+            destination @ (cs_mail_smtp_gateway::incoming::MailDestination::Address(_)
+            | cs_mail_smtp_gateway::incoming::MailDestination::Member(_)) => {
+                let alias = match destination {
+                    cs_mail_smtp_gateway::incoming::MailDestination::Address(address) => {
+                        alias_by_address(&mut tx, &address)?
+                    }
+                    cs_mail_smtp_gateway::incoming::MailDestination::Member(member) => {
+                        correspondence_inbox(&mut tx, member)?
+                    }
+                    cs_mail_smtp_gateway::incoming::MailDestination::Conversation(_) => {
+                        unreachable!()
+                    }
+                };
                 if alias.owner() != c.member() {
                     return Err(Error::Unauthorized.into());
                 }
@@ -654,7 +730,7 @@ impl IncomingRepository {
                     _ => return Err(Error::Unauthorized.into()),
                 }
             }
-            _ => None,
+            cs_mail_smtp_gateway::incoming::MailDestination::Conversation(_) => None,
         };
         let reply_alias = super::aliases::receiving_context(&mut tx, c.receiving_alias())?
             .filter(|a| a.owner() == c.member())
@@ -907,7 +983,7 @@ pub(super) fn paid_conversation_in(
     let conversation = ExternalConversation::inbound(
         id,
         *member,
-        public_inbox(tx, *member)?.id(),
+        request.terms.receiving_alias,
         notice.recipient.clone(),
         deployment.record().deployment_domain,
         &relationship,
@@ -940,100 +1016,27 @@ impl IncomingRepository {
         secret: &[u8; 32],
     ) -> Result<Option<IncomingPreparation>, StorageError> {
         use cs_mail_smtp_gateway::incoming::MailDestination;
-        if let MailDestination::Address(address) = mail.destination() {
-            return self.prepare_alias(mail, &address, secret).map(Some);
-        }
-        let MailDestination::Member(member) = mail.destination() else {
-            return self
+        match mail.destination() {
+            MailDestination::Address(address) => self.prepare_alias(mail, &address, secret),
+            MailDestination::Member(member) => {
+                let address = {
+                    let mut db = self
+                        .accounts
+                        .client
+                        .lock()
+                        .map_err(|_| StorageError::LockPoisoned)?;
+                    let mut tx = db.transaction()?;
+                    correspondence_inbox(&mut tx, member)?.address().clone()
+                };
+                self.prepare_alias(mail, &address, secret)
+            }
+            MailDestination::Conversation(_) => self
                 .prepare(
                     mail.conversation_id(&self.scope.deployment_domain, secret),
                     mail.mailbox(),
                 )
-                .map(Some);
-        };
-        let id = mail.conversation_id(&self.scope.deployment_domain, secret);
-        // A replay keeps its original route. The receive boundary returns the old
-        // receipt only for the same authenticated content.
-        {
-            let mut db = self
-                .accounts
-                .client
-                .lock()
-                .map_err(|_| StorageError::LockPoisoned)?;
-            let mut tx = db.transaction()?;
-            let (arrival, digest) = mail.fingerprints(&self.scope.deployment_domain, secret);
-            if let Some(row) = tx.query_opt(
-                "SELECT content_digest FROM cs_request_link_receipts WHERE identity=$1",
-                &[&arrival.bytes().as_slice()],
-            )? {
-                return if row.try_get::<_, Vec<u8>>(0)? == digest {
-                    Ok(None)
-                } else {
-                    Err(Error::Conflict.into())
-                };
-            }
-            if conversation(&mut tx, id)?.is_some() {
-                drop(tx);
-                drop(db);
-                return self.prepare(id, mail.mailbox()).map(Some);
-            }
+                .map(Some),
         }
-        let mut db = self
-            .accounts
-            .client
-            .lock()
-            .map_err(|_| StorageError::LockPoisoned)?;
-        let mut tx = db.transaction()?;
-        let account = member_account(&mut tx, member)?;
-        let control = authority(&mut tx, account, member)?;
-        let r = mailbox_relationship(
-            &mut tx,
-            mail.mailbox()
-                .synthetic_protocol_identity(&self.scope.deployment_domain),
-            member,
-        )?;
-        let billing = billing::identity_account(&mut tx, member)?;
-        let now = self.accounts.clock.now();
-        let route = cs_mail_application::correspondence::external::new_mail_route(
-            r.as_ref().map(|(_, r)| r.state),
-            control.control.allows_service() && billing.covers(now),
-        )?;
-        if route == cs_mail_application::correspondence::external::NewMailRoute::RequestLink {
-            return Ok(None);
-        }
-        let (key, r) = r.ok_or(Error::Unavailable)?;
-        let handle = tx
-            .query_one(
-                "SELECT binding FROM cs_guest_email_bindings WHERE aggregate_key=$1",
-                &[&key],
-            )?
-            .try_get::<_, Json<cs_mail_application::members::RelationshipHandle>>(0)?
-            .0;
-        let member_key = member_key(&mut tx, member)?;
-        let lane = tx
-            .query_opt(
-                "SELECT lane FROM cs_capability_lanes WHERE aggregate_key=$1",
-                &[&key],
-            )?
-            .map(|r| {
-                r.try_get::<_, Json<cs_mail_capabilities::SenderScopedLane>>(0)
-                    .map(|j| j.0.grant().id)
-            })
-            .transpose()?;
-        Ok(Some(IncomingPreparation {
-            conversation: ExternalConversation::inbound(
-                id,
-                member,
-                public_inbox(&mut tx, member)?.id(),
-                mail.mailbox().clone(),
-                self.scope.deployment_domain,
-                &r,
-                now,
-            )?,
-            member_key,
-            relationship: handle,
-            lane,
-        }))
     }
     /// Untrusted preparation only; admission rechecks all current authority at commit.
     /// # Errors
@@ -1172,7 +1175,7 @@ impl IncomingRepository {
         mail: &cs_mail_smtp_gateway::incoming::VerifiedMail,
         address: &cs_mail_accounts::directory::MemberAddress,
         secret: &[u8; 32],
-    ) -> Result<IncomingPreparation, StorageError> {
+    ) -> Result<Option<IncomingPreparation>, StorageError> {
         let mut db = self
             .accounts
             .client
@@ -1198,7 +1201,7 @@ impl IncomingRepository {
             }
             drop(tx);
             drop(db);
-            return self.prepare(id, mail.mailbox());
+            return self.prepare(id, mail.mailbox()).map(Some);
         }
         let account = member_account(&mut tx, owner)?;
         let control = authority(&mut tx, account, owner)?;
@@ -1222,27 +1225,31 @@ impl IncomingRepository {
             payload_schema: None,
         };
         let evidence = cs_mail_capabilities::LaneEvidence::GuestMailbox(guest);
-        if !matches!(
-            cs_mail_application::aliases::admit(
-                &cs_mail_application::aliases::AdmissionContext {
-                    alias: &alias,
-                    authentication:
-                        cs_mail_application::aliases::SenderAuthentication::Authenticated(guest),
-                    relationship: existing.as_ref().map(|(_, r)| r),
-                    sender_scope: scope.as_ref(),
-                    lane: lane.as_ref(),
-                    declarations: &declarations,
-                    lane_evidence: Some(&evidence),
-                    domain_evidence: Some(mail.authentication()),
-                    covered: control.control.allows_service() && billing.covers(now),
-                    review_required: false,
-                    conversation: id,
-                },
-                now
-            ),
-            cs_mail_application::aliases::RouteDecision::Authorize(_)
-        ) {
-            return Err(Error::Unauthorized.into());
+        let decision = cs_mail_application::aliases::admit(
+            &cs_mail_application::aliases::AdmissionContext {
+                alias: &alias,
+                authentication: cs_mail_application::aliases::SenderAuthentication::Authenticated(
+                    guest,
+                ),
+                relationship: existing.as_ref().map(|(_, r)| r),
+                sender_scope: scope.as_ref(),
+                lane: lane.as_ref(),
+                declarations: &declarations,
+                lane_evidence: Some(&evidence),
+                domain_evidence: Some(mail.authentication()),
+                covered: control.control.allows_service() && billing.covers(now),
+                review_required: false,
+                conversation: id,
+            },
+            now,
+        );
+        match decision {
+            cs_mail_application::aliases::RouteDecision::Authorize(_) => (),
+            cs_mail_application::aliases::RouteDecision::Request => {
+                tx.commit()?;
+                return Ok(None);
+            }
+            _ => return Err(Error::Unauthorized.into()),
         }
         let (key, relationship) = if let Some(existing) = existing {
             existing
@@ -1281,17 +1288,61 @@ impl IncomingRepository {
             lane: lane.map(|l| l.grant().id),
         };
         tx.commit()?;
-        Ok(result)
+        Ok(Some(result))
     }
 }
 
-fn public_inbox(
+fn correspondence_inbox(
     tx: &mut Transaction<'_>,
     owner: ProtocolIdentity,
 ) -> Result<cs_mail_accounts::aliases::Alias, StorageError> {
-    let aliases = super::aliases::owned_aliases(tx, owner)?;
-    cs_mail_accounts::aliases::AliasPortfolio::new(owner, &aliases)?
-        .current_public()
-        .cloned()
-        .ok_or_else(|| Error::Unavailable.into())
+    super::aliases::correspondence_alias(tx, owner)?.ok_or_else(|| Error::Unavailable.into())
+}
+
+#[allow(clippy::too_many_arguments)] // Explicit protected facts for the shared domain decision.
+fn alias_mail_decision(
+    tx: &mut Transaction<'_>,
+    alias: &cs_mail_accounts::aliases::Alias,
+    mail: &cs_mail_smtp_gateway::incoming::VerifiedMail,
+    provider: cs_mail_primitives::ProviderRef,
+    domain: &[u8; 32],
+    secret: &[u8; 32],
+    covered: bool,
+    now: CanonicalTime,
+) -> Result<cs_mail_application::aliases::RouteDecision, StorageError> {
+    let guest = mail.mailbox().synthetic_protocol_identity(domain);
+    let existing = mailbox_relationship(tx, guest, alias.owner())?;
+    let scope = super::aliases::sender_scope(tx, guest, alias.owner())?;
+    let lane = existing
+        .as_ref()
+        .map(|(key, _)| ingress::load_current_lane(tx, key))
+        .transpose()?
+        .flatten();
+    let declarations = cs_mail_primitives::MessageDeclarations {
+        purpose: cs_mail_primitives::DeclaredPurpose::Unspecified,
+        origin: cs_mail_primitives::OriginDeclaration {
+            mode: cs_mail_primitives::OriginMode::LegacyOrUnspecified,
+            authority: cs_mail_primitives::DeclarationAuthority::GuestSmtp(provider),
+        },
+        payload_schema: None,
+    };
+    let evidence = cs_mail_capabilities::LaneEvidence::GuestMailbox(guest);
+    Ok(cs_mail_application::aliases::admit(
+        &cs_mail_application::aliases::AdmissionContext {
+            alias,
+            authentication: cs_mail_application::aliases::SenderAuthentication::Authenticated(
+                guest,
+            ),
+            relationship: existing.as_ref().map(|(_, r)| r),
+            sender_scope: scope.as_ref(),
+            lane: lane.as_ref(),
+            declarations: &declarations,
+            lane_evidence: Some(&evidence),
+            domain_evidence: Some(mail.authentication()),
+            covered,
+            review_required: false,
+            conversation: mail.conversation_id(domain, secret),
+        },
+        now,
+    ))
 }

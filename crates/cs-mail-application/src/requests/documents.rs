@@ -329,7 +329,7 @@ impl MailboxDelivery {
     ) -> Result<Self, CorrespondenceError> {
         let doc = &input.document.document;
         let package = doc.package();
-        if input.receiving_alias.kind() != cs_mail_accounts::aliases::AliasKind::Public
+        if input.receiving_alias.id() != request.terms.receiving_alias
             || input.receiving_alias.id() != doc.alias()
             || input.receiving_alias.owner() != request.terms.recipient
             || input

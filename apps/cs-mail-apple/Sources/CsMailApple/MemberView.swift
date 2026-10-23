@@ -38,7 +38,8 @@ public struct MemberView: View {
         let other: SenderReference
         let name: String
         let requestClass: RequestClassID
-        var id: String { other.value + ":" + requestClass.value }
+        let alias: String
+        var id: String { other.value + ":" + alias + ":" + requestClass.value }
     }
     @State private var requestTarget: RequestTarget?
     @State private var reviewingRequest = false
@@ -163,7 +164,7 @@ public struct MemberView: View {
         } message: { Text("Your unpublished edits are kept while you stay on this page. Save publishes them; discarding leaves the saved page unchanged.") }
         .sheet(isPresented: $showingDrafts) { DraftsView(model: model) }
         .sheet(isPresented: $creatingAddress) {
-            AddressCreationSheet(model: model, cancel: { creatingAddress = false }, showAlias: { id in
+            AddressCreationSheet(model: model, draft: model.aliasCreationDraft, cancel: { creatingAddress = false }, showAlias: { id in
                 managedAddressDestination = .address(id)
                 creatingAddress = false
             })
@@ -181,7 +182,7 @@ public struct MemberView: View {
         }
         .sheet(item: $requestTarget) { target in
             VStack {
-                RequestComposerView(model: model, other: target.other, name: target.name, requestClass: target.requestClass, close: { requestTarget = nil })
+                RequestComposerView(model: model, other: target.other, name: target.name, requestClass: target.requestClass, receivingAlias: target.alias, close: { requestTarget = nil })
             }
         }
         .sheet(isPresented: $reviewingRequest) {
@@ -420,6 +421,11 @@ public struct MemberView: View {
                     .toolbar(removing: .sidebarToggle)
                     #endif
                     .anchorPreference(key: ColumnBLightingBounds.self, value: .bounds) { $0 }
+                    // Preserve the agreed eight-point bottom gutter.
+                    .padding(.bottom, 8)
+                    .background(alignment: .bottom) {
+                        EditorialStyle.canvas(scheme).frame(height: 8)
+                    }
             } detail: {
                 workspaceDetail(inbox)
             }
@@ -430,7 +436,16 @@ public struct MemberView: View {
                         // Include the native sidebar's toolbar cap, leaving its eight-point gutter.
                         let top = min(bounds.minY, 8)
                         let panel = CGRect(x: bounds.minX, y: top, width: bounds.width, height: bounds.maxY - top)
-                        EditorialCoveLight(area: destination.area, bounds: panel)
+                        ZStack {
+                            #if os(macOS)
+                            // Cover the native divider before drawing the custom rim and spill.
+                            // Its resize hit region and column geometry remain native.
+                            EditorialStyle.canvas(scheme)
+                                .frame(width: 2, height: geometry.size.height)
+                                .position(x: bounds.maxX, y: geometry.size.height / 2)
+                            #endif
+                            EditorialCoveLight(area: destination.area, bounds: panel)
+                        }
                     }
                 }
                 .ignoresSafeArea(.container, edges: .top)
@@ -440,11 +455,7 @@ public struct MemberView: View {
     }
     /// Every recorded origin has a visible return action, including mailbox and unavailable-detail screens.
     private func workspaceDetail(_ inbox: Inbox) -> some View {
-        Group {
-            if showsCorrespondence { correspondence(inbox: inbox) }
-            else { destinationContent.disabled(model.busy) }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        VStack(spacing: 0) {
             if !returnStack.isEmpty && !detailHasReturn {
                 HStack {
                     Button(backTitle, systemImage: "chevron.left", action: goBack)
@@ -452,6 +463,14 @@ public struct MemberView: View {
                     Spacer()
                 }.padding(.horizontal, 24).padding(.vertical, 12)
             }
+            Group {
+                if showsCorrespondence { correspondence(inbox: inbox) }
+                else { destinationContent.disabled(model.busy) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The return action occupies its own layout space. Scrolling and
+            // overscroll stay within the detail viewport rather than under it.
+            .clipped()
         }
     }
     private var detailHasReturn: Bool {
@@ -545,6 +564,7 @@ public struct MemberView: View {
         }
         .foregroundStyle(EditorialStyle.ink(scheme))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
         .background {
             EditorialGlassSurface()
                 .ignoresSafeArea(.container, edges: .top)
@@ -590,7 +610,7 @@ public struct MemberView: View {
             DirectoryView(model: model.directory, member: model,
                 openCorrespondence: { sender in openContact(sender, area: .relationships) },
                 reviewRequest: { approach, requestClass in
-                    requestTarget = RequestTarget(other: SenderReference(approach.address), name: approach.displayName, requestClass: requestClass)
+                    requestTarget = RequestTarget(other: SenderReference(approach.address), name: approach.displayName, requestClass: requestClass, alias: approach.alias)
                 })
         case .addresses:
             ManagedAddressView(model: model, destination: $managedAddressDestination, create: { creatingAddress = true })
@@ -664,7 +684,7 @@ public struct MemberView: View {
                     guard let id = model.selectedInbox else { return }
                     pushNavigation {
                         model.chooseSender(nil); laneDirection = .incoming; laneReceivingAlias = id
-                        if model.aliasInboxes.first(where: { $0.address.id == id })?.address.kind == .private {
+                        if model.aliasInboxes.first(where: { $0.address.id == id })?.address.permission != .unpaired {
                             sidebarTarget = .aliasLane(id)
                         } else { sidebarTarget = nil }
                         destination = .lanes

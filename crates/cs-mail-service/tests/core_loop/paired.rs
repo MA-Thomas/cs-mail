@@ -68,6 +68,7 @@ impl Loop {
                         self.gateway.scope(),
                         cs_mail_protocol::pricing::RecipientRequestClasses::new(
                             ALICE,
+                            cs_mail_primitives::AliasId::new((ALICE).0).unwrap(),
                             1,
                             vec![
                                 cs_mail_protocol::pricing::RequestClass::new(
@@ -129,6 +130,10 @@ impl Loop {
         self.reverse_submit(&self.reverse_command(
             operation,
             ProtocolCommand::IssueRequestTerms {
+                return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                    cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
+                ),
+                alias: cs_mail_primitives::AliasId::new(ALICE.0).unwrap(),
                 class_id: RequestClassId(1),
                 quote_id: QuoteId(operation),
                 declaration_digest: None,

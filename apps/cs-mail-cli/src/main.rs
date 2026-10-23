@@ -50,6 +50,8 @@ enum Command {
     /// Publish a member-authored profile through the same atomic address workflow as the app.
     PublishDirectory {
         #[arg(long)]
+        alias: u128,
+        #[arg(long)]
         name: String,
         #[arg(long)]
         description: String,
@@ -155,6 +157,8 @@ enum Command {
     },
     /// Publish this member's request classes, replacing earlier ones.
     PublishClasses {
+        #[arg(long)]
+        alias: u128,
         /// Publication version; each publication must be newer than the last.
         #[arg(long)]
         version: u64,
@@ -318,15 +322,18 @@ fn run(cli: Cli) -> Result<(), String> {
                 Command::PublishContentKey => member.publish_content_key(),
                 Command::Account => member.account(),
                 Command::PublishDirectory {
+                    alias,
                     name,
                     description,
                     mailbox,
                     unlisted,
-                } => member.publish_directory(name, description, mailbox, unlisted),
+                } => member.publish_directory(alias, name, description, mailbox, unlisted),
                 Command::Purchase { offer } => member.purchase(offer),
-                Command::PublishClasses { version, classes } => {
-                    member.publish_classes(version, &classes)
-                }
+                Command::PublishClasses {
+                    alias,
+                    version,
+                    classes,
+                } => member.publish_classes(alias, version, &classes),
                 Command::Offer { to } => member.offer(to),
                 Command::Request {
                     to,

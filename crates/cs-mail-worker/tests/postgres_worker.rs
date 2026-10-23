@@ -221,6 +221,10 @@ fn reserve(engine: &PostgresEngine, id: u128) {
         .execute(
             sender(
                 ProtocolCommand::IssueRequestTerms {
+                    return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                        cs_mail_primitives::AliasId::new(SENDER.0).unwrap(),
+                    ),
+                    alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
                     class_id: cs_mail_primitives::RequestClassId(1),
                     quote_id: QuoteId(id),
                     declaration_digest: None,
@@ -630,6 +634,10 @@ fn blocked_inbox_still_signs_its_quote_and_recovers_across_relationship_workers(
         .unwrap();
     let issue = sender(
         ProtocolCommand::IssueRequestTerms {
+            return_route: cs_mail_protocol::RequestReturnRoute::Native(
+                cs_mail_primitives::AliasId::new(SENDER.0).unwrap(),
+            ),
+            alias: cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
             class_id: cs_mail_primitives::RequestClassId(1),
             quote_id: QuoteId(9),
             declaration_digest: None,

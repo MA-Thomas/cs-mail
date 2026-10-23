@@ -168,7 +168,7 @@ impl<C: CanonicalClock> IngressService<C> {
     /// Returns storage errors.
     pub fn request_offer(
         &self,
-        recipient: cs_mail_primitives::ProtocolIdentity,
+        recipient: cs_mail_primitives::AliasId,
     ) -> Result<Option<cs_mail_protocol::pricing::SenderOffer>, ServiceError> {
         let deployment = self.engine.deployment();
         Ok(
@@ -186,7 +186,7 @@ impl<C: CanonicalClock> IngressService<C> {
     /// Returns storage errors.
     pub fn request_class_status(
         &self,
-        recipient: cs_mail_primitives::ProtocolIdentity,
+        recipient: cs_mail_primitives::AliasId,
     ) -> Result<Vec<(cs_mail_protocol::pricing::RequestClass, bool)>, ServiceError> {
         let deployment = self.engine.deployment();
         Ok(

@@ -39,6 +39,34 @@ impl MemberClient {
             .map_err(|_| Error::InvalidData)?;
         Ok(acknowledgement.receipt.outcome)
     }
+    /// A signed, non-reserving suggestion. It creates no alias or durable mutation.
+    /// # Errors
+    /// Refuses invalid name input, unavailable candidates, transport or substituted evidence.
+    pub fn suggest_alias(
+        &self,
+        name: String,
+        fragment: Option<String>,
+    ) -> Result<cs_mail_application::aliases::generation::AddressSuggestion, Error> {
+        let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
+        let keys = storage::secrets(self.store.as_ref())?;
+        let state = storage::open(self.store.as_ref(), &keys)?;
+        if state.setup.is_some() {
+            return Err(Error::SetupPending);
+        }
+        let command = Command::Suggest {
+            name: name.try_into().map_err(|_| Error::InvalidAliasName)?,
+            fragment: fragment
+                .map(TryInto::try_into)
+                .transpose()
+                .map_err(|_| Error::InvalidAliasName)?,
+        };
+        let request = Self::signed_alias_command(&state, &keys, command)?;
+        match self.alias_call(&state, &request)? {
+            Outcome::Suggested(value) => Ok(value),
+            Outcome::Refused(_) => Err(Error::AddressUnavailable),
+            _ => Err(Error::InvalidData),
+        }
+    }
     /// # Errors
     /// Rejects unavailable authority or substituted acknowledgement evidence.
     pub fn aliases(&self) -> Result<Vec<Alias>, Error> {
@@ -62,7 +90,7 @@ impl MemberClient {
     /// All mutations are journaled before I/O; uncertain results retain the same signature.
     pub fn change_alias(&self, command: Command) -> Result<Outcome, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
-        if matches!(command, Command::Inspect) {
+        if matches!(command, Command::Inspect | Command::Suggest { .. }) {
             return Err(Error::InvalidData);
         }
         let keys = storage::secrets(self.store.as_ref())?;
@@ -112,7 +140,7 @@ impl MemberClient {
             return Ok(None);
         };
         let outcome = self.alias_call(state, request)?;
-        if matches!(outcome, Outcome::Aliases(_)) {
+        if matches!(outcome, Outcome::Aliases(_) | Outcome::Suggested(_)) {
             return Err(Error::InvalidData);
         }
         state.setup = None;

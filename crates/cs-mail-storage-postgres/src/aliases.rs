@@ -125,9 +125,12 @@ impl Store for PostgresAccountRepository {
         )?
         .into_parts();
         if let Some(effects) = effects {
-            let (aliases, scope, recorded) = effects.into_parts();
+            let (aliases, scope, correspondence, recorded) = effects.into_parts();
             for alias in aliases {
                 if tx.execute("INSERT INTO cs_alias_routes(id,owner,address,record) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET record=EXCLUDED.record WHERE cs_alias_routes.owner=EXCLUDED.owner AND cs_alias_routes.address=EXCLUDED.address", &[&alias.id().value().to_string(),&owner,&alias.address().as_str(),&Json(&alias)])? != 1 { return Err(StorageError::VersionConflict); }
+            }
+            if let Some(id) = correspondence {
+                tx.execute("INSERT INTO cs_correspondence_routes(owner,alias,revision) VALUES($1,$2,1) ON CONFLICT(owner) DO UPDATE SET alias=EXCLUDED.alias, revision=cs_correspondence_routes.revision+1", &[&owner, &id.value().to_string()])?;
             }
             if let Some(scope) = scope {
                 tx.execute("INSERT INTO cs_alias_sender_scopes(recipient,sender,record) VALUES($1,$2,$3) ON CONFLICT(recipient,sender) DO UPDATE SET record=EXCLUDED.record", &[&owner,&scope.sender().0.to_string(),&Json(scope)])?;
@@ -296,19 +299,17 @@ pub(super) fn persist_paired_lane(
 }
 
 impl super::PostgresDeployment {
-    /// Only the current public alias is published. Private aliases remain owner-only.
+    /// An explicitly selected correspondence entrance; it grants no permission.
     /// # Errors
-    /// Refuses inconsistent stored ownership and unavailable storage.
-    pub fn public_receiving_alias(
+    /// Refuses inconsistent stored ownership or unavailable storage.
+    pub fn correspondence_alias(
         &self,
         owner: ProtocolIdentity,
-    ) -> Result<Option<cs_mail_application::aliases::PublicReceivingAlias>, StorageError> {
+    ) -> Result<Option<cs_mail_application::aliases::CorrespondenceAlias>, StorageError> {
         let mut db = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
-        let aliases = owned_aliases(&mut tx, owner)?;
-        let portfolio = cs_mail_accounts::aliases::AliasPortfolio::new(owner, &aliases)?;
-        let result = portfolio.current_public().map(|alias| {
-            cs_mail_application::aliases::PublicReceivingAlias {
+        let result = correspondence_alias(&mut tx, owner)?.map(|alias| {
+            cs_mail_application::aliases::CorrespondenceAlias {
                 owner,
                 id: alias.id(),
                 address: alias.address().clone(),
@@ -316,5 +317,67 @@ impl super::PostgresDeployment {
         });
         tx.commit()?;
         Ok(result)
+    }
+}
+
+/// Load exactly the explicitly named route under transaction protection.
+pub(super) fn load_alias(tx: &mut Transaction<'_>, id: AliasId) -> Result<Alias, StorageError> {
+    let row = tx
+        .query_opt(
+            "SELECT owner,address,record FROM cs_alias_routes WHERE id=$1 FOR UPDATE",
+            &[&id.value().to_string()],
+        )?
+        .ok_or(AliasError::Permission)?;
+    let alias = row.try_get::<_, Json<Alias>>(2)?.0;
+    if alias.id() != id
+        || row.try_get::<_, String>(0)? != alias.owner().0.to_string()
+        || row.try_get::<_, String>(1)? != alias.address().as_str()
+    {
+        return Err(AliasError::Invalid.into());
+    }
+    Ok(alias)
+}
+
+pub(super) fn correspondence_alias(
+    tx: &mut Transaction<'_>,
+    owner: ProtocolIdentity,
+) -> Result<Option<Alias>, StorageError> {
+    let Some(row) = tx.query_opt(
+        "SELECT alias FROM cs_correspondence_routes WHERE owner=$1",
+        &[&owner.0.to_string()],
+    )?
+    else {
+        return Ok(None);
+    };
+    let id = AliasId::new(
+        row.try_get::<_, String>(0)?
+            .parse()
+            .map_err(|_| AliasError::Invalid)?,
+    )
+    .map_err(|_| AliasError::Invalid)?;
+    let alias = load_alias(tx, id)?;
+    if alias.owner() != owner {
+        return Err(AliasError::Invalid.into());
+    }
+    if !matches!(
+        alias.lifecycle(),
+        cs_mail_accounts::aliases::AliasLifecycle::Active
+            | cs_mail_accounts::aliases::AliasLifecycle::Restricted { .. }
+    ) {
+        return Ok(None);
+    }
+    Ok(Some(alias))
+}
+
+impl super::PostgresDeployment {
+    /// Resolve the exact known route for settlement/status, including after retirement.
+    /// # Errors
+    /// Missing route or corrupt ownership.
+    pub fn alias_owner(&self, id: AliasId) -> Result<ProtocolIdentity, StorageError> {
+        let mut db = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut tx = db.transaction()?;
+        let owner = load_alias(&mut tx, id)?.owner();
+        tx.commit()?;
+        Ok(owner)
     }
 }

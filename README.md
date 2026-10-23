@@ -7,16 +7,19 @@ published request class and authorizes one conditional charge. The recipient can
 accept with standing permission or an express lane, or reject; that decision
 determines both future permission and settlement.
 
-An alias is a receiving address; an express lane is separately granted permission.
-Creating a private alias grants no lane. A member can pair a healthcare alias with
-an **alias-scoped express lane**, allowing authenticated new correspondents given
-that address, or an Amazon alias with a **sender-scoped express lane**, admitting
-only its explicitly authorized subjects, such as selected authenticated domains.
-Private aliases have no bonded route; unauthorized senders may use the public
-approach route under its existing request rules. CS-MAIL owns this infrastructure;
-Phoros Account will later consume it through a linked account. Alias management
-and receiving inboxes are implemented locally; explicit lane pairing uses signed Rust commands and native controls. See the [domain model](DOMAIN_MODEL.md#aliases-and-express-lane-scope)
-and [boundary record](docs/application-persistence-boundaries.md#alias-foundation--14-october-2026).
+An alias has a selected receiving policy, independent of directory visibility and
+whether its address is chosen or generated. A **bonded alias** has its own profile
+and request classes: senders without permission explicitly authorize a bonded
+request, while sender-scoped grants or standing permission can allow direct contact.
+Alternatively, the member grants an **alias-scoped express lane**, allowing new
+senders who obtain the address to correspond subject to authentication and blocks.
+That policy has no bonded fallback. Public/private is no longer a product alias kind.
+
+The 21 October 2026 implementation uses this unified model across Rust, storage
+and Swift. The [Apple runbook](apps/cs-mail-apple/README.md) records validation and
+owner-install status.
+A nominal alias fee associated with the annual utility cycle is a future direction;
+pricing and billing semantics remain open. See the [domain model](DOMAIN_MODEL.md#aliases-and-express-lane-scope).
 
 External email is now available under Communications in the unified app: authored-text
 composition, conversation-scoped disclosure consent, authenticated pending replies,
@@ -52,7 +55,7 @@ The documents have distinct roles:
 7. **[Express-lane implementation plan](cs_mail_express_lanes_implementation.tex)** —
    lane authority, lifetime, domain authentication, and product integration.
 8. **[Aliases and express lanes](cs_mail_aliases_and_express_lanes.tex)** — the
-   motivation, private and public address journeys, two permission scopes,
+   motivation, bonded and alias-scoped address journeys, two permission scopes,
    CS-MAIL ownership and future Phoros use. This is agreed design, not an
    implementation record.
 
@@ -63,14 +66,15 @@ The build-plan source also retains its 11 October pause checkpoint.
 only as a superseded design-history document and must not be used as a current
 protocol reference.
 
-**Development state (13 October 2026):** one unified macOS application reopens
-`marcus@csqd-mail.com` and includes the current navigation, portal perimeter feedback
-and implemented native member workflows. There is no demo mode or separate assessment
-app. Fictional participants supply persisted canonical requests, standing permission,
-express lanes and unavailable approaches through the local backend. Identity evidence,
-banking and payments remain simulated. The original Keychain entry and account
-association are preserved. See the [app state and restart runbook](apps/cs-mail-apple/README.md)
-for validation and limits. No production service is launched.
+**Development state (21 October 2026):** one unified local macOS application has
+native requests/replies, alias management and inboxes, drafts, retained-copy offline
+search and conversation find. Your original account and credential association are
+preserved; requested addresses are recorded in AGENTS.md. The revised alias model is implemented across Rust, PostgreSQL and Swift, with
+explicit policy selection and per-alias publication and receiving scopes. Identity
+evidence, banking and payments remain simulated; no production service is launched. See the
+[Apple runbook](apps/cs-mail-apple/README.md) for evidence and limits.
+
+
 
 **Direction when development resumes (agreed 8 October 2026):** build and validate the SwiftUI member
 application locally, shipping macOS first and designing for iPhone/iPad from the
@@ -137,24 +141,27 @@ funding does not delay or reclassify it. Closure preserves the route for
 outstanding distributions and refunds. The earlier utility charge and later
 distribution remain separate transactions; distribution does not revoke coverage.
 
-The current owner app is `target/apple/CsMail-continuity-20261012.app`, backed by
-the preservation-checked copy of the original account. It keeps the original
-Keychain credential and `marcus@csqd-mail.com`, all sample contacts and message
-text, and a separate current-format cache. The older app/database/cache remain
-the rollback checkpoint. See the [current owner-app runbook](apps/cs-mail-apple/README.md#current-owner-app--12-october-2026).
+The canonical owner app is `target/apple/CsMail-continuity-20261012.app`, backed by
+the preservation-checked original account. The current owner address is
+`mtallis62831@c-sqdmail.com`; all requested aliases and the original Keychain
+association must survive the revised-model cutover. See the
+[current Apple runbook](apps/cs-mail-apple/README.md).
 
-The alias design separates participant identity from address routing. Blocking a
-sender applies across all recipient aliases. Private aliases have no automatic
-expiry and offer **Restrict, Replace, Retire** controls. Suspicious or insufficiently
-authenticated private-alias mail is held for explicit review. SMTP envelope routing
-and authenticated native targets establish the receiving alias. These are agreed
-requirements awaiting implementation; see the [domain rules](DOMAIN_MODEL.md#aliases-and-express-lane-scope).
+Aliases preserve receiving history and offer Restrict, Replace and Retire controls.
+Blocks apply across receiving aliases. Policy switching, detailed reply addressing
+and held-mail release remain open design work. Historical validation describes the
+earlier contracts and does not establish the new model.
+
 ## Core vocabulary
 
-- **Private alias**: a receiving address for a chosen context; creation grants no
-  lane. The member explicitly pairs permission with it. It has no bonded route.
-- **Public-facing alias**: an address for public approaches; creation grants no
-  lane, and the existing permission and bonded-request rules apply.
+- **Bonded alias**: an alias whose default approach policy requires a bonded
+  request from senders without applicable permission; it owns its profile/classes.
+- **Alias allowing contact through its address**: an alias explicitly paired with
+  an alias-scoped lane, allowing new senders subject to admission controls.
+- **Directory visibility**: whether the alias is discoverable in browse/search;
+  independent of its receiving policy. An unlisted bonded alias works by exact
+  address or direct link.
+
 - **Alias-scoped express lane**: permission through one receiving alias, including
   for previously unknown senders, subject to route policy and identity-level blocks.
 - **Sender-scoped express lane**: an explicit grant to a particular sender subject
@@ -162,7 +169,7 @@ requirements awaiting implementation; see the [domain rules](DOMAIN_MODEL.md#ali
   identities, external mailboxes and recipient-selected authenticated legacy domains.
 
 - **Private principal**: the provider-local subject used for control, recovery,
-  and request continuity across public aliases.
+  and request continuity across aliases.
 - **Protocol identity**: a communication participant whom another participant can
   accept or block; may control multiple aliases without publishing their association.
 - **Alias**: a separately identified communication route controlled by a protocol

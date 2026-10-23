@@ -46,7 +46,13 @@ pub enum CounterpartyContext {
     Member { opposite: Option<DirectionSnapshot> },
 }
 
+pub struct ReceivingScopes {
+    pub forward: Option<crate::aliases::SenderRouteScope>,
+    pub opposite: Option<crate::aliases::SenderRouteScope>,
+}
+
 pub struct RequestDecision {
+    scopes: Vec<crate::aliases::SenderScopeRecord>,
     delivery: Option<documents::MailboxDelivery>,
     forward: TransitionManifest,
     opposite: Option<DirectionEffect>,
@@ -58,8 +64,9 @@ impl RequestDecision {
         TransitionManifest,
         Option<DirectionEffect>,
         Option<documents::MailboxDelivery>,
+        Vec<crate::aliases::SenderScopeRecord>,
     ) {
-        (self.forward, self.opposite, self.delivery)
+        (self.forward, self.opposite, self.delivery, self.scopes)
     }
 
     /// # Errors
@@ -70,6 +77,7 @@ impl RequestDecision {
         command: &KernelCommand<ProtocolCommand>,
         context: &TransitionContext,
         document: Option<&documents::SubmissionDocument>,
+        receiving: &ReceivingScopes,
     ) -> Result<Self, ProtocolError> {
         let opposite = match counterparty {
             CounterpartyContext::Guest => None,
@@ -149,34 +157,70 @@ impl RequestDecision {
             }
             _ => None,
         };
-        let mut result =
-            Self::coordinate_acceptance(snapshot, counterparty, forward, opposite, &context)?;
+        let mut result = Self::coordinate_acceptance(
+            snapshot,
+            counterparty,
+            forward,
+            opposite,
+            &context,
+            None,
+            receiving,
+        )?;
         result.delivery = delivery;
         Ok(result)
     }
     /// Coordinates the same reverse consequence for standing and express-lane acceptance.
     /// # Errors
     /// Refuses missing opposite ownership, withdrawn agreement or invalid lane terms.
+    #[allow(clippy::too_many_arguments)] // Both protected directions and their prior receiving scopes form one acceptance.
     pub fn coordinate_acceptance(
         before: &SettlementSnapshot,
         counterparty: &CounterpartyContext,
         forward: TransitionManifest,
         mut opposite: Option<DirectionEffect>,
         context: &TransitionContext,
+        forward_lane: Option<(cs_mail_primitives::LaneId, cs_mail_primitives::Version)>,
+        receiving: &ReceivingScopes,
     ) -> Result<Self, ProtocolError> {
         let accepted = forward.next_state.requests.values().find(|request| {
-            request.terms.reply_lane.agreed().is_some()
-                && matches!(
-                    request.lifecycle,
+            matches!(
+                request.lifecycle,
+                cs_mail_protocol::RequestLifecycle::Accepted { .. }
+            ) && before.state.requests.get(&request.id).is_some_and(|old| {
+                !matches!(
+                    old.lifecycle,
                     cs_mail_protocol::RequestLifecycle::Accepted { .. }
                 )
-                && before.state.requests.get(&request.id).is_some_and(|old| {
-                    !matches!(
-                        old.lifecycle,
-                        cs_mail_protocol::RequestLifecycle::Accepted { .. }
-                    )
-                })
+            })
         });
+        let mut scopes = Vec::new();
+        if let Some(request) = accepted {
+            scopes.push(default_scope(
+                &forward.next_state.relationship,
+                cs_mail_capabilities::routes::ReceivingScope::one(request.terms.receiving_alias),
+                context.now,
+                forward_lane,
+                receiving.forward.as_ref(),
+            )?);
+        }
+        // An explicit new recipient grant renews the previously selected entrances.
+        // Revocation/unblocking and alias creation never reach this branch.
+        if accepted.is_none()
+            && (forward_lane.is_some()
+                || (forward.next_state.relationship.state
+                    == cs_mail_protocol::RelationshipState::Accepted
+                    && before.state.relationship.state
+                        != cs_mail_protocol::RelationshipState::Accepted))
+            && let Some(previous) = receiving.forward.as_ref()
+        {
+            scopes.push(default_scope(
+                &forward.next_state.relationship,
+                previous.receiving().clone(),
+                context.now,
+                forward_lane,
+                Some(previous),
+            )?);
+        }
         if let (
             CounterpartyContext::Member {
                 opposite: direction,
@@ -208,6 +252,17 @@ impl RequestDecision {
             if let Some(plan) = plan {
                 let (lane, manifest) = plan.into_effects();
                 let schedules = vec![lane.schedule_change()];
+                if let cs_mail_protocol::RequestReturnRoute::Native(alias) =
+                    request.terms.return_route
+                {
+                    scopes.push(default_scope(
+                        &manifest.next_state.relationship,
+                        cs_mail_capabilities::routes::ReceivingScope::one(alias),
+                        context.now,
+                        Some((lane.grant().id, lane.grant().version)),
+                        receiving.opposite.as_ref(),
+                    )?);
+                }
                 opposite = Some(DirectionEffect {
                     relationship: direction.snapshot.state.relationship.key.reference,
                     manifest,
@@ -218,6 +273,7 @@ impl RequestDecision {
             }
         }
         Ok(Self {
+            scopes,
             forward,
             opposite,
             delivery: None,
@@ -263,5 +319,28 @@ fn mailbox_delivery(
         )
     } else {
         None
+    })
+}
+
+fn default_scope(
+    r: &cs_mail_protocol::Relationship,
+    receiving: cs_mail_capabilities::routes::ReceivingScope,
+    at: cs_mail_primitives::CanonicalTime,
+    lane: Option<(cs_mail_primitives::LaneId, cs_mail_primitives::Version)>,
+    previous: Option<&crate::aliases::SenderRouteScope>,
+) -> Result<crate::aliases::SenderScopeRecord, ProtocolError> {
+    if previous.is_some_and(|p| p.sender() != r.key.sender || p.recipient() != r.key.recipient) {
+        return Err(ProtocolError::InvalidState);
+    }
+    Ok(crate::aliases::SenderScopeRecord {
+        revision: previous
+            .map_or(Some(1), |p| p.revision().checked_add(1))
+            .ok_or(ProtocolError::ArithmeticOverflow)?,
+        established_at: at,
+        sender: r.key.sender,
+        recipient: r.key.recipient,
+        relationship_version: r.version,
+        receiving,
+        lane,
     })
 }

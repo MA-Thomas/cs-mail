@@ -138,6 +138,38 @@ impl External {
             .gateway
             .grant_lane(&SignedLaneGrant { grant, signature }, IdempotencyKey(id))
             .unwrap();
+        let deployment = self.base.gateway.deployment();
+        let account = deployment
+            .accounts(move || at)
+            .persona_account(BOB)
+            .unwrap();
+        let command = cs_mail_application::aliases::SignedCommand {
+            scope: self.base.gateway.scope(),
+            product: "cs-mail/test".into(),
+            account,
+            owner: BOB,
+            key: BOB_KEY,
+            operation: IdempotencyKey(id + 100_000),
+            command: cs_mail_application::aliases::Command::ScopeSender {
+                sender: p.relationship.sender,
+                expected: 0,
+                receiving: cs_mail_capabilities::routes::ReceivingScope::one(
+                    cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
+                ),
+            },
+            signature: vec![],
+        }
+        .sign(&[21; 32])
+        .unwrap();
+        let result = self
+            .base
+            .gateway
+            .alias_command(&command, "inbox.test")
+            .unwrap();
+        assert!(matches!(
+            result.receipt.outcome,
+            cs_mail_application::aliases::Outcome::Scoped(_)
+        ));
     }
     fn reply(
         &self,

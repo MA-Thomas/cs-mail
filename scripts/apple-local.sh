@@ -52,8 +52,12 @@ step "build (simulation feature)"
 cargo build -q --manifest-path "$root/Cargo.toml" --features simulation -p cs-maild -p cs-mail-admin
 cargo build -q --manifest-path "$root/Cargo.toml" -p cs-mail-test-support --example browser-identity
 bin="$root/target/debug"
-maild="$bin/cs-maild"
-admin="$bin/cs-mail-admin"
+# Pin this running environment's simulator executables. Other local builds may
+# replace target/debug binaries with a different feature set during validation.
+cp "$bin/cs-maild" "$work/cs-maild"
+cp "$bin/cs-mail-admin" "$work/cs-mail-admin"
+maild="$work/cs-maild"
+admin="$work/cs-mail-admin"
 echo "work directory: $work"
 
 step "validate durable environment identity"

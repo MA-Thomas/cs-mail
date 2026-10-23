@@ -17,10 +17,16 @@ fn operation() -> Result<IdempotencyKey, Error> {
     Ok(IdempotencyKey(u128::from_be_bytes(bytes) | 1))
 }
 impl MemberClient {
-    fn inspect_directory(&self, state: &State, keys: &storage::Secrets) -> Result<Settings, Error> {
+    fn inspect_directory(
+        &self,
+        state: &State,
+        keys: &storage::Secrets,
+        alias: cs_mail_primitives::AliasId,
+    ) -> Result<Settings, Error> {
         let request = SignedRequest {
             scope: state.profile.deployment.scope,
             address: state.profile.persona,
+            alias,
             key: state.profile.recipient_key,
             operation: operation()?,
             command: Command::Inspect { at: (self.clock)() },
@@ -39,11 +45,11 @@ impl MemberClient {
         if settings
             .entry
             .as_ref()
-            .is_some_and(|e| e.address() != state.profile.persona)
+            .is_some_and(|e| e.address() != state.profile.persona || e.alias() != alias)
             || settings
                 .classes
                 .as_ref()
-                .is_some_and(|c| c.recipient() != state.profile.persona)
+                .is_some_and(|c| c.recipient() != state.profile.persona || c.alias() != alias)
         {
             return Err(Error::InvalidData);
         }
@@ -51,19 +57,24 @@ impl MemberClient {
     }
     /// # Errors
     /// Current address authority, custody or network is unavailable.
-    pub fn directory_settings(&self) -> Result<Settings, Error> {
+    pub fn directory_settings(
+        &self,
+        alias: cs_mail_primitives::AliasId,
+    ) -> Result<Settings, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let mut state = storage::open(self.store.as_ref(), &keys)?;
         self.finish_device_setup(&mut state, &keys)?;
-        self.inspect_directory(&state, &keys)
+        self.inspect_directory(&state, &keys, alias)
     }
     /// Atomic profile/class publication. A reviewed revision cannot silently overwrite
     /// a later edit. Interrupted edits retain their signed bytes through reopening.
     /// # Errors
     /// Conflicting setup, stale revision, invalid classes, unavailable custody or network.
+    #[allow(clippy::too_many_arguments)] // These independently authored publication fields are signed together.
     pub fn publish_directory(
         &self,
+        alias: cs_mail_primitives::AliasId,
         expected: DirectoryRevision,
         class_version: u64,
         profile: PublicProfile,
@@ -77,8 +88,9 @@ impl MemberClient {
         if state.setup.is_some() {
             return Err(Error::SetupPending);
         }
-        let classes = RecipientRequestClasses::new(state.profile.persona, class_version, classes)
-            .map_err(|_| Error::InvalidData)?;
+        let classes =
+            RecipientRequestClasses::new(state.profile.persona, alias, class_version, classes)
+                .map_err(|_| Error::InvalidData)?;
         let classes = CommandSigner::from_secret_bytes(
             ActorRef::Recipient(state.profile.persona),
             state.profile.recipient_key,
@@ -89,6 +101,7 @@ impl MemberClient {
         let signed = SignedRequest {
             scope: state.profile.deployment.scope,
             address: state.profile.persona,
+            alias,
             key: state.profile.recipient_key,
             operation: operation()?,
             command: Command::Publish {
@@ -186,13 +199,16 @@ impl MemberClient {
     }
     /// # Errors
     /// Local state or key custody unavailable.
-    pub fn directory_identity(&self) -> Result<(String, String, bool), Error> {
+    pub fn directory_identity(
+        &self,
+        alias: cs_mail_primitives::AliasId,
+    ) -> Result<(String, String, bool), Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let state = storage::open(self.store.as_ref(), &keys)?;
         Ok((
             state.profile.persona.0.to_string(),
-            format!("{}/r/{}", state.profile.server, state.profile.persona.0),
+            format!("{}/r/{}", state.profile.server, alias.value()),
             matches!(state.setup, Some(Setup::Directory(_))),
         ))
     }

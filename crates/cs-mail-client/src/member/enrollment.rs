@@ -344,7 +344,7 @@ impl MemberClient {
                 let ids = EnrollmentIdentifiers::for_operation(&keys.operation);
                 let mut state = State {
                     external: None,
-                    format: 4,
+                    format: 5,
                     mailbox: super::correspondence::Mailbox::default(),
                     sending: None,
                     profile: Profile {

@@ -29,9 +29,12 @@ another product's enrollment policy.
 
 ## Communication aliases
 
-The [alias design](../DOMAIN_MODEL.md#aliases-and-express-lane-scope), agreed
-2026-10-14 and awaiting implementation, adds private and public-facing
-communication addresses within the existing CS-MAIL account. It creates no
+The [alias design](../DOMAIN_MODEL.md#aliases-and-express-lane-scope), revised
+21 October 2026, defines multiple communication addresses within the existing
+CS-MAIL account. Public/private is superseded by independent receiving policy,
+visibility, address choice and permission. Each bonded alias has its own profile
+and request classes. Rust and Swift now implement this receiving/publication model.
+It creates no
 additional product login or shared subject. CS-MAIL owns the infrastructure;
 Phoros will later consume it through a linked account. That linkage does not
 itself authorize correspondence access, decryption or healthcare-record disclosure.
@@ -39,7 +42,8 @@ A protocol identity identifies a communication participant; an alias is a route
 controlled by that participant. One protocol identity may control multiple aliases.
 Alias creation, replacement and retirement preserve the protocol identity, account,
 login and subject. This replaces the product's address-equals-protocol-identity
-assumption; the current implementation has not made that cutover.
+assumption in creation, publication, request terms and receiving evidence.
+Privacy-preserving correspondent references remain separate design work.
 
 Blocking a sender protocol identity applies across all receiving aliases of the
 recipient. External mailbox evidence does not establish person-level equivalence

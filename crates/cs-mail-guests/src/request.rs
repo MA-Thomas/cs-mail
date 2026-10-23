@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 pub struct GuestRequestInput<'a> {
+    pub alias: cs_mail_primitives::AliasId,
     pub mailbox: &'a GuestMailbox,
     pub recipient: ProtocolIdentity,
     pub class: RequestClassId,
@@ -28,13 +29,14 @@ impl GuestRequestInput<'_> {
         operation: IdempotencyKey,
     ) -> GuestRequestFingerprint {
         let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC accepts a 32-byte key");
-        mac.update(b"cs-mail/guest-request-input/v1");
+        mac.update(b"cs-mail/guest-request-input/v2");
         mac.update(deployment);
         mac.update(&operation.0.to_be_bytes());
         let mailbox = self.mailbox.address();
         mac.update(&(mailbox.len() as u64).to_be_bytes());
         mac.update(mailbox.as_bytes());
         mac.update(&self.recipient.0.to_be_bytes());
+        mac.update(&self.alias.value().to_be_bytes());
         mac.update(&self.class.0.to_be_bytes());
         mac.update(self.payment_token);
         mac.update(self.message.as_bytes());

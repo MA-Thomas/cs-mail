@@ -7,21 +7,18 @@
 > menu and relationship-scoped publication. Lane acceptance and settlement are
 > unchanged.
 
-**Alias-model clarification (14 October 2026; implementation pending).** The
-[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope) now separates
-protocol identities from alias routes. Each bonded-route alias retains independent
-classes, authorized by the controlling identity and bound to the named alias.
-Shared control must not let a publication for one alias change another. The
-per-persona keys and storage described below record the current implementation,
-which requires an explicit cutover; they no longer define future alias ownership.
-
-Each protocol identity publishes up to eight of its own classes. No purpose
+**Alias-bound implementation (21 October 2026).** Each bonded alias owns its
+profile and up to eight request classes, independently of directory visibility or
+address generation. Signed commands, current-version pointers and history keys bind
+the selected alias; a signature for one alias cannot authorize an edit to another.
+Public/private is no longer an alias kind. No purpose
 taxonomy is hard-coded. A class has a stable `RequestClassId`, user-authored
 description, and collateral within the operator's cs-mail-wide bounds; the
 operator sets `C`.
 
 `RequestPricingService::publish_classes` authenticates a `SignedRequestClasses`
-publication against a key of that address, under protected current authority.
+publication against a key of the controlling protocol identity, with the selected
+alias ownership checked under protected current authority.
 `RecipientRequestClasses` checks the count and unique IDs, including on
 deserialization. The PostgreSQL adapter keeps the signed publication and commits
 the address's current classes. `IngressService::request_offer` exposes the
@@ -29,7 +26,7 @@ currently quotable classes to senders and `request_class_status` shows the
 recipient which are quotable. Publishing an empty collection creates no implicit
 class.
 
-`IssueRequestTerms` includes `class_id`. Issued `RequestTerms` retain a checked
+`IssueRequestTerms` names the receiving alias, frozen return route and `class_id`. Issued `RequestTerms` retain a checked
 `SelectedRequestClass` and the fixed collateral. Class changes cannot rewrite
 issued terms, partition principal-recipient history, or provide extra pending
 request slots. There is no misclassification penalty beyond ordinary rejection.
@@ -64,12 +61,13 @@ reuse policy remains separately enforced.
 
 ## Cutover and verification
 
-Migration 0018 adds checked class-publication storage and protocol record format
-9. Authenticated command and quote signing domains advance to v6. Superseded
-scalar-preference APIs are removed. This is a coordinated release requiring a
-fresh database or a separately reviewed migration of existing records; it does
-not invent descriptions for old preferences or reinterpret old signed requests.
-Only the isolated test database was migrated during development.
+Migration 0044 keys current and historical class publications by alias, removes
+the single-public-alias constraint and records an explicit correspondence route.
+Class signatures use domain v3; directory commands use v2; request commands and
+terms use v7. Superseded readers and creation APIs are removed. Populated schema-43
+records require the explicit preservation-checked owner upgrade; it archives
+original signed evidence without inventing signatures. The active local owner
+copy and validation evidence are recorded in the Apple runbook.
 
 The existing pricing, lane and correspondence scenarios are extended to challenge
 publication limits and tampering, immutable quote contents, preparation and late

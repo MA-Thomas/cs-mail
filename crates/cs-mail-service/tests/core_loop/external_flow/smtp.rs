@@ -674,7 +674,7 @@ fn member_address_lane_admission_is_atomic_and_member_reply_requires_consent() {
 #[allow(clippy::too_many_lines)] // One causal experiment: rollback, exact replay, then retirement.
 #[allow(clippy::too_many_lines)] // One lifecycle experiment challenges exact authority, rollback and replay together.
 fn challenge_alias_receiving(f: &External, host: &Host) {
-    use cs_mail_application::aliases::{AliasCreation, Command, Outcome, SignedCommand};
+    use cs_mail_application::aliases::{Command, Outcome, SignedCommand};
     let account = f
         .base
         .gateway
@@ -705,8 +705,17 @@ fn challenge_alias_receiving(f: &External, host: &Host) {
                 9800,
                 Command::Create {
                     id: alias,
-                    creation: AliasCreation::Private {
-                        description: "Care team".to_owned().try_into().unwrap(),
+                    creation: cs_mail_application::aliases::AliasCreation {
+                        address: cs_mail_application::aliases::AddressSelection::Generated {
+                            address: "fixture482731@mail.localhost"
+                                .to_owned()
+                                .try_into()
+                                .unwrap(),
+                        },
+                        configuration: cs_mail_accounts::aliases::AliasConfiguration {
+                            receiving: cs_mail_accounts::aliases::ReceivingPolicy::AliasScoped,
+                            description: "Care team".to_owned().try_into().unwrap(),
+                        },
                     },
                 },
             ),
@@ -727,8 +736,17 @@ fn challenge_alias_receiving(f: &External, host: &Host) {
                 9810,
                 Command::Create {
                     id: restricted_id,
-                    creation: AliasCreation::Private {
-                        description: "Shopping".to_owned().try_into().unwrap(),
+                    creation: cs_mail_application::aliases::AliasCreation {
+                        address: cs_mail_application::aliases::AddressSelection::Generated {
+                            address: "fixture482732@mail.localhost"
+                                .to_owned()
+                                .try_into()
+                                .unwrap(),
+                        },
+                        configuration: cs_mail_accounts::aliases::AliasConfiguration {
+                            receiving: cs_mail_accounts::aliases::ReceivingPolicy::Bonded,
+                            description: "Shopping".to_owned().try_into().unwrap(),
+                        },
                     },
                 },
             ),
@@ -867,14 +885,14 @@ fn challenge_alias_receiving(f: &External, host: &Host) {
     let address = aliases[0].address().as_str();
     assert!(matches!(
         aliases[0].permission().state(),
-        cs_mail_accounts::alias_permission::PermissionState::None
+        cs_mail_accounts::alias_permission::PermissionState::Broad(_)
     ));
     let open = signed(
         9802,
         Command::Permission {
             id: alias,
             expected_address: 0,
-            expected_permission: 0.into(),
+            expected_permission: 1.into(),
             action: cs_mail_application::aliases::PermissionAction::Open,
         },
     );
@@ -939,7 +957,7 @@ fn challenge_alias_receiving(f: &External, host: &Host) {
         Command::Permission {
             id: alias,
             expected_address: 0,
-            expected_permission: 1.into(),
+            expected_permission: 2.into(),
             action: cs_mail_application::aliases::PermissionAction::Remove,
         },
     );
@@ -961,7 +979,7 @@ fn challenge_alias_receiving(f: &External, host: &Host) {
         Command::Permission {
             id: alias,
             expected_address: 0,
-            expected_permission: 2.into(),
+            expected_permission: 3.into(),
             action: cs_mail_application::aliases::PermissionAction::Open,
         },
     );
@@ -991,7 +1009,7 @@ fn challenge_alias_receiving(f: &External, host: &Host) {
     assert_eq!(
         host.send(address, &raw),
         250,
-        "private route must admit an authenticated previously unknown sender"
+        "alias-scoped lane must admit an authenticated previously unknown sender"
     );
     let before: String = db
         .query_one(

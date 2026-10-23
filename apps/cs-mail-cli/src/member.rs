@@ -288,6 +288,7 @@ impl Member {
 
     pub fn publish_directory(
         &mut self,
+        alias: u128,
         name: String,
         description: String,
         mailbox: Option<String>,
@@ -300,7 +301,9 @@ impl Member {
         let deployment = self.deployment()?;
         let address = self.persona()?;
         let key = self.recipient_key()?;
+        let alias = cs_mail_primitives::AliasId::new(alias).map_err(|e| e.to_string())?;
         let inspect = SignedRequest {
+            alias,
             scope: deployment.scope,
             address,
             key,
@@ -341,6 +344,7 @@ impl Member {
             "v1/directory/commands",
             |_| {
                 let request = SignedRequest {
+                    alias,
                     scope: deployment.scope,
                     address,
                     key,
@@ -588,7 +592,12 @@ impl Member {
         print(&answer);
         Ok(())
     }
-    pub fn publish_classes(&mut self, version: u64, classes: &[String]) -> Result<(), String> {
+    pub fn publish_classes(
+        &mut self,
+        alias: u128,
+        version: u64,
+        classes: &[String],
+    ) -> Result<(), String> {
         let deployment = self.deployment()?;
         let persona = self.persona()?;
         let classes = classes
@@ -612,9 +621,13 @@ impl Member {
                 .map_err(|e| format!("invalid class {spec:?}: {e:?}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let classes =
-            cs_mail_protocol::pricing::RecipientRequestClasses::new(persona, version, classes)
-                .map_err(|e| format!("invalid classes: {e:?}"))?;
+        let classes = cs_mail_protocol::pricing::RecipientRequestClasses::new(
+            persona,
+            cs_mail_primitives::AliasId::new(alias).map_err(|e| e.to_string())?,
+            version,
+            classes,
+        )
+        .map_err(|e| format!("invalid classes: {e:?}"))?;
         let signed = self
             .recipient_signer()?
             .sign_request_classes(deployment.scope, classes)
@@ -841,6 +854,8 @@ impl Member {
         let (handle, _) = self.sending(to)?;
         let lose = |step: &str| lose_answer_at == Some(step);
 
+        let receiving_alias = self.native_receiving_alias(ProtocolIdentity(to))?;
+        let return_alias = self.native_receiving_alias(persona)?;
         // 1. Terms: the class, C, S, deadlines and refunds, signed by CSQD.
         let step = format!("request:{}:issue", request_id.0);
         let quote = QuoteId(id("quote")?);
@@ -853,6 +868,8 @@ impl Member {
                     &deployment,
                     &handle,
                     ProtocolCommand::IssueRequestTerms {
+                        return_route: cs_mail_protocol::RequestReturnRoute::Native(return_alias),
+                        alias: receiving_alias,
                         class_id: class,
                         quote_id: quote,
                         declaration_digest: Some(digest),

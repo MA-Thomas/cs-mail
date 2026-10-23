@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cs-mail-wire = { path = "../cs-mail-wire" }
 cs-mail-adapters = { path = "../cs-mail-adapters" }
 cs-mail-guests = { path = "../cs-mail-guests" }
 cs-mail-capabilities = { path = "../cs-mail-capabilities" }
