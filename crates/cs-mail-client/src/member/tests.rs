@@ -501,7 +501,7 @@ impl Transport for ContentNetwork {
                     }
                     Response::Message(Box::new(self.message.clone()))
                 }
-                Command::Send { package, .. } => {
+                Command::Send { package, .. } | Command::SendToAlias { package, .. } => {
                     self.sends.lock().unwrap().push(body.unwrap().to_vec());
                     if self.lose_send.swap(false, Ordering::SeqCst) {
                         return Err(Error::Offline);
@@ -687,6 +687,7 @@ fn content_fixture(keys: &storage::Secrets, store: Arc<Store>) -> ContentNetwork
 #[test]
 #[allow(clippy::too_many_lines)] // Keep journal, replay, acknowledgement and custody observations together.
 fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_nothing() {
+    challenge_addressed_draft_delivery();
     let store = Arc::new(Store::default());
     let keys = storage::Secrets {
         device: [4; 32],
@@ -766,6 +767,70 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     assert_eq!(navigation.len(), 1);
     assert_eq!(navigation[0].sender, "1");
     assert!(navigation[0].sent_requests.is_empty());
+    // Conjecture: each direction reflects only its own current relationship;
+    // an accepted incoming grant must not invent an outgoing standing grant.
+    assert!(matches!(
+        navigation[0].incoming_permission,
+        super::PermissionRoute::Standing
+    ));
+    assert!(matches!(
+        navigation[0].outgoing_permission,
+        super::PermissionRoute::Closed
+    ));
+    let mut outgoing = cs_mail_application::members::OutgoingRelationshipView {
+        relationship: network.view.clone(),
+        recipient_name: Some("Other member".into()),
+    };
+    outgoing.relationship.handle.sender = p::ProtocolIdentity(2);
+    outgoing.relationship.handle.recipient = p::ProtocolIdentity(1);
+    let paired = super::navigation::project(
+        p::ProtocolIdentity(2),
+        &[network.view.clone()],
+        &[outgoing.clone()],
+        p::CanonicalTime(100),
+    )
+    .unwrap();
+    assert!(matches!(
+        paired[0].incoming_permission,
+        super::PermissionRoute::Standing
+    ));
+    assert!(matches!(
+        paired[0].outgoing_permission,
+        super::PermissionRoute::Standing
+    ));
+    outgoing.relationship.state = cs_mail_protocol::RelationshipState::Revoked;
+    let paired = super::navigation::project(
+        p::ProtocolIdentity(2),
+        &[network.view.clone()],
+        &[outgoing.clone()],
+        p::CanonicalTime(100),
+    )
+    .unwrap();
+    assert!(matches!(
+        paired[0].incoming_permission,
+        super::PermissionRoute::Standing
+    ));
+    assert!(matches!(
+        paired[0].outgoing_permission,
+        super::PermissionRoute::Closed
+    ));
+    outgoing.relationship.state = cs_mail_protocol::RelationshipState::Accepted;
+    let outgoing_only = super::navigation::project(
+        p::ProtocolIdentity(2),
+        &[],
+        &[outgoing],
+        p::CanonicalTime(100),
+    )
+    .unwrap();
+    assert!(matches!(
+        outgoing_only[0].incoming_permission,
+        super::PermissionRoute::Closed
+    ));
+    assert!(matches!(
+        outgoing_only[0].outgoing_permission,
+        super::PermissionRoute::Standing
+    ));
+
     assert_eq!(store.load_cache().unwrap(), before);
     assert!(matches!(
         super::navigation::project(
@@ -1163,10 +1228,74 @@ struct DirectoryNetwork {
     fail_ack: AtomicBool,
     store: Arc<Store>,
 }
+impl DirectoryNetwork {
+    fn recipient_lookup(reference: &str) -> Result<Vec<u8>, Error> {
+        use cs_mail_accounts::directory::{
+            DirectoryEntry, DirectoryRevision, DiscoveryVisibility, PublicProfile,
+        };
+        if reference == "network-unavailable@example.test" {
+            return Err(Error::Offline);
+        }
+        if reference != "registered@native.test" {
+            return Err(Error::AddressUnavailable);
+        }
+        let entry = DirectoryEntry::replace(
+            None,
+            p::ProtocolIdentity(3),
+            p::AliasId::new(77).unwrap(),
+            DirectoryRevision(0),
+            PublicProfile::new("Recipient".into(), String::new(), None).unwrap(),
+            DiscoveryVisibility::Unlisted,
+            Some(reference.to_owned().try_into().unwrap()),
+        )
+        .unwrap();
+        Ok(
+            serde_json::to_vec(&cs_mail_application::directory::Approach {
+                entry,
+                offer: None,
+                covered: true,
+            })
+            .unwrap(),
+        )
+    }
+    fn inspect_recipient_alias(request: &cs_mail_application::aliases::SignedCommand) -> Vec<u8> {
+        use cs_mail_accounts::aliases::{
+            Alias, AliasConfiguration, AliasDescription, ReceivingPolicy,
+        };
+        use cs_mail_application::aliases::{Acknowledgement, Outcome, Receipt};
+        let alias = Alias::create(
+            p::AliasId::new(1).unwrap(),
+            request.owner,
+            "owner@native.test".to_owned().try_into().unwrap(),
+            AliasConfiguration {
+                description: AliasDescription::try_from("Owner".to_owned()).unwrap(),
+                receiving: ReceivingPolicy::Bonded,
+            },
+            p::CanonicalTime(100),
+        )
+        .unwrap();
+        serde_json::to_vec(
+            &Acknowledgement::sign(
+                Receipt {
+                    digest: request.digest().unwrap(),
+                    at: p::CanonicalTime(100),
+                    outcome: Outcome::Aliases(vec![alias]),
+                },
+                &[3; 32],
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+}
 impl Transport for DirectoryNetwork {
     fn request(&self, _: &str, route: &str, body: Option<&[u8]>) -> Result<Vec<u8>, Error> {
         use cs_mail_accounts::directory::DirectoryRevision;
         use cs_mail_application::directory::{Command, Receipt, Response, SignedRequest};
+        if route == "v1/directory/lookup" {
+            let input: serde_json::Value = serde_json::from_slice(body.unwrap()).unwrap();
+            return Self::recipient_lookup(input["reference"].as_str().unwrap());
+        }
         if route == "v1/aliases/commands" {
             use cs_mail_application::aliases::{
                 Acknowledgement, Command as AliasCommand, Outcome as AliasOutcome,
@@ -1178,6 +1307,9 @@ impl Transport for DirectoryNetwork {
                 return Err(Error::Offline);
             }
             let request: AliasCommandRequest = serde_json::from_slice(&bytes).unwrap();
+            if matches!(request.command, AliasCommand::Inspect) {
+                return Ok(Self::inspect_recipient_alias(&request));
+            }
             let cs_mail_application::aliases::Command::Create { id, ref creation } =
                 request.command
             else {
@@ -1366,6 +1498,26 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
     assert_setup_complete(store.as_ref(), &keys);
     drop(sent);
     challenge_alias_client_recovery(&reopened, &store, &network, &keys);
+    challenge_recipient_routing(&reopened);
+}
+
+fn challenge_recipient_routing(client: &MemberClient) {
+    // Conjecture: resolving a recipient cannot silently downgrade an unavailable
+    // native address or a failed lookup into external plaintext mail.
+    assert!(
+        matches!(client.composer_recipient("registered@native.test").unwrap(), super::ComposerRecipient::Native { other: p::ProtocolIdentity(3), alias, .. } if alias == p::AliasId::new(77).unwrap())
+    );
+    assert!(matches!(
+        client.composer_recipient("missing@NATIVE.test"),
+        Err(Error::AddressUnavailable)
+    ));
+    assert!(matches!(
+        client.composer_recipient("network-unavailable@example.test"),
+        Err(Error::Offline)
+    ));
+    assert!(
+        matches!(client.composer_recipient("guest@EXAMPLE.test").unwrap(), super::ComposerRecipient::External { mailbox } if mailbox == "guest@example.test")
+    );
 }
 
 // Conjecture: losing an external command acknowledgement cannot create a second
@@ -1619,6 +1771,231 @@ fn challenge_multiple_drafts(client: &MemberClient) {
     );
 }
 
+fn challenge_addressed_draft_delivery() {
+    // Conjecture: an explicitly selected alias survives draft submission in the
+    // signed send command rather than being replaced by the default entrance.
+    let (store, keys, _) = external_device();
+    let network = Arc::new(content_fixture(&keys, store.clone()));
+    network.lose_send.store(false, Ordering::SeqCst);
+    let client = MemberClient::new(store, network.clone(), Arc::new(|| p::CanonicalTime(100)));
+    let alias = p::AliasId::new(77).unwrap();
+    let draft = client
+        .create_draft(super::DraftTarget::NativeAddress {
+            other: p::ProtocolIdentity(1),
+            alias,
+        })
+        .unwrap();
+    let draft = client
+        .save_draft(
+            draft.id(),
+            draft.revision(),
+            super::DraftBody::Native {
+                text: "addressed-draft-canary".into(),
+                sources: vec![],
+            },
+            "Chosen route",
+            0,
+        )
+        .unwrap();
+    assert!(matches!(
+        client
+            .submit_draft(draft.id(), draft.revision(), false, None)
+            .unwrap(),
+        super::DraftSubmission::Native { .. }
+    ));
+    let sends = network.sends.lock().unwrap();
+    let command: cs_mail_application::correspondence::SignedRequest =
+        serde_json::from_slice(sends.last().unwrap()).unwrap();
+    assert!(
+        matches!(command.command, cs_mail_application::correspondence::Command::SendToAlias { alias: selected, .. } if selected == alias)
+    );
+    assert!(client.drafts().unwrap().is_empty());
+}
+fn challenge_included_selection_transfer(first: &MemberClient) {
+    use cs_mail_correspondence::{MessageSelection, MessageVersion, SelectionElement};
+    let source = super::SourceDraft {
+        selection: MessageSelection::new(
+            p::MessageId(1),
+            MessageVersion([9; 32]),
+            vec![SelectionElement::TextRange {
+                block: 0,
+                start: 0,
+                end: 4,
+            }],
+        )
+        .unwrap(),
+        mode: super::ReuseMode::Quotation,
+    };
+    let draft = first
+        .create_draft(super::DraftTarget::Native {
+            other: p::ProtocolIdentity(2),
+            conversation: None,
+        })
+        .unwrap();
+    let draft = first
+        .save_draft(
+            draft.id(),
+            draft.revision(),
+            super::DraftBody::Native {
+                text: "included-writing".into(),
+                sources: vec![source],
+            },
+            "",
+            0,
+        )
+        .unwrap();
+    assert!(matches!(
+        first.retarget_draft(
+            draft.id(),
+            draft.revision(),
+            super::DraftTarget::External { conversation: None },
+            "guest@example.test".into(),
+            false
+        ),
+        Err(Error::InvalidData)
+    ));
+    let moved = first
+        .retarget_draft(
+            draft.id(),
+            draft.revision(),
+            super::DraftTarget::Native {
+                other: p::ProtocolIdentity(3),
+                conversation: None,
+            },
+            String::new(),
+            false,
+        )
+        .unwrap();
+    assert!(matches!(moved.body(), super::DraftBody::Native { sources, .. } if sources.len() == 1));
+    let external = first
+        .retarget_draft(
+            moved.id(),
+            moved.revision(),
+            super::DraftTarget::External { conversation: None },
+            "guest@example.test".into(),
+            true,
+        )
+        .unwrap();
+    assert_eq!(external.body().text(), "included-writing");
+    first
+        .discard_draft(external.id(), external.revision())
+        .unwrap();
+}
+fn challenge_recipient_change(first: &MemberClient, store: &Store) {
+    // Recipient changes must preserve one draft identity and writing, reject stale
+    // editors, and never drop native material without explicit approval.
+    let writing = first.create_draft(super::DraftTarget::Unaddressed).unwrap();
+    let writing = first
+        .save_draft(
+            writing.id(),
+            writing.revision(),
+            super::DraftBody::Native {
+                text: "recipient-change-canary".into(),
+                sources: vec![],
+            },
+            "Native subject",
+            0,
+        )
+        .unwrap();
+    // Writing without an addressee survives encrypted reopening, but cannot send.
+    let reopened = first
+        .drafts()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.id() == writing.id())
+        .unwrap();
+    assert_eq!(reopened.body().text(), "recipient-change-canary");
+    assert!(matches!(
+        first.submit_draft(writing.id(), writing.revision(), false, None),
+        Err(Error::InvalidData)
+    ));
+    store.fail_save.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        first.retarget_draft(
+            writing.id(),
+            writing.revision(),
+            super::DraftTarget::NativeAddress {
+                other: p::ProtocolIdentity(3),
+                alias: p::AliasId::new(1).unwrap()
+            },
+            String::new(),
+            false
+        ),
+        Err(Error::StorageUnavailable)
+    ));
+    store.fail_save.store(false, Ordering::SeqCst);
+    let preserved = first
+        .drafts()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.id() == writing.id())
+        .unwrap();
+    assert_eq!(preserved.revision(), writing.revision());
+    assert_eq!(preserved.target(), writing.target());
+    let addressed = first
+        .retarget_draft(
+            writing.id(),
+            writing.revision(),
+            super::DraftTarget::NativeAddress {
+                other: p::ProtocolIdentity(3),
+                alias: p::AliasId::new(1).unwrap(),
+            },
+            String::new(),
+            false,
+        )
+        .unwrap();
+    assert_eq!(addressed.id(), writing.id());
+    assert_eq!(addressed.subject(), "Native subject");
+    assert_eq!(addressed.body().text(), "recipient-change-canary");
+    assert!(matches!(
+        first.retarget_draft(
+            writing.id(),
+            writing.revision(),
+            super::DraftTarget::External { conversation: None },
+            "guest@example.test".into(),
+            true
+        ),
+        Err(Error::DraftChanged)
+    ));
+    let external = first
+        .retarget_draft(
+            addressed.id(),
+            addressed.revision(),
+            super::DraftTarget::External { conversation: None },
+            "guest@example.test".into(),
+            true,
+        )
+        .unwrap();
+    assert_eq!(external.id(), writing.id());
+    assert_eq!(external.body().text(), "recipient-change-canary");
+    assert_eq!(external.subject(), "Native subject");
+    challenge_fixed_reply_recipient(first);
+    challenge_included_selection_transfer(first);
+    first
+        .discard_draft(external.id(), external.revision())
+        .unwrap();
+}
+
+fn challenge_fixed_reply_recipient(first: &MemberClient) {
+    let reply = first
+        .create_draft(super::DraftTarget::Native {
+            other: p::ProtocolIdentity(2),
+            conversation: Some(cs_mail_correspondence::ConversationId::new(1).unwrap()),
+        })
+        .unwrap();
+    assert!(matches!(
+        first.retarget_draft(
+            reply.id(),
+            reply.revision(),
+            super::DraftTarget::External { conversation: None },
+            "guest@example.test".into(),
+            true
+        ),
+        Err(Error::InvalidData)
+    ));
+    first.discard_draft(reply.id(), reply.revision()).unwrap();
+}
+
 fn challenge_draft_handoff(
     first: &Arc<MemberClient>,
     store: &Arc<Store>,
@@ -1626,19 +2003,39 @@ fn challenge_draft_handoff(
     state: &State,
     network: &ExternalNetwork,
 ) {
+    challenge_recipient_change(first, store);
     let draft = first
         .open_draft(super::DraftTarget::External { conversation: None })
         .unwrap();
-    let body = super::DraftBody::External {
+    let body = super::DraftBody::Composed {
         mailbox: "guest@example.test".into(),
-        text: "external-loss-private-canary".into(),
+        content: cs_mail_correspondence::composed::ComposedBody::new(
+            cs_mail_correspondence::composed::CompositionFormat::Editable,
+            "<b>external-loss-private-canary</b>".into(),
+            vec![],
+            vec![
+                cs_mail_correspondence::composed::AttachedFile::new(
+                    "private-draft-file.txt".into(),
+                    b"durable-attachment-canary".to_vec(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap(),
+        sources: vec![],
     };
     let guard = first.operation.lock().unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     let writer = first.clone();
     let writing = std::thread::spawn(move || {
-        tx.send(writer.save_draft(draft.id(), draft.revision(), body, "", 0))
-            .unwrap();
+        tx.send(writer.save_draft(
+            draft.id(),
+            draft.revision(),
+            body,
+            "External subject canary",
+            0,
+        ))
+        .unwrap();
     });
     let result = rx.recv_timeout(std::time::Duration::from_secs(2));
     drop(guard);
@@ -1657,7 +2054,18 @@ fn challenge_draft_handoff(
     assert_eq!(first.drafts().unwrap()[0].revision(), saved.revision());
     assert!(first.external_inbox().unwrap().pending.is_none());
     assert!(network.commands.lock().unwrap().is_empty());
+    let retained = first.drafts().unwrap();
+    let super::DraftBody::Composed { content, .. } = retained[0].body() else {
+        panic!("formatted draft lost")
+    };
+    assert!(content.html().contains("<b>"));
+    assert_eq!(content.files()[0].bytes(), b"durable-attachment-canary");
     let original_workspace = store.workspace.lock().unwrap().clone().unwrap();
+    assert!(
+        !original_workspace
+            .windows(b"durable-attachment-canary".len())
+            .any(|w| w == b"durable-attachment-canary")
+    );
     let mut malformed: serde_json::Value = serde_json::from_slice(
         &storage::decrypt(keys, &original_workspace, b"cs-mail/member-workspace/v3").unwrap(),
     )
@@ -1732,7 +2140,7 @@ fn challenge_external_pages(
     assert_eq!(inbox.threads[0].messages.len(), 1);
     assert_eq!(
         inbox.threads[0].messages[0].text,
-        "external-loss-private-canary"
+        "Subject: External subject canary\n\nexternal-loss-private-canary"
     );
     assert!(matches!(
         inbox.threads[0].permission_route,
@@ -2038,4 +2446,247 @@ fn fixture_public_alias(route: &str) -> Value {
         address: format!("fixture-{owner}@inbox.test").try_into().unwrap(),
     })
     .unwrap()
+}
+
+// Conjecture: picture access requires message-specific approval committed before I/O;
+// failed saves cannot disclose, unrelated IDs cannot expand scope, and reopening a
+// retained picture cannot send a second request or replace account credentials.
+#[test]
+#[allow(clippy::too_many_lines)] // One interruption/reopen experiment with its explicit encrypted fixture.
+fn email_picture_approval_is_scoped_durable_and_never_automatically_replayed() {
+    use cs_mail_application::correspondence::external::{
+        Direction, Message, MessageFields, MessageView,
+    };
+    use cs_mail_correspondence::{ConversationId, Document, DocumentPart, email::EmailContent};
+    for authored in [false, true] {
+        let (store, keys, mut state) = external_device();
+        let credentials = store.load_secret().unwrap();
+        let mailbox = cs_mail_guests::GuestMailbox::parse("notices@example.test").unwrap();
+        let guest = mailbox.synthetic_protocol_identity(&[7; 32]);
+        let relationship = cs_mail_protocol::ProtocolState::initial_scoped(
+            p::RelationshipRef::from_u128_for_test(99),
+            p::RequestHistoryRef::from_u128_for_test(1),
+            guest,
+            state.profile.persona,
+            p::CanonicalTime(100),
+        )
+        .relationship;
+        let id = ConversationId::new(4321).unwrap();
+        let conversation = cs_mail_correspondence::external::ExternalConversation::start(
+            id,
+            state.profile.persona,
+            p::AliasId::new(2).unwrap(),
+            mailbox,
+            [7; 32],
+            &relationship,
+            p::CanonicalTime(100),
+        )
+        .unwrap();
+        let html = "<p>Private HTML canary</p><img src='https://example.test/picture-a'><img src='https://example.test/picture-b'>";
+        let part = if authored {
+            DocumentPart::Composed(
+                cs_mail_correspondence::composed::ComposedBody::new(
+                    cs_mail_correspondence::composed::CompositionFormat::Imported,
+                    html.into(),
+                    vec![],
+                    vec![],
+                )
+                .unwrap(),
+            )
+        } else {
+            DocumentPart::Email(
+                EmailContent::from_mime(
+                    format!("Content-Type: text/html\r\n\r\n{html}").into_bytes(),
+                )
+                .unwrap(),
+            )
+        };
+        let doc = Document::new(vec![part], [54; 32]).unwrap();
+        let message = p::MessageId(4322);
+        let manifest = doc.manifest(message, id).unwrap();
+        let (secret, public) = super::correspondence::own_keys(&state.profile, &keys).unwrap();
+        let binding = cs_mail_content::ContentBinding {
+            wire_version: p::WireVersion(1),
+            protocol_version: p::ProtocolVersion(2),
+            content_ref: p::ContentRef(4322),
+            message_id: message,
+            sender: state.profile.persona,
+            recipient: state.profile.persona,
+            relationship: relationship.key.reference,
+            content_scope: p::ContentScopeRef::from_u128_for_test(1),
+            sender_certificate: cs_mail_content::ContentCertificateDigest([0; 32]),
+            declarations: p::MessageDeclarations {
+                purpose: p::DeclaredPurpose::Known(p::KnownPurpose::Personal),
+                origin: p::OriginDeclaration {
+                    mode: p::OriginMode::HumanInitiated,
+                    authority: p::DeclarationAuthority::NativeSender(state.profile.sender_key),
+                },
+                payload_schema: None,
+            },
+            message_valid_until: p::MessageValidityUntil(p::CanonicalTime(10000)),
+            capability: None,
+        };
+        let encrypted = cs_mail_content::encrypt(
+            &secret,
+            public,
+            binding,
+            &serde_json::to_vec(&doc).unwrap(),
+            p::CanonicalTime(100),
+            p::CanonicalTime(10000),
+        )
+        .unwrap();
+        let record = Message::new(MessageFields {
+            manifest,
+            sender_key: public,
+            member_copy: encrypted,
+            direction: Direction::MemberToGuest,
+            committed_at: p::CanonicalTime(100),
+        })
+        .unwrap();
+        state.external = Some(super::external::Workspace {
+            pending: None,
+            records: [(
+                id.value(),
+                super::external::Record {
+                    conversation,
+                    relationship,
+                    messages: vec![MessageView {
+                        sequence: 1,
+                        message: record,
+                        delivery: None,
+                        provider_events: vec![],
+                    }],
+                },
+            )]
+            .into(),
+        });
+        storage::save(store.as_ref(), &keys, &state).unwrap();
+        let client = MemberClient::new(
+            store.clone(),
+            Arc::new(EnrollmentNetwork::default()),
+            Arc::new(|| p::CanonicalTime(110)),
+        );
+        let key = super::MailKey::External(id);
+        let inbox = client.external_inbox().unwrap();
+        let super::ReadingContent::Readable(parts) = &inbox.threads[0].messages[0].content else {
+            panic!()
+        };
+        let super::ReadingPart::Email(email) = &parts[0] else {
+            panic!()
+        };
+        let picture = email.pictures[0].clone();
+        let calls = AtomicU64::new(0);
+        let fetch = |approved: &cs_mail_correspondence::email::ApprovedPicture| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(approved.url(), picture.url);
+            let saved = super::personal::Personal::load(&client, &keys, &state).unwrap();
+            assert_eq!(saved.resources.len(), 1, "intent must precede the request");
+            Ok((
+                "image/png".into(),
+                b"retained-picture-private-canary".to_vec(),
+            ))
+        };
+        assert!(
+            client
+                .load_pictures_with(key, message, &["unrelated".into()], fetch)
+                .is_err()
+        );
+        store.fail_save.store(true, Ordering::SeqCst);
+        assert!(
+            client
+                .load_pictures_with(key, message, &[picture.id.clone()], fetch)
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        store.fail_save.store(false, Ordering::SeqCst);
+        client
+            .load_pictures_with(key, message, &[picture.id.clone()], fetch)
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        client
+            .load_pictures_with(key, message, &[picture.id.clone()], fetch)
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let reopened = MemberClient::new(
+            store.clone(),
+            Arc::new(EnrollmentNetwork::default()),
+            Arc::new(|| p::CanonicalTime(120)),
+        );
+        let inbox = reopened.external_inbox().unwrap();
+        let super::ReadingContent::Readable(parts) = &inbox.threads[0].messages[0].content else {
+            panic!()
+        };
+        let super::ReadingPart::Email(email) = &parts[0] else {
+            panic!()
+        };
+        assert!(
+            email
+                .resources
+                .iter()
+                .any(|r| r.bytes == b"retained-picture-private-canary")
+        );
+        let other = email.pictures.iter().find(|p| p.id != picture.id).unwrap();
+        let result = reopened.load_pictures_with(key, message, &[other.id.clone()], |_| {
+            store.fail_save.store(true, Ordering::SeqCst);
+            Ok(("image/png".into(), b"uncommitted-picture".to_vec()))
+        });
+        assert!(matches!(result, Err(Error::StorageUnavailable)));
+        store.fail_save.store(false, Ordering::SeqCst);
+        let after_loss = reopened.external_inbox().unwrap();
+        let super::ReadingContent::Readable(parts) = &after_loss.threads[0].messages[0].content
+        else {
+            panic!()
+        };
+        let super::ReadingPart::Email(after_loss) = &parts[0] else {
+            panic!()
+        };
+        assert!(
+            after_loss
+                .pictures
+                .iter()
+                .any(|p| p.id == other.id && matches!(p.status, super::PictureStatus::Attempted))
+        );
+        assert!(
+            !after_loss
+                .resources
+                .iter()
+                .any(|r| r.bytes == b"uncommitted-picture")
+        );
+        // Reading after an uncertain fetch acknowledgement never resumes retrieval.
+        // The new text interpretation must repair a stale derived email index from
+        // the authenticated original without replacing the original message.
+        assert_eq!(reopened.index_local_mail(10).unwrap(), 1);
+        let mut previous_index = super::retained::Retained::load(&reopened, &keys, &state).unwrap();
+        let copy_key = super::retained::CopyKey {
+            thread: key,
+            message,
+        };
+        let mut stale_entry = previous_index
+            .copy(&reopened, &keys, copy_key, p::CanonicalTime(120))
+            .unwrap()
+            .unwrap();
+        stale_entry.text = "obsoletecollapsedwords".into();
+        previous_index.insert(stale_entry);
+        previous_index.save(&reopened, &keys).unwrap();
+        drop(previous_index);
+        let mut interpretation = super::personal::Personal::load(&reopened, &keys, &state).unwrap();
+        interpretation.email_text_revision = 0;
+        store
+            .save_personal(&interpretation.bytes(&keys).unwrap())
+            .unwrap();
+        reopened.index_local_mail(10).unwrap();
+        let repaired = super::retained::Retained::load(&reopened, &keys, &state).unwrap();
+        let repaired = repaired
+            .copy(&reopened, &keys, copy_key, p::CanonicalTime(120))
+            .unwrap()
+            .unwrap();
+        assert!(repaired.text.contains("Private HTML canary"));
+        let personal = store.load_personal().unwrap().unwrap();
+        assert!(
+            !personal
+                .windows(b"retained-picture-private-canary".len())
+                .any(|w| w == b"retained-picture-private-canary")
+        );
+        assert_eq!(store.load_secret().unwrap(), credentials);
+    }
 }

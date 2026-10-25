@@ -360,7 +360,7 @@ fn unsupported_mime_cannot_be_acknowledged_by_selecting_only_its_plain_part() {
     let good = alternative("carol", &to, "unsupported", "visible text");
     let cases = [
         ("mixed", good.replace("multipart/alternative", "multipart/mixed")),
-        ("HTML only", good.replace("text/plain", "text/html")),
+        ("duplicate HTML alternatives", good.replace("text/plain", "text/html")),
         ("unknown text subtype", good.replace("text/plain", "text/calendar")),
         ("attachment disposition", good.replace("Content-Type: text/html", "Content-Disposition: attachment; filename=details.html\r\nContent-Type: text/html")),
         ("inline file", good.replace("text/html; charset=utf-8", "text/html; charset=utf-8; name=details.html")),
@@ -435,7 +435,7 @@ fn outbound_carrier_and_multipart_reply_form_one_readable_local_conversation() {
         ),
     );
     let signed = sign_message(&reply);
-    // The unused HTML representation is still part of the authentication input.
+    // Both preserved representations are part of the authentication input.
     let mut tampered = signed.clone();
     let marker = b"Content-Transfer-Encoding: base64\r\n\r\n";
     let offset = tampered
@@ -456,12 +456,13 @@ fn outbound_carrier_and_multipart_reply_form_one_readable_local_conversation() {
     let bytes =
         cs_mail_content::decrypt(&member, incoming.sender_key, &incoming.member_copy).unwrap();
     let document: cs_mail_correspondence::Document = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        document.parts(),
-        &[cs_mail_correspondence::DocumentPart::Text(format!(
-            "Subject: Receiver experiment\n\n{text}"
-        ))]
-    );
+    let [cs_mail_correspondence::DocumentPart::Email(email)] = document.parts() else {
+        panic!("incoming email must preserve MIME")
+    };
+    assert_eq!(email.mime(), signed);
+    let presentation = email.presentation().unwrap();
+    assert!(presentation.supplied_text.unwrap().contains(text));
+    assert!(presentation.html.unwrap().contains("café"));
     assert_eq!(host.send(to, &signed), 250);
     assert_eq!(f.read(1100).1.len(), 2);
     let parts: Vec<_> = reply.split("--reply-boundary\r\n").collect();
@@ -474,7 +475,7 @@ fn outbound_carrier_and_multipart_reply_form_one_readable_local_conversation() {
     assert_eq!(
         f.read(1100).1.len(),
         2,
-        "alternative order does not change delivered text"
+        "alternative order cannot replace or duplicate committed content"
     );
     assert_eq!(carrier.count(), 1);
 }
@@ -568,6 +569,7 @@ fn member_address_prompts_are_authenticated_bounded_and_rechecked_before_sending
 /// consumes a lane twice, or leaves a partial route when admission fails.
 #[test]
 #[ignore = "requires isolated PostgreSQL and local HTTP/SMTP/DNS sockets"]
+#[allow(clippy::too_many_lines)] // One causal experiment: admission, explicit send consent, rollback, replay and withdrawal.
 fn member_address_lane_admission_is_atomic_and_member_reply_requires_consent() {
     let f = External::new();
     f.start(1300);
@@ -612,24 +614,59 @@ fn member_address_lane_admission_is_atomic_and_member_reply_requires_consent() {
         BOB,
         f.base.clock.now(),
     );
-    let send = f.command(id, 1302, app::Command::Send(Box::new(package)));
+    let send = f.command(
+        id,
+        1302,
+        app::Command::Send {
+            message: Box::new(package),
+            disclose_to_external_mail: false,
+        },
+    );
     let refused = app::Service(&f.repository()).handle(&send).unwrap();
     assert!(
         matches!(&refused, app::Response::Outcome(a) if matches!(a.receipt.outcome, app::Outcome::Refused(_)))
     );
-    app::Service(&f.repository())
-        .handle(&f.command(id, 1303, app::Command::GrantDisclosure))
+    // Explicit Send must grant consent and queue the reply together. A commit
+    // failure must leave neither grant nor message, and must not reopen a refusal.
+    let mut replacement = send.clone();
+    replacement.operation = IdempotencyKey(1307);
+    if let app::Command::Send {
+        disclose_to_external_mail,
+        ..
+    } = &mut replacement.command
+    {
+        *disclose_to_external_mail = true;
+    }
+    let replacement = replacement.sign(&[21; 32]).unwrap();
+    db.batch_execute("CREATE FUNCTION refuse_reply() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected reply failure'; END $$; CREATE TRIGGER fail_reply BEFORE INSERT ON cs_external_messages FOR EACH ROW EXECUTE FUNCTION refuse_reply();").unwrap();
+    assert!(app::Service(&f.repository()).handle(&replacement).is_err());
+    assert_eq!(f.read(id).1.len(), 1);
+    if let app::Response::Conversation { conversation, .. } = app::Service(&f.repository())
+        .handle(&f.command(id, 900_001, app::Command::Read { after: 0 }))
+        .unwrap()
+    {
+        assert!(
+            !conversation.disclosure().permits_dispatch(),
+            "failed Send must not leave an outgoing grant"
+        );
+    } else {
+        panic!("expected conversation");
+    }
+    db.batch_execute("DROP TRIGGER fail_reply ON cs_external_messages")
         .unwrap();
+    let accepted = app::Service(&f.repository()).handle(&replacement).unwrap();
+    assert!(
+        matches!(&accepted, app::Response::Outcome(a) if matches!(a.receipt.outcome, app::Outcome::Queued(_)))
+    );
+    assert_eq!(
+        accepted,
+        app::Service(&f.repository()).handle(&replacement).unwrap()
+    );
     assert_eq!(
         refused,
         app::Service(&f.repository()).handle(&send).unwrap(),
         "consent restoration cannot reopen a terminal refusal"
     );
-    let mut replacement = send.clone();
-    replacement.operation = IdempotencyKey(1307);
-    app::Service(&f.repository())
-        .handle(&replacement.sign(&[21; 32]).unwrap())
-        .unwrap();
     let carrier = support::smtp2go::Carrier::new();
     carrier.push(support::smtp2go::accepted("consented-inbound-reply"));
     let mut transport = cs_mail_service::external::Smtp2goTransport {
@@ -658,7 +695,14 @@ fn member_address_lane_admission_is_atomic_and_member_reply_requires_consent() {
         f.base.clock.now(),
     );
     app::Service(&f.repository())
-        .handle(&f.command(id, 1304, app::Command::Send(Box::new(package))))
+        .handle(&f.command(
+            id,
+            1304,
+            app::Command::Send {
+                message: Box::new(package),
+                disclose_to_external_mail: false,
+            },
+        ))
         .unwrap();
     app::Service(&f.repository())
         .handle(&f.command(id, 1305, app::Command::WithdrawDisclosure))

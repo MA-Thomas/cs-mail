@@ -2,6 +2,8 @@
 use cs_mail_client::member as core;
 use std::sync::Arc;
 uniffi::setup_scaffolding!();
+mod composition;
+pub use composition::*;
 mod drafts;
 mod mailbox;
 pub use drafts::*;
@@ -375,6 +377,8 @@ pub struct NavigationContact {
     pub external: bool,
     pub requests: Vec<NavigationRequest>,
     pub sent_requests: Vec<NavigationRequest>,
+    pub incoming_permission: PermissionRoute,
+    pub outgoing_permission: PermissionRoute,
     pub incoming_lane: Option<NavigationLane>,
     pub outgoing_lane: Option<NavigationLane>,
 }
@@ -412,6 +416,8 @@ impl From<core::NavigationContact> for NavigationContact {
             external: value.external,
             requests: value.requests.into_iter().map(Into::into).collect(),
             sent_requests: value.sent_requests.into_iter().map(Into::into).collect(),
+            incoming_permission: value.incoming_permission.into(),
+            outgoing_permission: value.outgoing_permission.into(),
             incoming_lane: value.incoming_lane.map(Into::into),
             outgoing_lane: value.outgoing_lane.map(Into::into),
         }
@@ -1185,6 +1191,7 @@ pub struct SourceMessage {
 }
 #[derive(Clone, Debug, uniffi::Enum)]
 pub enum SourceBlock {
+    Attachment { block: u32, size: u32 },
     Text { block: u32, text: String },
     Image { block: u32, bytes: Vec<u8> },
     Reference { block: u32 },
@@ -1490,6 +1497,9 @@ impl AppleClient {
                             SourceBlock::Image { block, bytes }
                         }
                         core::SourceBlock::Reference { block } => SourceBlock::Reference { block },
+                        core::SourceBlock::Attachment { block, size } => {
+                            SourceBlock::Attachment { block, size }
+                        }
                     })
                     .collect(),
             })
@@ -1552,6 +1562,26 @@ pub enum ExternalAction {
 }
 #[uniffi::export]
 impl AppleClient {
+    /// # Errors
+    /// Unavailable custody or invalid encrypted content.
+    /// Explicit approval for the named message's selected remote pictures.
+    #[allow(clippy::needless_pass_by_value)] // UniFFI owns string arguments across the boundary.
+    pub fn load_email_pictures(
+        &self,
+        key: MailKey,
+        message: String,
+        ids: Vec<String>,
+    ) -> Result<(), ClientError> {
+        self.0
+            .load_email_pictures(
+                key.try_into()?,
+                cs_mail_primitives::MessageId(
+                    message.parse().map_err(|_| ClientError::InvalidData)?,
+                ),
+                &ids,
+            )
+            .map_err(Into::into)
+    }
     /// # Errors
     /// Unavailable custody or invalid encrypted content.
     pub fn external_inbox(&self) -> Result<ExternalInbox, ClientError> {
@@ -1626,5 +1656,39 @@ impl AppleClient {
                 },
             )
             .map_err(Into::into)
+    }
+}
+
+#[derive(uniffi::Enum)]
+pub enum ComposerRecipient {
+    Native {
+        other: String,
+        alias: String,
+        mailbox: Option<String>,
+    },
+    External {
+        mailbox: String,
+    },
+}
+#[allow(clippy::needless_pass_by_value)] // UniFFI takes owned strings at the language boundary.
+#[uniffi::export]
+impl AppleClient {
+    /// # Errors
+    /// Invalid/unavailable native address, custody or transport failure.
+    pub fn composer_recipient(&self, reference: String) -> Result<ComposerRecipient, ClientError> {
+        match self.0.composer_recipient(&reference)? {
+            core::ComposerRecipient::Native {
+                other,
+                alias,
+                mailbox,
+            } => Ok(ComposerRecipient::Native {
+                other: other.0.to_string(),
+                alias: alias.value().to_string(),
+                mailbox,
+            }),
+            core::ComposerRecipient::External { mailbox } => {
+                Ok(ComposerRecipient::External { mailbox })
+            }
+        }
     }
 }

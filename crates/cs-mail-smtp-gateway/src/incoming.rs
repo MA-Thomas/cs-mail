@@ -13,7 +13,7 @@ mod encrypted;
 mod mime;
 pub use encrypted::{AuthenticatedReply, ReplyEncryption};
 
-pub const MAX_EMAIL_BYTES: usize = 128 * 1024;
+pub const MAX_EMAIL_BYTES: usize = cs_mail_correspondence::email::MAX_EMAIL_BYTES;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Refusal {
     Permanent,
@@ -89,6 +89,7 @@ pub struct VerifiedMail {
     may_notify: bool,
     message_id: String,
     text: String,
+    content: cs_mail_correspondence::email::EmailContent,
     authentication: VerifiedDomain,
     transport_digest: [u8; 32],
     raw_digest: [u8; 32],
@@ -139,7 +140,7 @@ impl VerifiedMail {
         let content = encrypted::fingerprint(
             secret,
             b"cs-mail/smtp-content/v2",
-            &[&identity, self.text.as_bytes()],
+            &[&identity, &self.content.delivery_commitment()],
         );
         (ArrivalIdentity(identity), content)
     }
@@ -215,14 +216,11 @@ pub async fn authenticate(
     if id.len() > 998 || !id.contains('@') || id.bytes().any(|b| b <= 32 || b >= 127) {
         return Err(Refusal::Permanent);
     }
-    let body = mime::plain_text(&message)?;
-    let text = match message.subject() {
-        Some(s) if !s.is_empty() => format!("Subject: {s}\n\n{body}"),
-        _ => body.to_string(),
-    };
-    if text.is_empty() || text.len() > 16384 {
-        return Err(Refusal::TooLarge);
-    }
+    let content = mime::content(&message)?;
+    let text = content
+        .presentation()
+        .map_err(|_| Refusal::Unsupported)?
+        .text;
     let verification = verifier.verify(request).await.map_err(|e| match e.kind {
         DmarcErrorKind::Temporary => Refusal::Temporary,
         _ => Refusal::Permanent,
@@ -233,7 +231,7 @@ pub async fn authenticate(
     {
         return Err(Refusal::Permanent);
     }
-    let context = serde_json::to_vec(&(
+    let transport = serde_json::to_vec(&(
         request.remote_ip,
         request.helo_identity,
         request.mail_from,
@@ -251,8 +249,9 @@ pub async fn authenticate(
                 .all(|v| v.as_text().is_some_and(|s| s.eq_ignore_ascii_case("no"))),
         message_id: id.to_owned(),
         text,
+        content,
         authentication: verification,
-        transport_digest: Sha256::digest(context).into(),
+        transport_digest: Sha256::digest(transport).into(),
         raw_digest: Sha256::digest(request.raw_message).into(),
     })
 }

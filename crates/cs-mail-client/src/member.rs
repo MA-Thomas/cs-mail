@@ -13,6 +13,7 @@ mod inboxes;
 mod personal;
 pub use inboxes::{AliasInbox, InboxScope, InboxWorkspace, MessageRoute, SenderLaneScope};
 mod reading;
+mod resources;
 mod retained;
 mod retained_index;
 pub use drafts::{
@@ -21,10 +22,13 @@ pub use drafts::{
 pub use personal::{
     MailAction, MailFolder, MailItem, MailKey, OutgoingWork, SearchMatch, SearchPage, WorkStatus,
 };
-pub use reading::{ReadingBlock, ReadingContent, ReadingPart};
+pub use reading::{
+    PictureStatus, ReadingBlock, ReadingContent, ReadingEmail, ReadingPart, ReadingPicture,
+};
 pub use retained::RetentionProgress;
 mod directory;
 pub use correspondence::{ConversationSummary, ReplyRoute};
+pub use directory::ComposerRecipient;
 mod external;
 pub use external::{ExternalAction, ExternalInbox, ExternalMessage, ExternalThread};
 mod enrollment;

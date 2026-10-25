@@ -7,6 +7,7 @@ use mail_auth::common::crypto::{RsaKey, Sha256};
 use mail_auth::common::headers::HeaderWriter;
 use mail_auth::dkim::{DkimSigner, Done};
 use rustls_pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject};
+use std::fmt::Write;
 
 /// The deployment domain's signing identity: `selector._domainkey.domain`.
 pub struct DkimIdentity {
@@ -143,11 +144,26 @@ impl std::error::Error for OutboundError {}
 /// # Errors
 /// Rejects header injection and signing failures.
 pub fn render_signed(mail: &OutboundMail, dkim: &DkimIdentity) -> Result<Vec<u8>, OutboundError> {
+    render(mail, dkim, None)
+}
+/// # Errors
+/// Refuses invalid content, header injection or signing failure.
+pub fn render_composed(
+    mail: &OutboundMail,
+    dkim: &DkimIdentity,
+    body: &cs_mail_correspondence::composed::ComposedBody,
+) -> Result<Vec<u8>, OutboundError> {
+    render(mail, dkim, Some(body))
+}
+fn render(
+    mail: &OutboundMail,
+    dkim: &DkimIdentity,
+    composed: Option<&cs_mail_correspondence::composed::ComposedBody>,
+) -> Result<Vec<u8>, OutboundError> {
     let safe = |value: &str| !value.is_empty() && value.bytes().all(|b| (32..127).contains(&b));
     for value in [
         &mail.from_local,
         &mail.to,
-        &mail.subject,
         &mail.message_id,
         &mail.date,
         dkim.domain(),
@@ -156,6 +172,13 @@ pub fn render_signed(mail: &OutboundMail, dkim: &DkimIdentity) -> Result<Vec<u8>
             return Err(OutboundError::InvalidHeader);
         }
     }
+    if mail.subject.is_empty()
+        || mail.subject.len() > 4096
+        || mail.subject.chars().any(char::is_control)
+    {
+        return Err(OutboundError::InvalidHeader);
+    }
+    let subject = encoded_subject(&mail.subject);
     let mut thread_headers = String::new();
     if let Some(thread) = &mail.thread {
         if !safe(&thread.reply_to) || cs_mail_guests::GuestMailbox::parse(&thread.reply_to).is_err()
@@ -193,14 +216,21 @@ pub fn render_signed(mail: &OutboundMail, dkim: &DkimIdentity) -> Result<Vec<u8>
     } else {
         ("8bit", normalized)
     };
+    let content = if let Some(body) = composed {
+        String::from_utf8(body.mime(true).map_err(|_| OutboundError::InvalidHeader)?)
+            .map_err(|_| OutboundError::InvalidHeader)?
+    } else {
+        format!(
+            "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: {encoding}\r\n\r\n{body}"
+        )
+    };
     let message = format!(
         "From: {}@{}\r\nTo: {}\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: <{}@{}>\r\n\
-         {thread_headers}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\
-         Content-Transfer-Encoding: {encoding}\r\n\r\n{body}",
+         {thread_headers}MIME-Version: 1.0\r\n{content}",
         mail.from_local,
         dkim.domain(),
         mail.to,
-        mail.subject,
+        subject,
         mail.date,
         mail.message_id,
         dkim.domain(),
@@ -217,4 +247,29 @@ pub fn render_signed(mail: &OutboundMail, dkim: &DkimIdentity) -> Result<Vec<u8>
     let mut signed = signature.to_header().into_bytes();
     signed.extend_from_slice(message.as_bytes());
     Ok(signed)
+}
+
+fn encoded_subject(subject: &str) -> String {
+    if subject.is_ascii() && subject.len() <= 70 {
+        subject.to_owned()
+    } else {
+        let mut result = String::new();
+        let mut rest = subject;
+        while !rest.is_empty() {
+            let mut end = rest.len().min(42);
+            while !rest.is_char_boundary(end) {
+                end -= 1;
+            }
+            if !result.is_empty() {
+                result.push_str("\r\n ");
+            }
+            let _ = write!(
+                result,
+                "=?utf-8?B?{}?=",
+                STANDARD.encode(&rest.as_bytes()[..end])
+            );
+            rest = &rest[end..];
+        }
+        result
+    }
 }

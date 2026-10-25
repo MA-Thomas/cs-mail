@@ -114,6 +114,10 @@ pub(super) struct Personal {
     persona: ProtocolIdentity,
     threads: Vec<PersonalThread>,
     work: Vec<WorkRecord>,
+    #[serde(default)]
+    pub(super) resources: Vec<super::resources::ResourceRecord>,
+    #[serde(default)]
+    pub(super) email_text_revision: u8,
 }
 const CONTEXT: &[u8] = b"cs-mail/personal-mailbox/v1";
 #[derive(Clone, Debug)]
@@ -158,8 +162,14 @@ impl Personal {
                 persona: state.profile.persona,
                 threads: Vec::new(),
                 work: Vec::new(),
+                resources: Vec::new(),
+                email_text_revision: 0,
             },
         };
+        super::resources::validate_records(&value.resources)?;
+        if value.email_text_revision > 1 {
+            return Err(Error::InvalidData);
+        }
         let unique: BTreeSet<_> = value.threads.iter().map(|t| t.key).collect();
         let operations: BTreeSet<_> = value.work.iter().map(|w| w.operation).collect();
         if value.account != state.profile.account
@@ -244,7 +254,7 @@ impl Personal {
                     matches!(
                         p.command,
                         cs_mail_application::correspondence::external::Command::Start { .. }
-                            | cs_mail_application::correspondence::external::Command::Send(_)
+                            | cs_mail_application::correspondence::external::Command::Send { .. }
                     )
                 })
                 .map(|p| WorkCommand::External(Box::new(p.clone())))
@@ -322,8 +332,8 @@ impl WorkCommand {
                 }
             }
             Self::External(p) => {
-                if let external::Command::Start { message, .. } | external::Command::Send(message) =
-                    &p.command
+                if let external::Command::Start { message, .. }
+                | external::Command::Send { message, .. } = &p.command
                 {
                     Ok((
                         p.operation.0,
@@ -460,7 +470,7 @@ impl MemberClient {
             .into_iter()
             .find(|i| i.key == key)
             .ok_or(Error::InvalidData)?;
-        let visible = self.scope_items(&state, vec![known.clone()], scope)?;
+        let visible = self.scope_items(&state, vec![known.clone()], scope, &personal)?;
         let known = visible.first().ok_or(Error::InvalidData)?;
         if let MailAction::Read(ids) | MailAction::Unread(ids) = &action {
             if ids.len() > 10_000 || ids.iter().any(|m| !known.messages.contains(m)) {

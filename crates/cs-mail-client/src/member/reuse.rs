@@ -29,6 +29,7 @@ pub struct SourceMessage {
 }
 #[derive(Clone, Debug)]
 pub enum SourceBlock {
+    Attachment { block: u32, size: u32 },
     Text { block: u32, text: String },
     Image { block: u32, bytes: Vec<u8> },
     Reference { block: u32 },
@@ -165,6 +166,13 @@ impl MemberClient {
                         end: *bytes,
                     },
                     BlockDescriptor::Image { .. } => SelectionElement::ImageBlock { block },
+                    BlockDescriptor::Email { .. } => return Err(Error::SourceUnavailable),
+                    BlockDescriptor::Attachment { bytes } => {
+                        return Ok(SourceBlock::Attachment {
+                            block,
+                            size: *bytes,
+                        });
+                    }
                     BlockDescriptor::Reference => return Ok(SourceBlock::Reference { block }),
                 };
                 let selection = MessageSelection::new(message, manifest.version(), vec![element])
@@ -351,6 +359,8 @@ impl MemberClient {
                 }
             }
             retained.save(self, keys)?;
+            drop(retained);
+            self.forget_resources(state, keys, super::MailKey::Native(id))?;
         }
         state.editing_conversation = None;
         super::storage::save(self.store.as_ref(), keys, state)?;

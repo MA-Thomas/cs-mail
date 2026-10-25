@@ -7,16 +7,16 @@ enum SidebarTarget: Hashable {
     case external(String)
     case request(String, String, EditorialDirection)
     case senderLane(String, EditorialDirection)
+    case standingPermission(String, EditorialDirection)
     case aliasLane(String)
-    case financial(String, String, EditorialDirection)
     var id: String {
         switch self {
         case .contact(let sender): return "contact-\(sender)"
         case .external(let sender): return "external-\(sender)"
         case .request(let sender, let request, let direction): return "request-\(direction.rawValue)-\(sender)-\(request)"
+        case .standingPermission(let sender, let direction): return "standing-\(direction.rawValue)-\(sender)"
         case .senderLane(let sender, let direction): return "sender-lane-\(direction.rawValue)-\(sender)"
         case .aliasLane(let id): return "alias-lane-\(id)"
-        case .financial(let sender, let request, let direction): return "financial-\(direction.rawValue)-\(sender)-\(request)"
         }
     }
 }
@@ -43,15 +43,6 @@ enum SidebarProjection {
             let order = $0.item.title.localizedCaseInsensitiveCompare($1.item.title)
             return order == .orderedSame ? $0.target.id < $1.target.id : order == .orderedAscending
         }
-    }
-    static func aliasLanes(_ lanes: [ReceivingLaneView]) -> [SidebarEntry] {
-        lanes.map { lane in
-            let address = lane.address
-            let target = SidebarTarget.aliasLane(address.id)
-            return SidebarEntry(target: target, item: EditorialNavigationItem(
-                id: target.id, title: address.description ?? address.address,
-                subtitle: address.permission == .restricted ? "Existing conversations only" : address.permission == .senders ? "Selected senders only" : AliasLanePresentation.summary(address.state)))
-        }.sorted { $0.item.title.localizedCaseInsensitiveCompare($1.item.title) == .orderedAscending }
     }
     static func shortDate(_ milliseconds: UInt64) -> String {
         Date(timeIntervalSince1970: Double(milliseconds) / 1000).formatted(.dateTime.month(.abbreviated).day())

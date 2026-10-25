@@ -21,7 +21,9 @@ Working conventions:
   available for Marcus to assess. Do not introduce a separate demo mode, preview app,
   assessment app, fake client adapter or alternate owner account. Local bank/payment
   simulation and isolated test fixtures belong behind the existing backend contracts;
-  they are not another application mode.
+  they are not another application mode. The member application may contain selectable
+  presentation interfaces (A, B and later additions), sharing the same real Rust
+  client session, account and durable state; these are not separate applications.
   The canonical build entry is `scripts/apple-build.sh`; the current app is
   `target/apple/CsMail-continuity-20261012.app` (**cs-mail Development**).
   Read the current sections of [the Apple runbook](apps/cs-mail-apple/README.md)
@@ -46,7 +48,8 @@ Working conventions:
   clickable regions; main-space portals highlight their **perimeter** on hover,
   without shading the whole portal. Navigation previews must correspond to the
   actual hovered icon and dismiss after the pointer leaves both icon and popup.
-  The composer remains a popup/pop-out from the main space. These are presentation
+  New-message and reply composers occupy the main space, with Column B for optional
+  native-message quotation, reference and sharing sources. These are presentation
   behaviors; they do not establish communication permission or disclosure consent.
 - Report milestone progress from current implementation and validation evidence,
   distinguishing local simulation from public/live-provider delivery. Do not carry

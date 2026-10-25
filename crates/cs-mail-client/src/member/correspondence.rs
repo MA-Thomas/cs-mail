@@ -361,7 +361,18 @@ impl MemberClient {
             sources,
             draft,
         } = writing;
-        if (text.trim().is_empty() && sources.is_empty()) || text.len() > MAX_TEXT_BYTES {
+        let composed = draft.and_then(|d| {
+            if let super::DraftBody::Composed { content, .. } = d.body() {
+                Some(content)
+            } else {
+                None
+            }
+        });
+        if (text.trim().is_empty()
+            && sources.is_empty()
+            && composed.is_none_or(|c| !c.has_content()))
+            || (composed.is_none() && text.len() > MAX_TEXT_BYTES)
+        {
             return Err(Error::InvalidData);
         }
         let subject = if let Some(id) = conversation {
@@ -412,7 +423,9 @@ impl MemberClient {
             .checked_add(MESSAGE_LIFETIME)
             .ok_or(Error::InvalidData)?;
         let mut parts = Vec::new();
-        if !text.is_empty() {
+        if let Some(body) = composed {
+            parts.push(DocumentPart::Composed(body.clone()));
+        } else if !text.is_empty() {
             parts.push(DocumentPart::Text(text.to_owned()));
         }
         parts.extend(self.source_parts(state, keys, sources)?);

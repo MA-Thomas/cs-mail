@@ -1,17 +1,16 @@
 # Incoming conversation mail — supported MIME profile
 
-The Rust `cs-mail-mx` executable receives plain-text and paired plain-text/HTML mail to member addresses and replies to existing external
+The Rust `cs-mail-mx` executable receives supported plain-text and HTML MIME mail to member addresses and replies to existing external
 conversations. It offers STARTTLS, performs SPF/DKIM/DMARC through the existing
 `mail-auth` verifier using the actual socket peer and SMTP envelope, matches the
-single From mailbox to the conversation, encrypts text to the member, and commits
+single From mailbox to the conversation, encrypts preserved MIME content to the member, and commits
 admission before the final DATA `250`. It has no outbound relay or SMTP AUTH.
 
 This is a local, validated receiver implementation. Public MX/DNS deployment and
 Internet deliverability have not been established. The outbound adapter is now implemented locally (see [SMTP2GO](smtp2go-outbound.md));
 General member-address mail, paid acceptance reply routes and SMTP2GO transactional
 notices are implemented in the [local external-email journey](external-email-journey.md).
-HTML-only messages, attachments and request-page confirmation for weakly authenticated
-mail remain later work. Unsupported content/authentication is explicitly refused.
+Attachments and request-page confirmation for weakly authenticated mail remain later work. Unsupported content/authentication is explicitly refused.
 
 ## Addresses and supported email
 
@@ -58,100 +57,32 @@ The address identifies a route; it conveys no permission. Automatic authenticati
 exact From-mailbox matching and current conversation/relationship authority still
 apply. Member-selected invitations require no interactive mailbox-control challenge.
 
-The receiver accepts one recipient per transaction and either one `text/plain` part
-(including the MIME default when Content-Type is absent) or a flat
-`multipart/alternative` containing exactly one plain-text and one HTML part, in
-either order. It selects the actual plain-text part; it never converts HTML into
-text. Subject and decoded text are retained together as encrypted external text,
-at most 16 KiB, with no native quotation/provenance assertion. A single valid From
-and Message-ID are required. Authentication receives the complete original email,
-including the HTML representation, before any admission occurs.
+The receiver accepts one recipient per transaction and a bounded complete MIME tree:
+plain text (including MIME's default), HTML, alternatives containing one of each,
+and related inline PNG/JPEG/WebP resources with unique Content-IDs. The original
+accepted MIME is retained encrypted, up to 2 MiB and 64 parts. Named inline raster
+resources are supported; attachments and other multipart/content kinds are refused.
+A single valid From and Message-ID are required. Authentication receives the complete
+original email before any admission occurs.
 
-This uses MIME's alternative-representation convention; it does not establish that
-the HTML and plain text say the same thing. HTML is neither rendered nor stored.
-Conventional MIME preamble/epilogue are framing, not delivered content. HTML-only
-mail, attachments (including named inline files), extra or nested parts, ambiguous
-part headers, unsupported encodings/charsets and truncated boundaries receive an
-explicit unsupported-content response. Recognized charset decoding and standard
-identity/base64/quoted-printable transfer encodings are supported. Decoded U+FFFD
-is conservatively refused because it may indicate lossy decoding, even when that
-character was intentional. Boundary validation prevents the parser's permissive
-recovery from accepting a missing closing delimiter. The profile is deliberately
-narrower than arbitrary Internet MIME; it does not silently accept an attachment
-and discard it.
+Rust derives a restricted HTML presentation and local searchable text without I/O.
+The supplied plain-text alternative remains distinct; it is not evidence that both
+representations say the same thing. Ambiguous headers, unsupported encodings/charsets,
+lossy decoding and incomplete multipart framing are refused. An unsupported sibling
+cannot be silently discarded to admit the rest.
 
-Email carries `GuestSmtp` provenance with unspecified origin and purpose. It never
-claims that a human initiated it. Guest express lanes created through the CLI now
-accept unspecified email declarations; existing narrower lanes retain their own
-constraints and may refuse such email. The request page's `GuestGateway` provenance
-remains separate. Native upload paths cannot claim SMTP authority.
+The Apple reader preserves supported HTML/CSS appearance in an isolated nonpersistent
+WebKit view. Scripts, frames, forms, automatic navigation and external requests are
+blocked. Supplied raster bytes use an app-owned local resource scheme, with decoder,
+format, frame-count, dimension and pixel limits. External `img` pictures are listed
+for explicit per-message approval, individually or as a selected collection.
+Retrieval uses anonymous HTTPS on port 443, pinned public DNS results, no proxy,
+redirects or automatic retries, and a 4 MiB response limit. Attempts precede requests
+in encrypted device storage. Successful bytes retain their provenance separately
+from the original message and are reused locally until message expiry. External
+stylesheets/fonts/CSS background URLs remain blocked and have no loading action.
+No sender-wide permission or automatic background retrieval is introduced.
 
-## Local configuration and startup
-
-Migrate/bootstrap through `cs-maild` first. The receiver opens the exact current
-schema (40) without running migrations and refuses a different schema version.
-The original owner uses a preservation-checked copy; no fallback reader or
-credential replacement is introduced.
-
-```json
-{
-  "database_url": "postgresql://receiver@127.0.0.1/cs_mail",
-  "listen": "127.0.0.1:2525",
-  "mail_domain": "mail.example.net",
-  "tls_certificate_file": "/secure/mx-chain.pem",
-  "tls_private_key_file": "/secure/mx-key.pem",
-  "replay_secret_file": "/secure/mx-replay.json",
-  "maximum_connections": 32
-}
-```
-
-The certificate file contains the PEM leaf certificate followed by intermediates;
-the key is PEM. The replay secret is a dedicated, nonzero 32-byte JSON array. Keep
-these files protected. No member/account signing or relay-decryption secrets are
-supplied to this process. To open previously unknown authenticated guests on private
-aliases, provision the optional registration capability explicitly:
-
-```json
-"alias_registration": {
-  "relationship_secret_file": "/secure/member-relationship.json",
-  "principal_secret_file": "/secure/member-principal.json"
-}
-```
-
-These must be the same protected derivation keys used by the member host; never
-generate substitute keys. Registration uses the same guest-pair/history-linking
-owner as existing external conversations and grants no ongoing relationship or
-outbound disclosure consent. Without this capability, a missing guest pair is
-unavailable, not silently created under a different identity mapping. Admission
-still rechecks the exact alias, current lifecycle and identity-level blocks.
-
-The checked-in certificates/private key under
-`cs-mail-test-support/fixtures` are public test material, never deployment credentials.
-
-```sh
-cargo build --locked -p cs-mail-mx
-target/debug/cs-mail-mx --config /secure/mx.json
-```
-
-Keep the replay secret stable across restarts and back it up with the database.
-Uncoordinated replacement changes operation identities; secret rotation requires a
-separate migration design. Current deployment expects a local/trusted PostgreSQL
-connection; a remote TLS database connector and a hardened deployment-specific
-SQL-role/privilege configuration are not supplied by this pass.
-
-The process bounds connections (configured 1–256), commands (100 per cleartext/TLS phase),
-command lines (512 bytes), DATA lines (1,000 bytes after dot unstuffing), raw email
-(128 KiB), header size/count, DKIM signatures, authentication duration (30 seconds),
-DATA duration (120 seconds), and session duration (300 seconds). At most eight
-blocking admission operations run; their permits remain held if a disconnected
-session leaves a database operation completing. STARTTLS discards the earlier
-SMTP state and refuses buffered cleartext commands at the upgrade boundary.
-
-The final DATA `250` distinguishes admission to the member from a queued request-page
-prompt for an unknown authenticated sender. The latter explicitly says the original
-email was not delivered. MAIL/RCPT `250` merely records
-SMTP transaction inputs. Permanent authentication/routing/permission failures use
-`550`, unsupported content uses `554`, oversized content uses `552`, and transient
 DNS/database/transfer failures use `4xx`. A request-page prompt requires a DMARC pass,
 a nonempty envelope sender and no automatic-message marker. It is bounded to one
 per mailbox/member per 24 hours; forged or automatic mail cannot trigger it.
@@ -161,15 +92,16 @@ Received Authentication-Results headers never supply authentication evidence.
 
 The stable message identity is a keyed fingerprint of deployment, addressed route,
 exact mailbox and RFC Message-ID. A separate keyed fingerprint binds that identity
-to the decoded subject and selected plain-text body. MIME ordering/transfer encoding
-and HTML-only changes do not alter this delivered-text fingerprint, but every
-attempt must still pass the full MIME profile and authentication. This avoids treating randomized encryption, fresh
+to the decoded subject, every supplied text/HTML representation and each CID resource.
+Transport trace headers, alternative ordering and equivalent transfer encodings do not
+change that identity; changes to HTML or resource bytes do. Every attempt must still
+pass the full MIME profile and authentication. The first accepted original remains unchanged. This avoids treating randomized encryption, fresh
 verification time, or changing Received headers as a new message. Changed content
 under the same identity is refused. The receiver reauthenticates every attempt;
 an exact already-admitted retry returns its historical receipt without another
 message or lane consumption, even if permission has since changed.
 
-The gateway binds verified text, exact mailbox, conversation, replay identity and
+The gateway binds verified content, exact mailbox, conversation, replay identity and
 ciphertext in a private `AuthenticatedReply`. Storage accepts only this value; a
 caller cannot supply independently constructed authentication evidence and content.
 The application receives plain facts for deterministic rule evaluation. Verification

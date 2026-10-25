@@ -1,3 +1,2241 @@
+## Composer click targets and recipient selection — 25 October 2026
+
+Fixed recipient suggestions disappearing on mouse-down before their buttons could
+receive the click. SearchFieldClickAwayScope now scopes the recipient field and
+its choices together in A/B; other search fields keep their existing behavior.
+One click on a native contact populates To and switches Column B to Source message.
+Choose a person, then a retained message; highlight text to enable Quote selection,
+Reference selection and Share selected copy. These remain existing native inclusion
+operations, with Rust permissions checked through the existing submission boundary.
+
+ComposerControlTarget owns 44-point square icon regions across the shared toolbar
+and attached-file removal. ComposerActionStyle supplies the same minimum height for
+secondary actions. Recipient choices and native source actions have full-row hit
+regions. Glyphs remain compact and the portal hover convention is unchanged.
+
+Validation: canonical build/install passed (`target/composer-hit-target-build.log`).
+Running Interface B accepted a native recipient with one click, retained the existing
+subject/HTML/picture/file, exposed source actions, and inserted both a quotation and
+reference from selected text. Removed the duplicate reference and kept one unsent
+review quotation. Clicking the options button near its padded edge opened Import
+HTML design. Interface A also accepted a native recipient with one click and switched
+to the source picker. Restored Interface B dark. No messages were sent. This is a
+presentation-only fix: no new tests or unrelated Rust/PostgreSQL suites were run.
+iOS runtime, exhaustive button audit and keyboard/accessibility traversal were not
+validated. Existing account, Keychain association and signing requirement remain.
+
+## Formatted composer and imported designs — 25 October 2026
+
+The shared A/B main-space composer now has compact formatting controls, links,
+inline raster pictures with size/description controls, retained file attachments,
+and subject editing. Column B can open older correspondence alongside writing;
+native quotation/reference/sharing continues through its existing consent owner.
+Unaddressed/external helper reading grants no permission to reuse native content.
+Import a design accepts UTF-8 HTML and explicitly selected local image resources,
+previews them without network access, and sends through the existing native or
+external submission workflow. Imported designs may be replaced or explicitly
+converted to editable text; there is no visual design studio.
+
+Composed HTML, images and attached files are checked together in Rust and retained
+in encrypted drafts and committed documents. Subject, presentation and bytes survive
+save/reopen and retry. The current combined content limit is 4 MiB, with at most
+24 images/files. File and data image URLs are rejected; relative imported resources
+must be explicitly supplied from the selected containing folder. Remote pictures
+remain unavailable during import preview. Normal received-message approval retains
+its existing message/version-specific disclosure and durable retry behavior.
+
+Validation agreed with Marcus: content preservation after reopen, attachment changes
+during retry, and unexpected preview network access, affected Rust/PostgreSQL
+boundaries, and running A/B inspection. All eight full quality-gate checks passed
+(`target/composer-quality-final-all.log`), including production clippy and PostgreSQL.
+Focused content checks passed (`target/composer-content-release-tests.log`). The
+isolated native SQLite/FFI journey passed with retained 192 KiB files
+(`target/composer-native-release-check.log`). Local SMTP multipart/DKIM experiments
+passed (`target/composer-smtp-tests.log`); these establish local carrier behavior,
+not public/live-provider delivery. The final production WebKit adapter check passed
+(`target/composer-render-current.log`), including stale-selection formatting,
+normal-weight pasted spans, inert imported content and no canary network connections.
+
+Running-owner walkthroughs exercised B dark formatted drafting, file/picture insertion,
+reopen, and Column B reading; A light exercised local-resource design import, styled
+preview, subject preservation after recipient selection, save/reopen, and a fresh
+blank draft. Review drafts remain unsent. A formatting issue observed during the
+walkthrough was fixed and passed the final WebKit check. iOS runtime, VoiceOver, a full security audit and public delivery were not
+validated in the walkthrough. Request writing remains text-only; arbitrary incoming
+external attachments, CC/BCC and campaigns are outside this slice.
+
+Canonical final build and installation passed (`target/composer-apple-build.log`).
+Strict signature verification and baseline comparisons passed for the original
+signing requirement, account/alias ownership rows and configured key-file fingerprints
+(`target/composer-validation.json`). No Keychain entry was changed or replaced and
+no owner database migration was needed. The established owner backend job was
+updated and reports readiness. Computer Use temporarily timed out after the earlier
+walkthrough; Marcus closed the app and explicitly authorized reopening. The updated
+canonical app reopened successfully with the original account. In that running build,
+whole-selection bold worked across both lines and the retained subject, picture and
+file reopened intact. Interface B dark appearance was restored. The contextual picture controls were corrected to use an explicit popover and
+verified in the final installed build: Small visibly resizes the retained picture,
+and Apply description updates its accessible content. The text appearance menu
+opens with font, size, color, indentation and alignment choices. The review draft
+was saved without sending. Installed and running executable UUIDs match, and the
+original signing requirement and strict signature verification still pass.
+
+## Remove the Finances section — 24 October 2026
+
+Removed Finances from the shared area/destination types, both Column A navigation
+interfaces, the Column B financial organizer and layout preview, and the main-space
+record/Q&A destinations. Removed their dedicated views, selection/filter checkpoint
+state, record-order type and finance-only presentation colors. There is no hidden
+Finances route or replacement navigation alias. Existing request and settlement
+facts remain with their existing Rust owners and request workflows.
+
+Canonical build/check compilation, original signing comparison, strict verification
+and installation passed (`target/remove-finances-build.log`). Normally reopened with
+the original account. Running Interface B shows Home, Communications, Relationships,
+Aliases and Express Lanes, and Notes, with no Finances icon. Communications still
+opens its populated Column B and main inbox. Source checks find no remaining finance
+area, organizer or main-space destination in either interface. Whitespace checks
+passed. Presentation-only: no new tests or unrelated Rust/PostgreSQL suites. A separate
+Interface A runtime walkthrough and iOS runtime were not exercised.
+
+## Remove the plain-text format toggle — 24 October 2026
+
+Removed Show plain text/Show formatted email and their toggle state from the shared
+A/B email reader. Supported HTML displays directly. Originally text-only mail and
+text presentation after a renderer failure retain their existing handling. The
+external-picture review action remains available only when pictures are missing.
+
+Canonical build/check compilation, original signing comparison, strict verification
+and installation passed (`target/remove-plain-text-toggle-build.log`). Normally
+reopened with the original account and inspected the running Interface B HTML
+notification: formatting and retained picture remain visible, and the format toggle
+is absent. Whitespace checks passed. Presentation-only: no new tests or unrelated
+Rust/database suites. A separate A/iOS walkthrough and renderer-failure injection
+were not performed for this change.
+
+## Quiet conversation actions — 24 October 2026
+
+Removed Latest from native and external readers in both interfaces. Manage contact
+now belongs to each reader's existing conversation-actions menu alongside private
+organization: native opens the existing management sheet; external has a contextual
+submenu. The unused permanent action row is gone. Explicit Command-F still reveals
+local find and Escape dismisses it. Menu help no longer incorrectly promises that
+all included actions are private organization with no permission consequences.
+
+Canonical build/check compilation, original signing comparison, strict verification
+and installation passed (`target/reading-actions-menu-build.log`). Normally reopened
+with the original account. Inspected running Interface B native and HTML readers:
+Latest and the prominent management button are absent, both existing menus include
+Manage contact, and the native menu action opens the original management sheet.
+Closed it without changes. Verified external Command-F/Escape still works.
+Whitespace checks passed. Presentation-only: no new tests or unrelated Rust/database
+suites. A separate Interface A runtime walkthrough and iOS runtime were not exercised.
+
+## Full external-picture explanation — 24 October 2026
+
+The shared picture-review sheet now wraps its complete disclosure explanation,
+picture addresses and retry notes without a line limit. Explanation and resources
+share a bounded scroll area; Cancel and Load remain outside it. The sheet has an
+explicit usable width/height range rather than compressing the explanation above
+a competing scroll view.
+
+Canonical build/check compilation, original signing comparison, strict verification
+and installation passed (`target/external-picture-sheet-build.log`). Normally
+reopened the app with the original account. Inspected the running Interface B
+popup: every sentence of the explanation and the full sample address were visible,
+with both actions accessible. Cancelled without fetching any picture. Whitespace
+checks passed. Presentation-only: no new tests or unrelated Rust/PostgreSQL suites.
+Many-resource overflow, enlarged accessibility text and iOS runtime were not
+separately exercised.
+
+## Conversation find is hidden by default — 24 October 2026
+
+Removed the persistent find bar from native and external readers in A and B.
+Command-F explicitly reveals and focuses local find; Escape dismisses it and
+clears its query. The normal reader shows only its existing conversation actions.
+The header geometry remains shared when find is invoked.
+
+Canonical build/check compilation, signing comparison, strict verification and
+installation passed (`target/conversation-find-hidden-build.log`). Normally
+reopened with the original account. Verified in the running Interface B HTML
+reader that no search field appears on opening, Command-F reveals/focuses it,
+and Escape removes it. Whitespace checks passed. Presentation-only: no new tests
+or unrelated Rust/PostgreSQL suites. Native/A keyboard walkthroughs and iOS runtime
+were not separately exercised for this correction.
+
+## Reading hierarchy and outgoing email authorization — 24 October 2026
+
+Native and external readers now share ConversationReaderHeader and portal geometry:
+search is the first fixed row within the reading surface. Subject, sender/date,
+notices and permission controls cannot move that row. Email subject is the heading;
+mailbox identity is quiet message metadata. The external contact-level subject picker,
+large sender heading, permanent transport explanation and prominent permission grid
+are removed. Opening a mailbox row selects that exact conversation, including two
+notifications from the same sender with identical subjects. Missing selected content
+does not select a different conversation.
+
+Manage contact owns blocking and current incoming-permission revocation, plus
+outgoing consent withdrawal when applicable. The no-standing-permission example
+offers Block and omits Revoke. Reply no longer requires a separate disclosure grant.
+Explicit Send supplies outgoing authorization in its signed command: the Rust
+application commits the grant and selected queued reply together. Failed commit
+leaves neither effect; replay remains terminal/idempotent, withdrawal still cancels
+waiting messages, and a new grant does not revive cancelled mail. Opening, drafting
+and saving issue no grant. Block enforcement and picture permissions are separate.
+
+Canonical build/install, original signing comparison and strict verification passed
+(`target/reading-layout-build.log`). The matching simulation-enabled service was
+built (`target/reading-layout-service-build.log`) and restarted through its existing
+`com.csqd.cs-mail.owner-readable-aliases` launchd job, preserving database/config/keys.
+The first manual start found the supervisor already listening; the established job
+was then explicitly restarted on the updated binary. No second service remains.
+The native inspector initially timed out while the old app was running; Marcus
+normally closed it, and the installed app was reopened with the original account.
+
+Running Interface B observations: native and HTML search share the same top position;
+HTML subject heading and secondary sender/date; no subject dropdown or action grid;
+contextual Manage contact menu; native find returns/highlights its match; selecting
+either same-subject notification opens the selected message's timestamp. Retained
+pictures remain available. Original account/persona associations, full alias records,
+backend-key digests and signing requirement match the pre-update baseline, and the
+canonical installed executable is running (`target/reading-layout-validation.json`).
+No real mail was sent, external picture fetched, or contact permission changed.
+
+Validation: 8 SMTP/PostgreSQL experiments passed in an isolated database
+(`target/reading-layout-smtp-tests.log`), including the extended existing experiment
+that injects a failed explicit Send to challenge atomic grant/message persistence,
+then retries, replays and withdraws. Affected application/client library checks
+passed (1 application, 7 client; FFI has no unit cases) in
+`target/reading-layout-unit-tests.log`. Affected crates' all-target/all-feature lint
+passed (`target/reading-layout-clippy.log`) after documenting the single extended
+causal experiment's length. Native WebKit inert rendering/local find/embedded image
+and long-body reflow checks passed (`target/reading-layout-render-check.log`).
+Whitespace checks passed. No full workspace/production-feature quality gate,
+separate Interface A runtime walkthrough, iOS runtime, real-send or live-provider
+delivery validation was performed for this change.
+
+## Remove the contact-conversations return button — 24 October 2026
+
+Removed the “Conversations with <person>” chevron button from the opened native
+conversation in both A and B, as requested. The existing mailbox-origin return
+and contact controls retain their roles.
+
+Canonical build/check compilation, signing-requirement comparison, strict signature
+verification and installation passed (`target/remove-conversations-back-build.log`).
+Normally reopened the app with the original account and inspected Elena Park’s
+conversation in Interface B: the requested button is absent and the reading surface
+remains intact. Whitespace checks passed. Presentation-only; no new tests or
+unrelated Rust/PostgreSQL suites. A separate A runtime walkthrough was not performed.
+
+## Email scrolling has one vertical owner — 24 October 2026
+
+The HTML reader previously placed a fixed-height WebKit scroll pane inside the
+conversation scroll view. The email body now fits its measured content height;
+local app-owned observation updates that height after image layout and width
+changes. Vertical wheel gestures over the HTML body pass to the conversation.
+The same shared reader serves A and B. Sender scripting and external-request
+restrictions retain their existing owners. Explicit search can reveal its selected
+text through the enclosing scroll view.
+
+Canonical build/install, original signing-requirement comparison and strict
+signature verification passed (`target/email-scroll-build.log`). Normally
+reopened the installed app with the original account. In Interface B, verified
+scrolling down over formatted content reaches the footer, reversing over the
+body returns to the header, retained pictures remain visible, and local search
+reveals a lower-body match. The focused native rendering experiment also passed
+(`target/email-scroll-render-check.log`, check compilation in
+`target/email-scroll-check-build.log`): a long body exceeds the former height
+cap, narrow reflow expands it, widening shrinks it again, and it has no remaining
+vertical HTML overflow. Existing layout, embedded-image, local-find, blocked
+network and disabled-sender-script observations passed in that same experiment.
+Whitespace checks passed. No Rust/domain/database behavior changed; unrelated
+suites were not rerun. Physical trackpad momentum, iOS runtime and a separate
+Interface A live walkthrough were not exercised for this correction.
+
+## Preserved HTML email with deliberate picture retrieval — 24 October 2026
+
+Incoming email now retains its original MIME in the encrypted message, including
+supported plain/HTML alternatives and embedded raster pictures. Rust owns the
+accepted format, inert presentation, extracted text, message-bound approvals and
+encrypted retrieval records. Both native interfaces use the same Swift reader.
+Headings, tables, emphasis, sender styling and embedded pictures are retained;
+plain text is available explicitly. Opening or searching correspondence does not
+authorize external requests. The replaced plain-only SMTP selector is removed.
+
+External pictures are reviewed by exact URL and selected for this message. An
+attempt is saved before I/O. Retrieval permits public HTTPS raster pictures with
+bounded size/time, refuses redirects and automatic retries, and stores successful
+bytes separately from the original. A failed picture does not mark the member
+service offline. Scripts, frames, external CSS/fonts/backgrounds and ambient
+network requests are blocked. Deliberate hyperlinks open the external browser.
+
+The canonical app was built, installed with the original signing requirement,
+normally reopened and inspected using the existing account. Verified healthcare,
+government, workplace and professional-network fictitious email; formatted and
+plain views; table-text find; retained-search results and return position; both
+interfaces; an explicitly selected public picture; redirect refusal; and retained
+picture display after reopening. The remaining unapproved picture remains blocked.
+The fictitious incoming messages used existing local backend admission/encryption
+contracts and receiving permissions. No real email was sent or permission changed.
+Account/persona associations, complete alias records and backend-key digests match
+the pre-update baseline. Original Keychain credentials were neither replaced nor
+rewritten. The running executable is the canonical installed app.
+
+Validation: workspace tests, PostgreSQL suites, identity manifest, dependency
+direction, formatting and application-binary checks passed in
+`target/html-quality-gate-release.log`. That run reported two lint failures;
+those cosmetic issues were corrected and both complete lint configurations passed
+in `target/html-release-clippy.log` and
+`target/html-release-production-clippy.log`. This is individual-check evidence,
+not a claim that the release gate completed cleanly in one invocation. SMTP retry
+checks passed in `target/html-smtp-tests.log`. Native WebKit checks passed in
+`target/html-render-check-release.log`: layout, embedded raster display, disabled
+sender script, blocked canary network and local find/selection. Named Rust
+experiments challenge MIME fidelity/replay identity and durable explicit retrieval,
+including failed-save and no-refetch cases. Build/install evidence:
+`target/html-apple-build-release.log`; continuity and running-app evidence:
+`target/html-validation-final.json`. Whitespace checks passed.
+
+Limits: incoming attachments, SVG/animation, external styles/fonts/backgrounds and
+structured native reuse of HTML selections are outside this slice. Extracted-text
+search can differ from rendered matching for hidden text and whitespace. No iOS
+runtime, full VoiceOver/decoder-abuse audit or live-provider email delivery was
+validated. Resource expiry is enforced when read; physical cache removal is
+opportunistic and also accompanies permanent native-copy deletion, not a scheduled
+cleanup service. Outgoing composition remains text-only.
+
+## Compact Interface B mailboxes — 24 October 2026
+
+Inbox, Sent, receiving inboxes, retained-search results and Drafts now share a
+compact row composition: aligned correspondent, subject and short date, a stacked
+fallback for constrained widths, and contextual secondary text. Quiet separators
+and perimeter feedback replace spacious portal treatment. Read/unread emphasis
+and flags remain facts supplied by the existing mailbox projection. Selection
+checkboxes, opening a row and its organization menu remain separate actions.
+The header groups title, search and options; routine refresh timestamps and
+repeated transport explanations are removed. Offline and uncertain delivery
+outcomes remain visible. Outbox language distinguishes queued email delivery
+from confirmed native delivery and unknown sending outcomes.
+
+Canonical build/check compilation, original signing-requirement comparison,
+strict signature verification and installation passed. Reopened the canonical
+app with the existing account. Inspected populated Inbox in dark and light,
+receiving inbox without redundant receiving captions, Sent, compact Drafts, and
+the empty Outbox. Verified checkbox selection exposes bulk actions, opening an
+organization menu does not open the row, returning from a conversation preserves
+selection, and opening a search match and returning preserves its query/results.
+Cleared the inspection selection/query and restored dark appearance and All
+inboxes / Inbox. No sending, deletion or permission actions were exercised.
+Evidence: target/compact-mailboxes-build.log. Whitespace checks passed.
+
+Presentation-only: no new tests or unrelated Rust/PostgreSQL suites. Constrained
+window fallback, keyboard traversal, populated unread/flagged and external-email
+rows, offline warning, and nonempty Outbox outcome variants were not exercised
+in the running app. No live-provider delivery claim is made.
+
+## Remove Column A’s transient solid blue focus perimeter — 24 October 2026
+
+Clearing focus after pointer activation still allowed a transient blue ring before
+the action executed. Column A now explicitly excludes the shared solid teal focus
+perimeter from rendering, even during transient focus. An unselected keyboard-focused
+navigation icon instead uses a small neutral underline; selected icons keep cove
+lighting. Home contact focus rings keep their separate role. Native navigation
+focus effects remain disabled.
+
+Canonical build/check compilation, original signing comparison, strict verification,
+installation and whitespace checks passed. Normally quit/reopened the canonical app.
+Inspected focused Home and keyboard traversal to Communications, followed by pointer
+activation and repeated selection of Notes. Captured Column A after repeated clicks:
+Notes retains its cove spill without a solid blue outline. The blue perimeter branch
+is excluded for the navigation role rather than removed after a click. Original
+dark appearance, profiles and account/credential association retained.
+Evidence: target/column-a-no-blue-flash-build.log.
+
+Presentation-only: no new tests or unrelated Rust/PostgreSQL suites. No frame-by-frame
+mouse-down recording, light/iOS or full accessibility recheck in this pass.
+
+## Column A pointer activation no longer assigns keyboard focus — 24 October 2026
+
+The solid blue outline reported after clicking was the custom keyboard-focus ring:
+Column A’s activation action unconditionally assigned focusedIcon. Pointer/native
+button activation now clears that focus; explicit Space/Return activation retains
+it. Navigation selection continues to own the steady area-colored cove outline.
+Hover and preview state do not substitute for selection.
+
+Canonical build/check compilation, original signing comparison, strict verification,
+installation and whitespace checks passed. Normally quit/reopened the canonical app.
+In the running dark Interface B app, clicking Notes and clicking it again retained
+the purple cove perimeter with the window (not icon) focused. Tab focused Home;
+Space activated it and retained keyboard focus. Clicking Notes afterward cleared
+icon focus again. Screenshot inspection confirmed cove spill without a solid teal
+focus ring after pointer activation. Left Notes selected in the original dark
+appearance. Account, credentials, profiles and texture settings were retained.
+Evidence: target/column-a-pointer-focus-build.log.
+
+No new tests or unrelated Rust/PostgreSQL suites for this focused presentation fix.
+Light mode, compact/iOS, VoiceOver and every pointer-preview path were not rechecked.
+
+## Column A selected perimeter and cove light — 24 October 2026
+
+Interface B Column A selection now uses one thin rounded perimeter and soft
+exterior cove lighting instead of the teal side marker. The shared cove renderer
+has a navigation-selection role using each area's reflection color for dark-mode
+legibility; existing surface/preview lighting keeps its original role. No icon fill,
+raised treatment or stacked bezel is introduced. Unselected hover remains a quiet
+perimeter, and keyboard focus retains its separate crisp outer ring. Increased
+contrast/Reduce Transparency selects a solid legible outline instead of glow.
+Home contact rows do not acquire persistent selection.
+
+Canonical build/check compilation, original signing comparison, strict signature
+verification, installation and whitespace checks passed. Normally quit/reopened
+the canonical app with original account association. The first dark Home inspection
+found selection too faint; the final installed role refinement was inspected in
+both dark and light Home screenshots. Tab moved focus to Communications without
+changing Home selection; Space selected Communications, Right Arrow opened its
+matching preview, and Escape dismissed it. Returned to Home and original dark
+appearance, then cleared keyboard focus so the steady selected outline is visible.
+Saved profiles, texture settings and credentials were retained.
+Evidence: target/column-a-selected-cove-build.log.
+
+Presentation-only: no new tests or unrelated Rust/PostgreSQL suites. Compact/iOS,
+all area colors, full VoiceOver and accessibility override runtime checks, and
+exhaustive pointer hover/press paths were not re-exercised.
+
+## Quiet Column A and Home contact rows — 24 October 2026
+
+Interface B Column A icons and Home contacts now share a quiet workspace-button
+style. Removed Column A’s glass/embossed frames and Home’s filled, stacked-border
+contact capsules. Navigation keeps its 48-point hit areas and teal leading active
+marker. Contacts use full-width padded rows, names/status, trailing arrows and
+subtle separators, retaining the existing Home arrangement choices. Hover is
+perimeter-only, pressing gives distinct perimeter/content feedback, and keyboard
+focus has a separate teal ring. Main-space lighting and texture settings remain.
+The replaced navigation style and its unused private rendering branch are removed;
+action controls and the separate relationship map keep their existing styles.
+
+Canonical Apple build/check compilation, original signing comparison, strict
+signature verification, installation and whitespace checks passed. Normally
+quit/reopened the canonical app with the original account. Dark/light screenshots
+verified the changed composition. Keyboard inspection found focused contact rows
+did not activate with Space/Return; the final installed correction explicitly routes
+both keys to the same action as click. Native Tab traversal focused Daniel with
+a visible ring; Space and Return each opened his conversation list, and Back to
+Home restored the overview. Column A click navigation, selected marker, focus
+ring, Right Arrow preview for Communications and Escape dismissal were inspected.
+A captured Home screenshot also showed restrained perimeter hover on a history row.
+Left Home in Marcus’s original dark appearance with texture/profile values retained.
+Evidence: target/quiet-home-navigation-build.log.
+
+Presentation-only: no new tests or unrelated Rust/PostgreSQL suites. Compact/iOS,
+all Home arrangements, full VoiceOver/increased-contrast checks, pointer-preview
+exit paths and exhaustive hit-region/press-state coverage were not re-exercised.
+No sends, permission mutations or credential replacement.
+
+## Focused profile list and naming — 24 October 2026
+
+Interface B’s palette now lists selectable profiles with an active checkmark.
+Save as new profile switches only the Profiles section to Name/Save/Cancel;
+rename uses the same focused form. Rename/Delete live in each row’s menu and
+operate on that exact profile without selecting/applying it. Modified and Update
+profile appear only when needed. Failed saves retain the form and entered name.
+The replaced picker, permanent name box and always-exposed management row are
+removed. Local profile storage format and existing appearance snapshots remain.
+
+Canonical build/check compilation, original signing requirement comparison, strict
+signature verification, installation and whitespace checks passed. Native inspection
+of the older process timed out; its verified PID was stopped with SIGTERM and the
+canonical update reopened successfully with the original account. Runtime Interface B
+inspection covered list/checkmark rendering, blank new-name form with focused field
+and disabled empty Save, Cancel without creation, successful Save returning to the
+list, selecting Light Terrazzo, renaming an inactive temporary profile from its menu
+without changing selection, and deleting only that temporary profile. Final list
+contains Dark Green and Light Terrazzo, with Light Terrazzo still selected and its
+original appearance intact. Screenshot inspection confirmed the reduced controls.
+Evidence: target/profile-list-build.log.
+
+Presentation-only validation: no new tests or unrelated Rust/PostgreSQL suites.
+Storage-failure and duplicate-name form behavior, Modified/Update visibility, iOS,
+full keyboard/VoiceOver coverage and another restart were not re-exercised.
+
+## Named appearance profiles — 24 October 2026
+
+Interface B’s palette now offers named appearance profiles, with Save as new,
+Update profile, Rename and Delete. A snapshot records resolved light/dark mode,
+default/custom texture color and both optional opacity overrides. Live changes
+mark the selected profile Modified without overwriting it; selecting it restores
+the snapshot, including when reselecting the same profile. Deleting a profile
+leaves current appearance untouched. A scrollable palette keeps color/opacity
+controls reachable below profiles. One local encoded document owns profiles and
+selection, with restoration validation and refusal to overwrite unreadable data.
+First adoption saved Marcus’s current dark-green appearance as Dark Green.
+
+Validation challenged two claims: live edits must not silently overwrite a saved
+appearance, and named snapshots must survive reopening and restore the complete
+appearance. Canonical Apple build/check compilation, original signing-requirement
+comparison, strict verification, installation and whitespace checks passed. Normal
+quit/reopen retained the original account. Native Interface B interaction saved a
+second profile, changed hue (Modified appeared), updated it, renamed it, restored
+Dark Green’s original hue, changed to light mode (Modified appeared), and reselected
+Dark Green to restore dark mode. Both profiles and the selected Dark Green survived
+another quit/reopen. Deleted only the temporary check profile and restored Dark
+Green. A preference comparison confirmed the saved Dark Green snapshot and restored
+current values exactly match all original mode/color/opacity settings.
+Screenshot inspection covered the running profile controls and green workspace.
+Evidence: target/appearance-profiles-build.log.
+
+No new automated tests or unrelated Rust/PostgreSQL suites for this presentation
+change. Corrupt-storage recovery, duplicate-name refusals, delete-all/reopen,
+system-appearance changes, a full keyboard/VoiceOver audit and iOS runtime were not
+exercised. Profiles are local device preferences, with no cloud sync or export.
+The installed canonical app is running with Dark Green selected.
+
+## Separate live terrazzo opacity — 24 October 2026
+
+The Interface B palette now includes Main-space texture and Surrounding texture
+opacity sliders. Each applies immediately to its own surface scope; surrounding
+also drives Column B at one-quarter strength. Opacity changes preserve the current
+color choice. Intensity is relabeled Color saturation; Use defaults restores the
+original raster and removes both overrides, including scheme-specific opacity
+defaults. Optional presentation overrides are persisted as local preferences.
+
+Canonical Apple build/check compilation, original signing requirement comparison,
+strict verification, canonical installation and whitespace check passed. Normally
+quit/reopened the signed app with the original account. In the running light-mode
+Interface B alias workspace, incrementing main-space opacity from 18.7% to 28.7%
+left surrounding at 34%; reducing surrounding to 24% left main at 28.7%. Screenshot
+inspection showed corresponding live changes and quieter Column B. Use defaults
+restored 18.7%/34% and neutral rendering; unchecking restored Marcus's existing blue
+choice, with hue/brightness/saturation unchanged. Left original light appearance
+and blue color active, with no opacity overrides. No account or credential changes.
+Evidence: target/terrazzo-opacity-build.log.
+
+Presentation-only scope: no new tests or unrelated Rust/PostgreSQL suites. Dark-mode
+opacity overrides, override persistence after another reopen, pointer dragging,
+iOS and full accessibility checks were not exercised in this pass. Opaque writing
+surfaces and accessibility suppression retain their existing rendering paths.
+
+## Live terrazzo color controls — 24 October 2026
+
+Interface B has a palette toolbar popover beside light/dark appearance. Its
+continuous hue/brightness field, native Hue/Brightness alternatives and Intensity
+(saturation) slider update shared B backgrounds immediately. Use default colors
+restores the original raster, retaining the last custom selection. Device-local
+preferences persist across reopening; no account/client state is involved.
+
+One deterministic generator produces the original raster, binder and neutral fleck
+layers once. Custom rendering multiplies the neutral flecks by the chosen color,
+retaining alpha and mineral variation; binder/noise remain independent. Changes
+reuse cached layers rather than regenerating geometry. Window anchoring, existing
+texture strengths, opaque reading/writing surfaces and accessibility suppression
+retain their owners.
+
+Validation: canonical build and CsMailAppleCheck compilation, original designated
+signing-requirement comparison, strict signature verification, installation and
+whitespace check passed. Normally quit/reopened the canonical app with the original
+account. Interface B inspection verified palette access, live hue/intensity and
+brightness changes through native adjustable controls, automatic default deselection,
+custom persistence across reopening, and default restoration. Light/dark screenshot
+inspection verified shared colored flecks and the original neutral default.
+The original dark appearance and default colors were restored after checks.
+Evidence: target/terrazzo-color-build.log.
+
+Presentation-only scope: no new tests or unrelated Rust/PostgreSQL suites. No
+quantitative frame-rate benchmark, pointer-drag automation, complete keyboard or
+VoiceOver audit, increased-contrast/Reduce Transparency runtime check, iOS runtime
+or Interface A appearance change. App-window captures crop portions of native
+popover content outside the window; they do not establish full-screen placement.
+
+## Main-space alias creation — 24 October 2026
+
+Aliases and Express Lanes now defaults to New alias in the main space in A/B.
+Column B and existing-alias New Alias actions use that same destination; the
+creation sheet and modal-only state are removed. The guide remains an explicit
+Column B choice. Unfinished inputs and submission/refusal state belong to the
+shared session draft and survive navigation; successful creation opens the new
+alias only while the creation destination is still active. Existing Rust creation
+and receiving-policy contracts are unchanged.
+
+Validation: canonical Apple build and CsMailAppleCheck compilation passed, with
+original designated-requirement comparison, strict signature verification and
+canonical installation. Normally quit/reopened the app and inspected Interface B:
+Column A defaults to the inline form; guide and existing-alias detail navigation
+work; Column B and detail New Alias open the main space without a popup; purpose
+and name survive guide navigation and leaving/re-entering the area. Screenshot
+inspection found the form within the existing main-space surface. Temporary form
+text was cleared, with no alias created or permission changed. Original account
+and credential association were retained. Evidence: target/main-space-alias-build.log.
+No new tests or unrelated Rust/PostgreSQL suites for this presentation change.
+Interface A compiled but was not inspected interactively; iOS, VoiceOver, actual
+creation and in-flight navigation/failure races were not re-exercised.
+
+## Column A/B divider top alignment — 24 October 2026
+
+The wide-layout vertical divider now shares Column B’s top inset through
+InterfaceBWorkspaceLayout.verticalInset. Its existing bottom and compact-layout
+horizontal separator are unchanged. Canonical build/check compilation, original
+signing comparison, strict verification, installation and whitespace checks passed.
+Quit/reopened the canonical app and verified the aligned top edges in the running
+Interface B Communications screenshot. Presentation-only: no new tests or backend
+suites; compact/iOS layout not rechecked. Evidence:
+target/column-divider-alignment-build.log.
+
+## Light composer surround texture — 24 October 2026
+
+Marcus clarified that the email body must remain solid white. Retained its native
+opaque background and increased the shared light main-space terrazzo strength to
+55% of outside strength. Dark remains at 25%, sidebar at 25%, outside unchanged.
+The proposed transparent-writing modifier was removed; it is not part of this
+implementation. No separate composer texture or replacement white surface added.
+
+Canonical build/check compilation, original signing requirement comparison,
+strict signature verification, installation and whitespace checks passed. Normally
+quit/reopened the canonical app and inspected the light Write an email screen:
+the body remains opaque white and header/margins/footer show stronger terrazzo,
+subordinate to outside. Dark rendering code is unchanged. Left that screen visible.
+Presentation-only: no new tests or unrelated backend suites; iOS/accessibility
+variants were not rechecked. Evidence: target/light-composer-surround-build.log.
+
+## Light main-space texture — 24 October 2026
+
+Raised Interface B main-space terrazzo from one-quarter to one-third of outside
+workspace strength in light appearance. Dark main space stays at one-quarter;
+subdued sidebar and outside strength are unchanged. The shared environment-owned
+role still reaches nested backgrounds and preserves accessibility suppression.
+Canonical build/check compilation, original signing comparison, strict verification,
+installation and diff whitespace passed. Normally quit/reopened the canonical app;
+inspected Communications in both appearances. Left light appearance visible for
+assessment. No new tests or unrelated backend suites; iOS and accessibility overrides
+were not re-exercised. Evidence: target/light-main-texture-build.log.
+
+## Quiet autosave — 24 October 2026
+
+Removed routine Saving draft / Draft saved text from the A/B shared draft-status
+surfaces. Automatic saving is unchanged; actionable save failures and content
+limits remain. Canonical build/check compilation, original signing requirement
+comparison, strict signature verification and installation passed. Quit/reopened
+the canonical app and verified Interface B typing/clearing changes only the body,
+with no routine save text. No emails sent. Presentation-only: no new tests or Rust
+suites; A runtime, iOS and simulated save-failure behavior were not rechecked.
+Build evidence: target/quiet-autosave-build.log.
+
+## Inline recipient field and quiet composer actions — 24 October 2026
+
+Replaced the recipient button/full-screen chooser with an editable To field and
+inline recipient suggestions in A/B new writing. The message remains visible.
+The workspace owns recipient query state across native/external editor transitions;
+editing an unresolved recipient disables Send until Rust resolves and commits the
+selection. Fixed conversation replies retain their existing recipient. Removed the
+replaced chooser and navigation state. Save/close, discard and relationship entry
+use shared text-only ComposerActionStyle; Send retains its interface primary style.
+
+Validation: canonical build and CsMailAppleCheck compilation passed, original
+signing requirement comparison and strict signature verification passed, and the
+canonical app was normally quit/reopened. Interface B screenshot/interaction
+inspection verified the plain editable To row and quiet secondary actions,
+external inline suggestion/Return selection, contact suggestion selection, message
+preservation through both editor transitions, and immediate Send disabling while
+editing a changed recipient. A first runtime check found a missing draft observation
+that left To disabled; the installed correction observes DraftEditor directly.
+Validation writing remains saved and unsent. A runtime, iOS, VoiceOver, cancellation
+races and incompatible-source confirmation were not rechecked in this pass.
+This changes presentation only; no new tests, Rust/domain rules, credentials or
+disclosure semantics changed. No emails were sent or unrelated backend tests run.
+Build evidence: target/inline-recipient-build.log.
+
+## Write before addressing — 24 October 2026
+
+Marcus rejected mandatory recipient-first composition. Write an email now opens
+an empty editor immediately in A/B. The To control opens the existing recipient
+chooser when wanted. No recipient is required to write, save, close or reopen.
+Rust owns the distinct Unaddressed target in the encrypted workspace, with no
+submission path; assignment uses the same checked Retarget transition and keeps
+the draft identity/text. Column B stays clear until native source tools apply.
+No transport guessing, disclosure checkbox or explanatory copy was added.
+
+Validation: six existing client tests passed. The recipient-change scenario now
+starts with unaddressed writing, reopens its stored text, challenges submission
+without a recipient, and exercises the existing atomic recipient changes. No new
+test cases were added. Targeted client/FFI Clippy, formatting, identity manifest
+and whitespace checks passed. The canonical app was installed with its original
+signer after designated-requirement comparison, then normally quit/reopened.
+Interface B runtime and screenshot inspection verified the blank editor opens
+immediately; typed text saved and reopened without a recipient, Send stayed
+unavailable, and later assigning write-first@example.com preserved the text.
+The unsent check draft is saved; the app is left on a fresh blank editor.
+No messages were sent, credentials replaced or permissions granted. Interface A
+compiled but was not re-inspected interactively; keyboard/VoiceOver remain untested.
+Evidence: target/write-first-build.log, target/write-first-tests.log and
+target/write-first-clippy.log. No PostgreSQL, iOS or actual sending checks.
+
+## Recipient-first composer installed and inspected — 24 October 2026
+
+A/B Write an email now opens a main-space recipient picker. Known contacts,
+directory names and exact addresses feed the existing native or external editor.
+The selected native publication's exact alias crosses the Rust/Swift boundary and
+is retained in a distinct NativeAddress draft, submitted through the existing
+signed SendToAlias path. Current native namespace membership comes from the
+authenticated owner alias portfolio. Missing native publications, empty namespace
+evidence and transport/custody failures cannot silently select external email.
+This is the existing single-deployment namespace, not federated discovery.
+
+Change recipient is available for new writing only. Rust Retarget preserves the
+same draft identity and message text in one encrypted workspace replacement,
+checks the expected revision and refuses fixed replies/request targets. Native
+subject/source removal for an external destination requires an explicit choice;
+native-to-native changes retain their sources for normal send-time checks. The
+picker ignores obsolete reads and prevents duplicate submit actions. Replies and
+saved writing reopen their existing targets. Eligible native contexts retain the
+existing relationship-request entry. Column B renders native source tools or
+stays clear; no replacement explanatory panel or relay/status copy was added.
+
+Validation: the canonical Apple build, including regenerated bindings and
+CsMailAppleCheck compilation, passed. Signing verification and original designated
+requirement comparison passed before canonical installation. The identity-source
+manifest, formatting, diff whitespace and targeted client/FFI Clippy checks passed.
+Six client tests passed with member-runtime enabled. Existing scenarios were
+extended, with no new test cases: exact-alias submission is observed in the signed
+command; native-address/transport failures refuse plaintext fallback; recipient
+changes preserve identity/text, reject stale revisions and failed writes, preserve
+native inclusions, require approval for their removal and refuse reply redirection.
+These are local transport/store fixtures, not PostgreSQL or provider evidence.
+
+The final build is installed at the canonical path with the original signer and
+account association; no credentials, account or schema were replaced. After the
+Mac became accessible, the app was normally quit and reopened from that path.
+Interface B runtime inspection verified the main-space recipient picker, native
+Daniel Reed composition with Column B source tools, external address resolution
+for workspace-check@example.com with Column B clear, and message-text preservation
+in both directions. Save/close and Drafts reopening preserved the text. The unsent
+validation draft remains saved; no messages were sent or permissions granted.
+
+Keyboard/VoiceOver, stale-query interaction, Interface A runtime transitions, iOS,
+source-removal confirmation and send refusals were not exercised in this runtime
+pass. Actual sending/public-provider delivery remains untested. No unrelated
+PostgreSQL/full gate or live-provider work was run.
+
+Evidence: `target/recipient-composer-build.log`, `target/recipient-client-tests.log`,
+`target/recipient-core-clippy.log`, `target/recipient-client-clippy.log` and
+`target/recipient-identity-check.log`. This entry records the earlier recipient-first
+interaction; the write-before-addressing entry below supersedes that entry flow.
+
+## Send label — 24 October 2026
+
+Renamed Queue email to Send in A/B external composers. No behavior change or new
+interface copy. Canonical build/check compilation, strict signing and original
+requirement comparison, installation and whitespace checks passed. Quit/reopened
+the original account app and verified B/dark Send in accessibility and screenshot.
+Left the empty composer open. No message sent, new tests or backend suites; A runtime
+and iOS not rechecked. Build: `target/email-send-label-build.log`.
+
+## Relay footer removed — 24 October 2026
+
+Removed the local-development-relay footer from A/B external composers at Marcus’s
+request. Added no replacement copy. Canonical build/check-product compilation,
+signing requirement comparison, installation and whitespace checks passed.
+Quit/reopened the original account app; B/dark accessibility and screenshot confirm
+the footer is absent. Left the new-email composer open. No new tests or unrelated
+backend suites; A runtime, iOS and sending were not checked. Build evidence:
+`target/email-composer-relay-copy-build.log`.
+
+## External composer sentence removed — 23 October 2026
+
+Removed “Write a text email. Native messages and references cannot be included.”
+from the main-space external composer in A and B. Canonical build and check-product
+compilation passed, with original signing-requirement comparison and installation.
+Quit/reopened the canonical app with the existing account. B / new external email /
+dark screenshot and accessibility confirmed the sentence is absent; left that
+composer open. No sending behavior changed. No new tests or backend suites; A runtime,
+iOS and actual sending were not rechecked. Diff whitespace checks passed. Build:
+`target/email-composer-copy-build.log`.
+
+## Checkbox removal verified after reopening — 23 October 2026
+
+At Marcus’s request, quit cs-mail normally and reopened the canonical installed
+bundle with the existing account. Opened B / Communications / Write an email.
+Accessibility and a dark screenshot confirm the main-space composer has no
+relay/plaintext consent checkbox or consent paragraph. Existing recipient/body,
+save/close, discard and Queue email controls remain. Left the app on that empty
+composer. No email was sent. This resolves the preceding native inspection and
+reopening blocker; A, actual sending and iOS were not rechecked in this reopening.
+
+## External composer without separate consent checkbox — 23 October 2026
+
+Removed the relay/plaintext consent checkbox and its accompanying consent and
+recipient-reminder paragraphs from new/reply external composers in A and B.
+Marcus explicitly confirmed “Yes, send directly” when asked whether Queue email
+should send ordinary email without ticking a separate box. That explicit action
+now passes the existing disclosure intent for a new conversation. Replies retain
+their existing conversation-authority checks; editing and saving do not authorize
+or send anything. Rust authorization and disclosure-withdrawal contracts remain.
+
+Canonical build and CsMailAppleCheck compilation passed, including strict signing
+verification and comparison to the original designated requirement before canonical
+installation. Diff whitespace checks passed. No new tests, unrelated backend suites
+or actual email submission were performed. Evidence:
+`target/email-consent-presentation-build.log`.
+
+Native inspection repeatedly returned timeoutReached for accessibility state,
+bundle-ID/path app access and screenshot capture. App inventory reports cs-mail
+running, but the updated build could not be quit/reopened or visually verified.
+The last observed running composer predates this installation. This is a native
+inspection blocker, not evidence about application/backend performance. Reopen the
+canonical app and inspect the composer before treating the removal as visibly
+validated. Original account and signing association were not replaced.
+
+## Main-space email and message writing — 23 October 2026
+
+A/B new native conversations, native replies and external emails now compose in
+main space. Reopening those saved drafts uses the same workspace; the replaced
+composer sheets and internal composer split view are removed. Column B previews
+retained native sources and offers explicit passage quotation, reference and
+shared-copy actions against the same draft state. External email retains authored
+text only and its existing disclosure-consent boundary. Request and follow-up
+forms retain their existing presentation.
+
+WorkspaceComposition owns the active DraftEditor, source selection and inclusions.
+Navigation freezes editing while the latest body saves, respects the latest
+navigation request, and retains the workspace on failure with Save/Discard/Stay.
+Explicit discard can abandon unsaved edits after a write failure while Rust checks
+the saved revision. Save & close restores the recorded origin. Native draft
+reopening reads the full retained conversation, rather than the mailbox summary,
+so the existing reply subject remains visible without moving the reading context.
+The Swift principles and AGENTS composer convention record the owner's change.
+
+Canonical Apple build and CsMailAppleCheck compilation passed. The build compared
+the original designated signing requirement before installing at the canonical
+path; strict installed-signature verification passed with local trust-store
+access. Quit/reopened the final app with the existing account, aliases and drafts.
+The identity source manifest and diff whitespace checks passed. No new tests or
+unrelated Rust/PostgreSQL suites were run.
+
+Runtime challenges: B new external composition appears in main space; entering an
+unsent check recipient/body, navigating Home and reopening from Drafts preserved
+both fields. Cleared that check's fields and closed it. B native Reply restored
+existing writing; opening and highlighting a retained source changed no inclusion
+until an explicit action. Quote, Reference and Share each produced their distinct
+main-space inclusion, and Remove removed it. Removed all check inclusions and
+preserved the original draft text. Save & close restored Daniel's conversation.
+A new external composition and native draft reopening also used main space; final
+quit/reopen verified the restored reply subject. Dark screenshots inspected A's
+native composer and B's external/native/source layouts at the shared 236-point
+Column B minimum. No message was sent, consent granted or permission changed.
+
+Not exercised: actual submission, a native new-conversation entry under current
+broader permission, external reply reopening, injected save failures, image reuse,
+iOS, light appearance, smaller windows, alternate text sizes or VoiceOver. This
+establishes local presentation, not public-provider delivery. Build evidence:
+`target/main-space-composer-build.log`. Final app is left in B / new external email
+composition / original dark appearance.
+
+## Straight-sided Column B with matching rounded corners — 23 October 2026
+
+Clarified rectangular treatment: Column B keeps straight sides with 24-point
+corner rounding matching the main space. InterfaceBWorkspaceLayout now owns the
+shared surfaceCornerRadius used by the sidebar, general main-space clipping,
+backdrop/perimeter geometry and correspondence surface. No bow was restored.
+Texture, selection, width limits, cove lighting and insets retain their behavior.
+Swift principles record the clarified geometry.
+
+Canonical build, CsMailAppleCheck compilation, strict signing verification,
+original signing-requirement comparison and installation passed. Reopened the
+canonical bundle with the original account and inspected B / Communications /
+All inboxes in light appearance: Column B has straight sides and matching rounded
+corners, with selection markers and main-space cove lighting preserved. Diff
+checks passed. No new tests or unrelated backend suites. Other destinations,
+dark appearance, iOS, alternate sizes and accessibility overrides were not
+individually rechecked. Build: `target/rounded-rectangular-column-b-build.log`.
+
+## Rectangular Column B panel — 23 October 2026
+
+InterfaceBSidebarSurface now uses Rectangle for its clipping and quiet outline.
+Removed the replaced bowed-shape path implementation. Texture, outline strength,
+three-point divider clearance, content insets, shared measured width and selection
+markers retain their values. The minimum-width comment now describes the retained
+trailing breathing room; no width behavior changed. Main-space rounded geometry
+and cove lighting are untouched. Swift principles record the rectangular panel.
+
+Canonical Apple build, CsMailAppleCheck compilation, strict signing verification,
+original signing-requirement comparison and installation passed. Reopened the
+canonical bundle with the existing account and inspected B / Communications in
+light appearance: Column B has straight sides and square corners, its measured
+236-point minimum and teal selection markers remain, and main-space cove lighting
+is preserved. Diff checks passed. No new tests or unrelated backend suites. Other
+areas share this surface but were not individually inspected; dark appearance,
+iOS, alternate sizes and accessibility overrides were not rechecked. Build:
+`target/rectangular-column-b-build.log`.
+
+## Shared Column B selection marker — 23 October 2026
+
+A/B organizers now scope navigation selection through columnBNavigation and the
+shared ColumnBNavigationSelection modifier: a decorative 3-by-18-point teal
+leading marker and semibold label, with no persistent gray selection fill.
+Mailbox, receiving alias, alias-detail, permissions and financial-record rows
+use the same existing region styles within that scope. Relationships management
+buttons and the alias guide now expose their active destination as selection.
+Other content selections retain their existing style. Hit regions, sidebar width,
+main-space cove lighting and native keyboard behavior retain their owners;
+B’s transient hover/press perimeter and A’s hover feedback remain separate.
+
+Canonical build, CsMailAppleCheck compilation, strict signing verification,
+original signing-requirement comparison and installation passed. Reopened the
+canonical bundle with the original account. Native B inspection verified Inbox
+and All inboxes without fills, selection transfer to Unread, Relationships’ active
+overview, the alias guide’s active marker and the permissions destination. Light
+screenshots and a dark permissions screenshot confirmed marker/text legibility
+and preserved reading/diagram surfaces. Returned to B / Communications / Inbox /
+All inboxes / original light appearance. Diff checks passed. No new tests or
+unrelated backend suites. Populated financial selection, individual alias rows,
+A runtime, keyboard/VoiceOver and accessibility overrides were not individually
+rechecked. Build: `target/column-b-selection-build.log`.
+
+## One measured, noncollapsing Column B minimum — 23 October 2026
+
+Replaced the Communications-only width conditional in A/B with workspaceColumn,
+shared by every instantiated organizer. WorkspaceColumnLayout owns the heading
+font and measures Communications using CoreText, with scaled heading size plus
+44-point content insets and 24-point bowed-edge clearance. At the inspected text
+size the resulting minimum is 236 points. SwiftUI receives the same minimum;
+the macOS adapter also sets the containing NSSplitViewItem minimumThickness and
+canCollapse=false, recovering a previously undersized/collapsed item. It observes
+native resize and view lifecycle, without replacing the navigation owner or split
+delegate; observation is removed on teardown. The existing maximum remains 360
+unless enlarged text needs more space. Other long headings may wrap normally.
+The earlier per-area 280/230 conditional is removed. Home and Notes keep their
+intentional no-organizer layouts. No account/domain behavior changed.
+
+Canonical build, CsMailAppleCheck compilation, strict signing verification,
+original designated-requirement comparison and install passed. Reopened the
+canonical bundle with the original account. Runtime conjecture: dragging through
+the minimum must not collapse Column B, and normal resizing must still work.
+In B Communications, widened the actual divider from 236 to 323 points, then
+attempted to drag it near Column A: it clamped at 236 with the heading visible.
+Repeated shrink-past-minimum attempts in Relationships, Aliases and Express Lanes,
+and Finances all retained 236. Switched to A and verified its Communications
+minimum and drag clamp at 236, then restored B / Communications / light. Native
+screenshots confirmed the single-line heading and retained main-space styling.
+Diff checks passed. No new automated tests or unrelated backend suites. A’s other
+areas use the same modifier but were not individually dragged; whole-window
+shrinking, alternate text sizes, iOS, dark mode, keyboard and VoiceOver resizing
+were not individually checked. Build: `target/shared-column-width-build.log`.
+
+## Compact mailbox sidebar reopening verified — 23 October 2026
+
+Native app inspection reconnected. At Marcus’s request, closed cs-mail normally
+and reopened the canonical installed bundle with the existing account. Opened
+Communications / All inboxes in Interface B and inspected the light screenshot:
+mailbox rows show tighter spacing and Communications stays on one line. Left the
+app on that screen. This resolves the preceding reopening/visible-layout blocker.
+Minimum-width dragging, A, iOS and accessibility text sizes were not tested in this
+reopening. No build or account changes were needed.
+
+## Compact mailbox rows and single-line Communications heading — 23 October 2026
+
+A/B Communications mailbox sections now own a four-point row gap, with eight-point
+vertical and unchanged twelve-point horizontal label padding and a 36-point
+minimum row height. Full-width hit regions, icons, labels, selected/hover states
+and navigation actions remain. Receiving-inbox rows retain their prior spacing.
+Communications alone now uses a 280-point minimum Column B width (previously 230);
+its ideal remains 280 and maximum 360. Its heading keeps its intrinsic single-line
+width. Other areas retain the previous width limits.
+
+Canonical build, CsMailAppleCheck compilation, strict signing verification,
+original signing-requirement comparison and installation passed. Diff checks
+passed. No new automated tests or unrelated backend suites for this presentation
+change. Native app access repeatedly returned timeoutReached using bundle ID and
+canonical path, including after inventory reconnect and tool-session reset.
+Inventory still listed the existing cs-mail process. Reopening the running copy
+and native verification were not completed; installed output is current, but the
+running process is not verified to have loaded it. Rendered spacing, minimum-width
+resizing, pointer/keyboard behavior, A, iOS, dark/light and accessibility sizes
+remain unverified in this pass. Build: `target/compact-mailbox-sidebar-build.log`.
+
+## Main-space vertical edges align with Column B — 23 October 2026
+
+InterfaceBWorkspaceLayout now owns the shared 8-point vertical inset for Column B
+and the general main-space surface. Main-space horizontal spacing remains 20
+points. Previously its uniform 20-point padding placed its top 12 points below
+Column B and its bottom 12 points above. Rounded geometry, cove-light overlay,
+subdued interior and workspace-strength outer backdrop remain. Specific contact
+portal composition was not altered. Swift principles record shared alignment.
+
+Canonical build, CsMailAppleCheck compilation, strict signing verification,
+original signing-requirement comparison and installation passed. Reopened the
+canonical app with the original account and inspected Communications / All inboxes
+in dark appearance: the top and bottom rounded surface extents align with the
+bowed Column B panel, and cove lighting remains. Diff checks passed. No new tests
+or unrelated backend suites. Other shared destinations, contact portals, iOS,
+alternate window sizes and accessibility overrides were not individually checked.
+Build: `target/main-space-column-alignment-build.log`.
+
+## Outer backdrop matches workspace; cove lighting preserved — 23 October 2026
+
+The backdrop after workspaceDetail’s 20-point padding now explicitly uses the
+workspace texture role. Previously it inherited mainSpace’s quarter strength,
+producing a rectangular texture transition outside the cove lighting. The rounded
+interior and nested content still inherit the reduced mainSpace strength. Rounded
+clipping, cove-light overlay, embossed shoulder, padding and sidebar were not
+changed. Swift principles now distinguish the outer backdrop from the interior.
+
+Canonical Apple build, CsMailAppleCheck compilation, strict signing verification,
+original requirement comparison and installation passed. Reopened the canonical
+bundle with the existing account and inspected Communications / All inboxes in
+dark and light: outer terrazzo continues into the surrounding workspace, and the
+rounded surface and colored cove lighting remain. Left in the original dark
+appearance. Diff checks passed. No new tests or unrelated backend suites. Other
+destinations inherit the shared composition but were not individually inspected;
+iOS, alternate sizes and accessibility overrides were not rechecked. Build:
+`target/main-space-outer-backdrop-build.log`.
+
+## Main-space appearance change reverted — 23 October 2026
+
+At Marcus’s explicit REVERT request, restored workspaceDetail’s previous rounded
+backdrop and InterfaceBMainSpacePerimeter overlay exactly, removing the replacement
+black shadow. Removed the new no-outline rule from the Swift principles. All
+preceding alias, sender-permission and sidebar changes remain. Canonical build,
+CsMailAppleCheck compilation, strict signature verification, original requirement
+comparison and installation passed. Reopened the canonical app with the existing
+account and verified the restored colored cove lighting and rounded boundary in
+Communications / All inboxes, dark appearance. No new tests or unrelated backend
+suites were run. Other screens and accessibility overrides were not individually
+rechecked. Build: `target/revert-main-space-outline-change-build.log`.
+
+## Standing permission in both directions — 23 October 2026
+
+The Rust navigation projection and its generated Swift bridge now expose each
+contact’s incoming and outgoing PermissionRoute independently, using the existing
+current relationship interpretation. Both A/B permission views list standing
+permission alongside sender-scoped lanes in either direction. Standing rows now
+open a directional read-only detail with an Open correspondence action and the
+existing return path. Outgoing detail offers no grant/revoke controls. A refresh
+that removes standing permission replaces the active-grant description. Receiving
+alias names are not supplied by RelationshipView; details explicitly state that
+limitation rather than inferring account-wide scope. No wire/cache schema, domain
+permission, durable grant or account credential changed.
+
+Extended the existing client experiment to challenge directional isolation:
+incoming acceptance cannot invent outgoing standing permission, an accepted
+outgoing-only relationship is visible, and outgoing revocation does not remove
+independent incoming standing permission. The targeted member-runtime test passed
+(1 test); the initial invocation without member-runtime selected zero tests and
+is not evidence. Canonical build, CsMailAppleCheck compilation, regenerated bridge,
+strict signing verification, original signing-requirement comparison and install
+passed. Reopened the final canonical bundle with the existing account and checked
+B’s incoming list and outgoing standing empty state. The preceding build’s native
+inspection also covered the new incoming standing detail and Back to Permissions,
+and the outgoing light composition. Left the final app on Outgoing. Diff checks
+passed. No new test cases or unrelated Rust/PostgreSQL suites were run. Account
+has no outgoing standing grants, so populated outgoing detail and live revocation
+were not exercised in the native app; scopes, A, iOS, dark/compact layouts and
+keyboard/VoiceOver interactions were not individually verified. Logs:
+`target/outgoing-standing-permission-build.log`, `target/directional-standing-check.log`.
+
+## Alias sidebar separators and action alignment — 23 October 2026
+
+Removed horizontal section dividers from the Aliases and Express Lanes Column B
+organizer in A and B. New alias now uses the same padded full-width Label content
+as the guide and sender-permissions buttons. Existing generous hit regions,
+section order and individual alias entry points remain. Canonical build,
+CsMailAppleCheck compilation, strict signing verification, original requirement
+comparison and installation passed. Reopened the canonical bundle with the
+existing account and inspected B’s light sidebar screenshot: section lines are
+absent and the New alias action uses the same horizontal inset as the actions
+above. Diff checks passed. No new automated tests or unrelated backend suites;
+A, iOS, other section orders and dark/compact layouts were not individually
+inspected. Build: `target/alias-sidebar-no-dividers-build.log`.
+
+## Alias sidebar actions simplified — 23 October 2026
+
+Removed Manage all aliases from the A/B Aliases and Express Lanes sidebar,
+including its unused callback. New alias now sits directly beneath Permissions
+for particular senders in either section-order arrangement. Individual aliases
+retain their settings entry points. Canonical Apple build, CsMailAppleCheck
+compilation, strict signing verification, original requirement comparison and
+installation passed. Reopened the canonical app with the existing account and
+verified B’s sidebar in native accessibility state and a light screenshot: no
+Manage all aliases button, and New alias immediately follows sender permissions.
+Diff checks passed. No new tests or unrelated backend suites were run for this
+presentation-only change. A, iOS, alternate section order and dark/compact layouts
+were not individually inspected. Build: `target/remove-manage-aliases-build.log`.
+
+## Sender permissions open in main space — 23 October 2026
+
+In both interfaces, Column B now contains a generous selected-state button for
+Permissions for particular senders. Sender names, direction, sender search and
+the express-lane receiving-address filter moved to a dedicated main-space route.
+Standing permission and sender-scoped lanes have separate sections; outgoing
+shows the available outgoing lane projection. Alias-scoped access remains under
+My aliases and is no longer mixed into sender-lane records. The receiving-address
+filter explicitly applies only to express lanes. Sidebar alias search and main
+sender search have separate state; the new search uses the shared focus-dismissal
+contract. Existing navigation checkpoints retain sender filters and return paths.
+Removed the superseded alias-lane sidebar projection. No grant, account, domain
+rule or communication authority changed.
+
+Canonical build and CsMailAppleCheck compilation passed. macOS signing initially
+waited for protected Keychain authorization; Marcus approved the signing request,
+after which strict signature verification, original requirement comparison and
+installation passed. The superseded build’s pending signing request was stopped.
+Reopened the canonical app with the existing account, verified B sidebar/button,
+main-space light composition, Daniel Reed under standing permission, contact
+opening and Back to Permissions, and incoming/outgoing empty-lane views. Left on
+incoming permissions. Diff checks passed. No new automated tests or unrelated
+backend suites. Existing account has no sender-scoped lane records, so populated
+lane selection/filter results were not verified at runtime; A, iOS, dark mode,
+compact sizes and keyboard/accessibility interaction were not individually
+rechecked. Build: `target/sender-permissions-main-space-build.log`.
+
+## Alias guide wording correction — 23 October 2026
+
+Removed the address/identity-proof sentence from the shared guide’s alias-scoped
+lane result explanation. No permission or domain behavior changed. Canonical Apple
+build, CsMailAppleCheck compilation, strict signing verification, original signing
+requirement comparison and installation passed. Reopened the canonical bundle
+with the existing account and inspected Interface B’s guide, including selecting
+the alias-scoped branch: the result retains its first explanatory sentence and
+omits the requested sentence. Native screenshot inspection and diff checks passed.
+No new tests or unrelated backend suites were run for this text-only correction;
+Interface A, iOS and other sizes were not individually rechecked. Build:
+`target/alias-guide-wording-build.log`.
+
+## Subdued terrazzo throughout main space — 23 October 2026
+
+Interface B’s workspaceDetail composition now supplies a mainSpace texture role
+through the SwiftUI environment. All nested default backdrops inherit it, including
+the guide, inbox, Home, empty detail surfaces, Q&A and Notes. Main-column texture
+uses one-quarter workspace opacity: 0.085 light and 0.01625 dark. The base fill
+remains opaque. The surrounding workspace keeps 0.34/0.065; the sidebar keeps its
+explicit subdued setting. Perimeters, texture anchoring/cache and opaque reading
+interiors retain their current owners. Contrast and Reduce Transparency still
+omit texture. Interface A is unchanged by this correction. The Swift principles
+document records the shared main-space convention.
+
+Canonical build (including CsMailAppleCheck compilation), strict signature
+verification, original designated-requirement comparison, installation and
+reopening passed. The existing account reopened without credential replacement.
+Native B inspection confirmed visibly softer guide texture in light/dark and the
+same reduced strength in Communications / All inboxes in dark, with stronger
+surrounding workspace and existing sidebar/perimeter treatment. App left in B /
+Aliases and Express Lanes / guide / light. No messages, drafts, aliases, permissions
+or finances changed. Diff checks passed. No new tests or unrelated backend suites
+were run. Other main-space screens inherit the rule but were not individually
+inspected; iOS, alternate sizes/scales and runtime accessibility overrides were
+not rechecked. Build: `target/main-space-subdued-terrazzo-build.log`.
+
+## Guide reopening verified — 23 October 2026
+
+At Marcus’s request, native inspection reconnected successfully. Closed the running
+app normally and reopened the canonical installed bundle. The existing account
+opened without credential replacement. Interface B / Aliases and Express Lanes
+now visibly shows the new branching alias-policy diagram in light appearance;
+its accessibility text includes both receiving policies, optional sender grants,
+sender-scoped lanes and standing permission. The removed refunds section is
+absent and the permission-only request rule is present. This resolves the earlier
+reopening/visibility blockers for the wording and flow updates. The app is left
+on the guide. No account permissions, aliases or messages changed. Individual
+branch interactions, other sizes, A and iOS were not rechecked in this reopening.
+
+## Alias policy and optional sender-grant flow — 23 October 2026
+
+The shared guide’s opening example is now a top-down interactive flow:
+Create alias → require a bonded request / alias-scoped express lane → optional
+sender-specific permissions → no grants / selected senders → sender-scoped express
+lane / standing permission. Drawn branching and joining connectors show both
+receiving policies feeding the same optional grant decision. Selectable cards
+show their selected state with an outline and checkmark and expose native button
+and selected accessibility traits. The result explanation covers bonded access
+without a grant, direct sender-lane/standing access, and broad alias admission
+without a sender grant. Text explicitly permits different grants for different
+senders, names alias scope, and preserves blocks and authentication requirements.
+The former sender/alias/inbox illustration and its example pickers/toggle are
+removed. No spinner or refund explanation is present. Selections remain local
+educational state with no account/model authority calls.
+
+Canonical Apple build (including CsMailAppleCheck compilation), strict signature
+verification, original signing-requirement comparison and installation passed.
+Diff/source checks passed. No new automated tests or unrelated backend suites.
+Native app inspection again returned timeoutReached, continuing the previous
+wording-update inspection blocker. The installed build is current; reopening and
+visual verification of the running copy were not completed. No evidence is claimed
+for rendered geometry, interactive runtime, compact layouts, keyboard/VoiceOver
+behavior or iOS in this pass. No account, credential association, alias or grant
+was changed. Build: `target/alias-policy-flow-build.log`.
+
+## Alias guide keeps financial explanations separate — 23 October 2026
+
+Removed the Requests and refunds section from the shared guide. Its sender-access
+section now states that accepting a request can grant standing permission or an
+express lane, and that later expiry/revocation does not reopen the original
+request. The guide no longer discusses refunds, payment or settlement; financial
+explanations remain separate. This is presentation text, with no domain change.
+
+Canonical Apple build (including CsMailAppleCheck compilation), strict signature
+verification, original signing-requirement comparison and installation passed.
+Source inspection confirms the removed section and the new permission paragraph;
+diff checks passed. No new automated tests or unrelated backend suites were run.
+Native inspection repeatedly returned timeoutReached, including after reconnecting
+the tool. Inventory reports cs-mail Development running, but reopening the updated
+copy and visual verification were not completed. Do not treat the installed build
+as evidence that the running process has loaded this change. No credentials,
+account association or durable state were modified by this update. Neither
+interface’s runtime layout nor iOS was rechecked. Build evidence:
+`target/aliases-guide-permission-only-build.log`.
+
+## Aliases and Express Lanes workspace and guide — 23 October 2026
+
+Column A’s former Express lanes area is now Aliases and Express Lanes, with one
+at-sign/badge icon. Interface A wraps the full rail label onto two lines. Column B
+contains the guide action, Manage all aliases, New alias, all account aliases
+(including bonded-request aliases), incoming standing permission and existing
+incoming/outgoing sender express lanes. Existing section-order preference remains,
+with renamed choices. Standing permission is separate from the express-lane
+receiving-address filter; no alias scope is inferred from contact identity.
+
+Alias management now belongs to this area; the Relationships duplicate entry is
+removed. Communications retains its useful Manage aliases shortcut. Selecting an
+alias opens the existing managed-address screen with policy and receiving
+permission controls. The replaced lane-only alias-detail implementations are
+removed. Selecting a standing-permission contact reaches existing correspondence
+and Manage contact. Sender express-lane details retain their existing path. The
+new guide destination participates in normal checkpoint/back navigation and alias
+refresh. No domain grants or receiving policies changed.
+
+`AliasesGuideView` supplies one shared product explanation, with fonts inherited
+from each interface. Its interactive sender → alias → inbox diagram compares
+bonded and address-wide admission, sender lanes and standing permission, and a
+second bonded alias that does not inherit the first alias’s permission. It is
+educational state only, not a client adapter, account mode or permission editor.
+Text covers independent directory visibility, authentication, blocks, explicit
+scope, refunds, lane/address lifecycle, disclosure consent and open product
+contracts. No spinner is introduced.
+
+Canonical Apple build (including CsMailAppleCheck compilation), strict signature
+verification, original designated-requirement comparison, installation and
+reopening passed. The original account reopened without credential replacement;
+requested addresses remain listed. Native checks covered B in dark/light and A
+in light at the existing 219.5-point sidebar width: new label/icon, populated alias
+and standing sections, readable guide and diagram; B example choices for sender
+lane, standing permission, open-alias admission without a sender grant, and the
+other-alias refusal; bonded alias detail with policy and permission controls;
+standing contact’s existing permission-management sheet opened/closed without
+changes; guide action and checkpoint return navigation. Final installed build was
+reopened after the A-label correction. The app is left in B / Aliases and Express
+Lanes / guide / light. No messages, drafts, aliases, grants or financial state
+changed. Normal correspondence-opening semantics apply.
+
+Diff and removed-reference checks passed. No new automated tests or unrelated
+Rust/PostgreSQL suites were run under the presentation scope. Actual alias creation,
+grant mutation, outgoing/sender-lane runtime (no active sender lane in the current
+list), alternate sizes/scales, compact diagram fallback, runtime accessibility
+overrides, full VoiceOver audit and iOS were not exercised. This adds no public or
+live-provider delivery evidence. Build: `target/aliases-lanes-workspace-build.log`.
+
+## One reply action per native thread — 23 October 2026
+
+Removed the per-message “Reply to message” buttons from native correspondence in
+A and B. The existing thread-level Reply action remains with its current composer
+and permission checks. No message-specific quotation/targeting behavior was added.
+Canonical build, strict signature verification, original signing-requirement
+comparison, installation and reopening passed with the existing account and no
+credential replacement. Native B/dark inspection of Jules’s thread confirmed one
+Reply button and no per-message reply actions, including both retained messages
+in the accessibility tree. The app is left on the thread. No composer opened or
+message sent. Diff checks passed; Apple build includes CsMailAppleCheck compilation.
+No new automated tests or unrelated backend suites were run. A runtime, light
+appearance, iOS and composer sending were not separately exercised. Build evidence:
+`target/thread-reply-only-build.log`.
+
+## No spinners without explicit owner request — 23 October 2026
+
+Removed every remaining ProgressView from A and B: global busy/sign-in overlay,
+initial member details, Directory overlays, approach-page loading, alias creation
+and address generation, draft opening, composer source selection, express lanes
+and mailbox pagination. Existing labeled states use quiet text; unlabeled busy
+overlays are removed. Cancel sign-in remains available. The pagination trigger
+uses an invisible one-point boundary with its existing task, preserving automatic
+page loading independently of a visual indicator. The Swift principles document
+now prohibits spinners anywhere unless Marcus explicitly requests a particular
+circumstance. No exceptions are currently requested.
+
+Canonical build, strict signature verification, original requirement comparison,
+installation and reopening passed. The existing account reopened without
+credential replacement. Source audit found no ProgressView, NSProgressIndicator,
+UIActivityIndicator, spinner or explicit indeterminate animation implementation
+in Apple Swift/Objective-C application sources. Native B/dark inspection covered
+Home, populated Express lanes and Communications / All inboxes; the app is left
+in All inboxes. No messages, drafts, aliases, permissions or finances changed.
+Diff checks passed; Apple build includes CsMailAppleCheck compilation. No new
+tests or unrelated backend suites were run. Each transient loading branch,
+large-result pagination, sign-in cancellation, A runtime, light appearance and
+iOS were not individually exercised in this pass. Build evidence:
+`target/no-spinners-build.log`.
+
+## Stable live mailbox search — 23 October 2026
+
+MemberModel retains the last completed match projection and its query while the
+next query runs. The first page for the current request generation replaces the
+matches rather than appending to the previous query; subsequent pages append.
+Existing generation/lifetime guards remain. Empty query, receiving-scope changes,
+lock and explicit copy deletion discard result provenance with the matches. A and
+B show the query associated with displayed results, and remove the per-keystroke
+spinner that inserted/removes layout space. Completed empty results also remain
+stable pending their replacement. Search failures remain visible; existing
+pagination and expiry filtering remain.
+
+Canonical build, strict signature verification, signing-requirement comparison,
+installation and reopening passed with the existing account and no credential
+replacement. Native B/dark checks typed J, Ju and Jules through empty and matching
+results, confirmed no per-keystroke loading indicator, cleared directly back to
+inbox, searched again and opened the correct Jules thread from the results. The
+app is left there. Normal opening/displayed behavior applies; no message sent,
+draft, alias, permission or financial state changed. Apple build includes
+CsMailAppleCheck compilation; diff checks passed. No new tests or unrelated
+backend suites were run. A uses the same model and corresponding view change but
+was not separately inspected. Deliberately delayed/out-of-order responses,
+large-result pagination, failures, expiry races, light appearance and iOS were not
+runtime-tested in this pass. Build: `target/search-stable-results-build.log`.
+
+## Shared search click-away behavior — 23 October 2026
+
+All twelve search-field instances across A and B use `SearchFieldInteraction`:
+mailbox, conversation find (including external email), alias-inbox filtering,
+Directory, express lanes and financial records. Each retains its existing query
+owner and interface styling. A field-scoped native boundary observes same-window
+pointer-down events, clears that field’s focus only outside its bounds, ends native
+editing and returns the event for normal dispatch. Boundaries do not intercept hit
+testing; event monitors are removed with their views. No global text-field styling,
+query reset or domain authority is introduced. The Swift principles document records
+the applied interaction contract.
+
+Canonical build, strict signature verification, original designated-requirement
+comparison, installation and reopening passed. The existing account reopened
+without credential replacement. Native checks covered B mailbox blank-space
+click-away with Jules query/results retained, Command-F returning to search,
+opening a result while focused, B conversation search retaining Marcus and its
+match while the caret and strong border disappear on outside click, B Finances
+click-away across the sidebar/main-space boundary with a filter retained, and A
+Express lanes focus/dismissal. Temporary conversation/financial filters were
+cleared; mailbox search was used for the retained result journey. No messages,
+drafts, aliases, permission or financial state changed. Apple build includes
+CsMailAppleCheck compilation; diff checks passed. No new automated tests or
+unrelated Rust/PostgreSQL suites were run. Conditional alias search (>6 inboxes),
+Directory and external-email search were wired and compiled but not individually
+exercised. Light appearance, right/middle clicks, multi-window cases and runtime
+accessibility overrides were not rechecked. iOS pointer/touch dismissal is not
+implemented by the macOS event adapter. Build: `target/search-click-away-build.log`.
+
+## Interface B neutral search focus — 23 October 2026
+
+Conversation find and mailbox search now share `InterfaceBSearchFieldSurface`:
+plain native text editing with an opaque neutral interior, eight-point corners
+and a neutral outline (0.75 points at rest, 1.5 while focused). Focus increases
+outline opacity rather than adding the native blue bezel. Increased Contrast
+keeps the stronger width at rest. Existing focus bindings, search and submit
+behavior remain with their current owners; Interface A is unchanged by this work.
+
+Canonical build, signing, installation and reopening passed with the original
+designated requirement preserved. The existing account reopened without credential
+replacement. Native inspection confirmed a neutral focused border in mailbox
+search in light and Jules’s conversation find in light/dark. Typing Marcus found
+one match and highlighted the matching text; the query was cleared. The app is
+left in Jules’s thread in dark with the empty field focused. No message, draft,
+alias, permission or financial state changed. Apple build includes
+CsMailAppleCheck compilation; diff checks passed. No new automated tests or
+unrelated Rust/PostgreSQL suites were run. iOS, external-email find, runtime
+accessibility overrides, other search fields and narrow windows were not
+separately inspected. Build evidence: `target/interface-b-search-focus-build.log`.
+
+## Interface B redundant contact status removed — 23 October 2026
+
+Removed the “Contact from this person” line from the correspondence header at
+Marcus’s request. Manage contact remains, and the request outcome stays in its
+relationship-request section. Canonical build, signature verification and
+signing-requirement preservation passed; installed app reopened with the existing
+account and no credential replacement. Native light-appearance inspection of
+Jules’s thread confirmed the line absent and request outcome retained. The app is
+left there. No message sent or authority changed. Diff checks passed; Apple build
+includes CsMailAppleCheck compilation. No new tests or unrelated backend suites.
+Dark appearance, other screens and iOS were not rechecked. Build evidence:
+`target/interface-b-remove-contact-status-build.log`.
+
+## Interface B thread information hierarchy — 23 October 2026
+
+Current incoming-contact permission now sits with Manage contact in the thread
+header instead of floating above the back navigation. Request class and historical
+outcome form a compact, lightly tinted relationship-request section. Each message
+has one left-aligned sender/date/receiving-route group aligned with its readable
+body; the timestamp no longer floats at the opposite edge. Current permission and
+historical request outcome retain their separate supplied meanings. The portal no
+longer owns a second permission-text input. Interface A is unchanged by this work.
+
+Canonical build, signed installation and reopening passed with the original
+signing requirement preserved. The existing account reopened without credential
+replacement. Native inspection covered Jules Morgan’s retained thread from All
+inboxes in dark and light appearance at the existing window and sidebar size:
+request grouping, current permission placement and aligned message metadata were
+visible and readable. The app is left on that thread in light. No message sent,
+draft edited, permission, alias or financial state changed; opening follows normal
+reading/displayed behavior. Apple build includes CsMailAppleCheck compilation;
+diff checks passed. No new automated tests or unrelated Rust/PostgreSQL suites
+were run. Other request outcomes, long metadata/narrow windows, external-email
+screens, iOS and accessibility overrides were not separately inspected. Evidence:
+`target/interface-b-thread-hierarchy-build.log`.
+
+## Interface B consistent return navigation — 23 October 2026
+
+All Interface B chevron-left return controls now use `InterfaceBBackButton`:
+unboxed secondary text, a shared 13-point font, ten-point horizontal padding and
+a minimum 44-point click height. This replaces the mixture of plain, native boxed,
+region and decorated action styles across portal returns, contact conversations,
+workspace returns, external email, Directory, alias management and composer source
+selection. Interface A is unchanged by this correction.
+
+The canonical app built, installed and reopened with its original signing
+requirement preserved; the existing account opened without credential replacement.
+Native dark-appearance inspection of Jules Morgan’s thread from All inboxes
+confirmed matching unboxed outer and inner back controls. Clicking the inner
+control returned to Jules’s conversations; clicking the outer control returned to
+All inboxes. The thread was reopened and left visible. No message was sent or
+permission, alias or financial state changed; opening uses the normal reading workflow.
+Strict signature verification and diff checks passed. The Apple build compiled
+CsMailAppleCheck. No new tests or unrelated Rust/PostgreSQL suites were run.
+Light appearance, other return screens, narrow windows, iOS, keyboard focus and
+accessibility overrides were not separately inspected. Build evidence:
+`target/interface-b-back-navigation-build.log`.
+
+## Interface B continuous bowed contour — 23 October 2026
+
+The bowed surface reached the native divider mask at mid-height, which erased
+part of the fine contour. Its background and contour now reserve three trailing
+points, clearing that mask even at the narrower sidebar width. Native content
+layout, splitter geometry, contour width/opacity and texture strength are unchanged.
+No lighting or embossing is restored to column B.
+
+Canonical app built, installed and reopened, UUID
+`B1711E65-68D4-3C23-81D6-60F8B9196E5D`. Native inspection of Communications /
+All inboxes at the current 236.5-point sidebar split confirmed the contour remains
+continuous through its bowed midpoint in light/dark. The app is left there in light.
+The existing account reopened without credential replacement. No messages, drafts,
+permissions or aliases changed. Strict signature verification passed with the
+original designated requirement. A-source comparison passed after normalizing
+only the prior Finances heading rename; no A change in this pass. Diff checks
+passed. Apple build includes CsMailAppleCheck compilation. No new automated tests
+or unrelated Rust/PostgreSQL suites were run. Other sidebar/window widths, display
+scales, iOS and runtime accessibility overrides were not rechecked. Build evidence:
+`target/interface-b-continuous-bow-build.log`.
+
+## Interface B legible bowed organizer outline — 23 October 2026
+
+The bowed geometry survived the lighting transfer, but its pale textured fill
+blended into the workspace and made the shape hard to read. Column B now has a
+neutral 0.75-point contour, with ink opacity 0.18 in light and 0.24 in dark. The
+existing high-contrast 1.5-point outline remains. No shadow, embossing or cove is
+restored; quarter-strength terrazzo and main-space emphasis remain.
+
+Canonical app built, installed and reopened, UUID
+`7D751BDA-A97B-39CA-94A4-48CE73F92E0F`. Native inspection of Communications /
+All inboxes in light/dark confirmed the bowed silhouette is visibly outlined,
+column B remains unlit and the main perimeter retains its lighting. The app is
+left there in light appearance. The existing account reopened without credential
+replacement. No messages, drafts, permissions or aliases changed. Strict signature
+verification passed with the original designated requirement. A-source comparison
+passed after normalizing only the prior Finances heading rename; no A change in
+this pass. Diff checks passed. Apple build includes CsMailAppleCheck compilation.
+No new automated tests or unrelated Rust/PostgreSQL suites were run. Other window
+sizes/scales, iOS, runtime accessibility overrides and interactive resizing were
+not rechecked. Build evidence: `target/interface-b-sidebar-contour-build.log`.
+
+## Interface B main-space visual hierarchy — 23 October 2026
+
+Column B retains its bowed silhouette but has no embossed edge, shadow or cove
+light. Its interior uses the cached, window-anchored terrazzo at one-quarter of
+workspace opacity: light 0.085, dark 0.01625. The surrounding workspace remains at
+0.34/0.065. `InterfaceBSidebarSurface` replaces the embossed sidebar surface; its
+old cove implementation is removed.
+
+The active main-space surface now receives the soft embossed shoulder and area
+cove through `InterfaceBMainSpacePerimeter`. Normal destinations have a rounded
+24-point perimeter and 20-point inset. Opening correspondence omits that outer
+perimeter and lights the rounded reading container using the supplied route edge;
+there is one illuminated content frame at a time. Reading interiors stay opaque.
+Increased Contrast retains solid outlines and suppresses texture/cove; Reduce
+Transparency suppresses texture/cove. Sidebar top/bottom gutters and native
+splitter/divider masking remain.
+
+Canonical app built, installed and reopened, UUID
+`99EF9E4A-1FED-3CB5-BE4C-D296C235A0D3`. Native inspection covered Communications /
+All inboxes in light, Jules's open thread in light/dark, and a Finances record in
+dark: quiet faintly textured organizer, lit main perimeter, matching section hue,
+opaque thread interior and no duplicate illuminated frame. The app is left in
+Interface B / Finances / Daniel's record / light. No composer opened or message
+sent; no permissions, aliases or financial state changed. The existing account
+reopened without credential replacement. Opening the thread uses the normal
+reading/displayed workflow. Strict signature verification passed with the original
+designated requirement. A-source comparison passed after normalizing only its
+previously requested Finances heading rename; no A code changed in this pass.
+Diff checks passed. Apple build includes CsMailAppleCheck compilation. No new
+automated tests or unrelated Rust/PostgreSQL suites were run. Other destinations,
+permission-route shapes, narrow windows, other scales, iOS, runtime accessibility
+overrides, interactive resizing and performance were not inspected. Build evidence:
+`target/interface-b-main-space-hierarchy-build.log`.
+
+## Finances visible-name rename — 23 October 2026
+
+The visible Economics name is now Finances in both interfaces: shared navigation
+title/help/accessibility name and each column B heading. B's preview title follows
+the same shared name. Internal area identity, navigation, record order, icon,
+palette, stored preferences and domain behavior remain unchanged. Interface A's
+only screen-source change is the requested heading text.
+
+Canonical app built, installed and reopened, UUID
+`91193259-B063-35A9-887A-EBEEA959E415`. Native inspection confirmed B's Finances
+navigation name/help, column B heading and full-title preview; Escape dismissed
+it. The app is left in Interface B / Finances / light. The existing account reopened
+without credential replacement. Strict signature verification passed with the
+original designated requirement. Interface A source comparison passed after
+normalizing only the intentional heading rename. Diff checks passed. Apple build
+includes CsMailAppleCheck compilation. No new automated tests or unrelated
+Rust/PostgreSQL suites were run. A runtime, dark appearance, other sizes/scales,
+iOS and accessibility overrides were not rechecked. Build evidence:
+`target/finances-label-build.log`.
+
+## Interface B mini Reply and resting action rims — 23 October 2026
+
+Reply now uses mini control size for both native and external email: a 26-point
+visible height, 11-point text, eight-point horizontal padding and 13-point corners.
+The outer click target remains 44 points high. Small action controls retain their
+36-point treatment. Action rims are two points at rest and three while pressed;
+prominent label weight no longer implies a permanently emphasized rim. Actions
+omit the separate inset reflection line and use a six-point shadow with three-point
+offset. Navigation selected rims, inner reflections and portal treatment remain.
+
+Canonical app built, installed and reopened, UUID
+`C9F5272F-F447-3E45-B2BC-CAF6132DEA73`. Native light-appearance inspection of
+Jules's retained thread confirmed substantially smaller Reply, readable icon/label
+and a single thin resting colored rim. The app is left on that thread in Interface
+B, light. No composer opened or message sent, and no permissions or aliases changed.
+The existing account reopened without credential replacement. Strict signature
+verification passed with the original designated requirement. All 29 Interface A
+source hashes and diff checks passed. Apple build includes CsMailAppleCheck
+compilation. No new automated tests or unrelated Rust/PostgreSQL suites were run.
+Dark appearance, press/hover timing, other action screens, external-email runtime,
+iOS, other window sizes/scales and runtime accessibility overrides were not
+rechecked. Build evidence: `target/interface-b-mini-reply-build.log`.
+
+## Interface B action-button rim optics correction — 23 October 2026
+
+The previous change reduced the drawn rim to two/three points but retained native
+glass beneath action buttons, whose wider bevel still made Reply look heavy.
+Action buttons now use the neutral opaque center already used by column A,
+leaving the shared drawn two/three-point rim as their visible colored edge.
+Explicit portal/navigation/action roles replace the former control/navigation
+roles; native glass remains on Home portals. Compact Reply dimensions, inner
+reflections and hover/press outlines are retained.
+
+Canonical app built, installed and reopened, UUID
+`0966757F-2B8E-3D3F-95C5-770EBE6703FC`. Native inspection of Jules's retained
+thread confirmed the visibly thinner colored Reply edge and neutral center in
+light/dark, alongside column A. The app is left on that thread in Interface B,
+light. No composer was opened or message sent, and no permissions or aliases
+changed. The existing account reopened without credential replacement. Strict
+signature verification passed with the original designated requirement. All 29
+Interface A source hashes and diff checks passed. Apple build includes
+CsMailAppleCheck compilation. No new automated tests or unrelated Rust/PostgreSQL
+suites were run. Other action screens, external-email runtime, iOS, other window
+sizes/scales, runtime accessibility overrides and pointer timing were not
+rechecked. Build evidence: `target/interface-b-action-rim-optics-build.log`.
+
+## Interface B divider toolbar-cap repair — 23 October 2026
+
+The divider mask previously covered only the detail content height, exposing the
+native vertical separator through the toolbar above the restored column B top
+gap. It now extends upward by the measured toolbar safe-area inset. The backdrop
+remains aligned to the workspace texture and does not intercept pointer events;
+native splitter geometry and resizing code are unchanged.
+
+Canonical app built, installed and reopened, UUID
+`69F1CF98-7588-39A9-B670-F7C50A3130FC`. Native inspection confirmed the top divider
+segment is absent in Communications / All inboxes in light/dark, with the top gap
+and cove light retained. The app is left there in light appearance. The existing
+account reopened without credential replacement. No messages, drafts, aliases or
+permissions were changed. Strict signature verification passed with the original
+designated requirement. All 29 Interface A source hashes and diff checks passed.
+Apple build includes CsMailAppleCheck compilation. No new automated tests or
+unrelated Rust/PostgreSQL suites were run. Drag resizing, other window sizes/scales,
+iOS and runtime accessibility overrides were not rechecked. Build evidence:
+`target/interface-b-divider-cap-build.log`.
+
+## Interface B compact Reply and unified thin rims — 23 October 2026
+
+The shared decorated rim now uses two points normally and three when emphasized
+or selected, across action buttons, navigation and preview rims. The former
+role-specific rim width branch is removed; material roles still own interior
+behavior. Inner reflections and hover/press widths are retained. Native and
+external-email Reply actions request small control size: a 36-point visible
+surface, 12-point horizontal padding, 18-point corners and a 44-point click target.
+Other action buttons retain their size while adopting the thinner rim.
+
+Canonical app built, installed and reopened, UUID
+`EB985AC6-B5A2-3FEA-A44D-59BF5568AAB3`. Native light-appearance inspection of
+Maya's retained thread confirmed the smaller Reply and thinner emphasized rim,
+with readable label and existing adjacent explanation. The app is left in
+Interface B / Maya thread from All inboxes / light. No composer was opened or
+message sent, and no permissions or aliases changed. The existing account reopened
+without credential replacement. Strict signature verification passed with the
+original designated requirement. All 29 Interface A source hashes and diff checks
+passed. Apple build includes CsMailAppleCheck compilation. No new automated tests
+or unrelated Rust/PostgreSQL suites were run. Dark appearance, external-email
+runtime, other window sizes/scales, iOS, runtime accessibility overrides and
+pointer/press timing were not rechecked. Build evidence:
+`target/interface-b-compact-reply-rims-build.log`.
+
+## Interface B softly edged reading container — 23 October 2026
+
+The opened correspondence view keeps its rounded 24-point container with an opaque
+neutral interior, but removes the full rectangular canvas behind the view. Terrazzo
+is visible around the container and behind return navigation. The former sharp
+one-point boundary is replaced by a blurred six-point neutral gradient shoulder
+and a soft shadow. Content clips to the rounded interior; the supplied route and
+portal anchor remain the edge geometry owners. Increased Contrast retains a clear
+solid route outline. No glass or area-colored cove is added to the reader.
+
+Canonical app built, installed and reopened, UUID
+`3AD1E2C8-E92C-3C12-9171-7E966AB1A179`. Native inspection of Maya's retained native
+thread from All inboxes covered light/dark: square backing absent, terrazzo visible
+outside the rounded surface, soft edge and readable opaque interior. The app is
+left with that thread open in Interface B, light. No draft opened, message sent,
+permission or alias changed; the existing account reopened without credential
+replacement. Opening the thread uses the normal reading/displayed workflow.
+Strict signature verification passed with the original designated requirement.
+All 29 Interface A source hashes and diff checks passed. Apple build includes
+CsMailAppleCheck compilation. No new automated tests or unrelated Rust/PostgreSQL
+suites were run. Other window sizes/scales, iOS, runtime accessibility overrides,
+other permission-route geometries and external-email-specific screens were not
+inspected. Build evidence: `target/interface-b-soft-reading-surface-build.log`.
+
+## Readable interface selector — 23 October 2026
+
+The shared toolbar selector had compressed to arrows without visible selection
+text, including at Home. Its 124-point fixed width now keeps the current interface
+label readable. Existing Home/editor/busy switching guards remain unchanged.
+
+Canonical app built, installed and reopened, UUID
+`BFE4AF72-5D8C-31BB-AD92-E3BF9F283159`. Native inspection confirmed the visible
+Interface B label at Home, both menu options, switching to A and back to B. The
+app is left in Interface B / Home / light. The existing account remained open
+without credential replacement. Strict signature verification passed with the
+original designated requirement. All 29 Interface A screen-source hashes remain
+unchanged; the fix is in the shared selector owner. Diff checks passed. Apple build
+includes CsMailAppleCheck compilation. No new automated tests or unrelated
+Rust/PostgreSQL suites were run. Narrow window widths, other scales, iOS and
+runtime accessibility overrides were not rechecked. Build evidence:
+`target/interface-selector-visible-build.log`.
+
+## Interface B thinner navigation rims — 23 October 2026
+
+Column A's main colored rim is now two points normally and three points when
+selected. The navigation role carries this setting; previews and other B surface
+rims retain their existing widths. Inner reflections, fine outlines and hover/press
+lighting are unchanged.
+
+Canonical app built, installed and reopened, UUID
+`EEDDC438-E108-3CC2-A073-1287AD8F9F92`. Native light-appearance inspection confirmed
+the selected Communications rim and unselected rail rims. The app remains in
+Interface B / Communications / All inboxes, light. The existing account reopened
+without credential replacement. Strict signature verification passed with the
+original designated requirement. All 29 Interface A source hashes and diff checks
+passed. Apple build includes CsMailAppleCheck compilation. No new automated tests
+or unrelated Rust/PostgreSQL suites were run. Dark appearance, other sizes/scales,
+iOS, runtime accessibility overrides and exact hover/press timing were not
+rechecked. Build evidence: `target/interface-b-thinner-navigation-rims-build.log`.
+
+## Interface B full-title preview headings — 23 October 2026
+
+Column A previews now show the destination's full title in the 23-point heading
+style, replacing the small title-plus-layout caption. The header exposes a heading
+accessibility trait; the icon-only rail and preview opening/dismissal rules remain.
+
+Canonical app built, installed and reopened, UUID
+`7A283A47-4B7A-3129-B6D7-56036F6289AF`. Native light-appearance inspection confirmed
+the full Communications heading fits, is larger than the controls and appears as
+an accessibility heading. Right Arrow opening and Escape dismissal passed. The
+app is left in Interface B / Communications / All inboxes, light, preview closed.
+The existing account reopened without credential replacement. Strict signature
+verification passed with the original designated requirement. All 29 Interface A
+source hashes and diff checks passed. Apple build includes CsMailAppleCheck
+compilation. No new automated tests or unrelated Rust/PostgreSQL suites were run.
+Other preview titles, dark appearance, other sizes/scales, iOS, runtime accessibility
+overrides and exact hover timing were not rechecked. Build evidence:
+`target/interface-b-preview-headings-build.log`.
+
+## Interface B smaller rail and restored top buffer — 23 October 2026
+
+Column A buttons are now 48-point squares with centered 20-point icons, retaining
+the rail width, lowered starting position, six-point spacing, names and tooltips.
+Column B no longer extends through the toolbar. Eight-point vertical gutters
+keep its bowed panel below the toolbar safe area and above the window bottom;
+cove lighting follows its measured bounds. A workspace backdrop covers the native
+gray toolbar cap exposed by restoring the top buffer.
+
+Canonical app built, installed and reopened, UUID
+`25C910A7-C123-3159-965D-80A2B4EEF856`. Native light-appearance inspection confirmed
+all six smaller buttons, Communications selection, visible terrazzo top buffer,
+neutral bowed panel and matching cove light. An initial inspection exposed the
+gray native toolbar cap; the final installed build covers it with the backdrop.
+The app is left in Interface B / Communications / All inboxes, light. The existing
+account and aliases reopened without credential replacement. Strict signature
+verification passed with the original designated requirement. All 29 Interface A
+source hashes and diff checks passed. Apple build includes CsMailAppleCheck
+compilation. No new automated tests or unrelated Rust/PostgreSQL suites were run.
+Dark appearance, other window sizes/scales, compact/iOS layout, runtime accessibility
+overrides and exact hover timing were not rechecked for this change. Build evidence:
+`target/interface-b-smaller-rail-top-gap-build.log`.
+
+## Interface B icon-only rail — 23 October 2026
+
+The six column A navigation buttons now show centered icons at 24 points without
+visible text labels. Accessible names, tooltips, full button bounds, colored rims
+and navigation/preview interactions remain. Economics uses the banknote symbol
+in B rather than the shared chart symbol; Interface A remains unchanged.
+
+Canonical app built, installed and reopened, UUID
+`CA0B0ADE-DC72-3E4C-8D1F-79873BBC9479`. Native inspection confirmed all six
+label-free buttons, the banknote icon, and Economics selection without a preview.
+Accessibility inspection confirmed all six names and help descriptions remain.
+The app is left in Interface B / Economics / light. The existing account reopened
+without credential replacement. Strict signature verification passed with the
+original designated requirement. All 29 Interface A source hashes and diff checks
+passed. Apple build includes CsMailAppleCheck compilation. No new automated tests
+or unrelated Rust/PostgreSQL suites were run. Dark appearance, other sizes/scales,
+iOS, runtime accessibility overrides and exact hover timing were not rechecked
+for this change. Build evidence: `target/interface-b-icon-rail-build.log`.
+
+## Interface B lower rail and visible cove light — 23 October 2026
+
+The vertical rail starts 64 points lower, placing the Home button below the
+Communications heading. Compact horizontal navigation is unchanged. Column B's
+cove now has a wider reflected-color halo and a brighter near-edge spill. Its
+canvas extends 20 points beyond the split-view drawing bounds, making the left
+and bottom spill visible as well as the bowed right edge. The panel interior
+remains neutral; accessibility contrast/transparency suppression remains.
+
+Canonical app built, installed and reopened, UUID
+`3CDF7663-A9D9-3C4B-8D90-B91D31EC21FD`. Native inspection confirmed Home starts
+below Communications and the teal cove is visible along the bowed perimeter in
+light/dark. The app is left in Interface B / Communications / All inboxes, light.
+The existing account and aliases reopened without credential replacement. Strict
+signature verification passed with the original designated requirement. All 29
+Interface A source hashes are unchanged; diff checks passed. Apple build includes
+CsMailAppleCheck compilation. No new automated tests or unrelated Rust/PostgreSQL
+suites were run. Other window sizes/scales, compact/iOS layout, runtime
+accessibility overrides and performance remain unvalidated. Build evidence:
+`target/interface-b-rail-cove-build.log`.
+
+## Interface B hover-only pointer previews — 23 October 2026
+
+Column A click actions now navigate only; they no longer assign a pointer-preview
+session. Hover opens a closed preview after 1,000 ms instead of 750 ms. Moving
+between icons while a preview is already open retains the existing immediate
+handover. Right Arrow/accessibility preview access and pointer-exit dismissal
+remain available.
+
+The canonical app is built, installed and reopened, UUID
+`72035F28-92E3-32B2-960C-0BC34362331D`. Strict signature verification passed with
+the original designated signing requirement. The existing account reopened with
+its aliases, without credential replacement. Native inspection confirmed clicking
+Relationships selected its workspace without opening a preview; the screen remains
+in Interface B / Relationships / light. The one-second delay was checked in source;
+precise pointer dwell timing was not measured. All 29 Interface A source hashes
+remain unchanged. No unrelated Rust/PostgreSQL suites or new automated tests were
+run. Build evidence: `target/interface-b-hover-only-build.log`.
+
+## Interface B embossed sidebar and navigation focus — 23 October 2026
+
+Column B retains its bowed silhouette with a neutral interior and narrow embossed
+edge. A subtle cove light uses the open workspace's area color and is clipped to
+the exterior of the outline. The previous native sidebar glass, broad optical
+bands and reflections are removed. Increased Contrast uses a solid edge;
+Increased Contrast and Reduce Transparency omit the cove light. Column A disables
+the system focus effect, removing the blue rectangle after a click while retaining
+its selected rim and keyboard focus/Right Arrow preview action.
+
+The canonical app is built, installed and reopened, UUID
+`F6204CBA-DA28-327E-B590-6EE7FFC11D76`. Strict signature verification passed in
+system context with the original designated signing requirement preserved. The
+existing account reopened without credential replacement. All 29 Interface A
+source checksums remain unchanged. Native inspection covered Communications in
+light/dark, Relationships in light, column A click selection without a blue
+rectangle, and the Communications keyboard preview and Escape dismissal. The app
+is left in Interface B / Relationships, light appearance. No message was sent,
+no draft opened and no alias or permission changed.
+
+Validation: Apple build including CsMailAppleCheck compilation, native screen
+inspection, strict signature, A-source comparison and diff checks. No new automated
+tests or unrelated Rust/PostgreSQL suites were run for this presentation change.
+Other sizes/scales, iOS/older OS, runtime accessibility overrides, exact pointer
+animation timing and performance measurements remain unvalidated. Evidence:
+`target/interface-b-embossed-sidebar-build.log` and
+`target/interface-b-embossed-sidebar-validation.json`.
+
+## Interface B inky rim palette — 23 October 2026
+
+The owner's darker palette is applied through the existing area-palette owner:
+Home graphite, Communications petrol teal, Relationships dark bronze, Express
+lanes midnight blue, Economics black olive and Notes aubergine. Colored rim bands
+are stronger; midtone reflections and fine white glints preserve their glass-like
+depth. Shared palettes coordinate rail, preview/sidebar rims and perimeter light.
+Terrazzo texture/opacity and neutral interiors are retained.
+
+The first native inspection showed dark rims reflecting into the system glass
+and graying navigation-button interiors. Navigation material now uses a flat
+opaque neutral center, with the existing polished rim/hover/press treatments;
+native material remains on the other supported glass roles. This keeps color
+on navigation edges and avoids tinted or darkened centers.
+
+The canonical app is built, installed and reopened, UUID
+`FD067125-9E6C-3B5E-BFFB-B1854C13F540`. Strict signature verification passed in
+system context and the original designated signing requirement is preserved.
+The existing account reopened with no credential replacement. All 29 Interface A
+source checksums remain unchanged. Native inspection covered all six rail buttons
+at Home in light/dark, a dark Notes preview and Escape dismissal, appearance
+switches and the Communications sidebar in light. The app is left in Interface B
+/ Communications / All inboxes, light appearance. No message was sent, no draft
+opened and no alias or permission changed.
+
+Validation: Apple build including CsMailAppleCheck compilation, native screen
+inspection, strict signature, A-source comparison and diff checks. No new automated
+tests or unrelated Rust/PostgreSQL suites were run. Other sizes/scales, iOS/older
+OS, runtime accessibility overrides, exact pointer/press animation timing and
+performance measurements remain unvalidated. Evidence:
+`target/interface-b-inky-rims-build.log` and
+`target/interface-b-inky-rims-validation.json`.
+
+## Interface B varied, lower-density mineral texture — 23 October 2026
+
+The owner found the fragments too uniformly sized and dense. The periodic fracture
+field now thins its sites before forming cells, producing genuinely different
+cell areas. A larger fraction of cells is omitted, and three inset size ranges
+mix tiny flecks, medium fragments and occasional larger pieces. Split shards,
+chipped edges, translucent aggregate and mineral mottling remain. Light/dark layer
+opacities stay at 0.34/0.065; this changes size and coverage rather than hiding the
+same dense pattern under a lower opacity. The fixed cache and window anchor remain.
+It is still a procedural interpretation, not a pixel reproduction of the photo.
+
+The canonical signed app is installed and reopened, UUID
+`47C86058-7689-3A41-8079-574CDEA495BF`. Strict signature verification passed in
+system context and the original designated signing requirement is preserved.
+The existing account reopened without credential replacement. All 29 Interface A
+source checksums remain unchanged. Native inspection covered Home in light/dark,
+Relationships in light, a flat white Relationships hover box and a flat charcoal
+Communications hover box, plus Escape dismissal and appearance switching.
+The app is left in Interface B / Relationships / light appearance. No message was
+sent, no draft was opened, and no alias or permission changed.
+
+This installed build supersedes the pending mineral and flat-preview candidates
+recorded below. Their source changes are included: preview interiors are opaque
+and flat, with colored rims and no native glass gradient. No signing/install step
+remains pending for the current revision. Intermediate staging bundles have been
+removed by the canonical install or explicit cancellation cleanup.
+
+Validation: Apple build including CsMailAppleCheck compilation, native inspection,
+A-source comparison, strict signature and diff checks. No new automated tests or
+unrelated Rust/PostgreSQL suites were run. Other window sizes/scales, iOS, older OS,
+runtime accessibility overrides and cold-render/memory/power/frame-rate measurements
+remain unvalidated. Evidence: `target/interface-b-sparse-mineral-build.log` and
+`target/interface-b-sparse-mineral-validation.json`.
+
+## Interface B flat navigation-preview interior — 23 October 2026 (signing pending)
+
+The owner observed a blue gradient inside column A's hover box despite its neutral
+tint. Its native glass fill is now replaced with an opaque, flat canvas (white in
+light appearance, charcoal in dark), with the existing colored perimeter rim.
+The unused preview role was removed from the generic native glass material.
+Pointer hit regions, dismissal, controls and preview ownership are unchanged.
+
+The canonical Apple compilation, including CsMailAppleCheck, passed. The combined
+candidate also contains the previously requested mineral-texture refinement.
+Installation is waiting at macOS codesign/Keychain approval in
+`target/apple/.CsMail-build.R6cVDn/CsMail.app`; the open app still has the old preview
+fill and the first mineral revision. The prior waiting build was cancelled and
+its staging bundle removed, so it cannot overwrite this candidate. Complete
+signing, installation, reopening and native light/dark inspection before claiming
+this fill or the final mineral refinement available.
+
+All 29 Interface A source checksums and diff checks passed. No new automated tests
+or unrelated Rust/PostgreSQL suites were run. The changed preview's runtime
+appearance, final texture, iOS/older OS, runtime accessibility settings and other
+window sizes remain unvalidated. No message, draft, alias or permission changed.
+Log: `target/interface-b-flat-preview-build.log`.
+
+## Interface B mineral texture refinement — 23 October 2026 (signing pending)
+
+The owner's request to approach the tile photograph replaces the independent
+scattered polygons with periodic Voronoi fracture cells, split slivers and chipped
+notches. Translucent white aggregate, graded chip interiors and three scales of
+mineral mottling soften flat fills and cloud the matrix. The existing 1536-pixel
+cache, fixed seed, window anchoring, accessibility branches and opacity values
+(light 0.34, dark 0.065) remain. No texture timer or backend change is introduced.
+
+Native inspection of the first installed revision (UUID
+`087C91D4-9EF4-340A-B066-E258018A49C0`) at Home showed too much fitted-mosaic
+structure. The final source reduces coverage, adds more split shards, makes more
+aggregate near-white, varies inset/opacity and opens white space. That refinement
+compiled with the canonical Apple build including CsMailAppleCheck, but is waiting
+at codesign/Keychain approval in `target/apple/.CsMail-build.iX7MS5/CsMail.app`.
+The running app is still the first mosaic-like revision, not evidence for the
+final refined source. Complete signing, installation, reopening and light/dark
+native inspection before reporting that refinement available.
+
+Diff checks and all 29 Interface A source checksums passed. No new automated tests
+or unrelated Rust/PostgreSQL suites were run. The final rendering, iOS, older OS,
+runtime accessibility overrides, other display sizes/scales and cold-render/memory/
+power performance remain unvalidated. No message was sent, draft opened, or alias
+or permission changed. Build log: `target/interface-b-mineral-texture-build.log`.
+The cancelled earlier staging bundle was removed before the current candidate.
+
+## Interface B procedural terrazzo background — 23 October 2026
+
+B now uses a procedural interpretation of the owner's Terra Mia tile reference:
+pale irregular mineral chips, predominantly gray/white with faint beige and muted
+blue-green, over the pure-white canvas. It is lower contrast than the reference.
+One deterministic 1536-pixel transparent image is generated and cached per process;
+backgrounds reuse it in a shared window coordinate space. Edge chips wrap to avoid
+repeat seams. There is fine grain, no animation, timer or continuous regeneration.
+The large raster repeat is not a unique infinite surface. Dark appearance uses a
+much lower-opacity pattern over charcoal. Reduce Transparency and Increased
+Contrast omit the decorative pattern; these branches compile but were not forced
+on Marcus's system. Navigation/button/sidebar interiors remain neutral and their
+area-colored rims remain; reading pages retain their opaque canvas. The previous
+uniform backdrop implementation has been replaced, not retained as a second path.
+
+The canonical app is installed and reopened, UUID
+`05B73546-16C3-3E1A-9444-70C6076852BC`. Strict signature verification passed in
+system context, with the original designated signing requirement preserved. The
+existing account reopened without replacing its credential. All 29 Interface A
+source checksums remain unchanged. Native inspection covered Home in light,
+Relationships in light/dark, and Communications / All inboxes in light appearance.
+The texture remained stationary across inspected navigation and text stayed
+readable at this window size. Glass interiors and clipped sidebar corners retain
+their previous treatment. The app is left at Interface B / Communications / All
+inboxes, light appearance. No message was sent, no draft was opened and no alias
+or permission was changed during this inspection.
+
+Validation: canonical Apple build (including CsMailAppleCheck compilation), native
+screen inspection, A-source comparison, strict signature and diff checks. No new
+automated tests or unrelated Rust/PostgreSQL suites were run. Older OS and iOS
+runtime, runtime accessibility overrides, other window sizes, display scales,
+long-session memory/power/frame-rate, and every native workflow remain unvalidated.
+The cached pixel allocation is about 9 MiB; no measured performance claim follows.
+Evidence: `target/interface-b-terrazzo-build.log` and
+`target/interface-b-terrazzo-validation.json`.
+
+## Interface B white canvas and rim-only navigation color — 23 October 2026
+
+The owner clarified that column A button interiors should also be neutral.
+Navigation now has its own glass role: its base and native tint are neutral in
+both appearances, and its older-platform material has no area wash. Area colors
+remain on rims and perimeter hover light. Primary-action material retains its
+existing role. The light canvas is now pure white (`#FFFFFF`), replacing off-white;
+dark charcoal is unchanged. Column B and navigation-preview interiors remain
+neutral, and the clipped sidebar still has no external rectangular shadow.
+
+The canonical app is built, installed and reopened with the same account. UUID:
+`73853B74-1D2E-3031-9182-EDBB97B72F86`. System-context strict signature verification
+passed and the original designated signing requirement is preserved. All 29
+Interface A source checksums remain unchanged. Native inspection covered all six
+rail buttons at Home in light/dark, switching back to light, and Relationships
+with its neutral sidebar and colored rim. The app is left in B / Relationships,
+light appearance. No message, draft, alias or permission was changed.
+
+Validation: Apple build including CsMailAppleCheck compilation, native inspection,
+signature verification, A-source comparison and diff check. No new automated tests
+or unrelated Rust/PostgreSQL suites were run. Older OS fallback, iOS, runtime
+accessibility overrides, other window sizes and exact hover/press timing remain
+unvalidated. Evidence: `target/interface-b-white-rim-only-build.log` and
+`target/interface-b-white-rim-only-validation.json`.
+
+## Interface B neutral interiors and clipped sidebar — 23 October 2026
+
+The current installed B keeps color on column A buttons and on workspace rims.
+Column B and navigation-preview interiors now use neutral material, without the
+area-color fill or preview tint. The older-platform preview branch also omits its
+area wash. Existing selected-row indicators remain neutral and visible.
+
+This installation also completes the pending gray-surround correction below.
+Covering the sidebar backing and replacing the composite shadow were insufficient:
+native inspection still showed a square corner. The final implementation removes
+the external sidebar shadow and clips all glass rendering to the bowed lens.
+The bevel and inner reflections remain; no rectangular shadow plate is retained.
+The previously waiting candidate was cancelled and its staging directory removed
+before this combined build, so it cannot subsequently overwrite this installation.
+
+The canonical app is installed and reopened, UUID
+`AC6E58E6-881D-3324-926A-4B3B0691D00D`. System-context strict signature verification
+passed, retaining the original designated signing requirement. The existing account
+reopened with no credential replacement. All 29 Interface A source checksums match
+the pre-B-glass baseline. Native inspection verified Communications in light/dark,
+Relationships in light, a neutral Relationships preview in light and a neutral
+Notes preview in dark. Their colored rims remain distinct. The exposed sidebar
+corners no longer show the rectangular gray surround at this window size. Escape
+preview dismissal and appearance changes were exercised. The app is left in
+Interface B / Relationships, light appearance. No message was sent, no draft was
+opened, and no alias or permission was changed.
+
+The Apple build (including CsMailAppleCheck compilation), diff check, signature
+check and A-source comparison passed. No new tests or unrelated Rust/PostgreSQL
+suites were run. Other window sizes, iOS, older OS fallback, runtime accessibility
+overrides and exact pointer/press animation timing remain outside this validation.
+Evidence: `target/interface-b-neutral-interiors-build.log` and
+`target/interface-b-neutral-interiors-validation.json`.
+
+## Remaining Interface B gray surround — 23 October 2026
+
+The owner still observed the gray rectangle after the neutral-canvas change.
+That earlier inspection did not establish complete removal. A follow-up replacing
+the composite shadow with a lens-only blur also retained a square corner in native
+inspection. The current source removes the external shadow and clips the entire
+glass composite to the curved lens, preserving its bevel and inner reflections.
+
+The source compiles with the canonical Apple build, including CsMailAppleCheck.
+Installation is currently waiting at macOS codesign/Keychain approval; the final
+clipped candidate has not yet been reopened or visually verified. The running app
+is the intermediate lens-shadow build, not evidence for the final correction.
+Complete signing, installation and native light/dark corner inspection before
+reporting the rectangle resolved. Interface A's 29 source checksums are unchanged;
+diff check passed. No new tests or unrelated backend suites were run. iOS, older
+OS, runtime accessibility overrides and other window sizes remain unvalidated.
+Build log: `target/interface-b-sidebar-shadow-build.log`.
+
+## Interface B neutral canvas and sidebar backing — 23 October 2026
+
+The owner found the ivory too warm. B's light canvas is now neutral off-white
+`#F8F8F8` (equal RGB channels), replacing `#F8F8F6`. Dark charcoal is unchanged.
+The system sidebar's rectangular backing is covered with the same canvas behind
+the curved glass lens. The lens, area tint, bevel, soft shadow and native splitter
+remain; a separate gray rectangular surround serves no member purpose.
+
+Canonical build and installation passed. UUID:
+`55A4773F-7A95-36D7-8D68-ED421450574E`. Strict signature verification passed in
+system context, retaining the original designated signing requirement. The app
+reopened with the existing account. Native inspection covered Relationships in
+light and dark appearance and Communications in light appearance. The canvas and
+backing match at the inspected window size; glass edges and labels remain visible.
+The app is left at Interface B / Communications / All inboxes, light appearance.
+No message, draft, alias or permission was changed. All 29 Interface A source
+checksums are unchanged.
+
+Validation was the Apple build (including CsMailAppleCheck compilation), native
+screen inspection, signature and A-source checks, and diff check. No new tests or
+unrelated Rust/PostgreSQL suites were run. Other window sizes, iOS, older OS and
+runtime accessibility overrides remain unvalidated. Evidence:
+`target/interface-b-neutral-canvas-build.log` and
+`target/interface-b-neutral-canvas-validation.json`.
+
+## Interface B workspace palettes — 23 October 2026
+
+B now has a uniform, very slightly warm ivory canvas (`#F8F8F6`) in light
+appearance and charcoal (`#1F2020`) in dark appearance. This supersedes the
+geometric teal/gold background and sidebar color field described below.
+`InterfaceBEditorialAreaPalette` owns six presentation palettes: Home pearl,
+Communications teal, Relationships champagne, Express lanes slate blue, Economics
+olive and Notes lavender. Each column A button and its navigation preview use
+that button's palette; column B uses the current workspace's palette. Glass
+shapes, broad sidebar bevel, generous click regions and perimeter hover feedback
+are retained. No new sidebar is added to Home or Notes.
+
+Native dark tint adaptation initially bleached the lavender button. The material
+now uses an explicit dark tint and refreshes its native glass identity on an
+appearance change. Final native inspection verified light-to-dark and dark-to-light
+switches with all six rail buttons readable. Inspection across this revision also
+covered Relationships and Notes previews, an Express lanes preview over Economics
+in dark appearance, Relationships/Communications sidebars in both appearances,
+the slate-blue Express lanes sidebar, and lower Communications alias/Drafts labels.
+Preview palettes followed their own icon while another workspace remained open;
+Escape dismissed them. Hovered conversation rows retained perimeter-only light.
+Precise rail hover/press animation timing and pointer preview exit were not
+separately measured; their implementation is retained.
+
+The final canonical signed build is installed and running, UUID
+`0058BCD4-1262-3B40-8CDB-A42AE5528B69`. Strict signature verification passed in the
+system context, with the original designated signing requirement preserved. The
+original account reopened without replacing its credential. All 29 Interface A
+source checksums match the pre-B-glass baseline. The app is left in Interface B,
+Communications / All inboxes, light appearance. No message was sent, no draft was
+opened and no alias or permission was changed during this revision's inspection.
+
+The Apple build (including CsMailAppleCheck compilation), diff check and A-source
+checksum check passed. No new automated tests or unrelated Rust/PostgreSQL suites
+were run for this presentation change. iOS, older OS fallback, runtime accessibility
+overrides, other window sizes, frame-rate/power and every workflow remain outside
+this validation. Evidence: `target/interface-b-area-palettes-build.log` and
+`target/interface-b-area-palettes-validation.json`.
+
+## Interface B sidebar lens revision — 23 October 2026
+
+The first decorated B sidebar remained too frosted and rectangular compared with
+the supplied reference. Column B now uses a dedicated clear native-glass lens,
+a bowed right edge, a broad nine-point teal/gold bevel and separate fine inner
+reflections. A stationary color field sits behind the native glass. This replaces
+the sidebar's regular frosted plate and old rectangular cove outline; navigation
+previews retain their separate regular-glass surface. It adapts the reference's
+material appearance while retaining a functional sidebar, rather than reproducing
+the reference's large circular boundary or changing its navigation layout.
+
+The material is decorative background only: sidebar contents, click regions,
+native splitter and eight-point bottom gap retain their existing layout. The
+opaque accessibility branches are retained; older supported systems use ultra-thin
+system material. No custom-refraction shader or Interface C is introduced.
+
+The canonical signed build is installed and running, UUID
+`3578D4FF-1E00-34CE-B5B7-7CE5CC8527B6`. System-context strict signature verification
+passed and the original designated signing requirement is preserved. The original
+account reopened with no credential replacement. Interface A's 29 source files
+still match the pre-B-glass checksums.
+
+Native inspection covered Communications in light/dark appearance, scrolling to
+all receiving inboxes and Drafts, selecting NYC-Hospital and returning All inboxes,
+and Relationships with the revised material. Labels and controls remained readable
+inside the bevel at the inspected window size. The app is left at Interface B,
+Communications / All inboxes, light appearance. No message was sent, no draft was
+opened and no alias or permission was changed during this revision's inspection.
+
+The native build (including CsMailAppleCheck compilation), diff checks and A-source
+checksum check passed. No new tests or unrelated Rust/PostgreSQL suites were run.
+iOS, older OS fallback, runtime accessibility overrides, resizing at other window
+sizes, power/frame-rate measurements and every workflow remain unvalidated.
+Evidence: `target/interface-b-sidebar-lens-build.log` and
+`target/interface-b-sidebar-lens-validation.json`.
+
+## Interface B: decorated native glass — 23 October 2026
+
+Interface B now has decorated native Liquid Glass for its navigation buttons,
+Home portals, sidebar/navigation previews and styled primary actions. The system
+material is surrounded by polished teal/gold rim bands, inner reflections and
+stationary shadows. A static teal/gold color field supplies the Home/workspace
+environment. The navigation layout and opaque conversation-reading surfaces are
+retained. Interface A's 29 screen/component source files match the pre-change
+checksums; switching back to A was also inspected in the running app.
+
+B deliberately does not enable native interactive flexing, pointer-following
+reflections or idle animations. Hover feedback lights the perimeter without
+shading the portal interior. Press scaling is finite (1–1.5 percent), and disabled
+by Reduce Motion. Reduce Transparency and Increased Contrast select opaque
+surfaces and solid borders; the backdrop also loses its translucent color field.
+The supported older OS range uses regular system material where native glass
+is unavailable. These accessibility/older-platform branches compile and were
+reviewed, but were not forced on Marcus's system for visual validation.
+
+The first inspection exposed blurred rail labels inside a native glass container.
+The container was removed; each material stays behind its control label, and the
+corrected/final build was inspected with sharp navigation text. No superseded
+container implementation remains. Interface C's custom refraction is a separately
+requested future experiment; it has no placeholder selector entry or shader yet.
+
+The canonical signed app is installed and running with UUID
+`A1667823-0A81-3DFE-BA60-67B64B5486BB`. Strict signature verification passed in the
+system context; the original designated signing requirement and Keychain/account
+association are preserved. The app reopened on the same account in Interface B.
+All five active aliases, including all four requested addresses, were inspected.
+
+Native inspection covered B's light/dark Home glass, sharp rail labels, navigation,
+a Relationships preview and Escape dismissal, sidebar and opaque reading surfaces,
+the existing popup composer and decorated Send control, A/B switching and B
+selection/account reopening. An existing Daniel draft was opened, then saved and
+closed with its text unchanged; this refreshed its saved timestamp. No message
+was sent and no alias or permission was changed. The app is left at Home in
+Interface B, light appearance.
+
+The native build (including CsMailAppleCheck compilation), A-source checksum and
+diff checks passed. Logs: `target/interface-b-decorated-glass-final-build.log`,
+`target/interface-b-glass-source-check.log`; evidence:
+`target/interface-b-glass-a-baseline.json` and
+`target/interface-b-decorated-glass-validation.json`. Earlier build logs are
+repair evidence, not the final installation record. Superseded app bundles were
+removed by the canonical build script.
+
+No new automated tests or unrelated Rust/PostgreSQL suites were run. iOS runtime,
+older OS material, runtime Reduce Motion/Transparency/Increased Contrast settings,
+a full window-size/accessibility matrix, frame-rate/power measurements and every
+native workflow remain unvalidated. Press-scale/reduction behavior was reviewed in
+code; no frame-by-frame press capture was made. Pointer preview exit behavior is
+retained but was not separately exercised in this pass. No public/live-provider
+claim follows from this local presentation work.
+
+## Organize menu contrast — 23 October 2026
+
+The per-conversation Organize menu in interfaces A and B now supplies an explicit
+appearance-aware label and chevron, uses the macOS borderless menu style, and keeps
+its intrinsic width at the right of the row. This replaces the expanding default
+native menu whose text could render white on the light canvas. Existing menu
+actions, confirmation, authority and storage paths are unchanged.
+
+The canonical signed app is installed and reopened on the original account,
+UUID `1C342186-3AC6-3CAF-9A7F-9480C5C24E3C`. System-context strict signature
+verification passed and the designated signing requirement matches the original.
+No credential was replaced. Native inspection verified readable labels on the
+previously affected Jules and Elena rows, scrolling to the final Maya row in A,
+light/dark appearance in both interfaces, and readable active/inactive window
+states in A. Jules's A menu and Elena's B menu opened with Mark read, Mark unread,
+Flag, Archive and Move to Trash. No organization action was executed during
+inspection. The app is left in Interface A, light appearance, All inboxes.
+
+The native build and diff checks passed; the A/B mailbox sources match after type
+name normalization. No new tests or unrelated Rust/PostgreSQL suites were run.
+iOS, other window sizes, a full accessibility matrix and execution of the existing
+organization mutations were not revalidated. Build log:
+`target/organize-contrast-build.log`; validation:
+`target/organize-contrast-validation.json`.
+
+## Selectable interfaces A and B — 23 October 2026
+
+The canonical installed member application now offers an Interface A / Interface B
+selector in the toolbar. Both begin with the same screens and visual components,
+with independent source trees for future design work. One shared MemberView host
+owns the existing MemberModel/client session and account. No backend, database,
+credential, generated binding or client workflow was duplicated. Shared appearance
+and layout preferences initially apply to both interfaces. Additional interfaces
+can be registered in MemberView's MemberInterface enum.
+
+Screen trees: `Sources/CsMailApple/Interfaces/A/` and `B/`.
+Visual components: `Sources/CsMailPresentation/Interfaces/A/` and `B/`.
+These remain source groups in the existing Swift modules. Shared identifiers,
+view data, editing state and platform services retain single owners. See
+`Sources/CsMailApple/Interfaces/README.md` for development boundaries.
+
+Switching is available at Home (Main space) when no editor/dialog or busy operation
+is open. Elsewhere the disabled selector explains how to switch. Existing unsaved
+approach-page guards apply before returning Home. Switching recreates transient
+navigation at Home, ends the old reader, preserves the single unlocked client and
+saved work, and remembers the selection after quit/reopen. Inactive trees are not
+mounted and do not run background tasks.
+
+The native build passed, including compilation of CsMailAppleCheck. All 29 A/B
+source pairs matched after normalizing only concrete visual type names. The signed
+app is installed at `target/apple/CsMail-continuity-20261012.app`, UUID
+`E6CACD08-88BB-3999-BFB8-9ECE52460979`. System-context strict signature verification
+passed; the designated signing requirement matches the original. The first sandbox
+signing attempt could not access the identity and left the installation untouched.
+The system-context retry used the original identity and completed installation.
+Temporary failed build bundles were removed.
+
+Running-app inspection verified A-to-B and B-to-A switching, the matching Home
+presentation, disabled switching in Communications, the shared inbox, the same three
+existing saved drafts in both interfaces, all five existing active aliases, and
+B selection/account reopening after quit. All four requested addresses remain
+present. No draft or alias was created, edited or deleted during inspection; no
+Keychain credential was replaced. The app is left running at Home in Interface A,
+with the selector available.
+
+Evidence: `target/interface-selector-build.log`,
+`target/interface-selector-source-equivalence.json`,
+`target/interface-selector-final-check.log` and
+`target/interface-selector-validation.json`. No new automated tests were added and
+unrelated Rust/PostgreSQL suites were not run for this presentation change.
+iOS runtime, dark appearance, a full accessibility/window-size matrix, every native
+workflow, injected interruption during switching and public/live-provider delivery
+were not revalidated. Existing edit guards were retained; unsaved-edit loss was
+prevented structurally by limiting switching to Home rather than challenged by a
+new automated experiment.
+
 ## Superseded build state removed — 22 October 2026
 
 Principle 11 now requires removal of superseded build state. Obsolete compiler

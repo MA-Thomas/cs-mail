@@ -4,7 +4,7 @@ use super::{
     storage::{self, Secrets},
 };
 use cs_mail_application::correspondence::external::{
-    Command, Direction, MessageView, Outcome, PreparedText, Response, SignedCommand,
+    Command, Direction, MessageView, Outcome, PreparedMessage, Response, SignedCommand,
 };
 use cs_mail_content::{ContentBinding, ContentCertificateDigest, EndpointPublicKey};
 use cs_mail_correspondence::{
@@ -137,7 +137,7 @@ impl MemberClient {
                 }
                 let matched = match (&pending.command, &outcome) {
                     (
-                        Command::Start { message, .. } | Command::Send(message),
+                        Command::Start { message, .. } | Command::Send { message, .. },
                         Outcome::Queued(id),
                     ) => *id == message.manifest.message(),
                     (Command::Reject, Outcome::Rejected)
@@ -240,6 +240,7 @@ impl MemberClient {
         let (secret, _) = super::correspondence::own_keys(&state.profile, &keys)?;
         let mut threads = Vec::new();
         let now = (self.clock)();
+        let personal = super::personal::Personal::load(self, &keys, &state)?;
         if let Some(workspace) = &state.external {
             for record in workspace.records.values() {
                 let c = &record.conversation;
@@ -279,15 +280,24 @@ impl MemberClient {
                     {
                         return Err(Error::InvalidData);
                     }
+                    let mut content = super::ReadingContent::from_external_document(&doc);
+                    Self::apply_resources(
+                        &personal,
+                        &mut content,
+                        super::MailKey::External(c.id()),
+                        entry.message.manifest.message(),
+                        entry.message.manifest.version(),
+                        now,
+                    );
                     messages.push(ExternalMessage {
                         id: entry.message.manifest.message().0.to_string(),
-                        text: crate::correspondence::readable_text(&doc),
+                        text: content.search_text()?,
                         outgoing: entry.message.direction == Direction::MemberToGuest,
                         committed_at: entry.message.committed_at.0,
                         sequence: entry.sequence,
                         delivery: entry.delivery.clone(),
                         provider_events: entry.provider_events.clone(),
-                        content: super::ReadingContent::from_document(&doc),
+                        content,
                     });
                 }
                 let pending = c.pending_access(r);
@@ -349,8 +359,15 @@ impl MemberClient {
         let keys = storage::secrets(self.store.as_ref())?;
         let mut state = storage::open(self.store.as_ref(), &keys)?;
         super::require_idle(&state)?;
-        if text.trim().is_empty()
-            || text.len() > MAX_TEXT_BYTES
+        let composed = draft.and_then(|d| {
+            if let super::DraftBody::Composed { content, .. } = d.body() {
+                Some(content)
+            } else {
+                None
+            }
+        });
+        if (text.trim().is_empty() && composed.is_none_or(|c| !c.has_content()))
+            || (composed.is_none() && text.len() > MAX_TEXT_BYTES)
             || (conversation.is_none() && !disclose)
         {
             return Err(Error::InvalidData);
@@ -390,8 +407,16 @@ impl MemberClient {
         }
         let mut salt = [0; 32];
         getrandom::fill(&mut salt).map_err(|_| Error::Unavailable)?;
-        let doc = Document::new(vec![DocumentPart::Text(text.into())], salt)
-            .map_err(|_| Error::InvalidData)?;
+        let part = composed.map_or_else(
+            || DocumentPart::Text(text.into()),
+            |c| DocumentPart::Composed(c.clone()),
+        );
+        let mut doc = Document::new(vec![part], salt).map_err(|_| Error::InvalidData)?;
+        if let Some(draft) = draft {
+            if !draft.subject().trim().is_empty() {
+                doc = doc.with_subject(self.new_subject(Some(draft))?);
+            }
+        }
         let message = MessageId(identifier()?);
         let manifest = doc.manifest(message, id).map_err(|_| Error::InvalidData)?;
         let (secret, sender_key) = super::correspondence::own_keys(&state.profile, &keys)?;
@@ -424,7 +449,7 @@ impl MemberClient {
             capability: None,
         };
         let bytes = serde_json::to_vec(&doc).map_err(|_| Error::InvalidData)?;
-        let package = Box::new(PreparedText {
+        let package = Box::new(PreparedMessage {
             manifest,
             sender_key,
             member_copy: cs_mail_content::encrypt(
@@ -454,7 +479,10 @@ impl MemberClient {
                 disclose_to_external_mail: disclose,
             }
         } else {
-            Command::Send(package)
+            Command::Send {
+                message: package,
+                disclose_to_external_mail: disclose,
+            }
         };
         state
             .external

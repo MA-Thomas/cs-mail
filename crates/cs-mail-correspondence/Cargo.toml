@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64 = "=0.22.1"
 time = "0.3.55"
 cs-mail-guests = { path = "../cs-mail-guests" }
 cs-mail-protocol = { path = "../cs-mail-protocol" }
@@ -13,6 +14,10 @@ cs-mail-primitives = { path = "../cs-mail-primitives" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+ammonia = "=4.2.4"
+html5ever = "=0.40.1"
+mail-parser = "=0.11.8"
+url = "=2.5.8"
 
 [lints]
 workspace = true

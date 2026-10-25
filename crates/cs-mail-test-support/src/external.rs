@@ -1,5 +1,5 @@
 //! Synthetic external text and receiver evidence for controlled local experiments.
-use cs_mail_application::correspondence::external::PreparedText;
+use cs_mail_application::correspondence::external::PreparedMessage;
 use cs_mail_content::{ContentBinding, ContentCertificateDigest, EndpointSecretKey};
 use cs_mail_correspondence::{ConversationId, Document, DocumentPart};
 use cs_mail_guests::GuestMailbox;
@@ -13,9 +13,7 @@ pub fn text(
     message: MessageId,
     member: ProtocolIdentity,
     now: CanonicalTime,
-) -> PreparedText {
-    let (secret, sender_key) =
-        EndpointSecretKey::from_secret_bytes(ContentKeyRef(500), &[50; 32]).unwrap();
+) -> PreparedMessage {
     let document = Document::new(
         vec![DocumentPart::Text(format!(
             "external fixture {}",
@@ -24,6 +22,19 @@ pub fn text(
         [51; 32],
     )
     .unwrap();
+    prepared(preparation, conversation, message, member, now, &document)
+}
+/// Prepares exactly the supplied document for controlled transport experiments.
+pub fn prepared(
+    preparation: &Preparation,
+    conversation: ConversationId,
+    message: MessageId,
+    member: ProtocolIdentity,
+    now: CanonicalTime,
+    document: &Document,
+) -> PreparedMessage {
+    let (secret, sender_key) =
+        EndpointSecretKey::from_secret_bytes(ContentKeyRef(500), &[50; 32]).unwrap();
     let manifest = document.manifest(message, conversation).unwrap();
     let expires = now.checked_add(Duration(600_000)).unwrap();
     let binding = ContentBinding {
@@ -48,7 +59,7 @@ pub fn text(
         },
     };
     let bytes = serde_json::to_vec(&document).unwrap();
-    PreparedText {
+    PreparedMessage {
         manifest,
         sender_key,
         member_copy: cs_mail_content::encrypt(
@@ -286,4 +297,55 @@ pub fn callback_fixture(url: &str) -> cs_mail_storage_postgres::external::Reposi
     }
     repository.begin_dispatch(MessageId(900)).unwrap().unwrap();
     repository
+}
+
+/// Development-only fictional evidence; uses the same MIME, admission and encrypted
+/// persistence boundary as SMTP. Never call this for public/live email.
+pub fn admit_fictitious_email(
+    repository: &cs_mail_storage_postgres::external::IncomingRepository,
+    sender: &GuestMailbox,
+    raw: &[u8],
+    recipient: &str,
+    domain: &cs_mail_adapters::DomainIdentity,
+    now: CanonicalTime,
+) -> Result<MessageId, Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let verified = runtime
+        .block_on(cs_mail_smtp_gateway::incoming::authenticate(
+            &SyntheticVerifier(sender.domain().clone()),
+            cs_mail_adapters::SmtpAuthenticationRequest {
+                raw_message: raw,
+                remote_ip: "127.0.0.1".parse()?,
+                helo_identity: "fiction.example.test",
+                mail_from: None,
+                receiver_hostname: domain.as_str(),
+                received_at: now,
+            },
+            recipient,
+            domain,
+        ))
+        .map_err(|e| format!("fictional MIME refused: {e:?}"))?;
+    let secret = [88; 32];
+    let preparation = repository
+        .prepare_mail(&verified, &secret)?
+        .ok_or("fictional sender has no direct-contact permission on this route")?;
+    let reply = verified
+        .encrypt_reply(
+            ReplyEncryption {
+                conversation: preparation.conversation.id(),
+                deployment: repository.scope.deployment_domain,
+                provider: repository.scope.provider,
+                member: preparation.relationship.recipient,
+                relationship: preparation.relationship.relationship,
+                content_scope: preparation.relationship.content_scope,
+                member_key: preparation.member_key,
+                lane: preparation.lane,
+            },
+            &secret,
+            now,
+        )
+        .map_err(|e| format!("fictional encryption refused: {e:?}"))?;
+    Ok(repository.receive(&reply)?)
 }

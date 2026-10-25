@@ -66,9 +66,9 @@ The build-plan source also retains its 11 October pause checkpoint.
 only as a superseded design-history document and must not be used as a current
 protocol reference.
 
-**Development state (21 October 2026):** one unified local macOS application has
-native requests/replies, alias management and inboxes, drafts, retained-copy offline
-search and conversation find. Your original account and credential association are
+**Development state (25 October 2026):** one unified local macOS application has
+selectable A/B presentation interfaces over one account/client, native requests/replies, alias management and inboxes, drafts, retained-copy offline
+search and conversation find. The shared composer now supports formatted writing, inline pictures, retained attachments and HTML design import/preview; Column B provides supporting correspondence. Your original account and credential association are
 preserved; requested addresses are recorded in AGENTS.md. The revised alias model is implemented across Rust, PostgreSQL and Swift, with
 explicit policy selection and per-alias publication and receiving scopes. Identity
 evidence, banking and payments remain simulated; no production service is launched. See the

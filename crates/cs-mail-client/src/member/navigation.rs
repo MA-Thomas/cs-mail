@@ -20,6 +20,8 @@ pub struct NavigationContact {
     pub external: bool,
     pub requests: Vec<NavigationRequest>,
     pub sent_requests: Vec<NavigationRequest>,
+    pub incoming_permission: views::PermissionRoute,
+    pub outgoing_permission: views::PermissionRoute,
     pub incoming_lane: Option<NavigationLane>,
     pub outgoing_lane: Option<NavigationLane>,
 }
@@ -69,6 +71,8 @@ pub(super) fn project(
                 external: summary.external,
                 requests: requests(view, now),
                 sent_requests: Vec::new(),
+                incoming_permission: summary.permission_route,
+                outgoing_permission: views::PermissionRoute::Closed,
                 incoming_lane: lane(view, now),
                 outgoing_lane: None,
             },
@@ -92,9 +96,13 @@ pub(super) fn project(
             external: false,
             requests: Vec::new(),
             sent_requests: Vec::new(),
+            incoming_permission: views::PermissionRoute::Closed,
+            outgoing_permission: views::PermissionRoute::Closed,
             incoming_lane: None,
             outgoing_lane: None,
         });
+        contact.outgoing_permission =
+            views::permission(view.state, view.lane.as_ref(), Some(now)).1;
         contact.sent_requests = requests(view, now);
         contact.outgoing_lane = lane(view, now);
     }

@@ -72,6 +72,139 @@ item identity, credential bytes, account/persona association and public keys wer
 checked unchanged across the installed update. Swift navigation and all previously
 implemented native workflows now run together in this one account-backed app.
 
+## Selectable interfaces — 23 October 2026
+
+One installed application now offers Interface A and Interface B through a toolbar
+selector. They begin with the same screens and appearance. This is an authorized
+extension of the one-application convention: neither interface has another account,
+fixture adapter, backend, credential or device store.
+
+`MemberView` owns the sole `MemberModel`, including its `ClientWorker`, and remembers
+the selected interface in an ordinary app preference. The `MemberInterface` registry
+provides both the picker entries and the corresponding screen construction; adding
+C or D requires another case and its screen tree. The existing public MemberView
+entry remains the macOS and iOS integration point.
+
+Independent screen sources live in `Sources/CsMailApple/Interfaces/A/` and `B/`.
+Independent visual primitives live in `Sources/CsMailPresentation/Interfaces/A/`
+and `B/`. B's visual types have an `InterfaceB` prefix. These are source groups
+within the existing Swift modules, not duplicate client/platform modules. Shared
+presentation identifiers, view data, writing/editing state, model projections,
+Keychain/SQLite integration and generated bindings retain one implementation.
+Changes to shared code intentionally affect every interface. Change the chosen
+interface's screen and visual-component directories for independent design work.
+
+Switching is available at Home (Main space), with no open editor/dialog and no
+busy client or directory operation. Elsewhere the picker is disabled with a help
+message explaining how to switch. Existing navigation guards still protect unsaved
+approach-page edits before returning Home. Switching rebuilds transient screen
+state at Home, ends the old reader, and retains the one unlocked client session,
+saved drafts and durable account data. Only the selected screen tree is mounted,
+so inactive interfaces do not refresh, read messages or receive lifecycle events.
+Appearance and existing layout preferences remain shared initially. Quitting and
+reopening restores the selected interface; A is the initial default.
+
+### Interface B: decorated native glass
+
+The owner's 23 October preference gives B a decorated native-glass treatment.
+`InterfaceBDecoratedGlass` owns the material and its stationary polished rim;
+`InterfaceBPerimeterLight` owns hover/press edge lighting. System `glassEffect`
+provides the actual glass on macOS/iOS 26 and later. Application-drawn reflections,
+warm/cool rim bands and shadows strengthen its appearance. Native interactive
+flexing and pointer-following reflections are deliberately not enabled. A finite
+press scale is suppressed by Reduce Motion. There are no idle material animations.
+
+B's Home portals use the native material. Navigation controls, styled action
+buttons and previews have neutral opaque centers with decorated rims; column B
+uses the embossed treatment described below. Reading remains opaque. The workspace uses a
+procedural terrazzo texture over pure white (`#FFFFFF`) in light appearance and
+charcoal (`#1F2020`) in dark appearance. `InterfaceBTerrazzoTexture` generates one
+1536-pixel transparent raster with periodic Voronoi fractures, split shards, chipped
+notches, translucent white aggregate and three scales of mineral mottling.
+Fracture sites are thinned before cell formation; omitted cells and three inset
+size ranges reduce coverage and mix flecks with larger pieces. It is cached for
+the process lifetime (about 9 MiB of raw pixels). Background
+canvases reuse it with an origin in the shared workspace coordinate space, keeping
+the pattern stationary across navigation. The large repeat wraps edge chips.
+Dark appearance uses lower opacity; Increased Contrast and Reduce Transparency
+omit the pattern. There is no timer, per-frame random generation or external image
+asset. Window-size/performance and runtime accessibility claims need separate
+measurements. `InterfaceBEditorialAreaPalette` owns each area's color family:
+Home graphite, Communications petrol teal, Relationships dark bronze, Express
+lanes midnight blue, Finances black olive and Notes aubergine. Midtone reflections
+and fine white glints retain visible glass edges in dark appearance. Each rail button and its preview receive that
+button's area through presentation environment values; column B inherits the open
+workspace's area. Rail buttons, previews and sidebars have neutral interiors, retaining area color
+at their rims. Explicit portal, navigation and action material roles keep native
+portal optics separate from button surfaces. Navigation and action buttons use
+opaque neutral centers with the same two/three-point drawn rim, preventing native
+optics from adding a broader bevel beneath it or tinting their interiors. There is no
+geometric background artwork. Portal highlights follow the existing route outline; they
+do not shade the portal interior or grant communication authority. Layout, popup
+composer behavior and preview lifecycle remain the existing implementation.
+
+Reduce Transparency and Increased Contrast select opaque surfaces and solid rims.
+Earlier supported macOS 14/iOS 17 systems use system regular material instead of
+an unavailable glass API. These are explicit platform/accessibility branches in
+one material component, not another application or data path. They need their own
+runtime evidence; compiling the branches does not validate those configurations.
+
+Column B uses `InterfaceBSidebarSurface` with `InterfaceBBowedSidebarShape`.
+It has no embossing, shadow or cove light. A neutral 0.75-point contour
+keeps the bowed shape legible against the pale texture without a raised edge. The
+surface reserves three points at the trailing edge so its widest midpoint clears
+the native divider mask; content layout and splitter bounds are unchanged. Its neutral interior uses the same
+window-anchored terrazzo raster at one-quarter strength (light 0.085, dark 0.01625),
+keeping labels legible. Increased Contrast adds a solid outline, and the backdrop's
+contrast/transparency branches suppress the texture. Native layout, splitter and
+click regions remain, with eight-point top/bottom gutters below the toolbar.
+The workspace backdrop covers native sidebar backing outside the bowed shape;
+the divider mask includes the toolbar safe area without intercepting resizing.
+
+`InterfaceBMainSpacePerimeter` owns the active content surface's soft embossed
+shoulder and exterior area-colored cove light. Ordinary main-space destinations
+have a 24-point rounded perimeter with a 20-point inset; their terrazzo interior
+retains workspace strength. When correspondence is open, that outer perimeter is
+omitted and the reading container receives the same treatment using its supplied
+route geometry. There is one illuminated content perimeter at a time. The cove is
+clipped outside the rounded surface; it cannot wash the content interior. Increased
+Contrast uses a solid outline; Reduce Transparency suppresses the cove light.
+Navigation previews use a flat opaque canvas with a decorated colored rim.
+Their native glass fill was removed after the owner observed a blue gradient;
+preview interiors cannot sample background color through system material.
+The opened correspondence container has one opaque neutral rounded reading surface
+with a soft neutral gradient shoulder, shadow and matching main-space cove light. Its former full rectangular
+canvas backing is removed, exposing the workspace terrazzo around it. Content is
+clipped to the rounded interior, while the edge still uses the supplied route
+geometry and existing portal anchor. Increased Contrast retains a solid route
+outline. Native glass is not added to the reading surface.
+Column A's focusable buttons disable the system focus effect to remove the blue
+click-focus rectangle. Selected-rim styling, keyboard focus and Right Arrow
+preview access remain.
+The vertical column A rail starts 64 points below the content origin, placing
+Home below the column B heading; compact horizontal navigation retains its layout.
+B's six rail buttons use 48-point square targets with centered 20-point icons
+without visible text labels, retaining accessible names and descriptive tooltips.
+The rail width and lowered starting position remain unchanged. All decorated
+B rims use a two-point colored band. Selected navigation items retain a
+three-point rim; action buttons use three points only while pressed, independently
+of prominent label weight. Actions omit the separate inner reflection and use a
+smaller shadow, while navigation/portal reflection details remain. The shared
+action style honors small and mini control sizes. Reply uses mini: a 26-point
+visible surface, 11-point type, eight-point horizontal padding and a 44-point
+click target. Finances uses the
+banknote symbol in B; the shared area definition and Interface A are unchanged.
+Column A clicks navigate without assigning a pointer-preview session. A closed
+preview requires a one-second hover; an open preview still follows the hovered
+icon immediately. Keyboard/accessibility preview access remains available.
+Each preview header shows the full navigation title in the 23-point heading style
+and exposes a heading accessibility trait, identifying the icon-only destination.
+
+Interface C is the owner's intended future experiment with custom refraction.
+No C selector entry, shader, duplicate backend or placeholder application is added
+by B's work. Native glass grouping was removed from B's rail after inspection
+exposed label blur; each control's glass stays behind its label.
+
 ## Personal mailbox — 15 October 2026
 
 The [19 October product decisions](../DOMAIN_MODEL.md#personal-reading-and-organization)
@@ -235,7 +368,7 @@ pointer/focus preview state. As of 16 October, every area uses its popup for
 device-local layout controls. Home chooses cards/list within the existing permission
 sections; Comms orders receiving-inbox/mailbox sections; Relationships chooses
 column-B grouping and map/list overview; Express lanes orders alias/sender sections;
-Economics orders records by date/name; Notes adjusts the current page's reading
+Finances orders records by date/name; Notes adjusts the current page's reading
 width (writing is still deferred). Persistent column B owns receiving scope,
 mailbox selection, searchable relationship groups, lane filters and financial
 record direction/period filters. `MailboxNavigation` remains the one mailbox
@@ -529,6 +662,52 @@ recovery, annual financial/external-email UI and facade crash injection remain
 outside this pass. See the Apple runbook for concrete evidence and limitations.
 
 
+## Writing before recipient selection — 24 October 2026
+
+Write an email opens a blank main-space editor in both interfaces. The editable To field
+shows suggestions inline; it never replaces the draft. It is not a prerequisite to writing or
+saving. Rust owns the distinct Unaddressed draft target, with no submit path.
+Its text and identity survive recipient assignment through Retarget. Known contacts use the existing Rust conversation/external projections. Name search uses
+the existing directory; exact references pass through composer_recipient in Rust.
+A found publication yields its identity and exact alias. Only a definite missing
+publication can lead to external-mailbox parsing, and the current native namespace
+from the authenticated owner alias portfolio is excluded. Custody/transport errors
+never select an external route. This uses the deployment's existing single mail
+namespace; it establishes no federation rule or general provider discovery.
+
+NativeAddress is a distinct portable draft target for an explicit alias. Submission
+uses the existing signed SendToAlias path. Identity-default native composition and
+fixed conversation replies retain their existing targets. Retarget is a checked
+workspace transition: a stale/submitted/fixed-target draft cannot be redirected,
+identity/text stay together, and subject/source removal for an external destination
+needs the explicit drop choice. Persistence commits one encrypted workspace.
+
+WorkspaceComposition owns both editor and recipient state. Observed composition
+surfaces re-render main space and Column B together when the destination changes.
+RecipientPickerState is workspace-owned and discards obsolete reads on query
+changes, departure or lock. Unresolved recipient edits disable Send; only a
+committed selection restores it. Secondary composer actions share ComposerActionStyle.
+The shared DraftEditor adopts the committed revision after retarget; source access
+and permission remain with Rust. Existing request entry is available from eligible
+native composing contexts. Empty supporting columns add no instructional copy.
+
+## Main-space composition — 23 October 2026
+
+Both interfaces route native new conversations/replies and external new/reply
+emails into the existing main space, including reopening saved writing. The
+member workspace owns a WorkspaceComposition with one DraftEditor and the native
+source selection/inclusions. Column B renders the source browser against that
+same state; it is no longer a split pane inside a composer sheet. Choosing a
+source previews it; only explicit Quote, Reference or Share actions add content.
+Rust continues to validate access, selections, reuse and sending. External mail
+retains its text-only boundary and conversation-scoped disclosure consent.
+
+Navigation captures the current draft body and waits for local persistence before
+replacing the composer. Editing pauses during that handoff; a failed save retains
+the workspace and offers Save, Discard or Stay. Close restores the recorded
+navigation context. Request and request-follow-up forms keep their existing
+presentation. The popup email/message composers are removed.
+
 ## Composer-led source selection — 13 October 2026
 
 The contact portal opens directly onto a list of conversations, each with its
@@ -654,3 +833,98 @@ and preview intent across sheet closure; changing name/fragment invalidates the 
 preview and fences delayed results. It never implements generation rules. Both
 receiving policies use the same generator. No account, credential, schema or existing
 address conversion is involved.
+
+## Aliases and Express Lanes workspace — 23 October 2026
+
+`MemberArea.lanes` retains its persisted area identity but presents Aliases and
+Express Lanes with the new icon. `MemberDestination.addresses` and
+`MemberDestination.aliasesGuide` belong to that area. A and B keep their own screen
+trees and styling; `AliasesGuideView` shares the agreed educational content and
+example interaction. Example controls hold local presentation state and never
+call MemberModel or Rust authority operations. Existing managed-address controls
+own alias changes, and the existing contact sheet owns sender permission actions.
+The replaced receiving-lane-only detail screens are removed. Standing contacts
+are listed separately from filtered sender lanes so the interface does not infer
+receiving-alias scope from a standing contact projection. Existing route history,
+signing, client session and account store remain the owners of continuity.
+
+
+## Inert HTML email and explicit picture retrieval — 24 October 2026
+
+The checked `EmailContent` MIME-v1 representation is a sole `DocumentPart::Email`,
+with a nonselectable email descriptor. Native documents and their source semantics
+remain supported current representations; the replaced plain-only SMTP selector is
+removed. Original MIME is encrypted and committed in the existing message lifecycle.
+No historical-content converter or fallback reader is introduced. The owner authorized
+replacement fictitious content; account/Keychain/address continuity remains required.
+
+Rust owns MIME acceptance, deterministic HTML interpretation, immutable resource IDs,
+message-bound picture approval, encrypted attempt/cache state and retrieval constraints.
+Supplied alternatives, sanitized presentation, extracted text and fetched bytes have
+distinct provenance. Delivery deduplication commits all supplied content but excludes
+transport trace headers and equivalent transfer encodings; receipt replay never rewrites
+the original. Outbound member-authored email remains text-only.
+
+`EmailReader` supplies one A/B behavior contract. A nonpersistent WebKit view accepts
+only app-supplied sanitized HTML and local raster resources. A content rule list is
+installed before loading, CSP denies network and active content, website JavaScript
+and link previews are disabled, and navigation is intercepted. Only a deliberate
+hyperlink activation opens the external browser. App-owned local find code has no
+sender scripting authority. Copy is ordinary local text selection; structured source
+reuse of email descriptors is refused, preserving the native source-permission boundary.
+
+The picture review identifies exact URLs and the disclosure, then approves a selection
+for that message. Rust durably records attempts before external I/O, never automatically
+retries, and retains successful results separately until message expiry. Concurrent
+attempt identities prevent an older completion replacing a newer explicit action.
+Picture failures stay local to the reader and do not mark the member service offline.
+Original HTML/resources and subject remain bound to the original manifest.
+
+First-slice limits: supported raster/CID MIME only; no attachments, SVG, animated
+pictures, remote stylesheet/font/background loading, sender-wide grants or HTML-native
+source selections. Canonical extracted-text search and WebKit's rendered-text matching
+can differ for CSS-hidden text or whitespace across element boundaries. Formatting
+cannot be exact when an unapproved external resource supplies part of the appearance.
+
+
+The current extracted-text interpretation has an explicit local index revision.
+Existing retained external entries are rederived from authenticated originals before
+marking that revision complete; a failed save can repeat the derivation without
+network access. Block and table-cell boundaries remain readable in plain view and
+local search. Permanent native-copy deletion also purges its retained picture
+records after committing removal; expiry prevents presentation immediately, with
+physical expired-cache removal opportunistic on a subsequent approval.
+
+
+The shared HTML reader fits its full body height within the conversation's vertical
+scroll surface. App-owned isolated-world sizing observes content reflow and image
+layout; macOS vertical wheel gestures over HTML are forwarded to the enclosing
+conversation. There is no fixed-height independent email viewport. Search reveals
+selected text through that same enclosing surface. This geometry grants no sender
+script or network authority.
+
+
+ConversationReaderHeader owns one top search inset for native and external
+reading in both interfaces. Their portal layout is shared, with contact identity
+and message subject below the search row rather than above it. The external
+reader selects model.openedThread exactly, without a second contact-level subject
+picker; a missing selected thread does not fall back to a different conversation.
+Sender/date are secondary metadata and contact actions live in Manage contact.
+
+The existing signed external Send command now carries explicit outgoing-mail
+consent. The application derives a conversation grant and queued message in the
+same Changes value and transaction; failed validation/commit leaves neither
+new effect. The member composer supplies it only from Send, including replies.
+The old tuple-shaped Send encoding is replaced with no fallback reader. Opening,
+searching and saving do not issue this command. Stored message content, account
+associations and credential ownership are unchanged by the cutover.
+
+## Formatted composition and design import — 25 October 2026
+
+ComposedBody is the checked Rust owner of editable/imported HTML, inline images and AttachedFile values. The new DocumentPart::Composed flattens to canonical text, image and nonselectable attachment descriptors, preserving native source coordinates and complete document commitments. New authored files/images use compact byte encoding inside their encrypted representation; existing authenticated formats are unchanged. DraftBody::Composed is a first-class format alongside plain text and request writing, not a fallback reader.
+
+The FFI exposes Composition and explicit checked import/presentation functions. ComposerBodyEditor serves A/B native, external and unaddressed surfaces. Its WebKit editor has a nonpersistent store, disabled content scripting, denied network/file/data/blob requests and an app-owned isolated scripting world for editing commands and selection. Preview shares EmailReader’s inert resource handling. macOS file selection uses standard native panels; the iOS adapter retains its platform file importer. Images are decoded, bounded, re-encoded and stripped of input metadata before insertion.
+
+DraftEditor captures live writing before flush and coalesces nearby saves into a single revision-checked writer. The workspace identity scopes both editor and Column B lifetime. Attachments retain bytes and names inside the same encrypted draft and signed submission; native readers expose explicit attached-file saving. External transport renders deterministic multipart alternatives, related images and mixed attachments beneath the existing envelope, threading, consent and DKIM owners. Message HTTP bounds account for retained/recovery copies and JSON ciphertext expansion; alias/profile bounds remain unchanged.
+
+Large-file validation exposed repeated Personal decryption during alias projection. Inbox projection now reuses one validated personal snapshot for its scopes. The canonical development profile uses optimization level 1, with bulk cipher dependencies at level 3; debug symbols and application debug checks remain enabled. No owner schema or credential migration is required.

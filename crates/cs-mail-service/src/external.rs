@@ -101,7 +101,7 @@ pub trait Transport {
     fn send(&mut self, dispatch: &Dispatch, document: &Document) -> Handoff;
 }
 /// # Errors
-/// Content must match the committed manifest and contain only authored text.
+/// Content must match the committed manifest and contain only authored content, without native source reuse.
 pub fn open_dispatch(
     dispatch: &Dispatch,
     secret: &EndpointSecretKey,
@@ -113,10 +113,11 @@ pub fn open_dispatch(
         serde_json::from_slice(&bytes).map_err(|_| CorrespondenceError::Invalid)?;
     if document.manifest(message.manifest.message(), message.manifest.conversation())?
         != message.manifest
-        || document
-            .parts()
-            .iter()
-            .any(|p| !matches!(p, DocumentPart::Text(_)))
+        || !(matches!(document.parts(), [DocumentPart::Composed(_)])
+            || document
+                .parts()
+                .iter()
+                .all(|p| matches!(p, DocumentPart::Text(_))))
     {
         return Err(CorrespondenceError::Invalid);
     }
@@ -156,7 +157,9 @@ impl Transport for Smtp2goTransport {
         let mail = OutboundMail {
             from_local: member_local(dispatch.conversation().member()),
             to: dispatch.conversation().mailbox().address(),
-            subject: "cs-mail conversation".into(),
+            subject: document
+                .subject()
+                .map_or_else(|| "cs-mail conversation".into(), |s| s.text().to_owned()),
             body,
             message_id: format!("cs-{:032x}", id.0),
             date: crate::guests::rfc5322_date(dispatch.message().committed_at),
@@ -171,7 +174,19 @@ impl Transport for Smtp2goTransport {
         if self.dkim.domain() != self.domain.as_str() {
             return Handoff::Failed;
         }
-        let Ok(mime) = render_signed(&mail, &self.dkim) else {
+        let composed = document.parts().iter().find_map(|p| {
+            if let DocumentPart::Composed(body) = p {
+                Some(body)
+            } else {
+                None
+            }
+        });
+        let mime = if let Some(body) = composed {
+            cs_mail_smtp_gateway::outbound::render_composed(&mail, &self.dkim, body)
+        } else {
+            render_signed(&mail, &self.dkim)
+        };
+        let Ok(mime) = mime else {
             return Handoff::Failed;
         };
         match self.carrier.submit(&mime) {

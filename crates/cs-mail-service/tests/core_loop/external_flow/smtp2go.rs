@@ -4,6 +4,7 @@
 use super::*;
 use cs_mail_adapters::DomainIdentity;
 use cs_mail_correspondence::external::delivery::{ProviderEvent, ProviderEventKind};
+use cs_mail_correspondence::{Document, DocumentPart};
 use cs_mail_service::external::{Smtp2goTransport, dispatch};
 use cs_mail_smtp_gateway::smtp2go::{Smtp2go, Webhook, member_local, message_id};
 use support::smtp2go::{Carrier, Reply, accepted};
@@ -60,7 +61,42 @@ fn withdrawal_and_uncertain_submission_do_not_disclose_twice() {
         "withdrawal must prevent any provider request"
     );
 
-    f.start(801);
+    // A rich body and retained file must reach the actual MIME/DKIM adapter,
+    // and the concurrent dispatch challenge must still produce exactly one handoff.
+    let body = cs_mail_correspondence::composed::ComposedBody::new(
+        cs_mail_correspondence::composed::CompositionFormat::Editable,
+        "<p><b>external fixture 801</b></p>".into(),
+        vec![],
+        vec![
+            cs_mail_correspondence::composed::AttachedFile::new(
+                "report.txt".into(),
+                b"file-transport-canary".to_vec(),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let document = Document::new(vec![DocumentPart::Composed(body)], [51; 32]).unwrap();
+    let message = support::external::prepared(
+        &f.preparation(),
+        ConversationId::new(801).unwrap(),
+        MessageId(801),
+        BOB,
+        f.base.clock.now(),
+        &document,
+    );
+    app::Service(&f.repository())
+        .handle(&f.command(
+            801,
+            801,
+            app::Command::Start {
+                receiving_alias: cs_mail_primitives::AliasId::new(BOB.0).unwrap(),
+                mailbox: f.mailbox.clone(),
+                disclose_to_external_mail: true,
+                message: Box::new(message),
+            },
+        ))
+        .unwrap();
     carrier.push(accepted("first"));
     let barrier = Arc::new(Barrier::new(2));
     let (left, right) = (f.repository(), f.repository());
@@ -87,6 +123,16 @@ fn withdrawal_and_uncertain_submission_do_not_disclose_twice() {
     assert!(String::from_utf8_lossy(&mime).contains("a=rsa-sha256"));
     let parsed = mail_parser::MessageParser::default().parse(&mime).unwrap();
     assert_eq!(parsed.body_text(0).unwrap(), "external fixture 801");
+    assert!(
+        parsed
+            .body_html(0)
+            .unwrap()
+            .contains("<b>external fixture 801</b>")
+    );
+    assert_eq!(
+        parsed.attachment(0).unwrap().contents(),
+        b"file-transport-canary"
+    );
     assert_eq!(
         parsed.message_id(),
         Some("cs-00000000000000000000000000000321@example.test")
@@ -143,7 +189,14 @@ fn withdrawal_and_uncertain_submission_do_not_disclose_twice() {
         f.base.clock.now(),
     );
     app::Service(&f.repository())
-        .handle(&f.command(801, 1802, app::Command::Send(Box::new(package))))
+        .handle(&f.command(
+            801,
+            1802,
+            app::Command::Send {
+                message: Box::new(package),
+                disclose_to_external_mail: false,
+            },
+        ))
         .unwrap();
     // The API may include complete accounting as well as its queue reference.
     carrier.push(Reply::Json(

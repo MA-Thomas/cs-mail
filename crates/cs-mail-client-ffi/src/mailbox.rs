@@ -131,8 +131,79 @@ impl From<core::ReadingBlock> for ReadingBlock {
         }
     }
 }
+#[derive(Clone, uniffi::Record)]
+pub struct EmailResource {
+    pub id: String,
+    pub mime_type: String,
+    pub bytes: Vec<u8>,
+}
+#[derive(Clone, uniffi::Enum)]
+pub enum PictureStatus {
+    NotLoaded,
+    Attempted,
+    Loaded,
+}
+#[derive(Clone, uniffi::Record)]
+pub struct EmailPicture {
+    pub id: String,
+    pub url: String,
+    pub status: PictureStatus,
+}
+#[derive(Clone, uniffi::Record)]
+pub struct ReadingEmail {
+    pub files: Vec<crate::ComposerFile>,
+    pub subject: Option<String>,
+    pub html: Option<String>,
+    pub text: String,
+    pub supplied_text: Option<String>,
+    pub resources: Vec<EmailResource>,
+    pub pictures: Vec<EmailPicture>,
+}
+impl From<core::ReadingEmail> for ReadingEmail {
+    fn from(e: core::ReadingEmail) -> Self {
+        Self {
+            files: e
+                .files
+                .iter()
+                .map(|f| crate::ComposerFile {
+                    name: f.name().into(),
+                    bytes: f.bytes().to_vec(),
+                })
+                .collect(),
+            subject: e.subject,
+            html: e.html,
+            text: e.text,
+            supplied_text: e.supplied_text,
+            resources: e
+                .resources
+                .into_iter()
+                .map(|r| EmailResource {
+                    id: r.id,
+                    mime_type: r.mime_type,
+                    bytes: r.bytes,
+                })
+                .collect(),
+            pictures: e
+                .pictures
+                .into_iter()
+                .map(|p| EmailPicture {
+                    id: p.id,
+                    url: p.url,
+                    status: match p.status {
+                        core::PictureStatus::NotLoaded => PictureStatus::NotLoaded,
+                        core::PictureStatus::Attempted => PictureStatus::Attempted,
+                        core::PictureStatus::Loaded => PictureStatus::Loaded,
+                    },
+                })
+                .collect(),
+        }
+    }
+}
 #[derive(Clone, uniffi::Enum)]
 pub enum ReadingPart {
+    Email {
+        email: ReadingEmail,
+    },
     Text {
         text: String,
     },
@@ -169,6 +240,9 @@ impl From<core::ReadingContent> for ReadingContent {
                 parts: parts
                     .into_iter()
                     .map(|p| match p {
+                        core::ReadingPart::Email(email) => ReadingPart::Email {
+                            email: email.into(),
+                        },
                         core::ReadingPart::Text(text) => ReadingPart::Text { text },
                         core::ReadingPart::Image { bytes } => ReadingPart::Image { bytes },
                         core::ReadingPart::Quotation { source, blocks } => ReadingPart::Quotation {
@@ -532,4 +606,15 @@ impl From<core::InboxWorkspace> for InboxWorkspace {
                 .collect(),
         }
     }
+}
+
+/// Pure MIME interpretation for import and isolated renderer checks. No network or account authority.
+/// # Errors
+/// Malformed, oversized or unsupported MIME.
+#[uniffi::export]
+pub fn email_presentation(mime: Vec<u8>) -> Result<ReadingEmail, ClientError> {
+    cs_mail_correspondence::email::EmailContent::from_mime(mime)
+        .and_then(|email| email.presentation())
+        .map(|p| core::ReadingEmail::from(p).into())
+        .map_err(|_| ClientError::InvalidData)
 }

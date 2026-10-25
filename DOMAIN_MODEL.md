@@ -580,6 +580,21 @@ at submission; saving a source selection or recipient address is not authority.
 Draft synchronization between devices and replacement-device draft recovery are
 not established by this local workspace.
 
+### Writing and recipient selection
+
+Revised 24 October 2026. New writing opens without requiring a recipient.
+Unaddressed drafts save and reopen privately; they cannot be submitted. Choosing
+a recipient preserves the writing and uses the existing native or external sending path. Exact native-address drafts retain their selected
+alias separately from identity-default native drafts and conversation replies.
+Recipient selection grants no communication authority; submission retains existing
+protected permission and disclosure checks. An unavailable native address or a
+failed lookup must not silently become an external plaintext destination.
+
+Changing an unsent new recipient preserves its local draft identity and message
+text in one workspace commit. Native subject/source loss when changing to external
+email requires an explicit choice; retained sources still require authority at
+send time. Replies and request drafts retain their fixed conversation/target.
+
 ## Personal reading and organization
 
 Agreed usability follow-on, 15 October 2026. The portable client owns device-local
@@ -741,7 +756,9 @@ member can explicitly open a new unpaid invitation; a new subject line, retry,
 or guest-selected conversation identifier cannot reopen the rejected one.
 
 The first send and subsequent outbound emails require explicit conversation-scoped
-consent to disclose plaintext to the external relay and mailbox. Withdrawing that
+consent to disclose plaintext to the external relay and mailbox. In the member app,
+pressing Send supplies this authorization: granting it and queueing the selected
+message commit atomically. Opening, drafting and saving do not grant it. Withdrawing that
 consent cancels messages still waiting inside cs-mail. Consent withdrawal and
 beginning dispatch are serialized: withdrawal that commits first prevents dispatch;
 after dispatch begins, cancellation may be too late. A crash or uncertain handoff
@@ -750,9 +767,14 @@ must not silently revive cancelled messages. An inbound permission change is not
 itself withdrawal of outbound disclosure consent; blocks prevent new dispatch.
 
 The initial implementation is authored text through signed member commands and a
-development relay. The receive-only SMTP adapter now admits plain-text replies and
-selects plain text from paired plain-text/HTML alternatives for known conversations
-with automatic authentication, STARTTLS and durable deduplication.
+development relay. The receive-only SMTP adapter preserves supported plain-text/HTML
+MIME, alternatives and supplied CID raster resources, with automatic authentication,
+STARTTLS and durable deduplication. Content examination has no external network authority.
+External picture retrieval requires explicit approval scoped to selected resources in
+one immutable message; it grants no sender-wide, communication or behavioral-reporting
+permission. Original content and later retrieved resources retain distinct provenance.
+The [observation-permission principle](docs/correspondence_does_not_grant_permission_to_observe.md)
+governs native and legacy correspondence equally.
 Email provenance does not assert human involvement or a declared purpose.
 The SMTP2GO adapter submits signed plain-text MIME after committed dispatch and records
 authenticated provider events independently from handoff. Lost responses remain uncertain;
@@ -785,3 +807,13 @@ remained unchanged.
 
 See the [implementation record](audit/domain-model-implementation-2026-09-15.md)
 for implemented APIs, acceptance evidence, and remaining deployment work.
+
+## Authored presentation and attached files — 25 October 2026
+
+Ordinary member writing can carry formatted HTML, embedded raster pictures and separately named attached files. Imported HTML is a distinct authored format presented as an inert preview; it is not an incoming preserved MIME message or a source-reference permission. Supported layout is sanitized for presentation and outgoing MIME. Plain text remains a supported authored representation, and every formatted external message includes an extracted text alternative.
+
+The correspondence domain owns checked authored content and files: names carry no filesystem traversal or control characters, inline image references bind retained bytes, and the current composed body has a combined 4 MiB limit and at most 24 pictures/files. Its extracted text and the complete encoded document retain their existing bounds. A file is not a picture or a native reference. Files occupy nonselectable attachment blocks; native quotation/reference selection still names exact text or image blocks. Native source export to external email remains unavailable.
+
+Unsent recipient changes preserve subject and authored presentation/files. Changing to an external recipient still requires explicit removal of incompatible native source inclusions; native conversation replies keep their fixed recipient and shared subject. A draft, its revision and its complete submitted document move into the existing encrypted command journal atomically. Retries reuse the prepared content and operation. Outgoing email consent continues to come from explicit Send. Import, preview, editing and saving convey no communication or observation authority.
+
+The initial import accepts UTF-8 HTML and explicitly supplied relative image resources; remote image addresses remain unrequested during preview. General inbound email attachments, native attachment selection for onward source reuse, campaign tools, bulk recipients and a template designer are outside this composing slice.

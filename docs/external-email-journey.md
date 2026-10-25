@@ -60,7 +60,11 @@ external conversation. Relationship views now expose `external_conversations`, s
 members can discover the route through the existing CLI/API.
 
 Inbound permission does not authorize outbound disclosure. New guest-originated
-conversations start with `NotGranted` consent. The member runs:
+conversations start with `NotGranted` consent. In the member application, explicit
+Send carries the outgoing authorization in the signed command and commits the
+grant together with the queued reply. It does not revive previously cancelled
+messages. Opening or saving a reply grants nothing. The CLI can still make the
+separate explicit grant and send actions:
 
 ```sh
 cs-mail-cli --home /private/member grant-disclosure --conversation ID --operation NAME

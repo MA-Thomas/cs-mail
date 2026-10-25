@@ -22,6 +22,8 @@ pub enum BlockDescriptor {
     Text { bytes: u32 },
     Image { bytes: u32 },
     Reference,
+    Email { bytes: u32 },
+    Attachment { bytes: u32 },
 }
 
 /// Retained selected content; references cannot masquerade as retained image bytes.
@@ -43,6 +45,8 @@ enum BlockRef<'a> {
     Text(&'a str),
     Image(&'a ImageContent),
     Reference,
+    Email(usize),
+    File(usize),
 }
 impl BlockRef<'_> {
     fn descriptor(self) -> Result<BlockDescriptor, CorrespondenceError> {
@@ -55,12 +59,19 @@ impl BlockRef<'_> {
                 bytes: bounded(i.bytes().len())?,
             },
             Self::Reference => BlockDescriptor::Reference,
+            Self::File(bytes) => BlockDescriptor::Attachment {
+                bytes: bounded(bytes)?,
+            },
+            Self::Email(bytes) => BlockDescriptor::Email {
+                bytes: bounded(bytes)?,
+            },
         })
     }
 }
 fn validate_blocks(blocks: &[BlockDescriptor]) -> Result<(), CorrespondenceError> {
     let mut text = 0_u64;
     let mut images = 0_u64;
+    let mut files = 0_u64;
     if blocks.is_empty() || blocks.len() > MAX_BLOCKS {
         return Err(CorrespondenceError::Invalid);
     }
@@ -68,11 +79,19 @@ fn validate_blocks(blocks: &[BlockDescriptor]) -> Result<(), CorrespondenceError
         match block {
             BlockDescriptor::Text { bytes } => text += u64::from(*bytes),
             BlockDescriptor::Image { bytes } if *bytes > 0 => images += u64::from(*bytes),
-            BlockDescriptor::Image { .. } => return Err(CorrespondenceError::Invalid),
+            BlockDescriptor::Email { bytes }
+                if *bytes > 0 && *bytes as usize <= crate::email::MAX_EMAIL_BYTES => {}
+            BlockDescriptor::Email { .. } | BlockDescriptor::Image { .. } => {
+                return Err(CorrespondenceError::Invalid);
+            }
+            BlockDescriptor::Attachment { bytes } => files += u64::from(*bytes),
             BlockDescriptor::Reference => {}
         }
     }
-    if text > MAX_TEXT_BYTES as u64 || images > MAX_IMAGE_BYTES as u64 {
+    if text > MAX_TEXT_BYTES as u64
+        || images > MAX_IMAGE_BYTES as u64
+        || files > crate::composed::MAX_COMPOSED_BYTES as u64
+    {
         return Err(CorrespondenceError::Invalid);
     }
     Ok(())
@@ -133,6 +152,8 @@ impl QuotedExcerpt {
 pub struct SharedCopy(pub QuotedExcerpt);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DocumentPart {
+    Composed(crate::composed::ComposedBody),
+    Email(crate::email::EmailContent),
     Text(String),
     Image(ImageContent),
     Reference(SourceReference),
@@ -142,6 +163,11 @@ pub enum DocumentPart {
 impl DocumentPart {
     fn blocks(&self) -> Vec<BlockRef<'_>> {
         match self {
+            Self::Composed(body) => std::iter::once(BlockRef::Text(body.text()))
+                .chain(body.images().iter().map(BlockRef::Image))
+                .chain(body.files().iter().map(|f| BlockRef::File(f.bytes().len())))
+                .collect(),
+            Self::Email(e) => vec![BlockRef::Email(e.mime().len())],
             Self::Text(t) => vec![BlockRef::Text(t)],
             Self::Image(i) => vec![BlockRef::Image(i)],
             Self::Reference(_) => vec![BlockRef::Reference],
@@ -151,7 +177,7 @@ impl DocumentPart {
     }
     pub fn source(&self) -> Option<SourceUse> {
         match self {
-            Self::Text(_) | Self::Image(_) => None,
+            Self::Text(_) | Self::Image(_) | Self::Email(_) | Self::Composed(_) => None,
             Self::Reference(r) => Some(SourceUse::Reference(r.0.clone())),
             Self::Quotation(q) => Some(SourceUse::Quotation(q.source().clone())),
             Self::Share(s) => Some(SourceUse::Sharing(s.0.source().clone())),
@@ -186,6 +212,9 @@ impl TryFrom<DocumentRecord> for Document {
     type Error = CorrespondenceError;
     fn try_from(v: DocumentRecord) -> Result<Self, Self::Error> {
         if v.version_secret == [0; 32] || v.parts.is_empty() || v.parts.len() > MAX_PARTS {
+            return Err(CorrespondenceError::Invalid);
+        }
+        if v.parts.iter().any(|p| matches!(p, DocumentPart::Email(_))) && v.parts.len() != 1 {
             return Err(CorrespondenceError::Invalid);
         }
         let document = Self(v);
@@ -328,6 +357,13 @@ impl TryFrom<ManifestRecord> for MessageManifest {
     type Error = CorrespondenceError;
     fn try_from(v: ManifestRecord) -> Result<Self, Self::Error> {
         validate_blocks(&v.blocks)?;
+        if v.blocks
+            .iter()
+            .any(|b| matches!(b, BlockDescriptor::Email { .. }))
+            && (v.blocks.len() != 1 || !v.sources.is_empty())
+        {
+            return Err(CorrespondenceError::Invalid);
+        }
         if v.message.0 == 0
             || v.sources.len() > MAX_PARTS
             || v.sources

@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 /// refused until their policy/provenance graph can be evaluated at dispatch too.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PreparedText {
+pub struct PreparedMessage {
     pub manifest: MessageManifest,
     pub sender_key: EndpointPublicKey,
     pub member_copy: EncryptedContentRecord,
@@ -31,10 +31,13 @@ pub enum Command {
     Start {
         receiving_alias: cs_mail_primitives::AliasId,
         mailbox: GuestMailbox,
-        message: Box<PreparedText>,
+        message: Box<PreparedMessage>,
         disclose_to_external_mail: bool,
     },
-    Send(Box<PreparedText>),
+    Send {
+        message: Box<PreparedMessage>,
+        disclose_to_external_mail: bool,
+    },
     Reject,
     WithdrawDisclosure,
     GrantDisclosure,
@@ -278,7 +281,7 @@ pub struct Effects {
 }
 pub struct Changes {
     pub conversation: ExternalConversation,
-    pub delivery: Option<Box<PreparedText>>,
+    pub delivery: Option<Box<PreparedMessage>>,
     pub cancel_waiting: bool,
 }
 pub struct Decision {
@@ -310,7 +313,7 @@ impl<S: Store> Service<'_, S> {
 
 /// Structural checks apply to incoming packages and restored database records alike.
 /// # Errors
-/// Rejects nontext manifests, malformed envelopes and inconsistent content bindings.
+/// Rejects unsupported content manifests, malformed envelopes and inconsistent bindings.
 pub fn validate_copy(
     manifest: &MessageManifest,
     sender_key: EndpointPublicKey,
@@ -318,20 +321,19 @@ pub fn validate_copy(
 ) -> Result<(), Error> {
     use cs_mail_correspondence::BlockDescriptor;
     use cs_mail_primitives::{ProtocolVersion, WireVersion};
+    let email = matches!(manifest.blocks(), [BlockDescriptor::Email { .. }]);
+    let valid_content = email
+        || manifest.blocks().iter().all(|b| {
+            matches!(
+                b,
+                BlockDescriptor::Text { .. }
+                    | BlockDescriptor::Image { .. }
+                    | BlockDescriptor::Attachment { .. }
+            )
+        });
+    let max_ciphertext = cs_mail_correspondence::MAX_ENCODED_DOCUMENT_BYTES + 16;
     if !manifest.sources().is_empty()
-        || manifest
-            .blocks()
-            .iter()
-            .any(|b| !matches!(b, BlockDescriptor::Text { .. }))
-        || manifest
-            .blocks()
-            .iter()
-            .map(|b| match b {
-                BlockDescriptor::Text { bytes } => u64::from(*bytes),
-                _ => 0,
-            })
-            .sum::<u64>()
-            > 16384
+        || !valid_content
         || copy.binding.message_id != manifest.message()
         || copy.binding.content_ref.0 == 0
         || copy.binding.wire_version != WireVersion(1)
@@ -342,7 +344,7 @@ pub fn validate_copy(
         || copy.envelope.sender_key != sender_key.reference
         || copy.envelope.recipient_key.0 == 0
         || copy.envelope.encapsulated_key.len() != 32
-        || !(16..=65536).contains(&copy.envelope.ciphertext.len())
+        || !(16..=max_ciphertext).contains(&copy.envelope.ciphertext.len())
         || copy.created_at >= copy.expires_at
         || copy.created_at >= copy.binding.message_valid_until.0
     {
@@ -385,12 +387,19 @@ impl Message {
 }
 
 fn validate_message(
-    p: &PreparedText,
+    p: &PreparedMessage,
     request: &SignedCommand,
     c: &Context,
     now: CanonicalTime,
 ) -> Result<(), Error> {
-    if p.manifest.conversation() != request.conversation
+    if p.manifest.blocks().iter().any(|b| {
+        !matches!(
+            b,
+            cs_mail_correspondence::BlockDescriptor::Text { .. }
+                | cs_mail_correspondence::BlockDescriptor::Image { .. }
+                | cs_mail_correspondence::BlockDescriptor::Attachment { .. }
+        )
+    }) || p.manifest.conversation() != request.conversation
         || !p.manifest.sources().is_empty()
         || p.manifest.message().0 == 0
         || p.sender_key.bytes == [0; 32]
@@ -414,7 +423,8 @@ fn validate_message(
             || copy.binding.relationship != c.relationship.key.reference
             || copy.envelope.sender_key != p.sender_key.reference
             || copy.envelope.ciphertext.is_empty()
-            || copy.envelope.ciphertext.len() > 65536
+            || copy.envelope.ciphertext.len()
+                > cs_mail_correspondence::MAX_ENCODED_DOCUMENT_BYTES + 16
             || copy.created_at > now
             || copy.expires_at <= now
             || copy.binding.message_valid_until.0 <= now
@@ -519,8 +529,14 @@ fn mutation(
                 Outcome::Queued(message.manifest.message()),
             )
         }
-        Command::Send(message) => {
-            let conversation = c.conversation.clone().ok_or(Error::Unavailable)?;
+        Command::Send {
+            message,
+            disclose_to_external_mail,
+        } => {
+            let mut conversation = c.conversation.clone().ok_or(Error::Unavailable)?;
+            if *disclose_to_external_mail {
+                conversation = conversation.grant_disclosure(request.persona, now)?;
+            }
             if !c.billing.covers(now)
                 || !conversation.disclosure().permits_dispatch()
                 || c.relationship.state == RelationshipState::Blocked
@@ -750,7 +766,7 @@ fn authorize_reply(
         || copy.expires_at <= now
         || copy.binding.message_valid_until.0 <= now
         || copy.envelope.ciphertext.is_empty()
-        || copy.envelope.ciphertext.len() > 65536
+        || copy.envelope.ciphertext.len() > cs_mail_correspondence::MAX_ENCODED_DOCUMENT_BYTES + 16
         || reply.delivery_digest == [0; 32]
     {
         return Err(Error::Invalid);

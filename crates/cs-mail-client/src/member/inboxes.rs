@@ -173,14 +173,21 @@ impl MemberClient {
         *self.receiving.lock().map_err(|_| Error::Unavailable)? = Some(retained.inboxes()?);
         let aliases = retained.aliases();
         drop(retained);
+        let personal = Personal::load(self, &keys, &state)?;
         let all = self.scope_items(
             &state,
-            personal::items(&state, &Personal::load(self, &keys, &state)?)?,
+            personal::items(&state, &personal)?,
             InboxScope::All,
+            &personal,
         )?;
         let mut inboxes = Vec::new();
         for alias in aliases {
-            let items = self.scope_items(&state, all.clone(), InboxScope::Alias(alias.id()))?;
+            let items = self.scope_items(
+                &state,
+                all.clone(),
+                InboxScope::Alias(alias.id()),
+                &personal,
+            )?;
             let unread = items
                 .iter()
                 .filter(|i| i.folder == super::MailFolder::Inbox)
@@ -338,10 +345,15 @@ impl MemberClient {
         retained.set_aliases(self, &keys, aliases.clone())?;
         drop(retained);
         *self.receiving.lock().map_err(|_| Error::Unavailable)? = Some(snapshot);
-        let all = self.scope_items(&state, all, InboxScope::All)?;
+        let all = self.scope_items(&state, all, InboxScope::All, &personal)?;
         let mut inboxes = Vec::new();
         for alias in aliases {
-            let items = self.scope_items(&state, all.clone(), InboxScope::Alias(alias.id()))?;
+            let items = self.scope_items(
+                &state,
+                all.clone(),
+                InboxScope::Alias(alias.id()),
+                &personal,
+            )?;
             let unread = items
                 .iter()
                 .filter(|i| i.folder == super::MailFolder::Inbox)
@@ -385,6 +397,7 @@ impl MemberClient {
         state: &State,
         mut items: Vec<MailItem>,
         scope: InboxScope,
+        personal: &Personal,
     ) -> Result<Vec<MailItem>, Error> {
         let keys = storage::secrets(self.store.as_ref())?;
         let retained = super::retained::Retained::load(self, &keys, state)?;
@@ -420,8 +433,6 @@ impl MemberClient {
             .iter()
             .map(|r| ((route_key(r), r.message()), r))
             .collect();
-        let keys = storage::secrets(self.store.as_ref())?;
-        let personal = Personal::load(self, &keys, state)?;
         for item in &mut items {
             item.receiving = item
                 .messages
@@ -452,6 +463,7 @@ impl MemberClient {
                     .unwrap_or(0);
             }
         }
+        storage::check_keys(self.store.as_ref(), &keys)?;
         if scope != InboxScope::All {
             items.retain(|i| !i.messages.is_empty());
         }

@@ -53,6 +53,11 @@ private final class FixtureRoutes: @unchecked Sendable {
     }
     static func main() async throws {
         setbuf(stdout, nil)
+        if ProcessInfo.processInfo.environment["CS_MAIL_EMAIL_RENDER_CHECK"] == "1" {
+            try await inertEmailRendering()
+            print("PASS WebKit HTML layout, embedded raster, blocked network, disabled script, and local find")
+            return
+        }
         try durableReplacementAndExclusiveOwnership()
         print("PASS SQLite durable replacement, process exclusivity and secret exclusion")
         try isolatedKeychainCredential()
@@ -578,7 +583,22 @@ private final class FixtureRoutes: @unchecked Sendable {
     }
     private static func submitDraftForCheck(_ client: AppleClient, target: DraftTarget, body: DraftBody, disclose: Bool = false, reviewedRequest: String? = nil, subject: String = "") throws -> DraftSubmission {
         let initial = try client.openDraft(target: target)
-        let saved = try client.saveDraft(id: initial.id, revision: initial.revision, body: body, subject: subject, localOffsetSeconds: -14400)
+        // Challenge the complete HTTP/FFI path beyond the former 1 MB upload
+        // ceiling, including formatted content, retained bytes and native sources.
+        let retainedFile = ComposerFile(name: "native-journey-file.txt", bytes: Data(repeating: 0x61, count: 192 * 1024))
+        let authored: DraftBody
+        switch body {
+        case .native(let text,let sources):
+            authored = .composed(mailbox: "", content: Composition(html: "<p><b>" + text.replacingOccurrences(of: "&",with:"&amp;").replacingOccurrences(of:"<",with:"&lt;") + "</b></p>", imported: false, images: [], files: [retainedFile]), sources: sources)
+        case .external(let mailbox,let text):
+            authored = .composed(mailbox: mailbox, content: Composition(html: "<p><b>" + text + "</b></p>", imported: false, images: [], files: [retainedFile]), sources: [])
+        default: authored = body
+        }
+        let saved = try client.saveDraft(id: initial.id, revision: initial.revision, body: authored, subject: subject, localOffsetSeconds: -14400)
+        if case .composed = authored {
+            guard case .composed(_,let reopened,_) = try client.drafts().first(where: {$0.id == initial.id})?.body else {throw CheckFailure(code:"formatted-draft-not-retained")}
+            try require(reopened.files.first?.bytes == retainedFile.bytes && reopened.html.contains("<b>"),"formatted-draft-file-or-style-lost")
+        }
         let result = try client.submitDraft(id: saved.id, revision: saved.revision, disclose: disclose, reviewedRequest: reviewedRequest)
         try require(try client.drafts().allSatisfy { $0.id != saved.id }, "submitted-draft-still-editable")
         return result

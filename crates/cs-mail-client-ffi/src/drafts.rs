@@ -6,6 +6,11 @@ use cs_mail_primitives::{ProtocolIdentity, RequestClassId, RequestId};
 
 #[derive(Clone, uniffi::Enum)]
 pub enum DraftTarget {
+    Unaddressed,
+    NativeAddress {
+        other: String,
+        alias: String,
+    },
     Native {
         other: String,
         conversation: Option<String>,
@@ -39,6 +44,12 @@ impl TryFrom<DraftTarget> for core::DraftTarget {
     type Error = ClientError;
     fn try_from(value: DraftTarget) -> Result<Self, ClientError> {
         Ok(match value {
+            DraftTarget::Unaddressed => Self::Unaddressed,
+            DraftTarget::NativeAddress { other, alias } => Self::NativeAddress {
+                other: ProtocolIdentity(number(&other)?),
+                alias: cs_mail_primitives::AliasId::new(number(&alias)?)
+                    .map_err(|_| ClientError::InvalidData)?,
+            },
             DraftTarget::Native {
                 other,
                 conversation: id,
@@ -69,6 +80,11 @@ impl TryFrom<DraftTarget> for core::DraftTarget {
 impl From<&core::DraftTarget> for DraftTarget {
     fn from(value: &core::DraftTarget) -> Self {
         match value {
+            core::DraftTarget::Unaddressed => Self::Unaddressed,
+            core::DraftTarget::NativeAddress { other, alias } => Self::NativeAddress {
+                other: other.0.to_string(),
+                alias: alias.value().to_string(),
+            },
             core::DraftTarget::Native {
                 other,
                 conversation,
@@ -97,6 +113,11 @@ impl From<&core::DraftTarget> for DraftTarget {
 }
 #[derive(Clone, uniffi::Enum)]
 pub enum DraftBody {
+    Composed {
+        mailbox: String,
+        content: crate::Composition,
+        sources: Vec<SourceDraft>,
+    },
     Native {
         text: String,
         sources: Vec<SourceDraft>,
@@ -113,6 +134,25 @@ impl TryFrom<DraftBody> for core::DraftBody {
     type Error = ClientError;
     fn try_from(value: DraftBody) -> Result<Self, ClientError> {
         Ok(match value {
+            DraftBody::Composed {
+                mailbox,
+                content,
+                sources,
+            } => {
+                let core::DraftBody::Native { sources, .. } =
+                    core::DraftBody::try_from(DraftBody::Native {
+                        text: String::new(),
+                        sources,
+                    })?
+                else {
+                    unreachable!()
+                };
+                Self::Composed {
+                    mailbox,
+                    content: content.try_into()?,
+                    sources,
+                }
+            }
             DraftBody::Native { text, sources } => Self::Native {
                 text,
                 sources: sources
@@ -141,6 +181,23 @@ impl TryFrom<DraftBody> for core::DraftBody {
 impl From<&core::DraftBody> for DraftBody {
     fn from(value: &core::DraftBody) -> Self {
         match value {
+            core::DraftBody::Composed {
+                mailbox,
+                content,
+                sources,
+            } => {
+                let DraftBody::Native { sources, .. } = DraftBody::from(&core::DraftBody::Native {
+                    text: String::new(),
+                    sources: sources.clone(),
+                }) else {
+                    unreachable!()
+                };
+                Self::Composed {
+                    mailbox: mailbox.clone(),
+                    content: content.into(),
+                    sources,
+                }
+            }
             core::DraftBody::Native { text, sources } => Self::Native {
                 text: text.clone(),
                 sources: sources
@@ -287,6 +344,27 @@ impl AppleClient {
                 body.try_into()?,
                 &subject,
                 local_offset_seconds,
+            )
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+    /// # Errors
+    /// Stale revision, fixed conversation or unapproved incompatible content.
+    pub fn retarget_draft(
+        &self,
+        id: String,
+        revision: u64,
+        target: DraftTarget,
+        mailbox: String,
+        drop_incompatible: bool,
+    ) -> Result<Draft, ClientError> {
+        self.0
+            .retarget_draft(
+                number(&id)?.try_into()?,
+                revision.try_into()?,
+                target.try_into()?,
+                mailbox,
+                drop_incompatible,
             )
             .map(Into::into)
             .map_err(Into::into)

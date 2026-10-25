@@ -213,3 +213,48 @@ impl MemberClient {
         ))
     }
 }
+
+/// A resolved destination is routing evidence, never send permission.
+#[derive(Clone, Debug)]
+pub enum ComposerRecipient {
+    Native {
+        other: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
+        mailbox: Option<String>,
+    },
+    External {
+        mailbox: String,
+    },
+}
+impl MemberClient {
+    /// Resolve native publications first. A failed native-domain lookup must never
+    /// silently become plaintext external mail; transport failures never fall back.
+    /// # Errors
+    /// Invalid address, unavailable native publication, custody or transport.
+    pub fn composer_recipient(&self, reference: &str) -> Result<ComposerRecipient, Error> {
+        match self.directory_lookup(reference) {
+            Ok(approach) => Ok(ComposerRecipient::Native {
+                other: approach.entry.address(),
+                alias: approach.entry.alias(),
+                mailbox: approach.entry.mailbox().map(|m| m.as_str().to_owned()),
+            }),
+            Err(Error::AddressUnavailable) => {
+                let mailbox = cs_mail_guests::GuestMailbox::parse(reference)
+                    .map_err(|_| Error::InvalidData)?;
+                let owned = self.address_workspace()?;
+                if owned.addresses.is_empty()
+                    || owned.addresses.iter().any(|address| {
+                        cs_mail_guests::GuestMailbox::parse(&address.address)
+                            .is_ok_and(|native| native.domain() == mailbox.domain())
+                    })
+                {
+                    return Err(Error::AddressUnavailable);
+                }
+                Ok(ComposerRecipient::External {
+                    mailbox: mailbox.address(),
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+}

@@ -40,12 +40,40 @@ impl MemberClient {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let state = storage::open(self.store.as_ref(), &keys)?;
+        self.ensure_email_text_index(&state, &keys)?;
         let mut retained = Retained::load(self, &keys, &state)?;
         let processed = self.index_external(&state, &keys, &mut retained, usize::from(limit))?;
         if processed > 0 {
             retained.save(self, &keys)?;
         }
         u64::try_from(processed).map_err(|_| Error::InvalidData)
+    }
+    /// Upgrade only the derived external-email text interpretation, from verified
+    /// encrypted sources. No original message, native selection or credential changes.
+    fn ensure_email_text_index(&self, state: &State, keys: &Secrets) -> Result<(), Error> {
+        let _guard = self.workspace.lock().map_err(|_| Error::Unavailable)?;
+        let mut personal = super::personal::Personal::load(self, keys, state)?;
+        if personal.email_text_revision == 1 {
+            return Ok(());
+        }
+        let mut retained = Retained::load(self, keys, state)?;
+        let external: Vec<_> = retained
+            .entries
+            .keys()
+            .filter(|key| matches!(key.thread, MailKey::External(_)))
+            .copied()
+            .collect();
+        for key in external {
+            if let Some(mut entry) = retained.copy(self, keys, key, (self.clock)())? {
+                entry.text = self.external_text(state, keys, key.thread, key.message)?;
+                retained.insert(entry);
+            }
+        }
+        retained.save(self, keys)?;
+        drop(retained);
+        personal.email_text_revision = 1;
+        storage::check_keys(self.store.as_ref(), keys)?;
+        self.store.save_personal(&personal.bytes(keys)?)
     }
     /// Rebuild derived words from retained authenticated sources, preserving exclusions.
     /// # Errors

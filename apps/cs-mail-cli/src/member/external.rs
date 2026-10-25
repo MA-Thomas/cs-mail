@@ -5,7 +5,7 @@ use super::{
     json, now, print, random,
 };
 use cs_mail_application::correspondence::external::{
-    Command, PreparedText, Response, SignedCommand,
+    Command, PreparedMessage, Response, SignedCommand,
 };
 use cs_mail_correspondence::{ConversationId, Document, DocumentPart};
 use cs_mail_guests::GuestMailbox;
@@ -131,7 +131,7 @@ impl Member {
                     capability: None,
                 };
                 let bytes = serde_json::to_vec(&document).map_err(|e| e.to_string())?;
-                let package = Box::new(PreparedText {
+                let package = Box::new(PreparedMessage {
                     manifest,
                     sender_key,
                     member_copy: cs_mail_content::encrypt(
@@ -161,7 +161,10 @@ impl Member {
                         disclose_to_external_mail: disclose,
                     }
                 } else {
-                    Command::Send(package)
+                    Command::Send {
+                        message: package,
+                        disclose_to_external_mail: disclose,
+                    }
                 };
                 serde_json::to_value(member.external_signed(conversation, command)?)
                     .map_err(|e| e.to_string())

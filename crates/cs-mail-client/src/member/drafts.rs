@@ -58,6 +58,11 @@ impl DraftRevision {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DraftTarget {
+    Unaddressed,
+    NativeAddress {
+        other: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
+    },
     Native {
         other: ProtocolIdentity,
         conversation: Option<ConversationId>,
@@ -75,8 +80,27 @@ pub enum DraftTarget {
         request: RequestId,
     },
 }
+impl DraftTarget {
+    fn has_editable_recipient(&self) -> bool {
+        matches!(
+            self,
+            Self::Unaddressed
+                | Self::Native {
+                    conversation: None,
+                    ..
+                }
+                | Self::NativeAddress { .. }
+                | Self::External { conversation: None }
+        )
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DraftBody {
+    Composed {
+        mailbox: String,
+        content: cs_mail_correspondence::composed::ComposedBody,
+        sources: Vec<SourceDraft>,
+    },
     Native {
         text: String,
         sources: Vec<SourceDraft>,
@@ -99,7 +123,8 @@ pub enum DraftIssue {
 impl DraftBody {
     pub fn issues(&self) -> Vec<DraftIssue> {
         let mut issues = Vec::new();
-        let has_sources = matches!(self, Self::Native { sources, .. } if !sources.is_empty());
+        let has_sources = matches!(self, Self::Native { sources, .. } | Self::Composed { sources, .. } if !sources.is_empty())
+            || matches!(self, Self::Composed { content, .. } if content.has_content());
         if self.text().trim().is_empty() && !has_sources {
             issues.push(DraftIssue::EmptyMessage);
         }
@@ -123,6 +148,7 @@ impl DraftBody {
 
     pub fn text(&self) -> &str {
         match self {
+            Self::Composed { content, .. } => content.text(),
             Self::Native { text, .. } | Self::External { text, .. } | Self::Request { text } => {
                 text
             }
@@ -131,17 +157,40 @@ impl DraftBody {
     fn validate(&self, target: &DraftTarget) -> Result<(), Error> {
         let shape = matches!(
             (target, self),
-            (DraftTarget::Native { .. }, Self::Native { .. })
-                | (DraftTarget::External { .. }, Self::External { .. })
+            (
+                DraftTarget::Unaddressed
+                    | DraftTarget::Native { .. }
+                    | DraftTarget::NativeAddress { .. },
+                Self::Native { .. }
+            ) | (DraftTarget::External { .. }, Self::External { .. })
                 | (
                     DraftTarget::Request { .. } | DraftTarget::Followup { .. },
                     Self::Request { .. }
                 )
         );
+        let shape = shape
+            || matches!(
+                (target, self),
+                (
+                    DraftTarget::Unaddressed
+                        | DraftTarget::Native { .. }
+                        | DraftTarget::NativeAddress { .. }
+                        | DraftTarget::External { .. },
+                    Self::Composed { .. }
+                )
+            );
         if !shape || self.text().len() > 1_048_576 {
             return Err(Error::InvalidData);
         }
         match self {
+            Self::Composed {
+                mailbox, sources, ..
+            } if mailbox.len() > 320
+                || sources.len() > 100
+                || (matches!(target, DraftTarget::External { .. }) && (!sources.is_empty())) =>
+            {
+                Err(Error::InvalidData)
+            }
             Self::Native { sources, .. } if sources.len() > 128 => Err(Error::InvalidData),
             Self::External { mailbox, .. } if mailbox.len() > 320 => Err(Error::InvalidData),
             _ => Ok(()),
@@ -171,16 +220,21 @@ impl TryFrom<DraftRecord> for Draft {
             || !(-86_399..=86_399).contains(&record.local_offset_seconds)
             || (!matches!(
                 record.target,
-                DraftTarget::Native {
-                    conversation: None,
-                    ..
-                } | DraftTarget::Request { .. }
+                DraftTarget::Unaddressed
+                    | DraftTarget::Native {
+                        conversation: None,
+                        ..
+                    }
+                    | DraftTarget::NativeAddress { .. }
+                    | DraftTarget::Request { .. }
+                    | DraftTarget::External { .. }
             ) && !record.subject.is_empty())
         {
             return Err(Error::InvalidData);
         }
         match record.target {
             DraftTarget::Native { other, .. }
+            | DraftTarget::NativeAddress { other, .. }
             | DraftTarget::Request { other, .. }
             | DraftTarget::Followup { other, .. }
                 if other.0 == 0 =>
@@ -213,6 +267,13 @@ impl Draft {
     }
     pub fn issues(&self) -> Vec<DraftIssue> {
         let mut issues = self.body().issues();
+        if let (DraftTarget::External { .. }, DraftBody::Composed { mailbox, .. }) =
+            (self.target(), self.body())
+        {
+            if cs_mail_guests::GuestMailbox::parse(mailbox).is_err() {
+                issues.push(DraftIssue::InvalidMailbox);
+            }
+        }
         if self.subject().trim().len() > cs_mail_correspondence::MAX_SUBJECT_BYTES {
             issues.push(DraftIssue::SubjectTooLong {
                 max_bytes: cs_mail_correspondence::MAX_SUBJECT_BYTES as u64,
@@ -231,6 +292,57 @@ impl Draft {
     }
     pub const fn updated_at(&self) -> CanonicalTime {
         self.0.updated_at
+    }
+    fn retarget(
+        &self,
+        expected: DraftRevision,
+        target: DraftTarget,
+        mailbox: String,
+        drop_incompatible: bool,
+        now: CanonicalTime,
+    ) -> Result<Self, Error> {
+        let current = self;
+        if !current.target().has_editable_recipient() || !target.has_editable_recipient() {
+            return Err(Error::InvalidData);
+        }
+        let external = matches!(target, DraftTarget::External { .. });
+        let sources = match current.body() {
+            DraftBody::Native { sources, .. } | DraftBody::Composed { sources, .. } => {
+                sources.clone()
+            }
+            _ => Vec::new(),
+        };
+        if external && !sources.is_empty() && !drop_incompatible {
+            return Err(Error::InvalidData);
+        }
+        let body = if let DraftBody::Composed { content, .. } = current.body() {
+            DraftBody::Composed {
+                mailbox: if external { mailbox } else { String::new() },
+                content: content.clone(),
+                sources: if external { vec![] } else { sources },
+            }
+        } else if external {
+            DraftBody::External {
+                mailbox,
+                text: current.body().text().to_owned(),
+            }
+        } else {
+            DraftBody::Native {
+                text: current.body().text().to_owned(),
+                sources,
+            }
+        };
+        let next: Self = DraftRecord {
+            id: self.id(),
+            revision: DraftRevision(expected.0.checked_add(1).ok_or(Error::InvalidData)?),
+            target,
+            body,
+            subject: current.subject().to_owned(),
+            local_offset_seconds: current.local_offset_seconds(),
+            updated_at: now.max(current.updated_at()),
+        }
+        .try_into()?;
+        Ok(next)
     }
     fn update(
         &self,
@@ -341,6 +453,13 @@ enum WorkspaceCommand {
         subject: String,
         local_offset_seconds: i32,
     },
+    Retarget {
+        id: DraftId,
+        expected: DraftRevision,
+        target: DraftTarget,
+        drop_incompatible: bool,
+        mailbox: String,
+    },
     Discard {
         id: DraftId,
         expected: DraftRevision,
@@ -358,6 +477,59 @@ struct WorkspaceDecision {
     draft: Option<Draft>,
 }
 impl Workspace {
+    fn open(
+        &mut self,
+        id: DraftId,
+        target: DraftTarget,
+        mode: OpenMode,
+        now: CanonicalTime,
+    ) -> Result<Draft, Error> {
+        let existing = if matches!(mode, OpenMode::Resume) {
+            self.drafts
+                .iter()
+                .filter(|d| d.target() == &target)
+                .max_by_key(|d| (d.updated_at(), d.id().value()))
+        } else {
+            None
+        };
+        if let Some(draft) = existing {
+            Ok(draft.clone())
+        } else {
+            if self.drafts.len() + usize::from(self.submitted.is_some()) >= 256
+                || self.drafts.iter().any(|d| d.id() == id)
+                || self.submitted.as_ref().is_some_and(|d| d.id() == id)
+            {
+                return Err(Error::InvalidData);
+            }
+            let body = match target {
+                DraftTarget::Unaddressed
+                | DraftTarget::Native { .. }
+                | DraftTarget::NativeAddress { .. } => DraftBody::Native {
+                    text: String::new(),
+                    sources: Vec::new(),
+                },
+                DraftTarget::External { .. } => DraftBody::External {
+                    mailbox: String::new(),
+                    text: String::new(),
+                },
+                _ => DraftBody::Request {
+                    text: String::new(),
+                },
+            };
+            let draft: Draft = DraftRecord {
+                subject: String::new(),
+                local_offset_seconds: 0,
+                id,
+                revision: DraftRevision(1),
+                target,
+                body,
+                updated_at: now,
+            }
+            .try_into()?;
+            self.drafts.push(draft.clone());
+            Ok(draft)
+        }
+    }
     fn transition(
         mut self,
         command: WorkspaceCommand,
@@ -366,49 +538,7 @@ impl Workspace {
         let mut output = None;
         match command {
             WorkspaceCommand::Open { id, target, mode } => {
-                let existing = if matches!(mode, OpenMode::Resume) {
-                    self.drafts
-                        .iter()
-                        .filter(|d| d.target() == &target)
-                        .max_by_key(|d| (d.updated_at(), d.id().value()))
-                } else {
-                    None
-                };
-                if let Some(draft) = existing {
-                    output = Some(draft.clone());
-                } else {
-                    if self.drafts.len() + usize::from(self.submitted.is_some()) >= 256
-                        || self.drafts.iter().any(|d| d.id() == id)
-                        || self.submitted.as_ref().is_some_and(|d| d.id() == id)
-                    {
-                        return Err(Error::InvalidData);
-                    }
-                    let body = match target {
-                        DraftTarget::Native { .. } => DraftBody::Native {
-                            text: String::new(),
-                            sources: Vec::new(),
-                        },
-                        DraftTarget::External { .. } => DraftBody::External {
-                            mailbox: String::new(),
-                            text: String::new(),
-                        },
-                        _ => DraftBody::Request {
-                            text: String::new(),
-                        },
-                    };
-                    let draft: Draft = DraftRecord {
-                        subject: String::new(),
-                        local_offset_seconds: 0,
-                        id,
-                        revision: DraftRevision(1),
-                        target,
-                        body,
-                        updated_at: now,
-                    }
-                    .try_into()?;
-                    self.drafts.push(draft.clone());
-                    output = Some(draft);
-                }
+                output = Some(self.open(id, target, mode, now)?);
             }
             WorkspaceCommand::Save {
                 id,
@@ -431,13 +561,34 @@ impl Workspace {
                     .ok_or(Error::DraftChanged)? = next.clone();
                 output = Some(next);
             }
+            WorkspaceCommand::Retarget {
+                id,
+                expected,
+                target,
+                drop_incompatible,
+                mailbox,
+            } => {
+                let next = self.get(id, expected)?.retarget(
+                    expected,
+                    target,
+                    mailbox,
+                    drop_incompatible,
+                    now,
+                )?;
+                *self
+                    .drafts
+                    .iter_mut()
+                    .find(|d| d.id() == id)
+                    .ok_or(Error::DraftChanged)? = next.clone();
+                output = Some(next);
+            }
             WorkspaceCommand::Discard { id, expected } => {
                 self.get(id, expected)?;
                 self.drafts.retain(|d| d.id() != id);
             }
             WorkspaceCommand::Submit { id, expected } => {
                 let draft = self.get(id, expected)?;
-                if self.submitted.is_some() {
+                if self.submitted.is_some() || matches!(draft.target(), DraftTarget::Unaddressed) {
                     return Err(Error::DraftChanged);
                 }
                 self.drafts.retain(|d| d.id() != id);
@@ -536,6 +687,35 @@ impl MemberClient {
         let next = decision.draft.ok_or(Error::InvalidData)?;
         Ok(next)
     }
+    /// Atomically change one unsent recipient while preserving its writing.
+    /// # Errors
+    /// Stale revision, fixed reply/request target, unapproved content loss or storage failure.
+    pub fn retarget_draft(
+        &self,
+        id: DraftId,
+        expected: DraftRevision,
+        target: DraftTarget,
+        mailbox: String,
+        drop_incompatible: bool,
+    ) -> Result<Draft, Error> {
+        let _guard = self.workspace.lock().map_err(|_| Error::Unavailable)?;
+        let keys = storage::secrets(self.store.as_ref())?;
+        let state = storage::open(self.store.as_ref(), &keys)?;
+        let workspace = Workspace::load(self, &keys, &state)?;
+        let decision = workspace.transition(
+            WorkspaceCommand::Retarget {
+                id,
+                expected,
+                target,
+                mailbox,
+                drop_incompatible,
+            },
+            (self.clock)(),
+        )?;
+        storage::check_keys(self.store.as_ref(), &keys)?;
+        self.store.save_workspace(&decision.next.bytes(&keys)?)?;
+        decision.draft.ok_or(Error::InvalidData)
+    }
     /// # Errors
     /// A later edit cannot be discarded by an older editor.
     pub fn discard_draft(&self, id: DraftId, expected: DraftRevision) -> Result<(), Error> {
@@ -621,24 +801,40 @@ impl MemberClient {
             .find(|d| d.id() == id && d.revision() == expected)
             .ok_or(Error::DraftChanged)?;
         match (draft.target(), draft.body()) {
-            (
-                DraftTarget::Native {
-                    other,
-                    conversation,
-                },
-                DraftBody::Native { text, sources },
-            ) => {
+            (DraftTarget::Native { .. } | DraftTarget::NativeAddress { .. }, body) => {
+                let (other, conversation, alias) = match draft.target() {
+                    DraftTarget::Native {
+                        other,
+                        conversation,
+                    } => (*other, *conversation, None),
+                    DraftTarget::NativeAddress { other, alias } => (*other, None, Some(*alias)),
+                    _ => unreachable!("matched native target"),
+                };
+                let (text, sources) = match body {
+                    DraftBody::Native { text, sources } => (text.as_str(), sources.as_slice()),
+                    DraftBody::Composed {
+                        content, sources, ..
+                    } => (content.text(), sources.as_slice()),
+                    _ => return Err(Error::InvalidData),
+                };
                 let message = self.send_message_with_draft(
                     &other.0.to_string(),
                     conversation.map(ConversationId::value),
                     text,
                     sources,
                     Some(&draft),
-                    None,
+                    alias,
                 )?;
                 Ok(DraftSubmission::Native { message })
             }
-            (DraftTarget::External { conversation }, DraftBody::External { mailbox, text }) => {
+            (DraftTarget::External { conversation }, body) => {
+                let (mailbox, text) = match body {
+                    DraftBody::External { mailbox, text } => (mailbox.as_str(), text.as_str()),
+                    DraftBody::Composed {
+                        mailbox, content, ..
+                    } => (mailbox.as_str(), content.text()),
+                    _ => return Err(Error::InvalidData),
+                };
                 let conversation = self.send_external_with_draft(
                     conversation.map(|v| v.value().to_string()).as_deref(),
                     mailbox,

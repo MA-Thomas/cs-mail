@@ -112,7 +112,7 @@ impl VerifiedMail {
         let id = identity.message_id();
         let mut salt = [0; 32];
         getrandom::getrandom(&mut salt).map_err(|_| Refusal::Temporary)?;
-        let document = Document::new(vec![DocumentPart::Text(self.text.clone())], salt)
+        let document = Document::new(vec![DocumentPart::Email(self.content.clone())], salt)
             .map_err(|_| Refusal::Permanent)?;
         let manifest = document
             .manifest(id, p.conversation)

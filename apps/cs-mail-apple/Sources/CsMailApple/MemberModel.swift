@@ -57,7 +57,7 @@ actor ClientWorker {
     @Published private(set) var senderLaneScopes: [SenderLaneScope] = []
     func changeInbox(_ id: String?) {
         endReading(); selectedInbox = id; searchComplete = false; searchGeneration += 1
-        searchMatches = []; searchStatus = nil; searchContext = nil; searching = false
+        searchMatches = []; searchResultsQuery = nil; searchStatus = nil; searchContext = nil; searching = false
     }
     var mailScope: InboxScope { selectedInbox.map { .alias(id: $0) } ?? .all }
     var scopedMailItems: [MailItem] { selectedInbox.map { id in aliasInboxes.first(where: { $0.address.id == id })?.items ?? [] } ?? mailItems }
@@ -73,6 +73,7 @@ actor ClientWorker {
     @Published private(set) var outgoingWork: [OutgoingWork] = []
     @Published private(set) var mailboxError: String?
     @Published private(set) var searchMatches: [SearchMatch] = []
+    @Published private(set) var searchResultsQuery: String?
     @Published private(set) var searchStatus: String?
     @Published private(set) var searching = false
     @Published var openedThread: String?
@@ -109,7 +110,7 @@ actor ClientWorker {
     let directory: DirectoryModel
     enum Connection { case synchronized, saved }
     enum Session { case locked, open(Inbox, Connection) }
-    enum Work { case aliasLoad, aliasUpdate, aliasResume, source, reference, request, policy, relationship, unlock, signIn, enrollment, refresh, conversation, decision, retry, addressLoad, publication, purchase, message }
+    enum Work { case pictures, aliasLoad, aliasUpdate, aliasResume, source, reference, request, policy, relationship, unlock, signIn, enrollment, refresh, conversation, decision, retry, addressLoad, publication, purchase, message }
     enum Operation { case idle, working(Work), authenticating }
     struct Failure {
         let work: Work
@@ -194,7 +195,7 @@ actor ClientWorker {
         pendingSelection = nil; readingContext = nil; publicationDrafts.removeAll(); emptyPublicationDraft.clear(); editingAlias = nil; aliasCreationDraft.clear()
         searchQuery = ""; searchComplete = true
         mailItems = []; aliasInboxes = []; senderLaneScopes = []; selectedInbox = nil; outgoingWork = []; mailboxError = nil
-        searchGeneration += 1; searchMatches = []; searchStatus = nil; searchContext = nil; searching = false
+        searchGeneration += 1; searchMatches = []; searchResultsQuery = nil; searchStatus = nil; searchContext = nil; searching = false
         openedThread = nil; focusedMessage = nil
         if let client = draftClient { Task.detached { try? client.clearInboxes() } }
         draftClient = nil
@@ -479,6 +480,23 @@ actor ClientWorker {
         catch { return false }
     }
 
+    func loadEmailPictures(key: MailKey, message: String, ids: [String]) async -> String? {
+        guard !busy, !Task.isCancelled else { return "Please try again when the current action finishes." }
+        let started = generation
+        operation = .working(.pictures)
+        defer { if generation == started { operation = .idle } }
+        var explanation: String?
+        do { try await call { try $0.loadEmailPictures(key: key, message: message, ids: ids) } }
+        catch is CancellationError { return nil }
+        catch { explanation = "Some pictures could not be loaded. They will not be retried automatically." }
+        guard generation == started else { return nil }
+        do {
+            externalInbox = try await call { try $0.externalInbox() }
+            if key.transport == .native { try await refreshSelectedConversation() }
+        } catch is CancellationError { return nil }
+        catch { explanation = "Couldn’t reopen the retained pictures. Try opening this message again." }
+        return explanation
+    }
     func loadExternal() async {
         await perform(.conversation) { self.externalInbox = try await self.call { try $0.externalInbox() } }
     }
@@ -571,7 +589,7 @@ actor ClientWorker {
         if connected { retainAvailableMail() }
     }
     func deleteCopies(_ item: MailItem) async {
-        searchGeneration += 1; searchMatches = []; searchStatus = nil; searchContext = nil
+        searchGeneration += 1; searchMatches = []; searchResultsQuery = nil; searchStatus = nil; searchContext = nil
         clearSourceContact(); reference = nil
         conversation = nil
         await perform(.message) {
@@ -636,11 +654,16 @@ actor ClientWorker {
     }
     func search(_ query: String) async {
         let restoreCursor = hasSearch(query) ? (searchContext?.cursor ?? 0) : 0
-        searchQuery = query; searchComplete = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        searchQuery = query
         searchGeneration += 1
         let context = SearchContext(query: query, scope: mailScope, request: searchGeneration, lifetime: generation)
-        searchMatches = []; searchStatus = nil; searchContext = nil; searching = false
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // Retain the last completed projection while typing. Its query remains
+        // visible until the first page for the latest generation replaces it.
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            searchComplete = true
+            searchMatches = []; searchResultsQuery = nil; searchStatus = nil; searchContext = nil; searching = false
+            return
+        }
         searching = true
         do {
             try await Task.sleep(for: .milliseconds(100))
@@ -667,14 +690,19 @@ actor ClientWorker {
             var context = initial
             context.cursor = page.next; context.total = page.total
             context.indexed += page.searched; context.unavailable += page.unavailable; context.notRetained += page.notRetained
-            searchMatches += page.matches
+            if initial.cursor == 0 {
+                searchMatches = page.matches
+                searchResultsQuery = initial.query
+            } else {
+                searchMatches += page.matches
+            }
             searchContext = context
             searchStatus = "On this device: \(context.indexed) searchable · \(context.notRetained) not downloaded · \(context.unavailable) unavailable · \(context.total - context.cursor) more possible matches"
             searchComplete = context.cursor >= context.total && context.notRetained == 0 && context.unavailable == 0
         } catch {
             if initial.request == searchGeneration, initial.lifetime == generation {
                 searchContext = nil
-                searchStatus = Self.explanation(error) + " Search is incomplete."
+                searchStatus = "Couldn’t update search. " + Self.explanation(error) + " Search is incomplete."
             }
         }
         if initial.request == searchGeneration, initial.lifetime == generation { searching = false }

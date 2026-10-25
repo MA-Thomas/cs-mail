@@ -187,6 +187,8 @@ pub fn readable_text(document: &Document) -> String {
         .parts()
         .iter()
         .map(|part| match part {
+            DocumentPart::Email(email) => email.presentation().map(|p| p.text).unwrap_or_default(),
+            DocumentPart::Composed(body) => body.text().to_owned(),
             DocumentPart::Text(text) => text.clone(),
             DocumentPart::Image(_) => "[Image]".into(),
             DocumentPart::Reference(_) => "[Reference]".into(),

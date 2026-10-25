@@ -6,12 +6,56 @@ use super::{
 use cs_mail_correspondence::{ContentBlock, Document, DocumentPart, ImageContent};
 use cs_mail_primitives::MessageId;
 #[derive(Clone, Debug)]
+pub struct ReadingEmail {
+    pub files: Vec<cs_mail_correspondence::composed::AttachedFile>,
+    pub subject: Option<String>,
+    pub html: Option<String>,
+    pub text: String,
+    pub supplied_text: Option<String>,
+    pub resources: Vec<cs_mail_correspondence::email::EmailResource>,
+    pub pictures: Vec<ReadingPicture>,
+}
+#[derive(Clone, Debug)]
+pub struct ReadingPicture {
+    pub id: String,
+    pub url: String,
+    pub status: PictureStatus,
+}
+#[derive(Clone, Copy, Debug)]
+pub enum PictureStatus {
+    NotLoaded,
+    Attempted,
+    Loaded,
+}
+impl From<cs_mail_correspondence::email::EmailPresentation> for ReadingEmail {
+    fn from(p: cs_mail_correspondence::email::EmailPresentation) -> Self {
+        Self {
+            files: vec![],
+            subject: p.subject,
+            html: p.html,
+            text: p.text,
+            supplied_text: p.supplied_text,
+            resources: p.resources,
+            pictures: p
+                .pictures
+                .into_iter()
+                .map(|p| ReadingPicture {
+                    id: p.id,
+                    url: p.url,
+                    status: PictureStatus::NotLoaded,
+                })
+                .collect(),
+        }
+    }
+}
+#[derive(Clone, Debug)]
 pub enum ReadingBlock {
     Text(String),
     Image { bytes: Vec<u8> },
 }
 #[derive(Clone, Debug)]
 pub enum ReadingPart {
+    Email(ReadingEmail),
     Text(String),
     Image {
         bytes: Vec<u8>,
@@ -37,7 +81,29 @@ pub enum ReadingContent {
     AccessDenied,
 }
 impl ReadingContent {
+    pub(super) fn from_external_document(doc: &Document) -> Self {
+        let mut content = Self::from_document(doc);
+        if let (Some(subject), Self::Readable(parts)) = (doc.subject(), &mut content) {
+            for part in parts {
+                if let ReadingPart::Email(email) = part {
+                    if email.subject.is_some() {
+                        continue;
+                    }
+                    email.subject = Some(subject.text().to_owned());
+                    email.text = format!("Subject: {}\n\n{}", subject.text(), email.text);
+                }
+            }
+        }
+        content
+    }
+
     pub(super) fn from_document(doc: &Document) -> Self {
+        if let [DocumentPart::Email(email)] = doc.parts() {
+            return match email.presentation() {
+                Ok(presentation) => Self::Readable(vec![ReadingPart::Email(presentation.into())]),
+                Err(_) => Self::Unavailable,
+            };
+        }
         let image = |i: &ImageContent| ReadingBlock::Image {
             bytes: i.bytes().to_vec(),
         };
@@ -54,6 +120,17 @@ impl ReadingContent {
                 .iter()
                 .enumerate()
                 .map(|(index, p)| match p {
+                    DocumentPart::Email(_) => {
+                        unreachable!("a checked email is the sole document part")
+                    }
+                    DocumentPart::Composed(body) => match body.presentation() {
+                        Ok(p) => {
+                            let mut email: ReadingEmail = p.into();
+                            email.files = body.files().to_vec();
+                            ReadingPart::Email(email)
+                        }
+                        Err(_) => ReadingPart::Text(body.text().to_owned()),
+                    },
                     DocumentPart::Text(t) => ReadingPart::Text(t.clone()),
                     DocumentPart::Image(i) => ReadingPart::Image {
                         bytes: i.bytes().to_vec(),
@@ -82,6 +159,7 @@ impl ReadingContent {
         let mut text = Vec::new();
         for part in parts {
             match part {
+                ReadingPart::Email(email) => text.push(email.text.clone()),
                 ReadingPart::Text(t) => text.push(t.clone()),
                 ReadingPart::Quotation { blocks, .. } | ReadingPart::SharedCopy { blocks, .. } => {
                     for b in blocks {
@@ -104,7 +182,7 @@ impl MemberClient {
         record: &cs_mail_application::correspondence::MessageRecord,
     ) -> Result<ReadingContent, Error> {
         let message = record.manifest.message();
-        let result = if let Some(doc) = self.retained_document(state, keys, record)? {
+        let mut result = if let Some(doc) = self.retained_document(state, keys, record)? {
             ReadingContent::from_document(&doc)
         } else {
             let retained = super::retained::Retained::load(self, keys, state)?;
@@ -119,6 +197,15 @@ impl MemberClient {
                 ReadingContent::NotRetained
             }
         };
+        let personal = super::personal::Personal::load(self, keys, state)?;
+        Self::apply_resources(
+            &personal,
+            &mut result,
+            super::MailKey::Native(record.manifest.conversation()),
+            message,
+            record.manifest.version(),
+            (self.clock)(),
+        );
         storage::check_keys(self.store.as_ref(), keys)?;
         Ok(result)
     }
@@ -164,6 +251,6 @@ impl MemberClient {
         {
             return Err(Error::InvalidData);
         }
-        ReadingContent::from_document(&doc).search_text()
+        ReadingContent::from_external_document(&doc).search_text()
     }
 }

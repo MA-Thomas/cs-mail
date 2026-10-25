@@ -18,6 +18,10 @@ use serde_json::json;
 const BODY_LIMIT: usize = 64 * 1024;
 /// Largest accepted encrypted content upload.
 const CONTENT_LIMIT: usize = 1024 * 1024;
+// Four retained/recovery copies and JSON ciphertext expansion must fit the
+// authored-content limit. Alias/profile uploads keep their smaller ceiling.
+const MESSAGE_LIMIT: usize =
+    cs_mail_correspondence::composed::MAX_COMPOSED_BYTES * 32 + CONTENT_LIMIT;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -167,18 +171,18 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/v1/relationships/{sender}/{recipient}/content",
-            post(crate::members::content).layer(DefaultBodyLimit::max(CONTENT_LIMIT)),
+            post(crate::members::content).layer(DefaultBodyLimit::max(MESSAGE_LIMIT)),
         )
         .route("/v1/lanes", post(crate::members::lane))
         .route("/v1/members/reads", post(crate::members::read))
         .route(
             "/v1/correspondence/commands",
-            post(crate::members::correspondence).layer(DefaultBodyLimit::max(CONTENT_LIMIT)),
+            post(crate::members::correspondence).layer(DefaultBodyLimit::max(MESSAGE_LIMIT)),
         )
         .route("/v1/external/prepare", post(crate::external::prepare))
         .route(
             "/v1/external/commands",
-            post(crate::external::command).layer(DefaultBodyLimit::max(CONTENT_LIMIT)),
+            post(crate::external::command).layer(DefaultBodyLimit::max(MESSAGE_LIMIT)),
         )
         .route("/r/{persona}", get(crate::guests::page))
         .route("/r/assets/app.js", get(crate::guests::script))
