@@ -1,0 +1,5896 @@
+{
+  "frozen": {
+    "frozen_at_utc": "2026-10-25T20:00:35.585549+00:00",
+    "inputs": {
+      "tools/vector-store-evaluation/README.md": "6f1821f64b30444bc74b9dd8931d394e143507b9e4c66fbdf0b23891dde36ead",
+      "tools/vector-store-evaluation/store.py": "9953474d5c8c7579d7bd12524cc00f3592905a2757822f156c22e6b4b0748ed1",
+      "tools/vector-store-evaluation/sqlcipher_api.py": "8e19d2a0f0468e4b4e3bd524778937977a624cd1419902b4c2290f07f7a386b2",
+      "tools/vector-store-evaluation/experiment.py": "096f8ebc73562fb9e2b59dcd5df2c6ae4cf4e0bf8953967f9e416f99015ddb0e",
+      "tools/vector-store-evaluation/build.py": "4a75c95b0b31e8301b41b32fb48dd0386bc920ae730033582e008833f5c17866",
+      "tools/embedding-evaluation/fixture.json": "e4c49b870fcdf8142069af3f149a821c19744f9dc4743ac2d89eec1c3efceb5c",
+      "target/embedding-evaluation/gemma2.json": "4af910e22f614c70c74c6436a66fd8e111e865a740a8de4997ff68649a147386",
+      "target/embedding-evaluation/gemma2-fictional-vectors.npz": "45f2e12e07eeacc60c5d71652f8a1cab02a78c04f77a36bc7bde65cb2a89c65b",
+      "target/vector-store-evaluation/vec1.c": "01c91474cce6c1c4872b45e00d8d1934a909baa68ecac679bcdf1093fa054807",
+      "target/vector-store-evaluation/sqlite-vec/sqlite-vec.c": "ba081a47fa02eadc3cf6b16c314b695b84081269349aac722b4efa338fe8fd85",
+      "target/vector-store-evaluation/sqlcipher/sqlite3.c": "8640c653acadf665cce6331646f60b5b74a4690746f2c4a2d8f688a0570a0c0c",
+      "target/vector-store-evaluation/sqlcipher/libsqlite3.dylib": "4f4172283943dd289344cfe5849f6be641f0ecdac80db99b27995ac146376f9c",
+      "target/vector-store-evaluation/vec1.dylib": "77a782da96fc455439f0f0d4c7b2e01d797e5502a6fa056587eacc5a1f0fe8bf",
+      "target/vector-store-evaluation/vec0.dylib": "9d9ceb241fe656f0a4f1fd3ce8ce658741a0a6fd2e351170d69581447406465d"
+    },
+    "profile": "57d70c2fb8bae89b32a1759aaf6ebc4d2176dc20a323232260d93ae254ad3319"
+  },
+  "source_downloads": {
+    "sqlcipher": {
+      "url": "https://codeload.github.com/sqlcipher/sqlcipher/tar.gz/refs/tags/v4.19.0",
+      "sha256": "7075f96cbabe45b4ecfc2e6b1745a625f856f695b0827a5506ce9ed85b906aa0"
+    },
+    "sqlite-vec": {
+      "url": "https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-amalgamation.tar.gz",
+      "sha256": "3acd67cb4aff080c7050926fd3cf8227905fe5b7ee3829d8ee5024ab1283cf61"
+    },
+    "vec1": {
+      "url": "https://raw.githubusercontent.com/sqlite/sqlite/4012bdca5f1599d5dd3d6671112f170bfd48a26f/ext/vec1/vec1.c",
+      "revision": "4012bdca5f1599d5dd3d6671112f170bfd48a26f",
+      "sha256": "01c91474cce6c1c4872b45e00d8d1934a909baa68ecac679bcdf1093fa054807"
+    }
+  },
+  "model": "google/embeddinggemma-2",
+  "reference_device": {
+    "hardware_os": [
+      "Model Name: MacBook Pro",
+      "Model Identifier: MacBookPro18,2",
+      "Chip: Apple M1 Max",
+      "Total Number of Cores: 10 (8 Performance and 2 Efficiency)",
+      "Memory: 32 GB",
+      "System Version: macOS 26.6.2 (25G83)",
+      "Kernel Version: Darwin 25.6.0",
+      "Secure Virtual Memory: Enabled"
+    ],
+    "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=37814371)\t100%; finishing charge; 0:00 remaining present: true\n",
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded\n"
+  },
+  "arms": {
+    "vec1_streaming": {
+      "versions": {
+        "sqlite": [
+          [
+            "3.53.4"
+          ]
+        ],
+        "sqlcipher": [
+          [
+            "4.19.0 community"
+          ]
+        ],
+        "crypto": [
+          [
+            "commoncrypto"
+          ]
+        ],
+        "extension": [
+          [
+            "version 0.8 (NEON, multi-threaded)"
+          ]
+        ]
+      },
+      "compile_options": [
+        [
+          "ATOMIC_INTRINSICS=1"
+        ],
+        [
+          "COMPILER=clang-21.0.0"
+        ],
+        [
+          "DEFAULT_AUTOVACUUM"
+        ],
+        [
+          "DEFAULT_CACHE_SIZE=-2000"
+        ],
+        [
+          "DEFAULT_FILE_FORMAT=4"
+        ],
+        [
+          "DEFAULT_JOURNAL_SIZE_LIMIT=-1"
+        ],
+        [
+          "DEFAULT_MMAP_SIZE=0"
+        ],
+        [
+          "DEFAULT_PAGE_SIZE=4096"
+        ],
+        [
+          "DEFAULT_PCACHE_INITSZ=20"
+        ],
+        [
+          "DEFAULT_RECURSIVE_TRIGGERS"
+        ],
+        [
+          "DEFAULT_SECTOR_SIZE=4096"
+        ],
+        [
+          "DEFAULT_SYNCHRONOUS=2"
+        ],
+        [
+          "DEFAULT_WAL_AUTOCHECKPOINT=1000"
+        ],
+        [
+          "DEFAULT_WAL_SYNCHRONOUS=2"
+        ],
+        [
+          "DEFAULT_WORKER_THREADS=0"
+        ],
+        [
+          "DIRECT_OVERFLOW_READ"
+        ],
+        [
+          "ENABLE_FTS5"
+        ],
+        [
+          "ENABLE_MATH_FUNCTIONS"
+        ],
+        [
+          "ENABLE_PERCENTILE"
+        ],
+        [
+          "EXTRA_INIT=sqlcipher_extra_init"
+        ],
+        [
+          "EXTRA_SHUTDOWN=sqlcipher_extra_shutdown"
+        ],
+        [
+          "HAS_CODEC"
+        ],
+        [
+          "HAVE_ISNAN"
+        ],
+        [
+          "MALLOC_SOFT_LIMIT=1024"
+        ],
+        [
+          "MAX_ATTACHED=10"
+        ],
+        [
+          "MAX_COLUMN=2000"
+        ],
+        [
+          "MAX_COMPOUND_SELECT=500"
+        ],
+        [
+          "MAX_DEFAULT_PAGE_SIZE=8192"
+        ],
+        [
+          "MAX_EXPR_DEPTH=1000"
+        ],
+        [
+          "MAX_FUNCTION_ARG=1000"
+        ],
+        [
+          "MAX_LENGTH=1000000000"
+        ],
+        [
+          "MAX_LIKE_PATTERN_LENGTH=50000"
+        ],
+        [
+          "MAX_MMAP_SIZE=0x7fff0000"
+        ],
+        [
+          "MAX_PAGE_COUNT=0xfffffffe"
+        ],
+        [
+          "MAX_PAGE_SIZE=65536"
+        ],
+        [
+          "MAX_SQL_LENGTH=1000000000"
+        ],
+        [
+          "MAX_TRIGGER_DEPTH=1000"
+        ],
+        [
+          "MAX_VARIABLE_NUMBER=32766"
+        ],
+        [
+          "MAX_VDBE_OP=250000000"
+        ],
+        [
+          "MAX_WORKER_THREADS=0"
+        ],
+        [
+          "MUTEX_PTHREADS"
+        ],
+        [
+          "SYSTEM_MALLOC"
+        ],
+        [
+          "TEMP_STORE=3"
+        ],
+        [
+          "THREADSAFE=1"
+        ]
+      ],
+      "queries": [
+        {
+          "id": "q01",
+          "split": "dev",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d01",
+            "d02",
+            "d50",
+            "d49",
+            "d08",
+            "d37",
+            "d38",
+            "d26",
+            "d33",
+            "d25"
+          ],
+          "hybrid_ids": [
+            "d01",
+            "d02",
+            "d49",
+            "d50",
+            "d08",
+            "d06",
+            "d33",
+            "d43",
+            "d46",
+            "d07"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q02",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d04",
+            "d03",
+            "d18",
+            "d41",
+            "d42",
+            "d36",
+            "d17",
+            "d39",
+            "d40",
+            "d31"
+          ],
+          "hybrid_ids": [
+            "d04",
+            "d03",
+            "d36",
+            "d42",
+            "d41",
+            "d40",
+            "d39",
+            "d18",
+            "d33",
+            "d28"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.5,
+            "ndcg10": 0.6309297535714574
+          }
+        },
+        {
+          "id": "q03",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d05",
+            "d49",
+            "d01",
+            "d02",
+            "d26",
+            "d24",
+            "d50",
+            "d25",
+            "d38",
+            "d23"
+          ],
+          "hybrid_ids": [
+            "d05",
+            "d49",
+            "d01",
+            "d37",
+            "d06",
+            "d02",
+            "d42",
+            "d50",
+            "d15",
+            "d39"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q04",
+          "split": "dev",
+          "category": "negation",
+          "vector_ids": [
+            "d08",
+            "d07",
+            "d33",
+            "d34",
+            "d49",
+            "d37",
+            "d46",
+            "d31",
+            "d01",
+            "d50"
+          ],
+          "hybrid_ids": [
+            "d07",
+            "d08",
+            "d37",
+            "d33",
+            "d43",
+            "d49",
+            "d34",
+            "d40",
+            "d50",
+            "d10"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.5,
+            "ndcg10": 0.6309297535714574
+          }
+        },
+        {
+          "id": "q05",
+          "split": "test",
+          "category": "negation",
+          "vector_ids": [
+            "d07",
+            "d08",
+            "d46",
+            "d37",
+            "d34",
+            "d50",
+            "d40",
+            "d19",
+            "d45",
+            "d31"
+          ],
+          "hybrid_ids": [
+            "d07",
+            "d08",
+            "d46",
+            "d19",
+            "d49",
+            "d43",
+            "d37",
+            "d40",
+            "d31",
+            "d34"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q06",
+          "split": "test",
+          "category": "structured_meaning",
+          "vector_ids": [
+            "d10",
+            "d09",
+            "d47",
+            "d45",
+            "d39",
+            "d03",
+            "d48",
+            "d30",
+            "d35",
+            "d15"
+          ],
+          "hybrid_ids": [
+            "d09",
+            "d39",
+            "d10",
+            "d47",
+            "d01",
+            "d17",
+            "d49",
+            "d35",
+            "d30",
+            "d45"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q07",
+          "split": "test",
+          "category": "mathematics",
+          "vector_ids": [
+            "d11",
+            "d12",
+            "d47",
+            "d48",
+            "d13",
+            "d14",
+            "d01",
+            "d49",
+            "d44",
+            "d39"
+          ],
+          "hybrid_ids": [
+            "d11",
+            "d12",
+            "d47",
+            "d48",
+            "d14",
+            "d49",
+            "d43",
+            "d39",
+            "d15",
+            "d35"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q08",
+          "split": "dev",
+          "category": "mathematics",
+          "vector_ids": [
+            "d13",
+            "d14",
+            "d15",
+            "d49",
+            "d16",
+            "d11",
+            "d34",
+            "d46",
+            "d08",
+            "d45"
+          ],
+          "hybrid_ids": [
+            "d13",
+            "d14",
+            "d49",
+            "d11",
+            "d16",
+            "d15",
+            "d12",
+            "d35",
+            "d46",
+            "d47"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q09",
+          "split": "test",
+          "category": "mathematics",
+          "vector_ids": [
+            "d15",
+            "d16",
+            "d13",
+            "d14",
+            "d45",
+            "d49",
+            "d11",
+            "d01",
+            "d17",
+            "d03"
+          ],
+          "hybrid_ids": [
+            "d15",
+            "d16",
+            "d45",
+            "d11",
+            "d03",
+            "d08",
+            "d49",
+            "d01",
+            "d19",
+            "d30"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q10",
+          "split": "test",
+          "category": "negation",
+          "vector_ids": [
+            "d49",
+            "d01",
+            "d02",
+            "d50",
+            "d08",
+            "d37",
+            "d38",
+            "d07",
+            "d33",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d49",
+            "d01",
+            "d35",
+            "d50",
+            "d08",
+            "d02",
+            "d42",
+            "d06",
+            "d43",
+            "d33"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 0.0,
+            "mrr10": 0.16666666666666666,
+            "ndcg10": 0.3562071871080222
+          }
+        },
+        {
+          "id": "q11",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d18",
+            "d17",
+            "d03",
+            "d35",
+            "d39",
+            "d40",
+            "d10",
+            "d04",
+            "d08",
+            "d49"
+          ],
+          "hybrid_ids": [
+            "d17",
+            "d10",
+            "d04",
+            "d03",
+            "d18",
+            "d49",
+            "d08",
+            "d46",
+            "d37",
+            "d39"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q12",
+          "split": "dev",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d19",
+            "d45",
+            "d46",
+            "d08",
+            "d42",
+            "d40",
+            "d49",
+            "d20",
+            "d10",
+            "d41"
+          ],
+          "hybrid_ids": [
+            "d19",
+            "d49",
+            "d45",
+            "d17",
+            "d35",
+            "d08",
+            "d46",
+            "d34",
+            "d10",
+            "d09"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q13",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d20",
+            "d45",
+            "d19",
+            "d08",
+            "d46",
+            "d35",
+            "d43",
+            "d44",
+            "d33",
+            "d28"
+          ],
+          "hybrid_ids": [
+            "d20",
+            "d39",
+            "d07",
+            "d45",
+            "d43",
+            "d17",
+            "d27",
+            "d08",
+            "d19",
+            "d35"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q14",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d21",
+            "d33",
+            "d22",
+            "d49",
+            "d23",
+            "d01",
+            "d50",
+            "d24",
+            "d37",
+            "d43"
+          ],
+          "hybrid_ids": [
+            "d21",
+            "d49",
+            "d22",
+            "d01",
+            "d02",
+            "d06",
+            "d05",
+            "d28",
+            "d33",
+            "d43"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q15",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d24",
+            "d23",
+            "d49",
+            "d01",
+            "d26",
+            "d05",
+            "d02",
+            "d50",
+            "d38",
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d24",
+            "d49",
+            "d05",
+            "d01",
+            "d23",
+            "d37",
+            "d50",
+            "d02",
+            "d39",
+            "d06"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.2,
+            "ndcg10": 0.38685280723454163
+          }
+        },
+        {
+          "id": "q16",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d26",
+            "d25",
+            "d01",
+            "d23",
+            "d49",
+            "d02",
+            "d38",
+            "d24",
+            "d05",
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d01",
+            "d05",
+            "d02",
+            "d06",
+            "d49",
+            "d37",
+            "d31",
+            "d32",
+            "d13",
+            "d21"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 0.0,
+            "mrr10": 0,
+            "ndcg10": 0.0
+          }
+        },
+        {
+          "id": "q17",
+          "split": "dev",
+          "category": "cross_language",
+          "vector_ids": [
+            "d35",
+            "d36",
+            "d42",
+            "d03",
+            "d21",
+            "d22",
+            "d04",
+            "d39",
+            "d41",
+            "d33"
+          ],
+          "hybrid_ids": [
+            "d21",
+            "d22",
+            "d23",
+            "d35",
+            "d36",
+            "d42",
+            "d03",
+            "d04",
+            "d39",
+            "d41"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.25,
+            "ndcg10": 0.4306765580733931
+          }
+        },
+        {
+          "id": "q18",
+          "split": "test",
+          "category": "identifiers",
+          "vector_ids": [
+            "d27",
+            "d28",
+            "d43",
+            "d22",
+            "d17",
+            "d21",
+            "d31",
+            "d18",
+            "d36",
+            "d19"
+          ],
+          "hybrid_ids": [
+            "d27",
+            "d28",
+            "d43",
+            "d22",
+            "d17",
+            "d21",
+            "d31",
+            "d18",
+            "d36",
+            "d19"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q19",
+          "split": "test",
+          "category": "identifiers",
+          "vector_ids": [
+            "d18",
+            "d10",
+            "d04",
+            "d35",
+            "d03",
+            "d17",
+            "d09",
+            "d36",
+            "d42",
+            "d40"
+          ],
+          "hybrid_ids": [
+            "d04",
+            "d03",
+            "d18",
+            "d10",
+            "d35",
+            "d17",
+            "d09",
+            "d36",
+            "d42",
+            "d40"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q20",
+          "split": "test",
+          "category": "identifiers",
+          "vector_ids": [
+            "d36",
+            "d35",
+            "d39",
+            "d40",
+            "d17",
+            "d28",
+            "d27",
+            "d22",
+            "d34",
+            "d43"
+          ],
+          "hybrid_ids": [
+            "d35",
+            "d36",
+            "d39",
+            "d40",
+            "d17",
+            "d28",
+            "d27",
+            "d22",
+            "d34",
+            "d43"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q21",
+          "split": "dev",
+          "category": "quoted_phrase",
+          "vector_ids": [
+            "d13",
+            "d14",
+            "d15",
+            "d39",
+            "d40",
+            "d31",
+            "d42",
+            "d01",
+            "d11",
+            "d16"
+          ],
+          "hybrid_ids": [
+            "d13"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q22",
+          "split": "test",
+          "category": "quoted_phrase",
+          "vector_ids": [
+            "d47",
+            "d48",
+            "d13",
+            "d14",
+            "d35",
+            "d29",
+            "d30",
+            "d10",
+            "d11",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d47"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q23",
+          "split": "test",
+          "category": "quoted_phrase",
+          "vector_ids": [
+            "d18",
+            "d17",
+            "d22",
+            "d27",
+            "d28",
+            "d39",
+            "d40",
+            "d36",
+            "d35",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d18"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q24",
+          "split": "test",
+          "category": "negation",
+          "vector_ids": [
+            "d29",
+            "d30",
+            "d08",
+            "d07",
+            "d49",
+            "d43",
+            "d39",
+            "d32",
+            "d50",
+            "d01"
+          ],
+          "hybrid_ids": [
+            "d29",
+            "d07",
+            "d49",
+            "d08",
+            "d43",
+            "d30",
+            "d28",
+            "d18",
+            "d47",
+            "d17"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q25",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d31",
+            "d32",
+            "d08",
+            "d22",
+            "d01",
+            "d38",
+            "d37",
+            "d33",
+            "d21",
+            "d07"
+          ],
+          "hybrid_ids": [
+            "d31",
+            "d32",
+            "d08",
+            "d01",
+            "d18",
+            "d49",
+            "d43",
+            "d33",
+            "d46",
+            "d34"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q26",
+          "split": "test",
+          "category": "entities",
+          "vector_ids": [
+            "d33",
+            "d34",
+            "d01",
+            "d49",
+            "d37",
+            "d50",
+            "d02",
+            "d26",
+            "d38",
+            "d05"
+          ],
+          "hybrid_ids": [
+            "d33",
+            "d34",
+            "d01",
+            "d49",
+            "d06",
+            "d43",
+            "d08",
+            "d50",
+            "d02",
+            "d05"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q27",
+          "split": "dev",
+          "category": "entities",
+          "vector_ids": [
+            "d34",
+            "d33",
+            "d49",
+            "d01",
+            "d02",
+            "d05",
+            "d07",
+            "d08",
+            "d03",
+            "d31"
+          ],
+          "hybrid_ids": [
+            "d34",
+            "d33",
+            "d49",
+            "d10",
+            "d08",
+            "d02",
+            "d40",
+            "d07",
+            "d05",
+            "d06"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q28",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d37",
+            "d01",
+            "d49",
+            "d02",
+            "d38",
+            "d08",
+            "d35",
+            "d50",
+            "d26",
+            "d07"
+          ],
+          "hybrid_ids": [
+            "d37",
+            "d38",
+            "d49",
+            "d08",
+            "d07",
+            "d50",
+            "d35",
+            "d33",
+            "d05",
+            "d42"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q29",
+          "split": "test",
+          "category": "long_passage",
+          "vector_ids": [
+            "d47",
+            "d48",
+            "d29",
+            "d10",
+            "d30",
+            "d13",
+            "d11",
+            "d14",
+            "d09",
+            "d39"
+          ],
+          "hybrid_ids": [
+            "d47",
+            "d48",
+            "d13",
+            "d29",
+            "d14",
+            "d30",
+            "d12",
+            "d11",
+            "d18",
+            "d45"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q30",
+          "split": "test",
+          "category": "long_passage",
+          "vector_ids": [
+            "d50",
+            "d49",
+            "d02",
+            "d01",
+            "d38",
+            "d08",
+            "d37",
+            "d05",
+            "d07",
+            "d06"
+          ],
+          "hybrid_ids": [
+            "d49",
+            "d50",
+            "d07",
+            "d38",
+            "d08",
+            "d01",
+            "d02",
+            "d05",
+            "d35",
+            "d37"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q31",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d45",
+            "d19",
+            "d08",
+            "d17",
+            "d42",
+            "d44",
+            "d10",
+            "d43",
+            "d28",
+            "d40"
+          ],
+          "hybrid_ids": [
+            "d45",
+            "d19",
+            "d27",
+            "d28",
+            "d10",
+            "d44",
+            "d49",
+            "d03",
+            "d08",
+            "d18"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q32",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d46",
+            "d08",
+            "d19",
+            "d37",
+            "d28",
+            "d20",
+            "d49",
+            "d33",
+            "d34",
+            "d42"
+          ],
+          "hybrid_ids": [
+            "d46",
+            "d19",
+            "d37",
+            "d49",
+            "d42",
+            "d08",
+            "d43",
+            "d20",
+            "d50",
+            "d33"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q33",
+          "split": "dev",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d41"
+          ],
+          "hybrid_ids": [
+            "d41"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q34",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d39"
+          ],
+          "hybrid_ids": [
+            "d39"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q35",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d42"
+          ],
+          "hybrid_ids": [
+            "d42"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q36",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d40",
+            "d43",
+            "d03",
+            "d31",
+            "d04",
+            "d07",
+            "d34",
+            "d35",
+            "d17",
+            "d01"
+          ],
+          "hybrid_ids": [
+            "d40",
+            "d43",
+            "d03",
+            "d31",
+            "d04",
+            "d07",
+            "d34",
+            "d35",
+            "d17",
+            "d01"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q37",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d37"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q38",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d38",
+            "d49",
+            "d50",
+            "d01",
+            "d02",
+            "d26",
+            "d33",
+            "d29",
+            "d23",
+            "d24"
+          ],
+          "hybrid_ids": [
+            "d38",
+            "d49",
+            "d50",
+            "d06",
+            "d01",
+            "d02",
+            "d26",
+            "d33",
+            "d29",
+            "d23"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q39",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d03",
+            "d04",
+            "d41",
+            "d42",
+            "d36",
+            "d39",
+            "d35",
+            "d18",
+            "d40",
+            "d09"
+          ],
+          "hybrid_ids": [
+            "d03",
+            "d04",
+            "d36",
+            "d40",
+            "d35",
+            "d39",
+            "d18",
+            "d28",
+            "d44",
+            "d09"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q40",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d35",
+            "d36",
+            "d22",
+            "d21",
+            "d28",
+            "d43",
+            "d49",
+            "d45",
+            "d42",
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d35",
+            "d21",
+            "d43",
+            "d42",
+            "d23",
+            "d49",
+            "d01",
+            "d36",
+            "d22",
+            "d28"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q41",
+          "split": "test",
+          "category": "mathematics",
+          "vector_ids": [
+            "d15",
+            "d16",
+            "d14",
+            "d49",
+            "d13",
+            "d01",
+            "d08",
+            "d50",
+            "d07",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d15",
+            "d16",
+            "d49",
+            "d50",
+            "d45",
+            "d14",
+            "d33",
+            "d34",
+            "d39",
+            "d08"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q42",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d44",
+            "d45",
+            "d42",
+            "d35",
+            "d40",
+            "d39",
+            "d36",
+            "d03",
+            "d46",
+            "d04"
+          ],
+          "hybrid_ids": [
+            "d44",
+            "d45",
+            "d39",
+            "d29",
+            "d17",
+            "d49",
+            "d02",
+            "d35",
+            "d01",
+            "d03"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q43",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d08",
+            "d33",
+            "d40",
+            "d01",
+            "d07",
+            "d50",
+            "d02",
+            "d39",
+            "d49",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d08",
+            "d50",
+            "d07",
+            "d33",
+            "d01",
+            "d49",
+            "d02",
+            "d46",
+            "d40",
+            "d39"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q44",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d49",
+            "d37",
+            "d38",
+            "d01",
+            "d32",
+            "d34",
+            "d07",
+            "d39",
+            "d40",
+            "d03"
+          ],
+          "hybrid_ids": [
+            "d37",
+            "d49",
+            "d38",
+            "d07",
+            "d40",
+            "d18",
+            "d39",
+            "d35",
+            "d01",
+            "d50"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q45",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d41",
+            "d42",
+            "d39",
+            "d40",
+            "d34",
+            "d35",
+            "d28",
+            "d03",
+            "d08",
+            "d33"
+          ],
+          "hybrid_ids": [
+            "d42",
+            "d40",
+            "d49",
+            "d41",
+            "d18",
+            "d39",
+            "d17",
+            "d35",
+            "d07",
+            "d34"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q46",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d28",
+            "d27",
+            "d43",
+            "d17",
+            "d35",
+            "d36",
+            "d31",
+            "d18",
+            "d22",
+            "d33"
+          ],
+          "hybrid_ids": [
+            "d28",
+            "d27",
+            "d43",
+            "d17",
+            "d35",
+            "d36",
+            "d31",
+            "d18",
+            "d22",
+            "d33"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q47",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [],
+          "hybrid_ids": [],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q48",
+          "split": "test",
+          "category": "structured_meaning",
+          "vector_ids": [
+            "d43",
+            "d33",
+            "d28",
+            "d42",
+            "d27",
+            "d08",
+            "d40",
+            "d10",
+            "d39",
+            "d20"
+          ],
+          "hybrid_ids": [
+            "d43",
+            "d28",
+            "d42",
+            "d27",
+            "d07",
+            "d08",
+            "d20",
+            "d35",
+            "d49",
+            "d40"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        }
+      ],
+      "sql_plan": [
+        [
+          3,
+          0,
+          0,
+          "MATERIALIZE nearest"
+        ],
+        [
+          8,
+          3,
+          3280,
+          "SCAN v VIRTUAL TABLE INDEX 5:P"
+        ],
+        [
+          14,
+          3,
+          45,
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          42,
+          0,
+          49,
+          "SCAN nearest"
+        ],
+        [
+          49,
+          0,
+          0,
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      ],
+      "protection": {
+        "file_canaries_absent": [
+          {
+            "kind": "database",
+            "bytes": 4096
+          },
+          {
+            "kind": "WAL",
+            "bytes": 3201272
+          }
+        ],
+        "wrong_key_refused": true,
+        "system_sqlite_no_key_refused": true,
+        "temp_store_compile_time_memory_only": true,
+        "forced_sort_rows": 10000
+      },
+      "lifecycle": {
+        "failed_publication_atomic": true,
+        "failed_cleanup_still_suppressed_warm_and_reopened": true,
+        "old_and_current_generation_revival_refused": true,
+        "old_lifetime_refused_after_unlock": true,
+        "profile_substitution_refused": true,
+        "expiry_checked_at_query": true
+      },
+      "scale": [
+        {
+          "count": 10000,
+          "synthetic_distribution": "seeded Gaussian unit vectors, not model outputs",
+          "insert_and_index_seconds": 0.8702973339823075,
+          "database_bytes": 43851776,
+          "reopen_seconds": 0.09840116603299975,
+          "timings": {
+            "broad": {
+              "p50_ms": 30.39260397781618,
+              "p95_ms": 31.706739508081228,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 10000,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            },
+            "alias_0.1_percent": {
+              "p50_ms": 118.04827098967507,
+              "p95_ms": 120.07981255010236,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 10,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            }
+          },
+          "plans": {
+            "broad": [
+              [
+                3,
+                0,
+                0,
+                "MATERIALIZE nearest"
+              ],
+              [
+                8,
+                3,
+                3280,
+                "SCAN v VIRTUAL TABLE INDEX 5:P"
+              ],
+              [
+                14,
+                3,
+                45,
+                "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+              ],
+              [
+                38,
+                0,
+                49,
+                "SCAN nearest"
+              ],
+              [
+                45,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ],
+            "alias_0.1_percent": [
+              [
+                3,
+                0,
+                0,
+                "MATERIALIZE nearest"
+              ],
+              [
+                8,
+                3,
+                3280,
+                "SCAN v VIRTUAL TABLE INDEX 5:P"
+              ],
+              [
+                14,
+                3,
+                45,
+                "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+              ],
+              [
+                40,
+                0,
+                49,
+                "SCAN nearest"
+              ],
+              [
+                47,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ]
+          }
+        },
+        {
+          "count": 100000,
+          "synthetic_distribution": "seeded Gaussian unit vectors, not model outputs",
+          "insert_and_index_seconds": 9.731805499992333,
+          "database_bytes": 438849536,
+          "reopen_seconds": 0.1023278750362806,
+          "timings": {
+            "broad": {
+              "p50_ms": 297.55335400113836,
+              "p95_ms": 314.7636564972345,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 100000,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            },
+            "alias_0.1_percent": {
+              "p50_ms": 1121.3746255089063,
+              "p95_ms": 1516.1219892761437,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 100,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            }
+          },
+          "plans": {
+            "broad": [
+              [
+                3,
+                0,
+                0,
+                "MATERIALIZE nearest"
+              ],
+              [
+                8,
+                3,
+                3280,
+                "SCAN v VIRTUAL TABLE INDEX 5:P"
+              ],
+              [
+                14,
+                3,
+                45,
+                "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+              ],
+              [
+                38,
+                0,
+                49,
+                "SCAN nearest"
+              ],
+              [
+                45,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ],
+            "alias_0.1_percent": [
+              [
+                3,
+                0,
+                0,
+                "MATERIALIZE nearest"
+              ],
+              [
+                8,
+                3,
+                3280,
+                "SCAN v VIRTUAL TABLE INDEX 5:P"
+              ],
+              [
+                14,
+                3,
+                45,
+                "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+              ],
+              [
+                40,
+                0,
+                49,
+                "SCAN nearest"
+              ],
+              [
+                47,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ]
+          }
+        }
+      ],
+      "process_rss_after_scale_bytes": 491061248
+    },
+    "vec1_metadata": {
+      "versions": {
+        "sqlite": [
+          [
+            "3.53.4"
+          ]
+        ],
+        "sqlcipher": [
+          [
+            "4.19.0 community"
+          ]
+        ],
+        "crypto": [
+          [
+            "commoncrypto"
+          ]
+        ],
+        "extension": [
+          [
+            "version 0.8 (NEON, multi-threaded)"
+          ]
+        ]
+      },
+      "compile_options": [
+        [
+          "ATOMIC_INTRINSICS=1"
+        ],
+        [
+          "COMPILER=clang-21.0.0"
+        ],
+        [
+          "DEFAULT_AUTOVACUUM"
+        ],
+        [
+          "DEFAULT_CACHE_SIZE=-2000"
+        ],
+        [
+          "DEFAULT_FILE_FORMAT=4"
+        ],
+        [
+          "DEFAULT_JOURNAL_SIZE_LIMIT=-1"
+        ],
+        [
+          "DEFAULT_MMAP_SIZE=0"
+        ],
+        [
+          "DEFAULT_PAGE_SIZE=4096"
+        ],
+        [
+          "DEFAULT_PCACHE_INITSZ=20"
+        ],
+        [
+          "DEFAULT_RECURSIVE_TRIGGERS"
+        ],
+        [
+          "DEFAULT_SECTOR_SIZE=4096"
+        ],
+        [
+          "DEFAULT_SYNCHRONOUS=2"
+        ],
+        [
+          "DEFAULT_WAL_AUTOCHECKPOINT=1000"
+        ],
+        [
+          "DEFAULT_WAL_SYNCHRONOUS=2"
+        ],
+        [
+          "DEFAULT_WORKER_THREADS=0"
+        ],
+        [
+          "DIRECT_OVERFLOW_READ"
+        ],
+        [
+          "ENABLE_FTS5"
+        ],
+        [
+          "ENABLE_MATH_FUNCTIONS"
+        ],
+        [
+          "ENABLE_PERCENTILE"
+        ],
+        [
+          "EXTRA_INIT=sqlcipher_extra_init"
+        ],
+        [
+          "EXTRA_SHUTDOWN=sqlcipher_extra_shutdown"
+        ],
+        [
+          "HAS_CODEC"
+        ],
+        [
+          "HAVE_ISNAN"
+        ],
+        [
+          "MALLOC_SOFT_LIMIT=1024"
+        ],
+        [
+          "MAX_ATTACHED=10"
+        ],
+        [
+          "MAX_COLUMN=2000"
+        ],
+        [
+          "MAX_COMPOUND_SELECT=500"
+        ],
+        [
+          "MAX_DEFAULT_PAGE_SIZE=8192"
+        ],
+        [
+          "MAX_EXPR_DEPTH=1000"
+        ],
+        [
+          "MAX_FUNCTION_ARG=1000"
+        ],
+        [
+          "MAX_LENGTH=1000000000"
+        ],
+        [
+          "MAX_LIKE_PATTERN_LENGTH=50000"
+        ],
+        [
+          "MAX_MMAP_SIZE=0x7fff0000"
+        ],
+        [
+          "MAX_PAGE_COUNT=0xfffffffe"
+        ],
+        [
+          "MAX_PAGE_SIZE=65536"
+        ],
+        [
+          "MAX_SQL_LENGTH=1000000000"
+        ],
+        [
+          "MAX_TRIGGER_DEPTH=1000"
+        ],
+        [
+          "MAX_VARIABLE_NUMBER=32766"
+        ],
+        [
+          "MAX_VDBE_OP=250000000"
+        ],
+        [
+          "MAX_WORKER_THREADS=0"
+        ],
+        [
+          "MUTEX_PTHREADS"
+        ],
+        [
+          "SYSTEM_MALLOC"
+        ],
+        [
+          "TEMP_STORE=3"
+        ],
+        [
+          "THREADSAFE=1"
+        ]
+      ],
+      "queries": [
+        {
+          "id": "q01",
+          "split": "dev",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d01",
+            "d02",
+            "d50",
+            "d49",
+            "d08",
+            "d37",
+            "d38",
+            "d26",
+            "d33",
+            "d25"
+          ],
+          "hybrid_ids": [
+            "d01",
+            "d02",
+            "d49",
+            "d50",
+            "d08",
+            "d06",
+            "d33",
+            "d43",
+            "d46",
+            "d07"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q02",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d04",
+            "d03",
+            "d18",
+            "d41",
+            "d42",
+            "d36",
+            "d17",
+            "d39",
+            "d40",
+            "d31"
+          ],
+          "hybrid_ids": [
+            "d04",
+            "d03",
+            "d36",
+            "d42",
+            "d41",
+            "d40",
+            "d39",
+            "d18",
+            "d33",
+            "d28"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.5,
+            "ndcg10": 0.6309297535714574
+          }
+        },
+        {
+          "id": "q03",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d05",
+            "d49",
+            "d01",
+            "d02",
+            "d26",
+            "d24",
+            "d50",
+            "d25",
+            "d38",
+            "d23"
+          ],
+          "hybrid_ids": [
+            "d05",
+            "d49",
+            "d01",
+            "d37",
+            "d06",
+            "d02",
+            "d42",
+            "d50",
+            "d15",
+            "d39"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q04",
+          "split": "dev",
+          "category": "negation",
+          "vector_ids": [
+            "d08",
+            "d07",
+            "d33",
+            "d34",
+            "d49",
+            "d37",
+            "d46",
+            "d31",
+            "d01",
+            "d50"
+          ],
+          "hybrid_ids": [
+            "d07",
+            "d08",
+            "d37",
+            "d33",
+            "d43",
+            "d49",
+            "d34",
+            "d40",
+            "d50",
+            "d10"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.5,
+            "ndcg10": 0.6309297535714574
+          }
+        },
+        {
+          "id": "q05",
+          "split": "test",
+          "category": "negation",
+          "vector_ids": [
+            "d07",
+            "d08",
+            "d46",
+            "d37",
+            "d34",
+            "d50",
+            "d40",
+            "d19",
+            "d45",
+            "d31"
+          ],
+          "hybrid_ids": [
+            "d07",
+            "d08",
+            "d46",
+            "d19",
+            "d49",
+            "d43",
+            "d37",
+            "d40",
+            "d31",
+            "d34"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q06",
+          "split": "test",
+          "category": "structured_meaning",
+          "vector_ids": [
+            "d10",
+            "d09",
+            "d47",
+            "d45",
+            "d39",
+            "d03",
+            "d48",
+            "d30",
+            "d35",
+            "d15"
+          ],
+          "hybrid_ids": [
+            "d09",
+            "d39",
+            "d10",
+            "d47",
+            "d01",
+            "d17",
+            "d49",
+            "d35",
+            "d30",
+            "d45"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q07",
+          "split": "test",
+          "category": "mathematics",
+          "vector_ids": [
+            "d11",
+            "d12",
+            "d47",
+            "d48",
+            "d13",
+            "d14",
+            "d01",
+            "d49",
+            "d44",
+            "d39"
+          ],
+          "hybrid_ids": [
+            "d11",
+            "d12",
+            "d47",
+            "d48",
+            "d14",
+            "d49",
+            "d43",
+            "d39",
+            "d15",
+            "d35"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q08",
+          "split": "dev",
+          "category": "mathematics",
+          "vector_ids": [
+            "d13",
+            "d14",
+            "d15",
+            "d49",
+            "d16",
+            "d11",
+            "d34",
+            "d46",
+            "d08",
+            "d45"
+          ],
+          "hybrid_ids": [
+            "d13",
+            "d14",
+            "d49",
+            "d11",
+            "d16",
+            "d15",
+            "d12",
+            "d35",
+            "d46",
+            "d47"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q09",
+          "split": "test",
+          "category": "mathematics",
+          "vector_ids": [
+            "d15",
+            "d16",
+            "d13",
+            "d14",
+            "d45",
+            "d49",
+            "d11",
+            "d01",
+            "d17",
+            "d03"
+          ],
+          "hybrid_ids": [
+            "d15",
+            "d16",
+            "d45",
+            "d11",
+            "d03",
+            "d08",
+            "d49",
+            "d01",
+            "d19",
+            "d30"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q10",
+          "split": "test",
+          "category": "negation",
+          "vector_ids": [
+            "d49",
+            "d01",
+            "d02",
+            "d50",
+            "d08",
+            "d37",
+            "d38",
+            "d07",
+            "d33",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d49",
+            "d01",
+            "d35",
+            "d50",
+            "d08",
+            "d02",
+            "d42",
+            "d06",
+            "d43",
+            "d33"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 0.0,
+            "mrr10": 0.16666666666666666,
+            "ndcg10": 0.3562071871080222
+          }
+        },
+        {
+          "id": "q11",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d18",
+            "d17",
+            "d03",
+            "d35",
+            "d39",
+            "d40",
+            "d10",
+            "d04",
+            "d08",
+            "d49"
+          ],
+          "hybrid_ids": [
+            "d17",
+            "d10",
+            "d04",
+            "d03",
+            "d18",
+            "d49",
+            "d08",
+            "d46",
+            "d37",
+            "d39"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q12",
+          "split": "dev",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d19",
+            "d45",
+            "d46",
+            "d08",
+            "d42",
+            "d40",
+            "d49",
+            "d20",
+            "d10",
+            "d41"
+          ],
+          "hybrid_ids": [
+            "d19",
+            "d49",
+            "d45",
+            "d17",
+            "d35",
+            "d08",
+            "d46",
+            "d34",
+            "d10",
+            "d09"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q13",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d20",
+            "d45",
+            "d19",
+            "d08",
+            "d46",
+            "d35",
+            "d43",
+            "d44",
+            "d33",
+            "d28"
+          ],
+          "hybrid_ids": [
+            "d20",
+            "d39",
+            "d07",
+            "d45",
+            "d43",
+            "d17",
+            "d27",
+            "d08",
+            "d19",
+            "d35"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q14",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d21",
+            "d33",
+            "d22",
+            "d49",
+            "d23",
+            "d01",
+            "d50",
+            "d24",
+            "d37",
+            "d43"
+          ],
+          "hybrid_ids": [
+            "d21",
+            "d49",
+            "d22",
+            "d01",
+            "d02",
+            "d06",
+            "d05",
+            "d28",
+            "d33",
+            "d43"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q15",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d24",
+            "d23",
+            "d49",
+            "d01",
+            "d26",
+            "d05",
+            "d02",
+            "d50",
+            "d38",
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d24",
+            "d49",
+            "d05",
+            "d01",
+            "d23",
+            "d37",
+            "d50",
+            "d02",
+            "d39",
+            "d06"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.2,
+            "ndcg10": 0.38685280723454163
+          }
+        },
+        {
+          "id": "q16",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d26",
+            "d25",
+            "d01",
+            "d23",
+            "d49",
+            "d02",
+            "d38",
+            "d24",
+            "d05",
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d01",
+            "d05",
+            "d02",
+            "d06",
+            "d49",
+            "d37",
+            "d31",
+            "d32",
+            "d13",
+            "d21"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 0.0,
+            "mrr10": 0,
+            "ndcg10": 0.0
+          }
+        },
+        {
+          "id": "q17",
+          "split": "dev",
+          "category": "cross_language",
+          "vector_ids": [
+            "d35",
+            "d36",
+            "d42",
+            "d03",
+            "d21",
+            "d22",
+            "d04",
+            "d39",
+            "d41",
+            "d33"
+          ],
+          "hybrid_ids": [
+            "d21",
+            "d22",
+            "d23",
+            "d35",
+            "d36",
+            "d42",
+            "d03",
+            "d04",
+            "d39",
+            "d41"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.25,
+            "ndcg10": 0.4306765580733931
+          }
+        },
+        {
+          "id": "q18",
+          "split": "test",
+          "category": "identifiers",
+          "vector_ids": [
+            "d27",
+            "d28",
+            "d43",
+            "d22",
+            "d17",
+            "d21",
+            "d31",
+            "d18",
+            "d36",
+            "d19"
+          ],
+          "hybrid_ids": [
+            "d27",
+            "d28",
+            "d43",
+            "d22",
+            "d17",
+            "d21",
+            "d31",
+            "d18",
+            "d36",
+            "d19"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q19",
+          "split": "test",
+          "category": "identifiers",
+          "vector_ids": [
+            "d18",
+            "d10",
+            "d04",
+            "d35",
+            "d03",
+            "d17",
+            "d09",
+            "d36",
+            "d42",
+            "d40"
+          ],
+          "hybrid_ids": [
+            "d04",
+            "d03",
+            "d18",
+            "d10",
+            "d35",
+            "d17",
+            "d09",
+            "d36",
+            "d42",
+            "d40"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q20",
+          "split": "test",
+          "category": "identifiers",
+          "vector_ids": [
+            "d36",
+            "d35",
+            "d39",
+            "d40",
+            "d17",
+            "d28",
+            "d27",
+            "d22",
+            "d34",
+            "d43"
+          ],
+          "hybrid_ids": [
+            "d35",
+            "d36",
+            "d39",
+            "d40",
+            "d17",
+            "d28",
+            "d27",
+            "d22",
+            "d34",
+            "d43"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q21",
+          "split": "dev",
+          "category": "quoted_phrase",
+          "vector_ids": [
+            "d13",
+            "d14",
+            "d15",
+            "d39",
+            "d40",
+            "d31",
+            "d42",
+            "d01",
+            "d11",
+            "d16"
+          ],
+          "hybrid_ids": [
+            "d13"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q22",
+          "split": "test",
+          "category": "quoted_phrase",
+          "vector_ids": [
+            "d47",
+            "d48",
+            "d13",
+            "d14",
+            "d35",
+            "d29",
+            "d30",
+            "d10",
+            "d11",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d47"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q23",
+          "split": "test",
+          "category": "quoted_phrase",
+          "vector_ids": [
+            "d18",
+            "d17",
+            "d22",
+            "d27",
+            "d28",
+            "d39",
+            "d40",
+            "d36",
+            "d35",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d18"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q24",
+          "split": "test",
+          "category": "negation",
+          "vector_ids": [
+            "d29",
+            "d30",
+            "d08",
+            "d07",
+            "d49",
+            "d43",
+            "d39",
+            "d32",
+            "d50",
+            "d01"
+          ],
+          "hybrid_ids": [
+            "d29",
+            "d07",
+            "d49",
+            "d08",
+            "d43",
+            "d30",
+            "d28",
+            "d18",
+            "d47",
+            "d17"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q25",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d31",
+            "d32",
+            "d08",
+            "d22",
+            "d01",
+            "d38",
+            "d37",
+            "d33",
+            "d21",
+            "d07"
+          ],
+          "hybrid_ids": [
+            "d31",
+            "d32",
+            "d08",
+            "d01",
+            "d18",
+            "d49",
+            "d43",
+            "d33",
+            "d46",
+            "d34"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q26",
+          "split": "test",
+          "category": "entities",
+          "vector_ids": [
+            "d33",
+            "d34",
+            "d01",
+            "d49",
+            "d37",
+            "d50",
+            "d02",
+            "d26",
+            "d38",
+            "d05"
+          ],
+          "hybrid_ids": [
+            "d33",
+            "d34",
+            "d01",
+            "d49",
+            "d06",
+            "d43",
+            "d08",
+            "d50",
+            "d02",
+            "d05"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q27",
+          "split": "dev",
+          "category": "entities",
+          "vector_ids": [
+            "d34",
+            "d33",
+            "d49",
+            "d01",
+            "d02",
+            "d05",
+            "d07",
+            "d08",
+            "d03",
+            "d31"
+          ],
+          "hybrid_ids": [
+            "d34",
+            "d33",
+            "d49",
+            "d10",
+            "d08",
+            "d02",
+            "d40",
+            "d07",
+            "d05",
+            "d06"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q28",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d37",
+            "d01",
+            "d49",
+            "d02",
+            "d38",
+            "d08",
+            "d35",
+            "d50",
+            "d26",
+            "d07"
+          ],
+          "hybrid_ids": [
+            "d37",
+            "d38",
+            "d49",
+            "d08",
+            "d07",
+            "d50",
+            "d35",
+            "d33",
+            "d05",
+            "d42"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q29",
+          "split": "test",
+          "category": "long_passage",
+          "vector_ids": [
+            "d47",
+            "d48",
+            "d29",
+            "d10",
+            "d30",
+            "d13",
+            "d11",
+            "d14",
+            "d09",
+            "d39"
+          ],
+          "hybrid_ids": [
+            "d47",
+            "d48",
+            "d13",
+            "d29",
+            "d14",
+            "d30",
+            "d12",
+            "d11",
+            "d18",
+            "d45"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q30",
+          "split": "test",
+          "category": "long_passage",
+          "vector_ids": [
+            "d50",
+            "d49",
+            "d02",
+            "d01",
+            "d38",
+            "d08",
+            "d37",
+            "d05",
+            "d07",
+            "d06"
+          ],
+          "hybrid_ids": [
+            "d49",
+            "d50",
+            "d07",
+            "d38",
+            "d08",
+            "d01",
+            "d02",
+            "d05",
+            "d35",
+            "d37"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q31",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d45",
+            "d19",
+            "d08",
+            "d17",
+            "d42",
+            "d44",
+            "d10",
+            "d43",
+            "d28",
+            "d40"
+          ],
+          "hybrid_ids": [
+            "d45",
+            "d19",
+            "d27",
+            "d28",
+            "d10",
+            "d44",
+            "d49",
+            "d03",
+            "d08",
+            "d18"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q32",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d46",
+            "d08",
+            "d19",
+            "d37",
+            "d28",
+            "d20",
+            "d49",
+            "d33",
+            "d34",
+            "d42"
+          ],
+          "hybrid_ids": [
+            "d46",
+            "d19",
+            "d37",
+            "d49",
+            "d42",
+            "d08",
+            "d43",
+            "d20",
+            "d50",
+            "d33"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q33",
+          "split": "dev",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d41"
+          ],
+          "hybrid_ids": [
+            "d41"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q34",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d39"
+          ],
+          "hybrid_ids": [
+            "d39"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q35",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d42"
+          ],
+          "hybrid_ids": [
+            "d42"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q36",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d40",
+            "d43",
+            "d03",
+            "d31",
+            "d04",
+            "d07",
+            "d34",
+            "d35",
+            "d17",
+            "d01"
+          ],
+          "hybrid_ids": [
+            "d40",
+            "d43",
+            "d03",
+            "d31",
+            "d04",
+            "d07",
+            "d34",
+            "d35",
+            "d17",
+            "d01"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q37",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d37"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q38",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d38",
+            "d49",
+            "d50",
+            "d01",
+            "d02",
+            "d26",
+            "d33",
+            "d29",
+            "d23",
+            "d24"
+          ],
+          "hybrid_ids": [
+            "d38",
+            "d49",
+            "d50",
+            "d06",
+            "d01",
+            "d02",
+            "d26",
+            "d33",
+            "d29",
+            "d23"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q39",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d03",
+            "d04",
+            "d41",
+            "d42",
+            "d36",
+            "d39",
+            "d35",
+            "d18",
+            "d40",
+            "d09"
+          ],
+          "hybrid_ids": [
+            "d03",
+            "d04",
+            "d36",
+            "d40",
+            "d35",
+            "d39",
+            "d18",
+            "d28",
+            "d44",
+            "d09"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q40",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d35",
+            "d36",
+            "d22",
+            "d21",
+            "d28",
+            "d43",
+            "d49",
+            "d45",
+            "d42",
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d35",
+            "d21",
+            "d43",
+            "d42",
+            "d23",
+            "d49",
+            "d01",
+            "d36",
+            "d22",
+            "d28"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q41",
+          "split": "test",
+          "category": "mathematics",
+          "vector_ids": [
+            "d15",
+            "d16",
+            "d14",
+            "d49",
+            "d13",
+            "d01",
+            "d08",
+            "d50",
+            "d07",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d15",
+            "d16",
+            "d49",
+            "d50",
+            "d45",
+            "d14",
+            "d33",
+            "d34",
+            "d39",
+            "d08"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q42",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d44",
+            "d45",
+            "d42",
+            "d35",
+            "d40",
+            "d39",
+            "d36",
+            "d03",
+            "d46",
+            "d04"
+          ],
+          "hybrid_ids": [
+            "d44",
+            "d45",
+            "d39",
+            "d29",
+            "d17",
+            "d49",
+            "d02",
+            "d35",
+            "d01",
+            "d03"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q43",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d08",
+            "d33",
+            "d40",
+            "d01",
+            "d07",
+            "d50",
+            "d02",
+            "d39",
+            "d49",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d08",
+            "d50",
+            "d07",
+            "d33",
+            "d01",
+            "d49",
+            "d02",
+            "d46",
+            "d40",
+            "d39"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q44",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d49",
+            "d37",
+            "d38",
+            "d01",
+            "d32",
+            "d34",
+            "d07",
+            "d39",
+            "d40",
+            "d03"
+          ],
+          "hybrid_ids": [
+            "d37",
+            "d49",
+            "d38",
+            "d07",
+            "d40",
+            "d18",
+            "d39",
+            "d35",
+            "d01",
+            "d50"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q45",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d41",
+            "d42",
+            "d39",
+            "d40",
+            "d34",
+            "d35",
+            "d28",
+            "d03",
+            "d08",
+            "d33"
+          ],
+          "hybrid_ids": [
+            "d42",
+            "d40",
+            "d49",
+            "d41",
+            "d18",
+            "d39",
+            "d17",
+            "d35",
+            "d07",
+            "d34"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q46",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d28",
+            "d27",
+            "d43",
+            "d17",
+            "d35",
+            "d36",
+            "d31",
+            "d18",
+            "d22",
+            "d33"
+          ],
+          "hybrid_ids": [
+            "d28",
+            "d27",
+            "d43",
+            "d17",
+            "d35",
+            "d36",
+            "d31",
+            "d18",
+            "d22",
+            "d33"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q47",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [],
+          "hybrid_ids": [],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q48",
+          "split": "test",
+          "category": "structured_meaning",
+          "vector_ids": [
+            "d43",
+            "d33",
+            "d28",
+            "d42",
+            "d27",
+            "d08",
+            "d40",
+            "d10",
+            "d39",
+            "d20"
+          ],
+          "hybrid_ids": [
+            "d43",
+            "d28",
+            "d42",
+            "d27",
+            "d07",
+            "d08",
+            "d20",
+            "d35",
+            "d49",
+            "d40"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        }
+      ],
+      "sql_plan": [
+        [
+          3,
+          0,
+          0,
+          "MATERIALIZE nearest"
+        ],
+        [
+          8,
+          3,
+          3280,
+          "SCAN v VIRTUAL TABLE INDEX 5:PA00A01A02A03C04A05A06"
+        ],
+        [
+          21,
+          3,
+          45,
+          "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+        ],
+        [
+          49,
+          0,
+          49,
+          "SCAN nearest"
+        ],
+        [
+          56,
+          0,
+          0,
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      ],
+      "protection": {
+        "file_canaries_absent": [
+          {
+            "kind": "database",
+            "bytes": 4096
+          },
+          {
+            "kind": "WAL",
+            "bytes": 3201272
+          }
+        ],
+        "wrong_key_refused": true,
+        "system_sqlite_no_key_refused": true,
+        "temp_store_compile_time_memory_only": true,
+        "forced_sort_rows": 10000
+      },
+      "lifecycle": {
+        "failed_publication_atomic": true,
+        "failed_cleanup_still_suppressed_warm_and_reopened": true,
+        "old_and_current_generation_revival_refused": true,
+        "old_lifetime_refused_after_unlock": true,
+        "profile_substitution_refused": true,
+        "expiry_checked_at_query": true
+      },
+      "scale": [
+        {
+          "count": 10000,
+          "synthetic_distribution": "seeded Gaussian unit vectors, not model outputs",
+          "insert_and_index_seconds": 0.9270127090276219,
+          "database_bytes": 43851776,
+          "reopen_seconds": 0.09909345902269706,
+          "timings": {
+            "broad": {
+              "p50_ms": 32.5612919696141,
+              "p95_ms": 33.818187250290066,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 10000,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            },
+            "alias_0.1_percent": {
+              "p50_ms": 30.9609585092403,
+              "p95_ms": 31.85982324066572,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 10,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            }
+          },
+          "plans": {
+            "broad": [
+              [
+                3,
+                0,
+                0,
+                "MATERIALIZE nearest"
+              ],
+              [
+                8,
+                3,
+                3280,
+                "SCAN v VIRTUAL TABLE INDEX 5:PA00A01A02A03C04"
+              ],
+              [
+                19,
+                3,
+                45,
+                "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+              ],
+              [
+                43,
+                0,
+                49,
+                "SCAN nearest"
+              ],
+              [
+                50,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ],
+            "alias_0.1_percent": [
+              [
+                3,
+                0,
+                0,
+                "MATERIALIZE nearest"
+              ],
+              [
+                8,
+                3,
+                3280,
+                "SCAN v VIRTUAL TABLE INDEX 5:PA00A01A02A03C04A05"
+              ],
+              [
+                20,
+                3,
+                45,
+                "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+              ],
+              [
+                46,
+                0,
+                49,
+                "SCAN nearest"
+              ],
+              [
+                53,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ]
+          }
+        },
+        {
+          "count": 100000,
+          "synthetic_distribution": "seeded Gaussian unit vectors, not model outputs",
+          "insert_and_index_seconds": 10.634734624996781,
+          "database_bytes": 438849536,
+          "reopen_seconds": 0.10005258297314867,
+          "timings": {
+            "broad": {
+              "p50_ms": 320.2375629916787,
+              "p95_ms": 333.62280172877945,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 100000,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            },
+            "alias_0.1_percent": {
+              "p50_ms": 305.6872914894484,
+              "p95_ms": 310.5768957611872,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 100,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            }
+          },
+          "plans": {
+            "broad": [
+              [
+                3,
+                0,
+                0,
+                "MATERIALIZE nearest"
+              ],
+              [
+                8,
+                3,
+                3280,
+                "SCAN v VIRTUAL TABLE INDEX 5:PA00A01A02A03C04"
+              ],
+              [
+                19,
+                3,
+                45,
+                "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+              ],
+              [
+                43,
+                0,
+                49,
+                "SCAN nearest"
+              ],
+              [
+                50,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ],
+            "alias_0.1_percent": [
+              [
+                3,
+                0,
+                0,
+                "MATERIALIZE nearest"
+              ],
+              [
+                8,
+                3,
+                3280,
+                "SCAN v VIRTUAL TABLE INDEX 5:PA00A01A02A03C04A05"
+              ],
+              [
+                20,
+                3,
+                45,
+                "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+              ],
+              [
+                46,
+                0,
+                49,
+                "SCAN nearest"
+              ],
+              [
+                53,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ]
+          }
+        }
+      ],
+      "process_rss_after_scale_bytes": 283459584
+    },
+    "sqlite_vec": {
+      "versions": {
+        "sqlite": [
+          [
+            "3.53.4"
+          ]
+        ],
+        "sqlcipher": [
+          [
+            "4.19.0 community"
+          ]
+        ],
+        "crypto": [
+          [
+            "commoncrypto"
+          ]
+        ],
+        "extension": [
+          [
+            "Version: v0.1.9\nDate: 2026-03-31T08:01:41Z+0000\nCommit: e9f598abfa0c06b328d8fe5da9c3760cce74be10\nBuild flags:  neon"
+          ]
+        ]
+      },
+      "compile_options": [
+        [
+          "ATOMIC_INTRINSICS=1"
+        ],
+        [
+          "COMPILER=clang-21.0.0"
+        ],
+        [
+          "DEFAULT_AUTOVACUUM"
+        ],
+        [
+          "DEFAULT_CACHE_SIZE=-2000"
+        ],
+        [
+          "DEFAULT_FILE_FORMAT=4"
+        ],
+        [
+          "DEFAULT_JOURNAL_SIZE_LIMIT=-1"
+        ],
+        [
+          "DEFAULT_MMAP_SIZE=0"
+        ],
+        [
+          "DEFAULT_PAGE_SIZE=4096"
+        ],
+        [
+          "DEFAULT_PCACHE_INITSZ=20"
+        ],
+        [
+          "DEFAULT_RECURSIVE_TRIGGERS"
+        ],
+        [
+          "DEFAULT_SECTOR_SIZE=4096"
+        ],
+        [
+          "DEFAULT_SYNCHRONOUS=2"
+        ],
+        [
+          "DEFAULT_WAL_AUTOCHECKPOINT=1000"
+        ],
+        [
+          "DEFAULT_WAL_SYNCHRONOUS=2"
+        ],
+        [
+          "DEFAULT_WORKER_THREADS=0"
+        ],
+        [
+          "DIRECT_OVERFLOW_READ"
+        ],
+        [
+          "ENABLE_FTS5"
+        ],
+        [
+          "ENABLE_MATH_FUNCTIONS"
+        ],
+        [
+          "ENABLE_PERCENTILE"
+        ],
+        [
+          "EXTRA_INIT=sqlcipher_extra_init"
+        ],
+        [
+          "EXTRA_SHUTDOWN=sqlcipher_extra_shutdown"
+        ],
+        [
+          "HAS_CODEC"
+        ],
+        [
+          "HAVE_ISNAN"
+        ],
+        [
+          "MALLOC_SOFT_LIMIT=1024"
+        ],
+        [
+          "MAX_ATTACHED=10"
+        ],
+        [
+          "MAX_COLUMN=2000"
+        ],
+        [
+          "MAX_COMPOUND_SELECT=500"
+        ],
+        [
+          "MAX_DEFAULT_PAGE_SIZE=8192"
+        ],
+        [
+          "MAX_EXPR_DEPTH=1000"
+        ],
+        [
+          "MAX_FUNCTION_ARG=1000"
+        ],
+        [
+          "MAX_LENGTH=1000000000"
+        ],
+        [
+          "MAX_LIKE_PATTERN_LENGTH=50000"
+        ],
+        [
+          "MAX_MMAP_SIZE=0x7fff0000"
+        ],
+        [
+          "MAX_PAGE_COUNT=0xfffffffe"
+        ],
+        [
+          "MAX_PAGE_SIZE=65536"
+        ],
+        [
+          "MAX_SQL_LENGTH=1000000000"
+        ],
+        [
+          "MAX_TRIGGER_DEPTH=1000"
+        ],
+        [
+          "MAX_VARIABLE_NUMBER=32766"
+        ],
+        [
+          "MAX_VDBE_OP=250000000"
+        ],
+        [
+          "MAX_WORKER_THREADS=0"
+        ],
+        [
+          "MUTEX_PTHREADS"
+        ],
+        [
+          "SYSTEM_MALLOC"
+        ],
+        [
+          "TEMP_STORE=3"
+        ],
+        [
+          "THREADSAFE=1"
+        ]
+      ],
+      "queries": [
+        {
+          "id": "q01",
+          "split": "dev",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d01",
+            "d02",
+            "d50",
+            "d49",
+            "d08",
+            "d37",
+            "d38",
+            "d26",
+            "d33",
+            "d25"
+          ],
+          "hybrid_ids": [
+            "d01",
+            "d02",
+            "d49",
+            "d50",
+            "d08",
+            "d06",
+            "d33",
+            "d43",
+            "d46",
+            "d07"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q02",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d04",
+            "d03",
+            "d18",
+            "d41",
+            "d42",
+            "d36",
+            "d17",
+            "d39",
+            "d40",
+            "d31"
+          ],
+          "hybrid_ids": [
+            "d04",
+            "d03",
+            "d36",
+            "d42",
+            "d41",
+            "d40",
+            "d39",
+            "d18",
+            "d33",
+            "d28"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.5,
+            "ndcg10": 0.6309297535714574
+          }
+        },
+        {
+          "id": "q03",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d05",
+            "d49",
+            "d01",
+            "d02",
+            "d26",
+            "d24",
+            "d50",
+            "d25",
+            "d38",
+            "d23"
+          ],
+          "hybrid_ids": [
+            "d05",
+            "d49",
+            "d01",
+            "d37",
+            "d06",
+            "d02",
+            "d42",
+            "d50",
+            "d15",
+            "d39"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q04",
+          "split": "dev",
+          "category": "negation",
+          "vector_ids": [
+            "d08",
+            "d07",
+            "d33",
+            "d34",
+            "d49",
+            "d37",
+            "d46",
+            "d31",
+            "d01",
+            "d50"
+          ],
+          "hybrid_ids": [
+            "d07",
+            "d08",
+            "d37",
+            "d33",
+            "d43",
+            "d49",
+            "d34",
+            "d40",
+            "d50",
+            "d10"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.5,
+            "ndcg10": 0.6309297535714574
+          }
+        },
+        {
+          "id": "q05",
+          "split": "test",
+          "category": "negation",
+          "vector_ids": [
+            "d07",
+            "d08",
+            "d46",
+            "d37",
+            "d34",
+            "d50",
+            "d40",
+            "d19",
+            "d45",
+            "d31"
+          ],
+          "hybrid_ids": [
+            "d07",
+            "d08",
+            "d46",
+            "d19",
+            "d49",
+            "d43",
+            "d37",
+            "d40",
+            "d31",
+            "d34"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q06",
+          "split": "test",
+          "category": "structured_meaning",
+          "vector_ids": [
+            "d10",
+            "d09",
+            "d47",
+            "d45",
+            "d39",
+            "d03",
+            "d48",
+            "d30",
+            "d35",
+            "d15"
+          ],
+          "hybrid_ids": [
+            "d09",
+            "d39",
+            "d10",
+            "d47",
+            "d01",
+            "d17",
+            "d49",
+            "d35",
+            "d30",
+            "d45"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q07",
+          "split": "test",
+          "category": "mathematics",
+          "vector_ids": [
+            "d11",
+            "d12",
+            "d47",
+            "d48",
+            "d13",
+            "d14",
+            "d01",
+            "d49",
+            "d44",
+            "d39"
+          ],
+          "hybrid_ids": [
+            "d11",
+            "d12",
+            "d47",
+            "d48",
+            "d14",
+            "d49",
+            "d43",
+            "d39",
+            "d15",
+            "d35"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q08",
+          "split": "dev",
+          "category": "mathematics",
+          "vector_ids": [
+            "d13",
+            "d14",
+            "d15",
+            "d49",
+            "d16",
+            "d11",
+            "d34",
+            "d46",
+            "d08",
+            "d45"
+          ],
+          "hybrid_ids": [
+            "d13",
+            "d14",
+            "d49",
+            "d11",
+            "d16",
+            "d15",
+            "d12",
+            "d35",
+            "d46",
+            "d47"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q09",
+          "split": "test",
+          "category": "mathematics",
+          "vector_ids": [
+            "d15",
+            "d16",
+            "d13",
+            "d14",
+            "d45",
+            "d49",
+            "d11",
+            "d01",
+            "d17",
+            "d03"
+          ],
+          "hybrid_ids": [
+            "d15",
+            "d16",
+            "d45",
+            "d11",
+            "d03",
+            "d08",
+            "d49",
+            "d01",
+            "d19",
+            "d30"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q10",
+          "split": "test",
+          "category": "negation",
+          "vector_ids": [
+            "d49",
+            "d01",
+            "d02",
+            "d50",
+            "d08",
+            "d37",
+            "d38",
+            "d07",
+            "d33",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d49",
+            "d01",
+            "d35",
+            "d50",
+            "d08",
+            "d02",
+            "d42",
+            "d06",
+            "d43",
+            "d33"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 0.0,
+            "mrr10": 0.16666666666666666,
+            "ndcg10": 0.3562071871080222
+          }
+        },
+        {
+          "id": "q11",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d18",
+            "d17",
+            "d03",
+            "d35",
+            "d39",
+            "d40",
+            "d10",
+            "d04",
+            "d08",
+            "d49"
+          ],
+          "hybrid_ids": [
+            "d17",
+            "d10",
+            "d04",
+            "d03",
+            "d18",
+            "d49",
+            "d08",
+            "d46",
+            "d37",
+            "d39"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q12",
+          "split": "dev",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d19",
+            "d45",
+            "d46",
+            "d08",
+            "d42",
+            "d40",
+            "d49",
+            "d20",
+            "d10",
+            "d41"
+          ],
+          "hybrid_ids": [
+            "d19",
+            "d49",
+            "d45",
+            "d17",
+            "d35",
+            "d08",
+            "d46",
+            "d34",
+            "d10",
+            "d09"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q13",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d20",
+            "d45",
+            "d19",
+            "d08",
+            "d46",
+            "d35",
+            "d43",
+            "d44",
+            "d33",
+            "d28"
+          ],
+          "hybrid_ids": [
+            "d20",
+            "d39",
+            "d07",
+            "d45",
+            "d43",
+            "d17",
+            "d27",
+            "d08",
+            "d19",
+            "d35"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q14",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d21",
+            "d33",
+            "d22",
+            "d49",
+            "d23",
+            "d01",
+            "d50",
+            "d24",
+            "d37",
+            "d43"
+          ],
+          "hybrid_ids": [
+            "d21",
+            "d49",
+            "d22",
+            "d01",
+            "d02",
+            "d06",
+            "d05",
+            "d28",
+            "d33",
+            "d43"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q15",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d24",
+            "d23",
+            "d49",
+            "d01",
+            "d26",
+            "d05",
+            "d02",
+            "d50",
+            "d38",
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d24",
+            "d49",
+            "d05",
+            "d01",
+            "d23",
+            "d37",
+            "d50",
+            "d02",
+            "d39",
+            "d06"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.2,
+            "ndcg10": 0.38685280723454163
+          }
+        },
+        {
+          "id": "q16",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d26",
+            "d25",
+            "d01",
+            "d23",
+            "d49",
+            "d02",
+            "d38",
+            "d24",
+            "d05",
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d01",
+            "d05",
+            "d02",
+            "d06",
+            "d49",
+            "d37",
+            "d31",
+            "d32",
+            "d13",
+            "d21"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 0.0,
+            "mrr10": 0,
+            "ndcg10": 0.0
+          }
+        },
+        {
+          "id": "q17",
+          "split": "dev",
+          "category": "cross_language",
+          "vector_ids": [
+            "d35",
+            "d36",
+            "d42",
+            "d03",
+            "d21",
+            "d22",
+            "d04",
+            "d39",
+            "d41",
+            "d33"
+          ],
+          "hybrid_ids": [
+            "d21",
+            "d22",
+            "d23",
+            "d35",
+            "d36",
+            "d42",
+            "d03",
+            "d04",
+            "d39",
+            "d41"
+          ],
+          "hybrid_metrics": {
+            "hit1": 0.0,
+            "recall5": 1.0,
+            "mrr10": 0.25,
+            "ndcg10": 0.4306765580733931
+          }
+        },
+        {
+          "id": "q18",
+          "split": "test",
+          "category": "identifiers",
+          "vector_ids": [
+            "d27",
+            "d28",
+            "d43",
+            "d22",
+            "d17",
+            "d21",
+            "d31",
+            "d18",
+            "d36",
+            "d19"
+          ],
+          "hybrid_ids": [
+            "d27",
+            "d28",
+            "d43",
+            "d22",
+            "d17",
+            "d21",
+            "d31",
+            "d18",
+            "d36",
+            "d19"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q19",
+          "split": "test",
+          "category": "identifiers",
+          "vector_ids": [
+            "d18",
+            "d10",
+            "d04",
+            "d35",
+            "d03",
+            "d17",
+            "d09",
+            "d36",
+            "d42",
+            "d40"
+          ],
+          "hybrid_ids": [
+            "d04",
+            "d03",
+            "d18",
+            "d10",
+            "d35",
+            "d17",
+            "d09",
+            "d36",
+            "d42",
+            "d40"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q20",
+          "split": "test",
+          "category": "identifiers",
+          "vector_ids": [
+            "d36",
+            "d35",
+            "d39",
+            "d40",
+            "d17",
+            "d28",
+            "d27",
+            "d22",
+            "d34",
+            "d43"
+          ],
+          "hybrid_ids": [
+            "d35",
+            "d36",
+            "d39",
+            "d40",
+            "d17",
+            "d28",
+            "d27",
+            "d22",
+            "d34",
+            "d43"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q21",
+          "split": "dev",
+          "category": "quoted_phrase",
+          "vector_ids": [
+            "d13",
+            "d14",
+            "d15",
+            "d39",
+            "d40",
+            "d31",
+            "d42",
+            "d01",
+            "d11",
+            "d16"
+          ],
+          "hybrid_ids": [
+            "d13"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q22",
+          "split": "test",
+          "category": "quoted_phrase",
+          "vector_ids": [
+            "d47",
+            "d48",
+            "d13",
+            "d14",
+            "d35",
+            "d29",
+            "d30",
+            "d10",
+            "d11",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d47"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q23",
+          "split": "test",
+          "category": "quoted_phrase",
+          "vector_ids": [
+            "d18",
+            "d17",
+            "d22",
+            "d27",
+            "d28",
+            "d39",
+            "d40",
+            "d36",
+            "d35",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d18"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q24",
+          "split": "test",
+          "category": "negation",
+          "vector_ids": [
+            "d29",
+            "d30",
+            "d08",
+            "d07",
+            "d49",
+            "d43",
+            "d39",
+            "d32",
+            "d50",
+            "d01"
+          ],
+          "hybrid_ids": [
+            "d29",
+            "d07",
+            "d49",
+            "d08",
+            "d43",
+            "d30",
+            "d28",
+            "d18",
+            "d47",
+            "d17"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q25",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d31",
+            "d32",
+            "d08",
+            "d22",
+            "d01",
+            "d38",
+            "d37",
+            "d33",
+            "d21",
+            "d07"
+          ],
+          "hybrid_ids": [
+            "d31",
+            "d32",
+            "d08",
+            "d01",
+            "d18",
+            "d49",
+            "d43",
+            "d33",
+            "d46",
+            "d34"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q26",
+          "split": "test",
+          "category": "entities",
+          "vector_ids": [
+            "d33",
+            "d34",
+            "d01",
+            "d49",
+            "d37",
+            "d50",
+            "d02",
+            "d26",
+            "d38",
+            "d05"
+          ],
+          "hybrid_ids": [
+            "d33",
+            "d34",
+            "d01",
+            "d49",
+            "d06",
+            "d43",
+            "d08",
+            "d50",
+            "d02",
+            "d05"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q27",
+          "split": "dev",
+          "category": "entities",
+          "vector_ids": [
+            "d34",
+            "d33",
+            "d49",
+            "d01",
+            "d02",
+            "d05",
+            "d07",
+            "d08",
+            "d03",
+            "d31"
+          ],
+          "hybrid_ids": [
+            "d34",
+            "d33",
+            "d49",
+            "d10",
+            "d08",
+            "d02",
+            "d40",
+            "d07",
+            "d05",
+            "d06"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q28",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d37",
+            "d01",
+            "d49",
+            "d02",
+            "d38",
+            "d08",
+            "d35",
+            "d50",
+            "d26",
+            "d07"
+          ],
+          "hybrid_ids": [
+            "d37",
+            "d38",
+            "d49",
+            "d08",
+            "d07",
+            "d50",
+            "d35",
+            "d33",
+            "d05",
+            "d42"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q29",
+          "split": "test",
+          "category": "long_passage",
+          "vector_ids": [
+            "d47",
+            "d48",
+            "d29",
+            "d10",
+            "d30",
+            "d13",
+            "d11",
+            "d14",
+            "d09",
+            "d39"
+          ],
+          "hybrid_ids": [
+            "d47",
+            "d48",
+            "d13",
+            "d29",
+            "d14",
+            "d30",
+            "d12",
+            "d11",
+            "d18",
+            "d45"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q30",
+          "split": "test",
+          "category": "long_passage",
+          "vector_ids": [
+            "d50",
+            "d49",
+            "d02",
+            "d01",
+            "d38",
+            "d08",
+            "d37",
+            "d05",
+            "d07",
+            "d06"
+          ],
+          "hybrid_ids": [
+            "d49",
+            "d50",
+            "d07",
+            "d38",
+            "d08",
+            "d01",
+            "d02",
+            "d05",
+            "d35",
+            "d37"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q31",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d45",
+            "d19",
+            "d08",
+            "d17",
+            "d42",
+            "d44",
+            "d10",
+            "d43",
+            "d28",
+            "d40"
+          ],
+          "hybrid_ids": [
+            "d45",
+            "d19",
+            "d27",
+            "d28",
+            "d10",
+            "d44",
+            "d49",
+            "d03",
+            "d08",
+            "d18"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q32",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d46",
+            "d08",
+            "d19",
+            "d37",
+            "d28",
+            "d20",
+            "d49",
+            "d33",
+            "d34",
+            "d42"
+          ],
+          "hybrid_ids": [
+            "d46",
+            "d19",
+            "d37",
+            "d49",
+            "d42",
+            "d08",
+            "d43",
+            "d20",
+            "d50",
+            "d33"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q33",
+          "split": "dev",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d41"
+          ],
+          "hybrid_ids": [
+            "d41"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q34",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d39"
+          ],
+          "hybrid_ids": [
+            "d39"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q35",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d42"
+          ],
+          "hybrid_ids": [
+            "d42"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q36",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d40",
+            "d43",
+            "d03",
+            "d31",
+            "d04",
+            "d07",
+            "d34",
+            "d35",
+            "d17",
+            "d01"
+          ],
+          "hybrid_ids": [
+            "d40",
+            "d43",
+            "d03",
+            "d31",
+            "d04",
+            "d07",
+            "d34",
+            "d35",
+            "d17",
+            "d01"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q37",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d37"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q38",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [
+            "d38",
+            "d49",
+            "d50",
+            "d01",
+            "d02",
+            "d26",
+            "d33",
+            "d29",
+            "d23",
+            "d24"
+          ],
+          "hybrid_ids": [
+            "d38",
+            "d49",
+            "d50",
+            "d06",
+            "d01",
+            "d02",
+            "d26",
+            "d33",
+            "d29",
+            "d23"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q39",
+          "split": "test",
+          "category": "lifecycle",
+          "vector_ids": [
+            "d03",
+            "d04",
+            "d41",
+            "d42",
+            "d36",
+            "d39",
+            "d35",
+            "d18",
+            "d40",
+            "d09"
+          ],
+          "hybrid_ids": [
+            "d03",
+            "d04",
+            "d36",
+            "d40",
+            "d35",
+            "d39",
+            "d18",
+            "d28",
+            "d44",
+            "d09"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q40",
+          "split": "test",
+          "category": "cross_language",
+          "vector_ids": [
+            "d35",
+            "d36",
+            "d22",
+            "d21",
+            "d28",
+            "d43",
+            "d49",
+            "d45",
+            "d42",
+            "d37"
+          ],
+          "hybrid_ids": [
+            "d35",
+            "d21",
+            "d43",
+            "d42",
+            "d23",
+            "d49",
+            "d01",
+            "d36",
+            "d22",
+            "d28"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q41",
+          "split": "test",
+          "category": "mathematics",
+          "vector_ids": [
+            "d15",
+            "d16",
+            "d14",
+            "d49",
+            "d13",
+            "d01",
+            "d08",
+            "d50",
+            "d07",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d15",
+            "d16",
+            "d49",
+            "d50",
+            "d45",
+            "d14",
+            "d33",
+            "d34",
+            "d39",
+            "d08"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q42",
+          "split": "test",
+          "category": "paraphrase",
+          "vector_ids": [
+            "d44",
+            "d45",
+            "d42",
+            "d35",
+            "d40",
+            "d39",
+            "d36",
+            "d03",
+            "d46",
+            "d04"
+          ],
+          "hybrid_ids": [
+            "d44",
+            "d45",
+            "d39",
+            "d29",
+            "d17",
+            "d49",
+            "d02",
+            "d35",
+            "d01",
+            "d03"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        },
+        {
+          "id": "q43",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d08",
+            "d33",
+            "d40",
+            "d01",
+            "d07",
+            "d50",
+            "d02",
+            "d39",
+            "d49",
+            "d34"
+          ],
+          "hybrid_ids": [
+            "d08",
+            "d50",
+            "d07",
+            "d33",
+            "d01",
+            "d49",
+            "d02",
+            "d46",
+            "d40",
+            "d39"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q44",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d49",
+            "d37",
+            "d38",
+            "d01",
+            "d32",
+            "d34",
+            "d07",
+            "d39",
+            "d40",
+            "d03"
+          ],
+          "hybrid_ids": [
+            "d37",
+            "d49",
+            "d38",
+            "d07",
+            "d40",
+            "d18",
+            "d39",
+            "d35",
+            "d01",
+            "d50"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q45",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d41",
+            "d42",
+            "d39",
+            "d40",
+            "d34",
+            "d35",
+            "d28",
+            "d03",
+            "d08",
+            "d33"
+          ],
+          "hybrid_ids": [
+            "d42",
+            "d40",
+            "d49",
+            "d41",
+            "d18",
+            "d39",
+            "d17",
+            "d35",
+            "d07",
+            "d34"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q46",
+          "split": "test",
+          "category": "no_answer",
+          "vector_ids": [
+            "d28",
+            "d27",
+            "d43",
+            "d17",
+            "d35",
+            "d36",
+            "d31",
+            "d18",
+            "d22",
+            "d33"
+          ],
+          "hybrid_ids": [
+            "d28",
+            "d27",
+            "d43",
+            "d17",
+            "d35",
+            "d36",
+            "d31",
+            "d18",
+            "d22",
+            "d33"
+          ],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q47",
+          "split": "test",
+          "category": "structured_filter",
+          "vector_ids": [],
+          "hybrid_ids": [],
+          "hybrid_metrics": null
+        },
+        {
+          "id": "q48",
+          "split": "test",
+          "category": "structured_meaning",
+          "vector_ids": [
+            "d43",
+            "d33",
+            "d28",
+            "d42",
+            "d27",
+            "d08",
+            "d40",
+            "d10",
+            "d39",
+            "d20"
+          ],
+          "hybrid_ids": [
+            "d43",
+            "d28",
+            "d42",
+            "d27",
+            "d07",
+            "d08",
+            "d20",
+            "d35",
+            "d49",
+            "d40"
+          ],
+          "hybrid_metrics": {
+            "hit1": 1.0,
+            "recall5": 1.0,
+            "mrr10": 1.0,
+            "ndcg10": 1.0
+          }
+        }
+      ],
+      "sql_plan": [
+        [
+          3,
+          0,
+          49,
+          "SCAN vectors VIRTUAL TABLE INDEX 0:3{___}___[___"
+        ],
+        [
+          9,
+          0,
+          0,
+          "LIST SUBQUERY 1"
+        ],
+        [
+          11,
+          9,
+          47,
+          "SEARCH s USING COVERING INDEX source_scope (profile=? AND account=? AND retained=? AND removed=? AND alias=? AND expires>?)"
+        ],
+        [
+          42,
+          0,
+          0,
+          "USE TEMP B-TREE FOR ORDER BY"
+        ]
+      ],
+      "protection": {
+        "file_canaries_absent": [
+          {
+            "kind": "database",
+            "bytes": 4096
+          },
+          {
+            "kind": "WAL",
+            "bytes": 5570272
+          }
+        ],
+        "wrong_key_refused": true,
+        "system_sqlite_no_key_refused": true,
+        "temp_store_compile_time_memory_only": true,
+        "forced_sort_rows": 10000
+      },
+      "lifecycle": {
+        "failed_publication_atomic": true,
+        "failed_cleanup_still_suppressed_warm_and_reopened": true,
+        "old_and_current_generation_revival_refused": true,
+        "old_lifetime_refused_after_unlock": true,
+        "profile_substitution_refused": true,
+        "expiry_checked_at_query": true
+      },
+      "scale": [
+        {
+          "count": 10000,
+          "synthetic_distribution": "seeded Gaussian unit vectors, not model outputs",
+          "insert_and_index_seconds": 0.9175620829919353,
+          "database_bytes": 24444928,
+          "reopen_seconds": 0.0986777080106549,
+          "timings": {
+            "broad": {
+              "p50_ms": 39.65495849843137,
+              "p95_ms": 40.68127075152006,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 10000,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            },
+            "alias_0.1_percent": {
+              "p50_ms": 29.897145956056193,
+              "p95_ms": 31.152729236055166,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 10,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            }
+          },
+          "plans": {
+            "broad": [
+              [
+                3,
+                0,
+                49,
+                "SCAN vectors VIRTUAL TABLE INDEX 0:3{___}___[___"
+              ],
+              [
+                9,
+                0,
+                0,
+                "LIST SUBQUERY 1"
+              ],
+              [
+                11,
+                9,
+                53,
+                "SEARCH s USING COVERING INDEX source_scope (profile=? AND account=? AND retained=? AND removed=?)"
+              ],
+              [
+                38,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ],
+            "alias_0.1_percent": [
+              [
+                3,
+                0,
+                49,
+                "SCAN vectors VIRTUAL TABLE INDEX 0:3{___}___[___"
+              ],
+              [
+                9,
+                0,
+                0,
+                "LIST SUBQUERY 1"
+              ],
+              [
+                11,
+                9,
+                47,
+                "SEARCH s USING COVERING INDEX source_scope (profile=? AND account=? AND retained=? AND removed=? AND alias=? AND expires>?)"
+              ],
+              [
+                40,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ]
+          }
+        },
+        {
+          "count": 100000,
+          "synthetic_distribution": "seeded Gaussian unit vectors, not model outputs",
+          "insert_and_index_seconds": 11.582801916985773,
+          "database_bytes": 240418816,
+          "reopen_seconds": 0.10191329201916233,
+          "timings": {
+            "broad": {
+              "p50_ms": 397.0567294745706,
+              "p95_ms": 472.7974275301676,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 100000,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            },
+            "alias_0.1_percent": {
+              "p50_ms": 294.01099999086,
+              "p95_ms": 350.95179147901945,
+              "samples": 36,
+              "parity_queries": 12,
+              "eligible_count": 100,
+              "deadline_exceeded": false,
+              "deadline_seconds": 2
+            }
+          },
+          "plans": {
+            "broad": [
+              [
+                3,
+                0,
+                49,
+                "SCAN vectors VIRTUAL TABLE INDEX 0:3{___}___[___"
+              ],
+              [
+                9,
+                0,
+                0,
+                "LIST SUBQUERY 1"
+              ],
+              [
+                11,
+                9,
+                53,
+                "SEARCH s USING COVERING INDEX source_scope (profile=? AND account=? AND retained=? AND removed=?)"
+              ],
+              [
+                38,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ],
+            "alias_0.1_percent": [
+              [
+                3,
+                0,
+                49,
+                "SCAN vectors VIRTUAL TABLE INDEX 0:3{___}___[___"
+              ],
+              [
+                9,
+                0,
+                0,
+                "LIST SUBQUERY 1"
+              ],
+              [
+                11,
+                9,
+                47,
+                "SEARCH s USING COVERING INDEX source_scope (profile=? AND account=? AND retained=? AND removed=? AND alias=? AND expires>?)"
+              ],
+              [
+                40,
+                0,
+                0,
+                "USE TEMP B-TREE FOR ORDER BY"
+              ]
+            ]
+          }
+        }
+      ],
+      "process_rss_after_scale_bytes": 536363008
+    }
+  },
+  "limits": [
+    "fictional corpus; no owner credential",
+    "synthetic Gaussian scale vectors; no semantic scale claim",
+    "not production Rust or native app integration",
+    "no ANN, battery, iOS or swap/crash-dump audit"
+  ],
+  "live_model_load_seconds": 2.6393401250243187,
+  "live_query": {
+    "vec1_streaming": {
+      "query": "q02",
+      "seconds_encode_search_passage": 0.05639524996513501,
+      "passages": [
+        "d04",
+        "d03",
+        "d36",
+        "d42",
+        "d41"
+      ],
+      "vector_matches_prior_profile": true
+    },
+    "vec1_metadata": {
+      "query": "q02",
+      "seconds_encode_search_passage": 0.039856792020145804,
+      "passages": [
+        "d04",
+        "d03",
+        "d36",
+        "d42",
+        "d41"
+      ],
+      "vector_matches_prior_profile": true
+    },
+    "sqlite_vec": {
+      "query": "q02",
+      "seconds_encode_search_passage": 0.04109533299924806,
+      "passages": [
+        "d04",
+        "d03",
+        "d36",
+        "d42",
+        "d41"
+      ],
+      "vector_matches_prior_profile": true
+    }
+  },
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+  "timestamp_utc": "2026-10-25T20:03:21.616513+00:00",
+  "max_process_rss_bytes": 2510749696,
+  "packages": {
+    "numpy": "2.5.4",
+    "torch": "2.14.1",
+    "sentence-transformers": "6.2.0",
+    "transformers": "5.20.2",
+    "psutil": "7.2.1"
+  }
+}

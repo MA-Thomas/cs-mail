@@ -21,12 +21,6 @@ const META: &[u8] = b"cs-mail/retained-metadata/v3";
 fn context(kind: &[u8], id: RetainedRecordId) -> Vec<u8> {
     [kind, id.bytes()].concat()
 }
-pub(super) fn words(text: &str) -> BTreeSet<String> {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .map(str::to_lowercase)
-        .collect()
-}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Metadata {
@@ -34,13 +28,14 @@ struct Metadata {
     owner: ProtocolIdentity,
     aliases: Vec<cs_mail_accounts::aliases::Alias>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Indexed {
     key: CopyKey,
     pub subject: Option<ConversationSubject>,
     pub expires: CanonicalTime,
-    terms: BTreeSet<String>,
+    pub content_digest: [u8; 32],
+    pub projection: super::semantic::Projection,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,24 +58,26 @@ enum PendingRecord {
 }
 
 pub(super) struct Retained {
+    epoch: u64,
     metadata: Metadata,
     revision: u64,
     initialized: bool,
     reload_required: bool,
     key_tag: [u8; 32],
     pub entries: BTreeMap<CopyKey, Indexed>,
+    pub versions: BTreeMap<CopyKey, cs_mail_correspondence::MessageVersion>,
     pub excluded: BTreeSet<CopyKey>,
     by_thread: BTreeMap<MailKey, BTreeSet<CopyKey>>,
-    postings: BTreeMap<String, BTreeSet<CopyKey>>,
     pending: BTreeMap<CopyKey, PendingRecord>,
     pub known_keys: BTreeSet<CopyKey>,
     pub received_keys: BTreeMap<cs_mail_primitives::AliasId, BTreeSet<CopyKey>>,
     observed: (usize, usize),
     pub missing_native: BTreeMap<CopyKey, usize>,
     pub missing_external: BTreeMap<CopyKey, (u128, usize)>,
-    deadlines: BTreeMap<CanonicalTime, usize>,
+    deadlines: BTreeMap<CanonicalTime, BTreeSet<CopyKey>>,
+    suspended: BTreeSet<cs_mail_correspondence::ConversationId>,
 }
-pub(super) struct Access<'a>(MutexGuard<'a, Option<Retained>>);
+pub(super) struct Access<'a>(MutexGuard<'a, Option<Retained>>, &'a MemberClient, u64);
 impl Deref for Access<'_> {
     type Target = Retained;
     fn deref(&self) -> &Retained {
@@ -94,8 +91,24 @@ impl DerefMut for Access<'_> {
 }
 impl Drop for Access<'_> {
     fn drop(&mut self) {
-        if self.0.as_ref().is_some_and(|index| index.reload_required) {
+        if self
+            .1
+            .retained_epoch
+            .load(std::sync::atomic::Ordering::SeqCst)
+            != self.2
+            || self.0.as_ref().is_some_and(|index| index.reload_required)
+        {
             *self.0 = None;
+            if self
+                .1
+                .retained_epoch
+                .load(std::sync::atomic::Ordering::SeqCst)
+                != self.2
+            {
+                if let Ok(mut query) = self.1.search.try_lock() {
+                    *query = None;
+                }
+            }
         } else if let Some(index) = self.0.as_mut() {
             index.pending.clear();
         }
@@ -115,15 +128,12 @@ impl Retained {
         state: &State,
         epoch: Option<u64>,
     ) -> Result<Access<'a>, Error> {
+        let session = client.search_session()?;
         let mut guard = client.retained.lock().map_err(|_| Error::Unavailable)?;
-        if epoch.is_some_and(|value| {
-            value
-                != client
-                    .retained_epoch
-                    .load(std::sync::atomic::Ordering::SeqCst)
-        }) {
+        if epoch.is_some_and(|value| value != session.value()) {
             return Err(Error::Unavailable);
         }
+        client.check_search_session(session)?;
         let tag = Sha256::digest(keys.cache).into();
         if guard.is_none() {
             let (revision, bytes) = client.store.retained_state()?;
@@ -138,15 +148,16 @@ impl Retained {
                 None => return Err(Error::InvalidData),
             };
             let mut value = Self {
+                epoch: session.value(),
                 metadata,
                 revision,
                 initialized: bytes.is_some(),
                 reload_required: false,
                 key_tag: tag,
                 entries: BTreeMap::new(),
+                versions: BTreeMap::new(),
                 excluded: BTreeSet::new(),
                 by_thread: BTreeMap::new(),
-                postings: BTreeMap::new(),
                 pending: BTreeMap::new(),
                 known_keys: BTreeSet::new(),
                 received_keys: BTreeMap::new(),
@@ -154,6 +165,7 @@ impl Retained {
                 missing_native: BTreeMap::new(),
                 missing_external: BTreeMap::new(),
                 deadlines: BTreeMap::new(),
+                suspended: BTreeSet::new(),
             };
             value.check(state, tag)?;
             value.validate_metadata()?;
@@ -173,20 +185,15 @@ impl Retained {
                     let record: IndexRecord = serde_json::from_slice(&storage::decrypt(
                         keys,
                         &row.ciphertext,
-                        &context(b"cs-mail/retained-index/v2", row.id),
+                        &context(b"cs-mail/retained-index/v3", row.id),
                     )?)
                     .map_err(|_| Error::InvalidData)?;
                     if value.id(keys, record.key())? != row.id || value.known(record.key()) {
                         return Err(Error::InvalidData);
                     }
                     if let IndexRecord::Available(v) = &record {
-                        if v.subject.is_some() != matches!(v.key.thread, MailKey::Native(_))
-                            || v.terms.iter().any(|t| {
-                                t.is_empty()
-                                    || t.chars().any(char::is_control)
-                                    || t.to_lowercase() != *t
-                            })
-                        {
+                        v.projection.validate()?;
+                        if v.subject.is_some() != matches!(v.key.thread, MailKey::Native(_)) {
                             return Err(Error::InvalidData);
                         }
                     }
@@ -199,12 +206,23 @@ impl Retained {
         let value = guard.as_mut().ok_or(Error::InvalidData)?;
         value.check(state, tag)?;
         value.observe_headers(state);
-        Ok(Access(guard))
+        let access = Access(guard, client, session.value());
+        client.check_search_session(session)?;
+        Ok(access)
     }
     fn validate_metadata(&self) -> Result<(), Error> {
         self.inboxes().map(|_| ())
     }
     fn observe_headers(&mut self, state: &State) {
+        // Pending deletion is an explicit recoverable suspension, not proof of deletion.
+        // It survives a failed exclusion checkpoint because its signed intent is already durable.
+        if let Some(signed) = &state.editing_conversation {
+            if let cs_mail_application::correspondence::Command::DeleteCopies { id } =
+                signed.command
+            {
+                self.suspended.insert(id);
+            }
+        }
         let external_count = state
             .external
             .as_ref()
@@ -212,6 +230,7 @@ impl Retained {
         let observed = (state.mailbox.records.len(), external_count);
         if self.observed != observed {
             self.known_keys.clear();
+            self.versions.clear();
             self.received_keys.clear();
             self.missing_native.clear();
             self.missing_external.clear();
@@ -221,6 +240,7 @@ impl Retained {
                     message: record.manifest.message(),
                 };
                 self.known_keys.insert(key);
+                self.versions.insert(key, record.manifest.version());
                 if record.receiving.recipient() == self.metadata.owner {
                     self.received_keys
                         .entry(record.receiving.alias())
@@ -239,6 +259,7 @@ impl Retained {
                             message: view.message.manifest.message(),
                         };
                         self.known_keys.insert(key);
+                        self.versions.insert(key, view.message.manifest.version());
                         if let cs_mail_application::correspondence::external::Direction::GuestToMember(route) = &view.message.direction {
                             self.received_keys.entry(route.alias()).or_default().insert(key);
                         }
@@ -251,17 +272,22 @@ impl Retained {
             self.observed = observed;
         }
     }
-    pub fn session<'a>(client: &'a MemberClient, keys: &Secrets) -> Result<Access<'a>, Error> {
+    pub fn session<'a>(
+        client: &'a MemberClient,
+        keys: &Secrets,
+        session: super::SearchSessionId,
+    ) -> Result<Access<'a>, Error> {
         let guard = client.retained.lock().map_err(|_| Error::Unavailable)?;
+        client.check_search_session(session)?;
         if let Some(index) = guard.as_ref() {
             if index.key_tag != <[u8; 32]>::from(Sha256::digest(keys.cache)) {
                 return Err(Error::KeyUnavailable);
             }
-            return Ok(Access(guard));
+            return Ok(Access(guard, client, session.value()));
         }
         drop(guard);
         let state = storage::open(client.store.as_ref(), keys)?;
-        Self::load(client, keys, &state)
+        Self::load_at_epoch(client, keys, &state, Some(session.value()))
     }
     fn check(&self, state: &State, tag: [u8; 32]) -> Result<(), Error> {
         if self.metadata.account != state.profile.account
@@ -317,7 +343,45 @@ impl Retained {
         Ok(())
     }
     pub fn entry(&self, key: CopyKey, now: CanonicalTime) -> Option<&Indexed> {
+        if matches!(key.thread, MailKey::Native(id) if self.suspended.contains(&id)) {
+            return None;
+        }
         self.entries.get(&key).filter(|e| now < e.expires)
+    }
+    pub fn source(
+        &self,
+        key: CopyKey,
+    ) -> Result<
+        (
+            cs_mail_search::SourceIdentity,
+            cs_mail_search::SourceVersion,
+        ),
+        Error,
+    > {
+        use cs_mail_search::{
+            CorrespondenceStream, SourceIdentity, SourceOccurrence, SourceVersion,
+        };
+        let (stream, conversation) = match key.thread {
+            MailKey::Native(id) => (CorrespondenceStream::Native, id),
+            MailKey::External(id) => (CorrespondenceStream::External, id),
+        };
+        let identity = SourceIdentity::new(
+            self.metadata.account,
+            SourceOccurrence::Message {
+                stream,
+                conversation,
+                message: key.message,
+            },
+        )
+        .map_err(|_| Error::InvalidData)?;
+        let version = *self.versions.get(&key).ok_or(Error::InvalidData)?;
+        Ok((identity, SourceVersion::Message(version)))
+    }
+    pub fn suspend(&mut self, id: cs_mail_correspondence::ConversationId) {
+        self.suspended.insert(id);
+    }
+    pub fn resume(&mut self, id: cs_mail_correspondence::ConversationId) {
+        self.suspended.remove(&id);
     }
     pub fn known(&self, key: CopyKey) -> bool {
         self.entries.contains_key(&key)
@@ -345,23 +409,31 @@ impl Retained {
     pub fn exclude(&mut self, key: CopyKey) {
         self.pending.insert(key, PendingRecord::Exclude);
     }
+    /// Exclusion takes effect by time before this bounded cleanup removes the
+    /// sensitive derived words and retained copy in one checkpoint.
+    pub fn expire(&mut self, now: CanonicalTime, limit: usize) -> usize {
+        let expired: Vec<_> = self
+            .deadlines
+            .range(..=now)
+            .flat_map(|(_, keys)| keys.iter())
+            .take(limit)
+            .copied()
+            .collect();
+        let count = expired.len();
+        for key in expired {
+            self.exclude(key);
+        }
+        count
+    }
     fn publish(&mut self, record: IndexRecord) {
         let key = record.key();
         self.missing_native.remove(&key);
         self.missing_external.remove(&key);
         if let Some(old) = self.entries.remove(&key) {
-            if let Some(count) = self.deadlines.get_mut(&old.expires) {
-                *count -= 1;
-                if *count == 0 {
+            if let Some(keys) = self.deadlines.get_mut(&old.expires) {
+                keys.remove(&key);
+                if keys.is_empty() {
                     self.deadlines.remove(&old.expires);
-                }
-            }
-            for term in old.terms {
-                if let Some(set) = self.postings.get_mut(&term) {
-                    set.remove(&key);
-                    if set.is_empty() {
-                        self.postings.remove(&term);
-                    }
                 }
             }
         }
@@ -377,10 +449,8 @@ impl Retained {
                 self.excluded.insert(k);
             }
             IndexRecord::Available(v) => {
-                *self.deadlines.entry(v.expires).or_default() += 1;
-                for term in &v.terms {
-                    self.postings.entry(term.clone()).or_default().insert(key);
-                }
+                self.deadlines.entry(v.expires).or_default().insert(key);
+
                 self.by_thread.entry(key.thread).or_default().insert(key);
                 self.entries.insert(key, v);
             }
@@ -403,10 +473,12 @@ impl Retained {
             key: entry.key,
             subject: entry.subject.clone(),
             expires: entry.expires,
-            terms: words(&entry.text),
+            content_digest: super::semantic::content_digest(&entry.text),
+            projection: super::semantic::Projection::Pending,
         })
     }
     fn commit(&mut self, client: &MemberClient, change: RetainedCommit) -> Result<(), Error> {
+        client.check_search_session(super::SearchSessionId::try_from(self.epoch)?)?;
         if self.reload_required {
             return Err(Error::StorageUnavailable);
         }
@@ -420,6 +492,9 @@ impl Retained {
     }
     pub fn save(&mut self, client: &MemberClient, keys: &Secrets) -> Result<(), Error> {
         let pending = std::mem::take(&mut self.pending);
+        let invalidates_projection = pending
+            .values()
+            .any(|p| !matches!(p, PendingRecord::Reindex(_)));
         let mut records = Vec::new();
         let mut writes = Vec::new();
         for (key, entry) in pending {
@@ -444,7 +519,7 @@ impl Retained {
                     ciphertext: storage::encrypt(
                         keys,
                         &record,
-                        &context(b"cs-mail/retained-index/v2", id),
+                        &context(b"cs-mail/retained-index/v3", id),
                     )?,
                 },
                 copy,
@@ -466,6 +541,11 @@ impl Retained {
                 writes,
             },
         )?;
+        if invalidates_projection {
+            if let Some(runtime) = &client.retrieval {
+                runtime.interrupt();
+            }
+        }
         for record in records {
             self.publish(record);
         }
@@ -492,7 +572,9 @@ impl Retained {
         )?)
         .map_err(|_| Error::InvalidData)?;
         if entry.key != key
-            || Self::indexed(&entry)? != *indexed
+            || entry.subject != indexed.subject
+            || entry.expires != indexed.expires
+            || super::semantic::content_digest(&entry.text) != indexed.content_digest
             || entry
                 .native
                 .as_ref()
@@ -503,30 +585,41 @@ impl Retained {
         Ok(Some(entry))
     }
     pub fn progress(&self, now: CanonicalTime) -> super::retained::RetentionProgress {
-        let expired: usize = self.deadlines.range(..=now).map(|(_, count)| count).sum();
+        let expired: usize = self
+            .deadlines
+            .range(..=now)
+            .map(|(_, keys)| keys.len())
+            .sum();
+        let suspended = self
+            .suspended
+            .iter()
+            .filter_map(|id| self.by_thread.get(&MailKey::Native(*id)))
+            .flatten()
+            .filter(|key| {
+                self.entries
+                    .get(key)
+                    .is_some_and(|entry| now < entry.expires)
+            })
+            .count();
         super::retained::RetentionProgress {
-            retained: (self.entries.len() - expired) as u64,
-            unavailable: (self.excluded.len() + expired) as u64,
+            retained: (self.entries.len() - expired - suspended) as u64,
+            unavailable: (self.excluded.len() + expired + suspended) as u64,
             remaining: (self.missing_native.len() + self.missing_external.len()) as u64,
         }
     }
-    pub fn matching(&self, query: &str) -> BTreeSet<CopyKey> {
-        let terms = words(query);
-        if terms.is_empty() {
-            return BTreeSet::new();
-        }
-        let mut lists = Vec::new();
-        for term in terms {
-            let Some(set) = self.postings.get(&term) else {
-                return BTreeSet::new();
-            };
-            lists.push(set);
-        }
-        lists.sort_by_key(|set| set.len());
-        let mut result = lists[0].clone();
-        for set in lists.into_iter().skip(1) {
-            result.retain(|key| set.contains(key));
-        }
-        result
+    pub fn project(
+        &mut self,
+        key: CopyKey,
+        projection: super::semantic::Projection,
+    ) -> Result<(), Error> {
+        projection.validate()?;
+        let mut indexed = self
+            .entries
+            .get(&key)
+            .ok_or(Error::SourceUnavailable)?
+            .clone();
+        indexed.projection = projection;
+        self.pending.insert(key, PendingRecord::Reindex(indexed));
+        Ok(())
     }
 }

@@ -1,4 +1,4 @@
-//! Device-retained correspondence and a rebuildable word index share one encrypted commit.
+//! Device-retained correspondence and a source-bound search projection share one encrypted commit.
 use super::{
     Error, MailKey, MemberClient, State,
     storage::{self, Secrets},
@@ -33,16 +33,39 @@ impl MemberClient {
     /// Build bounded index entries from copies already held on this device. No network.
     /// # Errors
     /// Invalid limits, custody, restored content or atomic persistence.
-    pub fn index_local_mail(&self, limit: u16) -> Result<u64, Error> {
+    pub fn index_local_mail(
+        &self,
+        session: super::SearchSessionId,
+        limit: u16,
+    ) -> Result<u64, Error> {
         if limit == 0 || limit > 25 {
             return Err(Error::InvalidData);
         }
-        let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
+        let processed = self.index_retained_sources(session, limit)?;
+        if processed > 0 {
+            return Ok(processed);
+        }
+        // Hosts without a packaged encoder can still retain original correspondence.
+        // Missing numerical capability is not retryable background source work.
+        if self.retrieval.is_none() {
+            return Ok(0);
+        }
+        self.index_semantic(session)
+    }
+    fn index_retained_sources(
+        &self,
+        session: super::SearchSessionId,
+        limit: u16,
+    ) -> Result<u64, Error> {
+        let _guard = self.operation.try_lock().map_err(|_| Error::Unavailable)?;
+        self.check_search_session(session)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let state = storage::open(self.store.as_ref(), &keys)?;
         self.ensure_email_text_index(&state, &keys)?;
-        let mut retained = Retained::load(self, &keys, &state)?;
-        let processed = self.index_external(&state, &keys, &mut retained, usize::from(limit))?;
+        let mut retained = Retained::load_at_epoch(self, &keys, &state, Some(session.value()))?;
+        let expired = retained.expire((self.clock)(), usize::from(limit));
+        let processed = expired
+            + self.index_external(&state, &keys, &mut retained, usize::from(limit) - expired)?;
         if processed > 0 {
             retained.save(self, &keys)?;
         }
@@ -75,7 +98,7 @@ impl MemberClient {
         storage::check_keys(self.store.as_ref(), keys)?;
         self.store.save_personal(&personal.bytes(keys)?)
     }
-    /// Rebuild derived words from retained authenticated sources, preserving exclusions.
+    /// Rebuild derived search projections from retained authenticated sources, preserving exclusions.
     /// # Errors
     /// Invalid source content, denied custody or failed atomic replacement.
     pub fn rebuild_search_index(&self) -> Result<(), Error> {
@@ -153,14 +176,83 @@ impl MemberClient {
     /// Download bounded eligible copies after an explicit observation, never resume mutations.
     /// # Errors
     /// Invalid limits, unavailable transport/custody, substituted content or failed persistence.
-    pub fn retain_mail(&self, limit: u16) -> Result<RetentionProgress, Error> {
+    pub fn retain_mail(
+        &self,
+        session: super::SearchSessionId,
+        limit: u16,
+    ) -> Result<RetentionProgress, Error> {
         if limit == 0 || limit > 25 {
             return Err(Error::InvalidData);
         }
-        let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
+        let _retention = self.retention.try_lock().map_err(|_| Error::Unavailable)?;
+        self.check_search_session(session)?;
+        let (profile, pending) = {
+            let _guard = self.operation.try_lock().map_err(|_| Error::Unavailable)?;
+            let keys = storage::secrets(self.store.as_ref())?;
+            let state = storage::open(self.store.as_ref(), &keys)?;
+            let mut retained = Retained::load_at_epoch(self, &keys, &state, Some(session.value()))?;
+            if self.index_external(&state, &keys, &mut retained, usize::from(limit))? > 0 {
+                retained.save(self, &keys)?;
+            }
+            let pending: Vec<_> = retained
+                .missing_native
+                .iter()
+                .take(usize::from(limit))
+                .map(|(key, position)| {
+                    Ok((
+                        *key,
+                        *position,
+                        Self::signed(
+                            &state.profile,
+                            &keys,
+                            Command::Fetch {
+                                message: key.message,
+                            },
+                        )?,
+                    ))
+                })
+                .collect::<Result<_, Error>>()?;
+            (state.profile, pending)
+        };
+        for (key, position, signed) in pending {
+            self.check_search_session(session)?;
+            // Signed reads carry no secret key or decrypted content. No foreground
+            // actor, operation lock or cache/content key is held during this wait.
+            let response = self.correspondence_call(&profile, &signed)?;
+            self.check_search_session(session)?;
+            let _guard = self.operation.try_lock().map_err(|_| Error::Unavailable)?;
+            let keys = storage::secrets(self.store.as_ref())?;
+            let state = storage::open(self.store.as_ref(), &keys)?;
+            if state.profile.account != profile.account || state.profile.persona != profile.persona
+            {
+                return Err(Error::InvalidData);
+            }
+            let record = &state
+                .mailbox
+                .records
+                .get(position)
+                .ok_or(Error::InvalidData)?
+                .1;
+            if record.manifest.message() != key.message
+                || MailKey::Native(record.manifest.conversation()) != key.thread
+            {
+                return Err(Error::InvalidData);
+            }
+            let mut retained = Retained::load_at_epoch(self, &keys, &state, Some(session.value()))?;
+            // A foreground deletion may have committed while this fetch was in flight.
+            if retained.excluded.contains(&key) {
+                continue;
+            }
+            self.retain_response(&state, &keys, &mut retained, key, record, response)?;
+            retained.save(self, &keys)?;
+        }
+        self.check_search_session(session)?;
         let keys = storage::secrets(self.store.as_ref())?;
         let state = storage::open(self.store.as_ref(), &keys)?;
-        self.retain_batch(&state, &keys, usize::from(limit), None)
+        Ok(
+            Retained::load_at_epoch(self, &keys, &state, Some(session.value()))?
+                .progress((self.clock)()),
+        )
     }
     pub(super) fn retain_batch(
         &self,
@@ -205,44 +297,56 @@ impl MemberClient {
             )?;
             let response = self.correspondence_call(&state.profile, &signed)?;
             let mut retained = Retained::load_at_epoch(self, keys, state, Some(epoch))?;
-            match response {
-                Response::Message(view) => {
-                    if &view.record != record || view.ciphertext.expires_at <= (self.clock)() {
-                        return Err(Error::InvalidData);
-                    }
-                    let (secret, public) = super::correspondence::own_keys(&state.profile, keys)?;
-                    let doc = crate::correspondence::open(
-                        &crate::correspondence::EndpointKeys {
-                            owner: state.profile.persona,
-                            secret: &secret,
-                            public,
-                        },
-                        &view,
-                        record.sender_key,
-                    )
-                    .map_err(|_| Error::InvalidData)?;
-                    let subject = doc.subject().cloned().ok_or(Error::InvalidData)?;
-                    let text = format!(
-                        "{}\n\n{}",
-                        subject.text(),
-                        super::ReadingContent::from_document(&doc).search_text()?
-                    );
-                    retained.insert(Entry {
-                        key,
-                        expires: view.ciphertext.expires_at,
-                        native: Some(*view),
-                        text,
-                        subject: Some(subject),
-                    });
-                }
-                Response::Unavailable => retained.exclude(key),
-                Response::AccessDenied => return Err(Error::Unauthorized),
-                _ => return Err(Error::InvalidData),
-            }
+            self.retain_response(state, keys, &mut retained, key, record, response)?;
             // Each fetched copy and its index are a resumable atomic checkpoint.
             retained.save(self, keys)?;
         }
         Ok(Retained::load_at_epoch(self, keys, state, Some(epoch))?.progress((self.clock)()))
+    }
+    fn retain_response(
+        &self,
+        state: &State,
+        keys: &Secrets,
+        retained: &mut Retained,
+        key: CopyKey,
+        record: &cs_mail_application::correspondence::MessageRecord,
+        response: Response,
+    ) -> Result<(), Error> {
+        match response {
+            Response::Message(view) => {
+                if &view.record != record || view.ciphertext.expires_at <= (self.clock)() {
+                    return Err(Error::InvalidData);
+                }
+                let (secret, public) = super::correspondence::own_keys(&state.profile, keys)?;
+                let doc = crate::correspondence::open(
+                    &crate::correspondence::EndpointKeys {
+                        owner: state.profile.persona,
+                        secret: &secret,
+                        public,
+                    },
+                    &view,
+                    record.sender_key,
+                )
+                .map_err(|_| Error::InvalidData)?;
+                let subject = doc.subject().cloned().ok_or(Error::InvalidData)?;
+                let text = format!(
+                    "{}\n\n{}",
+                    subject.text(),
+                    super::ReadingContent::from_document(&doc).search_text()?
+                );
+                retained.insert(Entry {
+                    key,
+                    expires: view.ciphertext.expires_at,
+                    native: Some(*view),
+                    text,
+                    subject: Some(subject),
+                });
+            }
+            Response::Unavailable => retained.exclude(key),
+            Response::AccessDenied => return Err(Error::Unauthorized),
+            _ => return Err(Error::InvalidData),
+        }
+        Ok(())
     }
     pub(super) fn index_external(
         &self,

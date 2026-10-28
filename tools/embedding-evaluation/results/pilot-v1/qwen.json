@@ -1,0 +1,4364 @@
+{
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+  "timestamp_utc": "2026-10-25T19:22:47.121114+00:00",
+  "frozen": {
+    "frozen_at_utc": "2026-10-25T19:22:18.569960+00:00",
+    "inputs": {
+      "tools/embedding-evaluation/fixture.json": "e4c49b870fcdf8142069af3f149a821c19744f9dc4743ac2d89eec1c3efceb5c",
+      "tools/embedding-evaluation/README.md": "6cea49224b783eddc5c483750b89a2ab3909f8fe0095a5714a737223d125597a",
+      "tools/embedding-evaluation/common.py": "f89411791fee4d89ec8262c71beb91113f6d8ea5e020c9b022c216ce968e0825",
+      "tools/embedding-evaluation/evaluate.py": "f64093e7fb275c457710363f6e6f1dd4661d67a15a11402704a95cc1d8f1ef1a",
+      "tools/embedding-evaluation/requirements.txt": "5fc92db98693274603957c3b89f3298db904756d2baf796f7c0b646b74de0635"
+    },
+    "documents": 54,
+    "queries": 48,
+    "test_queries": 40
+  },
+  "system_before": {
+    "hardware_os": [
+      "Model Name: MacBook Pro",
+      "Model Identifier: MacBookPro18,2",
+      "Chip: Apple M1 Max",
+      "Total Number of Cores: 10 (8 Performance and 2 Efficiency)",
+      "Memory: 32 GB",
+      "System Version: macOS 26.6.2 (25G83)",
+      "Kernel Version: Darwin 25.6.0",
+      "Secure Virtual Memory: Enabled"
+    ],
+    "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=37814371)\t100%; finishing charge; 0:00 remaining present: true\n",
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded\n"
+  },
+  "system_after": {
+    "hardware_os": [
+      "Model Name: MacBook Pro",
+      "Model Identifier: MacBookPro18,2",
+      "Chip: Apple M1 Max",
+      "Total Number of Cores: 10 (8 Performance and 2 Efficiency)",
+      "Memory: 32 GB",
+      "System Version: macOS 26.6.2 (25G83)",
+      "Kernel Version: Darwin 25.6.0",
+      "Secure Virtual Memory: Enabled"
+    ],
+    "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=37814371)\t100%; finishing charge; 0:00 remaining present: true\n",
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded\n"
+  },
+  "python": "3.12.14",
+  "packages": {
+    "torch": "2.9.1",
+    "transformers": "4.57.6",
+    "sentence-transformers": "5.2.0",
+    "numpy": "2.5.4",
+    "psutil": "7.2.1",
+    "huggingface-hub": "0.36.2",
+    "tokenizers": "0.22.2",
+    "safetensors": "0.8.0"
+  },
+  "artifacts_sha256": {
+    "1_Pooling/config.json": "37bf193fa101f19101bfad9c31d3eb0f786e247b7b1e5cb7f007d730eed1ddbd",
+    "README.md": "c34d9b7e5a267ad3fdd13227a253686bc90844ff4744a2a6a86c7c905e3d06f3",
+    "config.json": "b5bf1f51fc45be473a54718cef92448d90a1be001bf9b9a44b8c7f10a19feaa9",
+    "config_sentence_transformers.json": "10667c72ddb772627bf1780cb7f86af8e2ae0032b8c243c731172064105c6961",
+    "generation_config.json": "28396d421a2108acce96383f6a7de78008f7f1b17f807958f3c14c51dbfb65fb",
+    "merges.txt": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+    "model.safetensors": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd",
+    "modules.json": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf",
+    "tokenizer.json": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+    "tokenizer_config.json": "253153d0738ceb4c668d2eff957714dd2bea0b56de772a9fdccd96cbf517e6a0",
+    "vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+  },
+  "profile": {
+    "device": "mps",
+    "dtype": "float32",
+    "dimensions": 512,
+    "normalization": "truncate_then_l2",
+    "query_prompt": "Instruct: Given a query about private correspondence, retrieve relevant message passages.\nQuery: ",
+    "document_preparation": "subject + two newlines + body",
+    "batch": 4,
+    "max_tokens": 2048,
+    "threads": 4,
+    "remote_code": false,
+    "modules": "SentenceTransformer(\n  (0): Transformer({'max_seq_length': 2048, 'do_lower_case': False, 'architecture': 'Qwen3Model'})\n  (1): Pooling({'word_embedding_dimension': 1024, 'pooling_mode_cls_token': False, 'pooling_mode_mean_tokens': False, 'pooling_mode_max_tokens': False, 'pooling_mode_mean_sqrt_len_tokens': False, 'pooling_mode_weightedmean_tokens': False, 'pooling_mode_lasttoken': True, 'include_prompt': True})\n  (2): Normalize()\n)",
+    "offline": true
+  },
+  "performance": {
+    "cached_load_seconds": 3.80496087501524,
+    "document_count": 54,
+    "index_seconds": 5.4361030829604715,
+    "documents_per_second": 9.933586463667996,
+    "tokens": {
+      "min": 29,
+      "median": 58.0,
+      "max": 243
+    },
+    "query_token_max": 39,
+    "query_latency_seconds": [
+      0.0861762500135228,
+      0.13394133403198794,
+      0.10903583304025233,
+      0.03289133298676461,
+      0.09261975000845268,
+      0.11074104200815782,
+      0.098519540973939,
+      0.09397208300651982,
+      0.09443925000960007,
+      0.03344337496673688,
+      0.08508499996969476,
+      0.03311124996980652,
+      0.03347199998097494,
+      0.03265170898521319,
+      0.03311650000978261,
+      0.034117290982976556,
+      0.0368662909604609,
+      0.03555762500036508,
+      0.03839237499050796,
+      0.03464041597908363,
+      0.04224070900818333,
+      0.04251854197354987,
+      0.041456540988292545,
+      0.039801583043299615,
+      0.03943654097383842,
+      0.03524900000775233,
+      0.03628658299567178,
+      0.0336952920188196,
+      0.03397670801496133,
+      0.03481354197720066,
+      0.03380320902215317,
+      0.0341484589735046,
+      0.037398750020656735,
+      0.042549333011265844,
+      0.03917400003410876,
+      0.033968708012253046,
+      0.04293816699646413,
+      0.04098400002112612,
+      0.040222000039648265,
+      0.04004420799901709,
+      0.03628083295188844,
+      0.03352862497558817,
+      0.04113399999914691,
+      0.03400208294624463,
+      0.033745417022146285,
+      0.03311716596363112,
+      0.0332966250134632,
+      0.03365425002994016
+    ],
+    "query_p50_seconds": 0.03657643697806634,
+    "query_p95_seconds": 0.10535513081704265,
+    "index_cpu_seconds": 1.786559232,
+    "throughput_workload_passages": 128,
+    "throughput_workload_token_range": [
+      214,
+      243
+    ],
+    "throughput_workload_seconds": 7.647889957996085,
+    "throughput_workload_passages_per_second": 16.736642486098063,
+    "base_process_rss_bytes": 373325824,
+    "sampled_peak_rss_bytes": 2345025536,
+    "sampled_peak_metal_driver_bytes": 4687659008,
+    "sampled_peak_metal_allocated_bytes": 3068897792,
+    "os_process_maxrss_bytes": 2360852480,
+    "battery_energy": "not_measured_AC_power",
+    "native_app_responsiveness": "not_measured"
+  },
+  "eligibility_violations": [],
+  "queries": [
+    {
+      "query": "q01",
+      "split": "dev",
+      "category": "paraphrase",
+      "relevant": {
+        "d01": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d02",
+          "d01",
+          "d06",
+          "d41",
+          "d42",
+          "d13",
+          "d43",
+          "d49",
+          "d46",
+          "d29"
+        ],
+        "semantic": [
+          "d01",
+          "d02",
+          "d50",
+          "d26",
+          "d08",
+          "d37",
+          "d25",
+          "d33",
+          "d24",
+          "d23"
+        ],
+        "hybrid": [
+          "d01",
+          "d02",
+          "d50",
+          "d08",
+          "d06",
+          "d49",
+          "d33",
+          "d41",
+          "d46",
+          "d07"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d01",
+          "cosine": 0.7565305829048157
+        },
+        {
+          "id": "d02",
+          "cosine": 0.7210923433303833
+        },
+        {
+          "id": "d50",
+          "cosine": 0.6341762542724609
+        },
+        {
+          "id": "d26",
+          "cosine": 0.6283655166625977
+        },
+        {
+          "id": "d08",
+          "cosine": 0.5787299275398254
+        }
+      ]
+    },
+    {
+      "query": "q02",
+      "split": "test",
+      "category": "paraphrase",
+      "relevant": {
+        "d03": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d04",
+          "d03",
+          "d38",
+          "d36",
+          "d49",
+          "d40",
+          "d33",
+          "d19",
+          "d44",
+          "d11"
+        ],
+        "semantic": [
+          "d04",
+          "d03",
+          "d36",
+          "d41",
+          "d35",
+          "d42",
+          "d39",
+          "d18",
+          "d40",
+          "d28"
+        ],
+        "hybrid": [
+          "d04",
+          "d03",
+          "d36",
+          "d40",
+          "d41",
+          "d42",
+          "d39",
+          "d28",
+          "d38",
+          "d34"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "hybrid": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d04",
+          "cosine": 0.7415993213653564
+        },
+        {
+          "id": "d03",
+          "cosine": 0.7302939891815186
+        },
+        {
+          "id": "d36",
+          "cosine": 0.5292532444000244
+        },
+        {
+          "id": "d41",
+          "cosine": 0.5169356465339661
+        },
+        {
+          "id": "d35",
+          "cosine": 0.5165703892707825
+        }
+      ]
+    },
+    {
+      "query": "q03",
+      "split": "test",
+      "category": "paraphrase",
+      "relevant": {
+        "d05": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d05",
+          "d42",
+          "d15",
+          "d37",
+          "d49",
+          "d06",
+          "d01",
+          "d41",
+          "d40",
+          "d39"
+        ],
+        "semantic": [
+          "d05",
+          "d26",
+          "d24",
+          "d02",
+          "d01",
+          "d33",
+          "d37",
+          "d06",
+          "d25",
+          "d23"
+        ],
+        "hybrid": [
+          "d05",
+          "d37",
+          "d01",
+          "d06",
+          "d49",
+          "d02",
+          "d15",
+          "d42",
+          "d46",
+          "d50"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d05",
+          "cosine": 0.6455541253089905
+        },
+        {
+          "id": "d26",
+          "cosine": 0.5575634837150574
+        },
+        {
+          "id": "d24",
+          "cosine": 0.5132409334182739
+        },
+        {
+          "id": "d02",
+          "cosine": 0.5013775825500488
+        },
+        {
+          "id": "d01",
+          "cosine": 0.48474615812301636
+        }
+      ]
+    },
+    {
+      "query": "q04",
+      "split": "dev",
+      "category": "negation",
+      "relevant": {
+        "d08": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d07",
+          "d37",
+          "d08",
+          "d43",
+          "d10",
+          "d47",
+          "d48",
+          "d33",
+          "d30",
+          "d49"
+        ],
+        "semantic": [
+          "d08",
+          "d07",
+          "d34",
+          "d46",
+          "d33",
+          "d18",
+          "d37",
+          "d01",
+          "d31",
+          "d49"
+        ],
+        "hybrid": [
+          "d07",
+          "d08",
+          "d37",
+          "d33",
+          "d49",
+          "d34",
+          "d47",
+          "d02",
+          "d50",
+          "d43"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.3333333333333333,
+          "ndcg10": 0.5
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d08",
+          "cosine": 0.6616892218589783
+        },
+        {
+          "id": "d07",
+          "cosine": 0.6515801548957825
+        },
+        {
+          "id": "d34",
+          "cosine": 0.54557204246521
+        },
+        {
+          "id": "d46",
+          "cosine": 0.5060810446739197
+        },
+        {
+          "id": "d33",
+          "cosine": 0.5012595057487488
+        }
+      ]
+    },
+    {
+      "query": "q05",
+      "split": "test",
+      "category": "negation",
+      "relevant": {
+        "d07": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d07",
+          "d08",
+          "d11",
+          "d04",
+          "d43",
+          "d17",
+          "d46",
+          "d19",
+          "d49",
+          "d47"
+        ],
+        "semantic": [
+          "d07",
+          "d08",
+          "d46",
+          "d34",
+          "d37",
+          "d33",
+          "d50",
+          "d49",
+          "d20",
+          "d31"
+        ],
+        "hybrid": [
+          "d07",
+          "d08",
+          "d46",
+          "d43",
+          "d49",
+          "d11",
+          "d37",
+          "d27",
+          "d34",
+          "d31"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d07",
+          "cosine": 0.7607731223106384
+        },
+        {
+          "id": "d08",
+          "cosine": 0.7360671162605286
+        },
+        {
+          "id": "d46",
+          "cosine": 0.5422090888023376
+        },
+        {
+          "id": "d34",
+          "cosine": 0.4902718663215637
+        },
+        {
+          "id": "d37",
+          "cosine": 0.4683729112148285
+        }
+      ]
+    },
+    {
+      "query": "q06",
+      "split": "test",
+      "category": "structured_meaning",
+      "relevant": {
+        "d09": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d09",
+          "d39",
+          "d01",
+          "d17",
+          "d02",
+          "d49",
+          "d06",
+          "d10",
+          "d13",
+          "d47"
+        ],
+        "semantic": [
+          "d09",
+          "d10",
+          "d43",
+          "d45",
+          "d08",
+          "d20",
+          "d17",
+          "d34",
+          "d39",
+          "d15"
+        ],
+        "hybrid": [
+          "d09",
+          "d10",
+          "d39",
+          "d17",
+          "d45",
+          "d49",
+          "d02",
+          "d47",
+          "d01",
+          "d43"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d09",
+          "cosine": 0.5344406962394714
+        },
+        {
+          "id": "d10",
+          "cosine": 0.49205654859542847
+        },
+        {
+          "id": "d43",
+          "cosine": 0.39008116722106934
+        },
+        {
+          "id": "d45",
+          "cosine": 0.3814566433429718
+        },
+        {
+          "id": "d08",
+          "cosine": 0.3775706887245178
+        }
+      ]
+    },
+    {
+      "query": "q07",
+      "split": "test",
+      "category": "mathematics",
+      "relevant": {
+        "d11": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d11",
+          "d12",
+          "d15",
+          "d47",
+          "d48",
+          "d14",
+          "d49",
+          "d19",
+          "d38",
+          "d43"
+        ],
+        "semantic": [
+          "d11",
+          "d12",
+          "d48",
+          "d47",
+          "d16",
+          "d15",
+          "d17",
+          "d46",
+          "d13",
+          "d43"
+        ],
+        "hybrid": [
+          "d11",
+          "d12",
+          "d48",
+          "d47",
+          "d15",
+          "d14",
+          "d43",
+          "d49",
+          "d18",
+          "d17"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d11",
+          "cosine": 0.7881002426147461
+        },
+        {
+          "id": "d12",
+          "cosine": 0.6356709599494934
+        },
+        {
+          "id": "d48",
+          "cosine": 0.4013816714286804
+        },
+        {
+          "id": "d47",
+          "cosine": 0.3957125246524811
+        },
+        {
+          "id": "d16",
+          "cosine": 0.36658191680908203
+        }
+      ]
+    },
+    {
+      "query": "q08",
+      "split": "dev",
+      "category": "mathematics",
+      "relevant": {
+        "d13": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d13",
+          "d06",
+          "d14",
+          "d09",
+          "d11",
+          "d35",
+          "d16",
+          "d39",
+          "d12",
+          "d10"
+        ],
+        "semantic": [
+          "d13",
+          "d14",
+          "d11",
+          "d05",
+          "d49",
+          "d08",
+          "d16",
+          "d34",
+          "d46",
+          "d04"
+        ],
+        "hybrid": [
+          "d13",
+          "d14",
+          "d11",
+          "d16",
+          "d49",
+          "d05",
+          "d06",
+          "d12",
+          "d47",
+          "d46"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d13",
+          "cosine": 0.7547886967658997
+        },
+        {
+          "id": "d14",
+          "cosine": 0.6066845655441284
+        },
+        {
+          "id": "d11",
+          "cosine": 0.39050841331481934
+        },
+        {
+          "id": "d05",
+          "cosine": 0.38520023226737976
+        },
+        {
+          "id": "d49",
+          "cosine": 0.3835439383983612
+        }
+      ]
+    },
+    {
+      "query": "q09",
+      "split": "test",
+      "category": "mathematics",
+      "relevant": {
+        "d15": 2,
+        "d16": 1
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d16",
+          "d15",
+          "d45",
+          "d04",
+          "d19",
+          "d09",
+          "d50",
+          "d11",
+          "d07",
+          "d03"
+        ],
+        "semantic": [
+          "d16",
+          "d15",
+          "d13",
+          "d48",
+          "d47",
+          "d08",
+          "d45",
+          "d14",
+          "d11",
+          "d27"
+        ],
+        "hybrid": [
+          "d16",
+          "d15",
+          "d45",
+          "d47",
+          "d11",
+          "d08",
+          "d07",
+          "d48",
+          "d31",
+          "d05"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 0.7967075809905066
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 0.7967075809905066
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 0.7967075809905066
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d16",
+          "cosine": 0.7134261131286621
+        },
+        {
+          "id": "d15",
+          "cosine": 0.6917617321014404
+        },
+        {
+          "id": "d13",
+          "cosine": 0.39245375990867615
+        },
+        {
+          "id": "d48",
+          "cosine": 0.36899814009666443
+        },
+        {
+          "id": "d47",
+          "cosine": 0.3604767918586731
+        }
+      ]
+    },
+    {
+      "query": "q10",
+      "split": "test",
+      "category": "negation",
+      "relevant": {
+        "d02": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d42",
+          "d49",
+          "d06",
+          "d13",
+          "d43",
+          "d35",
+          "d40",
+          "d03",
+          "d31",
+          "d01"
+        ],
+        "semantic": [
+          "d01",
+          "d02",
+          "d50",
+          "d37",
+          "d26",
+          "d32",
+          "d33",
+          "d08",
+          "d49",
+          "d25"
+        ],
+        "hybrid": [
+          "d01",
+          "d49",
+          "d50",
+          "d02",
+          "d08",
+          "d06",
+          "d33",
+          "d35",
+          "d42",
+          "d32"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "hybrid": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.25,
+          "ndcg10": 0.4306765580733931
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d01",
+          "cosine": 0.6503201723098755
+        },
+        {
+          "id": "d02",
+          "cosine": 0.6236926317214966
+        },
+        {
+          "id": "d50",
+          "cosine": 0.5714702010154724
+        },
+        {
+          "id": "d37",
+          "cosine": 0.5666795372962952
+        },
+        {
+          "id": "d26",
+          "cosine": 0.5498672127723694
+        }
+      ]
+    },
+    {
+      "query": "q11",
+      "split": "test",
+      "category": "paraphrase",
+      "relevant": {
+        "d17": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d29",
+          "d10",
+          "d04",
+          "d49",
+          "d17",
+          "d01",
+          "d03",
+          "d08",
+          "d37",
+          "d46"
+        ],
+        "semantic": [
+          "d17",
+          "d46",
+          "d43",
+          "d18",
+          "d08",
+          "d37",
+          "d45",
+          "d49",
+          "d35",
+          "d34"
+        ],
+        "hybrid": [
+          "d17",
+          "d46",
+          "d49",
+          "d08",
+          "d37",
+          "d18",
+          "d10",
+          "d32",
+          "d04",
+          "d43"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.2,
+          "ndcg10": 0.38685280723454163
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d17",
+          "cosine": 0.4934442937374115
+        },
+        {
+          "id": "d46",
+          "cosine": 0.4872743487358093
+        },
+        {
+          "id": "d43",
+          "cosine": 0.4524581730365753
+        },
+        {
+          "id": "d18",
+          "cosine": 0.4396009147167206
+        },
+        {
+          "id": "d08",
+          "cosine": 0.4330834746360779
+        }
+      ]
+    },
+    {
+      "query": "q12",
+      "split": "dev",
+      "category": "lifecycle",
+      "relevant": {
+        "d19": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d35",
+          "d17",
+          "d49",
+          "d34",
+          "d16",
+          "d19",
+          "d29",
+          "d15",
+          "d18",
+          "d45"
+        ],
+        "semantic": [
+          "d19",
+          "d20",
+          "d45",
+          "d46",
+          "d10",
+          "d42",
+          "d04",
+          "d36",
+          "d08",
+          "d28"
+        ],
+        "hybrid": [
+          "d19",
+          "d17",
+          "d45",
+          "d49",
+          "d34",
+          "d35",
+          "d08",
+          "d10",
+          "d46",
+          "d27"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0.16666666666666666,
+          "ndcg10": 0.3562071871080222
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d19",
+          "cosine": 0.6889314651489258
+        },
+        {
+          "id": "d20",
+          "cosine": 0.5832086801528931
+        },
+        {
+          "id": "d45",
+          "cosine": 0.4618024230003357
+        },
+        {
+          "id": "d46",
+          "cosine": 0.4464113712310791
+        },
+        {
+          "id": "d10",
+          "cosine": 0.3941008150577545
+        }
+      ]
+    },
+    {
+      "query": "q13",
+      "split": "test",
+      "category": "lifecycle",
+      "relevant": {
+        "d20": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d20",
+          "d07",
+          "d17",
+          "d48",
+          "d30",
+          "d39",
+          "d06",
+          "d50",
+          "d27",
+          "d40"
+        ],
+        "semantic": [
+          "d20",
+          "d19",
+          "d46",
+          "d45",
+          "d08",
+          "d43",
+          "d28",
+          "d22",
+          "d36",
+          "d21"
+        ],
+        "hybrid": [
+          "d20",
+          "d07",
+          "d43",
+          "d27",
+          "d45",
+          "d06",
+          "d39",
+          "d19",
+          "d08",
+          "d46"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d20",
+          "cosine": 0.7166979908943176
+        },
+        {
+          "id": "d19",
+          "cosine": 0.46686092019081116
+        },
+        {
+          "id": "d46",
+          "cosine": 0.44434845447540283
+        },
+        {
+          "id": "d45",
+          "cosine": 0.4362945258617401
+        },
+        {
+          "id": "d08",
+          "cosine": 0.419192910194397
+        }
+      ]
+    },
+    {
+      "query": "q14",
+      "split": "test",
+      "category": "cross_language",
+      "relevant": {
+        "d21": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d06",
+          "d02",
+          "d49",
+          "d21",
+          "d36",
+          "d01",
+          "d05",
+          "d22",
+          "d13",
+          "d08"
+        ],
+        "semantic": [
+          "d21",
+          "d22",
+          "d26",
+          "d01",
+          "d33",
+          "d24",
+          "d02",
+          "d50",
+          "d23",
+          "d05"
+        ],
+        "hybrid": [
+          "d21",
+          "d02",
+          "d22",
+          "d01",
+          "d06",
+          "d05",
+          "d49",
+          "d08",
+          "d36",
+          "d31"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.25,
+          "ndcg10": 0.4306765580733931
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d21",
+          "cosine": 0.7807049751281738
+        },
+        {
+          "id": "d22",
+          "cosine": 0.7302700281143188
+        },
+        {
+          "id": "d26",
+          "cosine": 0.5462421774864197
+        },
+        {
+          "id": "d01",
+          "cosine": 0.5165799856185913
+        },
+        {
+          "id": "d33",
+          "cosine": 0.5005836486816406
+        }
+      ]
+    },
+    {
+      "query": "q15",
+      "split": "test",
+      "category": "cross_language",
+      "relevant": {
+        "d23": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d49",
+          "d05",
+          "d37",
+          "d17",
+          "d24",
+          "d39",
+          "d01",
+          "d47",
+          "d14",
+          "d09"
+        ],
+        "semantic": [
+          "d26",
+          "d24",
+          "d23",
+          "d05",
+          "d25",
+          "d01",
+          "d02",
+          "d37",
+          "d50",
+          "d06"
+        ],
+        "hybrid": [
+          "d05",
+          "d24",
+          "d37",
+          "d49",
+          "d01",
+          "d23",
+          "d06",
+          "d02",
+          "d50",
+          "d08"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.3333333333333333,
+          "ndcg10": 0.5
+        },
+        "hybrid": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0.16666666666666666,
+          "ndcg10": 0.3562071871080222
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d26",
+          "cosine": 0.7244612574577332
+        },
+        {
+          "id": "d24",
+          "cosine": 0.7027096748352051
+        },
+        {
+          "id": "d23",
+          "cosine": 0.6335495710372925
+        },
+        {
+          "id": "d05",
+          "cosine": 0.6259936094284058
+        },
+        {
+          "id": "d25",
+          "cosine": 0.6047148108482361
+        }
+      ]
+    },
+    {
+      "query": "q16",
+      "split": "test",
+      "category": "cross_language",
+      "relevant": {
+        "d25": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d06",
+          "d05",
+          "d01",
+          "d13",
+          "d02",
+          "d14",
+          "d31",
+          "d37",
+          "d41",
+          "d49"
+        ],
+        "semantic": [
+          "d26",
+          "d25",
+          "d01",
+          "d02",
+          "d24",
+          "d37",
+          "d23",
+          "d38",
+          "d05",
+          "d50"
+        ],
+        "hybrid": [
+          "d01",
+          "d02",
+          "d05",
+          "d06",
+          "d37",
+          "d49",
+          "d31",
+          "d13",
+          "d32",
+          "d41"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "hybrid": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d26",
+          "cosine": 0.8223426342010498
+        },
+        {
+          "id": "d25",
+          "cosine": 0.7393311858177185
+        },
+        {
+          "id": "d01",
+          "cosine": 0.6806907057762146
+        },
+        {
+          "id": "d02",
+          "cosine": 0.6667417883872986
+        },
+        {
+          "id": "d24",
+          "cosine": 0.6406537294387817
+        }
+      ]
+    },
+    {
+      "query": "q17",
+      "split": "dev",
+      "category": "cross_language",
+      "relevant": {
+        "d35": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d23",
+          "d22",
+          "d21"
+        ],
+        "semantic": [
+          "d35",
+          "d21",
+          "d36",
+          "d03",
+          "d22",
+          "d41",
+          "d04",
+          "d39",
+          "d40",
+          "d42"
+        ],
+        "hybrid": [
+          "d21",
+          "d22",
+          "d23",
+          "d35",
+          "d36",
+          "d03",
+          "d41",
+          "d04",
+          "d39",
+          "d40"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.25,
+          "ndcg10": 0.4306765580733931
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d35",
+          "cosine": 0.63320392370224
+        },
+        {
+          "id": "d21",
+          "cosine": 0.5388938188552856
+        },
+        {
+          "id": "d36",
+          "cosine": 0.5369171500205994
+        },
+        {
+          "id": "d03",
+          "cosine": 0.5332188010215759
+        },
+        {
+          "id": "d22",
+          "cosine": 0.5263688564300537
+        }
+      ]
+    },
+    {
+      "query": "q18",
+      "split": "test",
+      "category": "identifiers",
+      "relevant": {
+        "d27": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [
+          "d27"
+        ],
+        "bm25_diagnostic": [
+          "d27",
+          "d28",
+          "d43"
+        ],
+        "semantic": [
+          "d27",
+          "d28",
+          "d34",
+          "d20",
+          "d33",
+          "d43",
+          "d22",
+          "d08",
+          "d21",
+          "d04"
+        ],
+        "hybrid": [
+          "d27",
+          "d28",
+          "d43",
+          "d34",
+          "d20",
+          "d33",
+          "d22",
+          "d08",
+          "d21",
+          "d04"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d27",
+          "cosine": 0.5782507658004761
+        },
+        {
+          "id": "d28",
+          "cosine": 0.49455714225769043
+        },
+        {
+          "id": "d34",
+          "cosine": 0.38700130581855774
+        },
+        {
+          "id": "d20",
+          "cosine": 0.37613430619239807
+        },
+        {
+          "id": "d33",
+          "cosine": 0.37341558933258057
+        }
+      ]
+    },
+    {
+      "query": "q19",
+      "split": "test",
+      "category": "identifiers",
+      "relevant": {
+        "d04": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [
+          "d04"
+        ],
+        "bm25_diagnostic": [
+          "d04",
+          "d03"
+        ],
+        "semantic": [
+          "d09",
+          "d04",
+          "d10",
+          "d18",
+          "d34",
+          "d33",
+          "d08",
+          "d39",
+          "d43",
+          "d28"
+        ],
+        "hybrid": [
+          "d04",
+          "d03",
+          "d09",
+          "d10",
+          "d18",
+          "d34",
+          "d33",
+          "d08",
+          "d39",
+          "d43"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d09",
+          "cosine": 0.4408179223537445
+        },
+        {
+          "id": "d04",
+          "cosine": 0.4279279410839081
+        },
+        {
+          "id": "d10",
+          "cosine": 0.4023275077342987
+        },
+        {
+          "id": "d18",
+          "cosine": 0.39998915791511536
+        },
+        {
+          "id": "d34",
+          "cosine": 0.37701189517974854
+        }
+      ]
+    },
+    {
+      "query": "q20",
+      "split": "test",
+      "category": "identifiers",
+      "relevant": {
+        "d35": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [
+          "d35"
+        ],
+        "bm25_diagnostic": [
+          "d35",
+          "d36"
+        ],
+        "semantic": [
+          "d36",
+          "d22",
+          "d33",
+          "d21",
+          "d27",
+          "d34",
+          "d35",
+          "d28",
+          "d04",
+          "d43"
+        ],
+        "hybrid": [
+          "d36",
+          "d35",
+          "d22",
+          "d33",
+          "d21",
+          "d27",
+          "d34",
+          "d28",
+          "d04",
+          "d43"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0.14285714285714285,
+          "ndcg10": 0.3333333333333333
+        },
+        "hybrid": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d36",
+          "cosine": 0.4383958876132965
+        },
+        {
+          "id": "d22",
+          "cosine": 0.40769267082214355
+        },
+        {
+          "id": "d33",
+          "cosine": 0.3726259469985962
+        },
+        {
+          "id": "d21",
+          "cosine": 0.36860212683677673
+        },
+        {
+          "id": "d27",
+          "cosine": 0.3677254915237427
+        }
+      ]
+    },
+    {
+      "query": "q21",
+      "split": "dev",
+      "category": "quoted_phrase",
+      "relevant": {
+        "d13": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [
+          "d13"
+        ],
+        "bm25_diagnostic": [
+          "d13",
+          "d47",
+          "d14",
+          "d12",
+          "d48",
+          "d11"
+        ],
+        "semantic": [
+          "d08",
+          "d13",
+          "d48",
+          "d47",
+          "d15",
+          "d16",
+          "d07",
+          "d46",
+          "d34",
+          "d14"
+        ],
+        "hybrid": [
+          "d13"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d08",
+          "cosine": 0.4388701915740967
+        },
+        {
+          "id": "d13",
+          "cosine": 0.4245384633541107
+        },
+        {
+          "id": "d48",
+          "cosine": 0.3682806193828583
+        },
+        {
+          "id": "d47",
+          "cosine": 0.36433544754981995
+        },
+        {
+          "id": "d15",
+          "cosine": 0.3624971807003021
+        }
+      ]
+    },
+    {
+      "query": "q22",
+      "split": "test",
+      "category": "quoted_phrase",
+      "relevant": {
+        "d47": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [
+          "d47"
+        ],
+        "bm25_diagnostic": [
+          "d47",
+          "d48",
+          "d12",
+          "d14",
+          "d13",
+          "d11",
+          "d33",
+          "d19",
+          "d09",
+          "d34"
+        ],
+        "semantic": [
+          "d47",
+          "d48",
+          "d15",
+          "d11",
+          "d08",
+          "d12",
+          "d29",
+          "d16",
+          "d30",
+          "d45"
+        ],
+        "hybrid": [
+          "d47"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d47",
+          "cosine": 0.6999664306640625
+        },
+        {
+          "id": "d48",
+          "cosine": 0.6282089352607727
+        },
+        {
+          "id": "d15",
+          "cosine": 0.30779343843460083
+        },
+        {
+          "id": "d11",
+          "cosine": 0.307339608669281
+        },
+        {
+          "id": "d08",
+          "cosine": 0.295585036277771
+        }
+      ]
+    },
+    {
+      "query": "q23",
+      "split": "test",
+      "category": "quoted_phrase",
+      "relevant": {
+        "d18": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [
+          "d18"
+        ],
+        "bm25_diagnostic": [
+          "d18",
+          "d17"
+        ],
+        "semantic": [
+          "d18",
+          "d22",
+          "d21",
+          "d04",
+          "d03",
+          "d34",
+          "d17",
+          "d08",
+          "d33",
+          "d35"
+        ],
+        "hybrid": [
+          "d18"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d18",
+          "cosine": 0.511980414390564
+        },
+        {
+          "id": "d22",
+          "cosine": 0.43721795082092285
+        },
+        {
+          "id": "d21",
+          "cosine": 0.4283249080181122
+        },
+        {
+          "id": "d04",
+          "cosine": 0.4222560524940491
+        },
+        {
+          "id": "d03",
+          "cosine": 0.40880799293518066
+        }
+      ]
+    },
+    {
+      "query": "q24",
+      "split": "test",
+      "category": "negation",
+      "relevant": {
+        "d29": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d29",
+          "d27",
+          "d07",
+          "d28",
+          "d49",
+          "d11",
+          "d18",
+          "d08",
+          "d43",
+          "d17"
+        ],
+        "semantic": [
+          "d29",
+          "d08",
+          "d43",
+          "d07",
+          "d48",
+          "d30",
+          "d05",
+          "d31",
+          "d23",
+          "d20"
+        ],
+        "hybrid": [
+          "d29",
+          "d07",
+          "d08",
+          "d43",
+          "d48",
+          "d30",
+          "d49",
+          "d27",
+          "d47",
+          "d05"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d29",
+          "cosine": 0.7508557438850403
+        },
+        {
+          "id": "d08",
+          "cosine": 0.45645269751548767
+        },
+        {
+          "id": "d43",
+          "cosine": 0.44175124168395996
+        },
+        {
+          "id": "d07",
+          "cosine": 0.4337094724178314
+        },
+        {
+          "id": "d48",
+          "cosine": 0.41253504157066345
+        }
+      ]
+    },
+    {
+      "query": "q25",
+      "split": "test",
+      "category": "paraphrase",
+      "relevant": {
+        "d31": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d31",
+          "d32",
+          "d46",
+          "d08",
+          "d35",
+          "d18",
+          "d36",
+          "d49",
+          "d03",
+          "d43"
+        ],
+        "semantic": [
+          "d31",
+          "d32",
+          "d08",
+          "d33",
+          "d37",
+          "d22",
+          "d38",
+          "d01",
+          "d50",
+          "d07"
+        ],
+        "hybrid": [
+          "d31",
+          "d32",
+          "d08",
+          "d46",
+          "d01",
+          "d33",
+          "d49",
+          "d18",
+          "d36",
+          "d35"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d31",
+          "cosine": 0.6962851881980896
+        },
+        {
+          "id": "d32",
+          "cosine": 0.5399404764175415
+        },
+        {
+          "id": "d08",
+          "cosine": 0.5385123491287231
+        },
+        {
+          "id": "d33",
+          "cosine": 0.5273805856704712
+        },
+        {
+          "id": "d37",
+          "cosine": 0.503953754901886
+        }
+      ]
+    },
+    {
+      "query": "q26",
+      "split": "test",
+      "category": "entities",
+      "relevant": {
+        "d33": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d34",
+          "d33",
+          "d01",
+          "d39",
+          "d17",
+          "d06",
+          "d13",
+          "d47",
+          "d12",
+          "d49"
+        ],
+        "semantic": [
+          "d33",
+          "d34",
+          "d01",
+          "d46",
+          "d37",
+          "d08",
+          "d49",
+          "d05",
+          "d26",
+          "d02"
+        ],
+        "hybrid": [
+          "d33",
+          "d34",
+          "d01",
+          "d08",
+          "d49",
+          "d46",
+          "d05",
+          "d06",
+          "d43",
+          "d02"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d33",
+          "cosine": 0.7875145077705383
+        },
+        {
+          "id": "d34",
+          "cosine": 0.7619851231575012
+        },
+        {
+          "id": "d01",
+          "cosine": 0.5518172383308411
+        },
+        {
+          "id": "d46",
+          "cosine": 0.5320416688919067
+        },
+        {
+          "id": "d37",
+          "cosine": 0.4936109781265259
+        }
+      ]
+    },
+    {
+      "query": "q27",
+      "split": "dev",
+      "category": "entities",
+      "relevant": {
+        "d34": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d34",
+          "d33",
+          "d10",
+          "d49",
+          "d09",
+          "d06",
+          "d30",
+          "d47",
+          "d15",
+          "d08"
+        ],
+        "semantic": [
+          "d34",
+          "d33",
+          "d05",
+          "d08",
+          "d46",
+          "d01",
+          "d26",
+          "d07",
+          "d25",
+          "d10"
+        ],
+        "hybrid": [
+          "d34",
+          "d33",
+          "d10",
+          "d08",
+          "d49",
+          "d07",
+          "d09",
+          "d05",
+          "d06",
+          "d02"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d34",
+          "cosine": 0.7857058048248291
+        },
+        {
+          "id": "d33",
+          "cosine": 0.5883772373199463
+        },
+        {
+          "id": "d05",
+          "cosine": 0.46209362149238586
+        },
+        {
+          "id": "d08",
+          "cosine": 0.45066770911216736
+        },
+        {
+          "id": "d46",
+          "cosine": 0.44755637645721436
+        }
+      ]
+    },
+    {
+      "query": "q28",
+      "split": "test",
+      "category": "paraphrase",
+      "relevant": {
+        "d37": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d37",
+          "d38",
+          "d06",
+          "d07",
+          "d42",
+          "d49",
+          "d05",
+          "d08",
+          "d47",
+          "d33"
+        ],
+        "semantic": [
+          "d37",
+          "d38",
+          "d01",
+          "d49",
+          "d26",
+          "d50",
+          "d32",
+          "d25",
+          "d02",
+          "d08"
+        ],
+        "hybrid": [
+          "d37",
+          "d38",
+          "d49",
+          "d50",
+          "d08",
+          "d07",
+          "d05",
+          "d33",
+          "d06",
+          "d32"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d37",
+          "cosine": 0.7886596918106079
+        },
+        {
+          "id": "d38",
+          "cosine": 0.6968724727630615
+        },
+        {
+          "id": "d01",
+          "cosine": 0.6214407086372375
+        },
+        {
+          "id": "d49",
+          "cosine": 0.6126574277877808
+        },
+        {
+          "id": "d26",
+          "cosine": 0.5988297462463379
+        }
+      ]
+    },
+    {
+      "query": "q29",
+      "split": "test",
+      "category": "long_passage",
+      "relevant": {
+        "d47": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d48",
+          "d47",
+          "d13",
+          "d31",
+          "d06",
+          "d29",
+          "d18",
+          "d12",
+          "d14",
+          "d02"
+        ],
+        "semantic": [
+          "d48",
+          "d47",
+          "d29",
+          "d12",
+          "d11",
+          "d30",
+          "d08",
+          "d15",
+          "d10",
+          "d45"
+        ],
+        "hybrid": [
+          "d48",
+          "d47",
+          "d29",
+          "d12",
+          "d13",
+          "d08",
+          "d11",
+          "d45",
+          "d30",
+          "d27"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "hybrid": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d48",
+          "cosine": 0.8003418445587158
+        },
+        {
+          "id": "d47",
+          "cosine": 0.747278094291687
+        },
+        {
+          "id": "d29",
+          "cosine": 0.43704915046691895
+        },
+        {
+          "id": "d12",
+          "cosine": 0.3880883753299713
+        },
+        {
+          "id": "d11",
+          "cosine": 0.37845829129219055
+        }
+      ]
+    },
+    {
+      "query": "q30",
+      "split": "test",
+      "category": "long_passage",
+      "relevant": {
+        "d49": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d49",
+          "d50",
+          "d35",
+          "d36",
+          "d07",
+          "d38",
+          "d18",
+          "d31",
+          "d30",
+          "d08"
+        ],
+        "semantic": [
+          "d50",
+          "d02",
+          "d01",
+          "d26",
+          "d08",
+          "d37",
+          "d38",
+          "d49",
+          "d33",
+          "d25"
+        ],
+        "hybrid": [
+          "d50",
+          "d49",
+          "d38",
+          "d08",
+          "d01",
+          "d02",
+          "d07",
+          "d33",
+          "d37",
+          "d05"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0.125,
+          "ndcg10": 0.3154648767857287
+        },
+        "hybrid": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d50",
+          "cosine": 0.7723088264465332
+        },
+        {
+          "id": "d02",
+          "cosine": 0.7074718475341797
+        },
+        {
+          "id": "d01",
+          "cosine": 0.6889218688011169
+        },
+        {
+          "id": "d26",
+          "cosine": 0.6159114837646484
+        },
+        {
+          "id": "d08",
+          "cosine": 0.6028420329093933
+        }
+      ]
+    },
+    {
+      "query": "q31",
+      "split": "test",
+      "category": "lifecycle",
+      "relevant": {
+        "d45": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d45",
+          "d19",
+          "d27",
+          "d03",
+          "d49",
+          "d04",
+          "d18",
+          "d28",
+          "d05",
+          "d10"
+        ],
+        "semantic": [
+          "d45",
+          "d19",
+          "d17",
+          "d20",
+          "d27",
+          "d44",
+          "d32",
+          "d06",
+          "d05",
+          "d18"
+        ],
+        "hybrid": [
+          "d45",
+          "d19",
+          "d27",
+          "d18",
+          "d05",
+          "d44",
+          "d10",
+          "d49",
+          "d28",
+          "d04"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d45",
+          "cosine": 0.6293240189552307
+        },
+        {
+          "id": "d19",
+          "cosine": 0.5222326517105103
+        },
+        {
+          "id": "d17",
+          "cosine": 0.4415929615497589
+        },
+        {
+          "id": "d20",
+          "cosine": 0.427846223115921
+        },
+        {
+          "id": "d27",
+          "cosine": 0.413383811712265
+        }
+      ]
+    },
+    {
+      "query": "q32",
+      "split": "test",
+      "category": "lifecycle",
+      "relevant": {
+        "d46": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d46",
+          "d19",
+          "d42",
+          "d37",
+          "d49",
+          "d43",
+          "d02",
+          "d47",
+          "d41",
+          "d38"
+        ],
+        "semantic": [
+          "d46",
+          "d34",
+          "d37",
+          "d08",
+          "d20",
+          "d49",
+          "d07",
+          "d45",
+          "d19",
+          "d25"
+        ],
+        "hybrid": [
+          "d46",
+          "d37",
+          "d19",
+          "d49",
+          "d42",
+          "d20",
+          "d45",
+          "d08",
+          "d43",
+          "d36"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d46",
+          "cosine": 0.7848870158195496
+        },
+        {
+          "id": "d34",
+          "cosine": 0.5280643105506897
+        },
+        {
+          "id": "d37",
+          "cosine": 0.4668082296848297
+        },
+        {
+          "id": "d08",
+          "cosine": 0.45404505729675293
+        },
+        {
+          "id": "d20",
+          "cosine": 0.4461929202079773
+        }
+      ]
+    },
+    {
+      "query": "q33",
+      "split": "dev",
+      "category": "structured_filter",
+      "relevant": {
+        "d41": 2
+      },
+      "eligible_count": 1,
+      "rankings": {
+        "lexical_proxy": [
+          "d41"
+        ],
+        "bm25_diagnostic": [
+          "d41"
+        ],
+        "semantic": [
+          "d41"
+        ],
+        "hybrid": [
+          "d41"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d41",
+          "cosine": 0.7889646291732788
+        }
+      ]
+    },
+    {
+      "query": "q34",
+      "split": "test",
+      "category": "structured_filter",
+      "relevant": {
+        "d39": 2
+      },
+      "eligible_count": 1,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d39"
+        ],
+        "semantic": [
+          "d39"
+        ],
+        "hybrid": [
+          "d39"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d39",
+          "cosine": 0.5286551117897034
+        }
+      ]
+    },
+    {
+      "query": "q35",
+      "split": "test",
+      "category": "structured_filter",
+      "relevant": {
+        "d42": 2
+      },
+      "eligible_count": 1,
+      "rankings": {
+        "lexical_proxy": [
+          "d42"
+        ],
+        "bm25_diagnostic": [
+          "d42"
+        ],
+        "semantic": [
+          "d42"
+        ],
+        "hybrid": [
+          "d42"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d42",
+          "cosine": 0.8020492196083069
+        }
+      ]
+    },
+    {
+      "query": "q36",
+      "split": "test",
+      "category": "structured_filter",
+      "relevant": {
+        "d40": 2
+      },
+      "eligible_count": 47,
+      "rankings": {
+        "lexical_proxy": [
+          "d40"
+        ],
+        "bm25_diagnostic": [
+          "d40"
+        ],
+        "semantic": [
+          "d40",
+          "d04",
+          "d03",
+          "d36",
+          "d34",
+          "d35",
+          "d07",
+          "d33",
+          "d31",
+          "d08"
+        ],
+        "hybrid": [
+          "d40",
+          "d04",
+          "d03",
+          "d36",
+          "d34",
+          "d35",
+          "d07",
+          "d33",
+          "d31",
+          "d08"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d40",
+          "cosine": 0.8597413897514343
+        },
+        {
+          "id": "d04",
+          "cosine": 0.508244514465332
+        },
+        {
+          "id": "d03",
+          "cosine": 0.4657585918903351
+        },
+        {
+          "id": "d36",
+          "cosine": 0.44557735323905945
+        },
+        {
+          "id": "d34",
+          "cosine": 0.4239809215068817
+        }
+      ]
+    },
+    {
+      "query": "q37",
+      "split": "test",
+      "category": "structured_filter",
+      "relevant": {
+        "d37": 2
+      },
+      "eligible_count": 1,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d37"
+        ],
+        "semantic": [
+          "d37"
+        ],
+        "hybrid": [
+          "d37"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d37",
+          "cosine": 0.7510124444961548
+        }
+      ]
+    },
+    {
+      "query": "q38",
+      "split": "test",
+      "category": "structured_filter",
+      "relevant": {
+        "d38": 2
+      },
+      "eligible_count": 49,
+      "rankings": {
+        "lexical_proxy": [
+          "d38"
+        ],
+        "bm25_diagnostic": [
+          "d38",
+          "d50",
+          "d49",
+          "d06"
+        ],
+        "semantic": [
+          "d38",
+          "d50",
+          "d26",
+          "d08",
+          "d01",
+          "d02",
+          "d33",
+          "d49",
+          "d25",
+          "d24"
+        ],
+        "hybrid": [
+          "d38",
+          "d50",
+          "d49",
+          "d06",
+          "d26",
+          "d08",
+          "d01",
+          "d02",
+          "d33",
+          "d25"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d38",
+          "cosine": 0.7337518334388733
+        },
+        {
+          "id": "d50",
+          "cosine": 0.5421905517578125
+        },
+        {
+          "id": "d26",
+          "cosine": 0.5119671821594238
+        },
+        {
+          "id": "d08",
+          "cosine": 0.5098519325256348
+        },
+        {
+          "id": "d01",
+          "cosine": 0.4858473837375641
+        }
+      ]
+    },
+    {
+      "query": "q39",
+      "split": "test",
+      "category": "lifecycle",
+      "relevant": {
+        "d03": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d03",
+          "d04",
+          "d36",
+          "d44",
+          "d07",
+          "d38",
+          "d40",
+          "d28",
+          "d06",
+          "d35"
+        ],
+        "semantic": [
+          "d04",
+          "d03",
+          "d36",
+          "d41",
+          "d42",
+          "d35",
+          "d18",
+          "d17",
+          "d39",
+          "d40"
+        ],
+        "hybrid": [
+          "d03",
+          "d04",
+          "d36",
+          "d35",
+          "d40",
+          "d18",
+          "d28",
+          "d39",
+          "d38",
+          "d07"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d04",
+          "cosine": 0.7874243855476379
+        },
+        {
+          "id": "d03",
+          "cosine": 0.7212476134300232
+        },
+        {
+          "id": "d36",
+          "cosine": 0.5099909901618958
+        },
+        {
+          "id": "d41",
+          "cosine": 0.49703800678253174
+        },
+        {
+          "id": "d42",
+          "cosine": 0.4905657172203064
+        }
+      ]
+    },
+    {
+      "query": "q40",
+      "split": "test",
+      "category": "cross_language",
+      "relevant": {
+        "d35": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d23",
+          "d35",
+          "d21",
+          "d42",
+          "d43",
+          "d49"
+        ],
+        "semantic": [
+          "d35",
+          "d36",
+          "d21",
+          "d22",
+          "d28",
+          "d23",
+          "d32",
+          "d42",
+          "d04",
+          "d41"
+        ],
+        "hybrid": [
+          "d35",
+          "d21",
+          "d23",
+          "d42",
+          "d43",
+          "d49",
+          "d36",
+          "d22",
+          "d28",
+          "d32"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 0.0,
+          "recall5": 1.0,
+          "mrr10": 0.5,
+          "ndcg10": 0.6309297535714574
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d35",
+          "cosine": 0.5981500744819641
+        },
+        {
+          "id": "d36",
+          "cosine": 0.5389655828475952
+        },
+        {
+          "id": "d21",
+          "cosine": 0.5134832262992859
+        },
+        {
+          "id": "d22",
+          "cosine": 0.4864794611930847
+        },
+        {
+          "id": "d28",
+          "cosine": 0.4535049498081207
+        }
+      ]
+    },
+    {
+      "query": "q41",
+      "split": "test",
+      "category": "mathematics",
+      "relevant": {
+        "d15": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d15",
+          "d16",
+          "d04",
+          "d50",
+          "d45",
+          "d49",
+          "d47",
+          "d33",
+          "d41",
+          "d09"
+        ],
+        "semantic": [
+          "d15",
+          "d16",
+          "d08",
+          "d45",
+          "d07",
+          "d14",
+          "d13",
+          "d47",
+          "d34",
+          "d48"
+        ],
+        "hybrid": [
+          "d15",
+          "d16",
+          "d45",
+          "d47",
+          "d33",
+          "d34",
+          "d08",
+          "d41",
+          "d14",
+          "d07"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d15",
+          "cosine": 0.7707744836807251
+        },
+        {
+          "id": "d16",
+          "cosine": 0.7636032104492188
+        },
+        {
+          "id": "d08",
+          "cosine": 0.3657631278038025
+        },
+        {
+          "id": "d45",
+          "cosine": 0.32634133100509644
+        },
+        {
+          "id": "d07",
+          "cosine": 0.32493603229522705
+        }
+      ]
+    },
+    {
+      "query": "q42",
+      "split": "test",
+      "category": "paraphrase",
+      "relevant": {
+        "d44": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d44",
+          "d17",
+          "d29",
+          "d45",
+          "d05",
+          "d11",
+          "d47",
+          "d06",
+          "d39",
+          "d32"
+        ],
+        "semantic": [
+          "d44",
+          "d45",
+          "d19",
+          "d20",
+          "d17",
+          "d03",
+          "d42",
+          "d18",
+          "d43",
+          "d04"
+        ],
+        "hybrid": [
+          "d44",
+          "d45",
+          "d17",
+          "d19",
+          "d29",
+          "d03",
+          "d05",
+          "d43",
+          "d32",
+          "d39"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d44",
+          "cosine": 0.6630042791366577
+        },
+        {
+          "id": "d45",
+          "cosine": 0.4309622049331665
+        },
+        {
+          "id": "d19",
+          "cosine": 0.35925641655921936
+        },
+        {
+          "id": "d20",
+          "cosine": 0.34596481919288635
+        },
+        {
+          "id": "d17",
+          "cosine": 0.3273155689239502
+        }
+      ]
+    },
+    {
+      "query": "q43",
+      "split": "test",
+      "category": "no_answer",
+      "relevant": {},
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d07",
+          "d49",
+          "d50",
+          "d33",
+          "d02",
+          "d46",
+          "d08",
+          "d01",
+          "d38",
+          "d39"
+        ],
+        "semantic": [
+          "d08",
+          "d33",
+          "d07",
+          "d02",
+          "d01",
+          "d50",
+          "d26",
+          "d23",
+          "d05",
+          "d37"
+        ],
+        "hybrid": [
+          "d07",
+          "d33",
+          "d08",
+          "d50",
+          "d02",
+          "d01",
+          "d46",
+          "d49",
+          "d38",
+          "d06"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": null,
+        "bm25_diagnostic": null,
+        "semantic": null,
+        "hybrid": null
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d08",
+          "cosine": 0.6088952422142029
+        },
+        {
+          "id": "d33",
+          "cosine": 0.5317533612251282
+        },
+        {
+          "id": "d07",
+          "cosine": 0.5212773680686951
+        },
+        {
+          "id": "d02",
+          "cosine": 0.5181973576545715
+        },
+        {
+          "id": "d01",
+          "cosine": 0.49956855177879333
+        }
+      ]
+    },
+    {
+      "query": "q44",
+      "split": "test",
+      "category": "no_answer",
+      "relevant": {},
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d37",
+          "d50",
+          "d49",
+          "d38",
+          "d18",
+          "d07",
+          "d36",
+          "d40",
+          "d47",
+          "d35"
+        ],
+        "semantic": [
+          "d37",
+          "d38",
+          "d21",
+          "d22",
+          "d32",
+          "d26",
+          "d33",
+          "d24",
+          "d49",
+          "d18"
+        ],
+        "hybrid": [
+          "d37",
+          "d38",
+          "d49",
+          "d18",
+          "d50",
+          "d07",
+          "d35",
+          "d36",
+          "d31",
+          "d01"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": null,
+        "bm25_diagnostic": null,
+        "semantic": null,
+        "hybrid": null
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d37",
+          "cosine": 0.469220906496048
+        },
+        {
+          "id": "d38",
+          "cosine": 0.4583489000797272
+        },
+        {
+          "id": "d21",
+          "cosine": 0.4462611675262451
+        },
+        {
+          "id": "d22",
+          "cosine": 0.42825913429260254
+        },
+        {
+          "id": "d32",
+          "cosine": 0.42035484313964844
+        }
+      ]
+    },
+    {
+      "query": "q45",
+      "split": "test",
+      "category": "no_answer",
+      "relevant": {},
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d18",
+          "d42",
+          "d49",
+          "d06",
+          "d13",
+          "d40",
+          "d17",
+          "d14",
+          "d47",
+          "d48"
+        ],
+        "semantic": [
+          "d04",
+          "d33",
+          "d03",
+          "d08",
+          "d36",
+          "d22",
+          "d34",
+          "d21",
+          "d41",
+          "d42"
+        ],
+        "hybrid": [
+          "d42",
+          "d40",
+          "d41",
+          "d27",
+          "d03",
+          "d18",
+          "d33",
+          "d36",
+          "d04",
+          "d35"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": null,
+        "bm25_diagnostic": null,
+        "semantic": null,
+        "hybrid": null
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d04",
+          "cosine": 0.4392050504684448
+        },
+        {
+          "id": "d33",
+          "cosine": 0.4105053246021271
+        },
+        {
+          "id": "d03",
+          "cosine": 0.38769739866256714
+        },
+        {
+          "id": "d08",
+          "cosine": 0.3837265372276306
+        },
+        {
+          "id": "d36",
+          "cosine": 0.3832518458366394
+        }
+      ]
+    },
+    {
+      "query": "q46",
+      "split": "test",
+      "category": "no_answer",
+      "relevant": {},
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d28",
+          "d27",
+          "d43"
+        ],
+        "semantic": [
+          "d27",
+          "d28",
+          "d08",
+          "d43",
+          "d34",
+          "d33",
+          "d20",
+          "d22",
+          "d21",
+          "d46"
+        ],
+        "hybrid": [
+          "d27",
+          "d28",
+          "d43",
+          "d08",
+          "d34",
+          "d33",
+          "d20",
+          "d22",
+          "d21",
+          "d46"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": null,
+        "bm25_diagnostic": null,
+        "semantic": null,
+        "hybrid": null
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d27",
+          "cosine": 0.5641568899154663
+        },
+        {
+          "id": "d28",
+          "cosine": 0.49089550971984863
+        },
+        {
+          "id": "d08",
+          "cosine": 0.367870032787323
+        },
+        {
+          "id": "d43",
+          "cosine": 0.36386096477508545
+        },
+        {
+          "id": "d34",
+          "cosine": 0.3540456295013428
+        }
+      ]
+    },
+    {
+      "query": "q47",
+      "split": "test",
+      "category": "structured_filter",
+      "relevant": {},
+      "eligible_count": 0,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [],
+        "semantic": [],
+        "hybrid": []
+      },
+      "metrics": {
+        "lexical_proxy": null,
+        "bm25_diagnostic": null,
+        "semantic": null,
+        "hybrid": null
+      },
+      "semantic_top_scores": []
+    },
+    {
+      "query": "q48",
+      "split": "test",
+      "category": "structured_meaning",
+      "relevant": {
+        "d43": 2
+      },
+      "eligible_count": 50,
+      "rankings": {
+        "lexical_proxy": [],
+        "bm25_diagnostic": [
+          "d43",
+          "d11",
+          "d28",
+          "d07",
+          "d04",
+          "d35",
+          "d27",
+          "d06",
+          "d49",
+          "d42"
+        ],
+        "semantic": [
+          "d43",
+          "d20",
+          "d46",
+          "d08",
+          "d28",
+          "d34",
+          "d27",
+          "d07",
+          "d18",
+          "d19"
+        ],
+        "hybrid": [
+          "d43",
+          "d28",
+          "d07",
+          "d27",
+          "d20",
+          "d08",
+          "d35",
+          "d04",
+          "d19",
+          "d11"
+        ]
+      },
+      "metrics": {
+        "lexical_proxy": {
+          "hit1": 0.0,
+          "recall5": 0.0,
+          "mrr10": 0,
+          "ndcg10": 0.0
+        },
+        "bm25_diagnostic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "semantic": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        },
+        "hybrid": {
+          "hit1": 1.0,
+          "recall5": 1.0,
+          "mrr10": 1.0,
+          "ndcg10": 1.0
+        }
+      },
+      "semantic_top_scores": [
+        {
+          "id": "d43",
+          "cosine": 0.6706240773200989
+        },
+        {
+          "id": "d20",
+          "cosine": 0.49904105067253113
+        },
+        {
+          "id": "d46",
+          "cosine": 0.4526064097881317
+        },
+        {
+          "id": "d08",
+          "cosine": 0.4405330717563629
+        },
+        {
+          "id": "d28",
+          "cosine": 0.42689478397369385
+        }
+      ]
+    }
+  ]
+}

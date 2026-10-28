@@ -373,6 +373,11 @@ impl AccountView {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MemberAnswer {
     Account(AccountView),
+    AliasRequestPermission {
+        recipient: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
+        permission: Option<cs_mail_protocol::RequestPermission>,
+    },
     /// The relationship as its sender sees it. Absent until it is first opened.
     Sending {
         handle: RelationshipHandle,

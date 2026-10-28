@@ -48,7 +48,7 @@ public struct InterfaceBTerrazzoControls: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Terrazzo appearance").font(.headline)
-            Toggle("Use defaults", isOn: Binding(get: {
+            Toggle("Use original terrazzo", isOn: Binding(get: {
                 appearance.usesDefault && appearance.mainOpacity == nil && appearance.surroundingOpacity == nil
             }, set: { enabled in
                 appearance.usesDefault = enabled

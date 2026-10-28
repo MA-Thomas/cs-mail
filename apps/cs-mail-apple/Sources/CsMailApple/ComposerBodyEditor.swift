@@ -10,6 +10,7 @@ import AppKit
 /// One writing surface and toolbar for A/B, including drafts without a recipient.
 struct ComposerBodyEditor: View {
     @ObservedObject var draft: DraftEditor
+    @Environment(\.colorScheme) private var scheme
     @StateObject private var editing = ComposerEditingSession()
     @State private var choosing: ComposerImport?
     @State private var selecting = false
@@ -28,10 +29,10 @@ struct ComposerBodyEditor: View {
                     if let preview = try? compositionPresentation(content: content) {
                         EmailReader(email: preview, showsFiles: false, allowsPictureRetrieval: false, loadPictures: { _ in nil }).padding(16)
                     }
-                }.background(.white)
+                }.background(ComposerCanvas(scheme).background)
             } else {
                 ComposerWebEditor(draft: draft, editing: editing)
-                    .background(.white)
+                    .background(ComposerCanvas(scheme).background)
                     .accessibilityLabel("Message body")
             }
             if let content = draft.composition, !content.files.isEmpty {
@@ -243,6 +244,19 @@ struct ComposerBodyEditor: View {
     static func escaped(_ value: String) -> String {value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")}
 }
 private enum ComposerImport {case html, image, files, folder}
+
+/// The drafting canvas is presentation, never authored message formatting.
+private struct ComposerCanvas {
+    let dark: Bool
+    init(_ scheme: ColorScheme) {dark = scheme == .dark}
+    var background: Color {Color(red: dark ? 31 / 255.0 : 1, green: dark ? 32 / 255.0 : 1, blue: dark ? 32 / 255.0 : 1)}
+    var css: String {"html{background:\(dark ? "#1f2020" : "#ffffff");color-scheme:\(dark ? "dark" : "light")}body{background:\(dark ? "#1f2020" : "#ffffff")!important;color:\(dark ? "#e8e3d9" : "#222222")!important}"}
+    #if os(macOS)
+    var nativeBackground: NSColor {NSColor(red: dark ? 31 / 255.0 : 1, green: dark ? 32 / 255.0 : 1, blue: dark ? 32 / 255.0 : 1, alpha: 1)}
+    #else
+    var nativeBackground: UIColor {UIColor(red: dark ? 31 / 255.0 : 1, green: dark ? 32 / 255.0 : 1, blue: dark ? 32 / 255.0 : 1, alpha: 1)}
+    #endif
+}
 private enum ComposerFailure: LocalizedError {
     case message(String)
     var errorDescription: String? {if case .message(let value) = self {return value}; return nil}
@@ -267,6 +281,7 @@ private enum ComposerFailure: LocalizedError {
     weak var draft: DraftEditor?
     weak var editing: ComposerEditingSession?
     var identity: UUID?
+    private var scheme: ColorScheme = .light
     private var pendingDocument = ""
     package override init() {super.init()}
     package private(set) var loaded = false
@@ -304,7 +319,7 @@ private enum ComposerFailure: LocalizedError {
     package func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         navigationAction.navigationType == .other && navigationAction.request.url?.absoluteString == "about:blank" ? .allow : .cancel
     }
-    package func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {loaded = true}
+    package func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {loaded = true; applyAppearance()}
     package func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {draft?.compositionError = "The editor stopped. Your saved draft is retained; reopen it before continuing."; loaded = false}
     package func makeView() -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -320,11 +335,23 @@ private enum ComposerFailure: LocalizedError {
         scripts.addUserScript(WKUserScript(source: Self.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = self; view.allowsLinkPreview = false; self.view = view
+        view.underPageBackgroundColor = ComposerCanvas(scheme).nativeBackground
         WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "cs-mail-composer-no-network", encodedContentRuleList: "[{\"trigger\":{\"url-filter\":\"^https?://\"},\"action\":{\"type\":\"block\"}},{\"trigger\":{\"url-filter\":\"^file:\"},\"action\":{\"type\":\"block\"}},{\"trigger\":{\"url-filter\":\"^ftp:\"},\"action\":{\"type\":\"block\"}},{\"trigger\":{\"url-filter\":\"^data:\"},\"action\":{\"type\":\"block\"}},{\"trigger\":{\"url-filter\":\"^blob:\"},\"action\":{\"type\":\"block\"}}]") { [weak self] rules, _ in
             guard let self else {return}; guard let rules else {self.draft?.compositionError = "Couldn’t prepare the protected editor. Your saved draft has been retained."; return}
             view.configuration.userContentController.add(rules); self.permitted = true; self.update(); if self.draft == nil && !self.pendingDocument.isEmpty {view.loadHTMLString(self.pendingDocument, baseURL: nil)}
         }
         return view
+    }
+    func setAppearance(_ scheme: ColorScheme) {
+        guard self.scheme != scheme else {return}
+        self.scheme = scheme
+        view?.underPageBackgroundColor = ComposerCanvas(scheme).nativeBackground
+        if loaded {applyAppearance()}
+    }
+    private func applyAppearance() {
+        // Head styles are excluded from captured body HTML. Switching appearance
+        // preserves content, selection and undo history without reloading the draft.
+        view?.callAsyncJavaScript("let style=document.getElementById('cs-mail-composer-appearance');if(!style){style=document.createElement('style');style.id='cs-mail-composer-appearance';document.head.appendChild(style);}style.textContent=css;", arguments: ["css":ComposerCanvas(scheme).css], in: nil, in: .defaultClient) { _ in }
     }
     func update() {
         guard permitted, let draft, let content = draft.composition, view != nil, identity != draft.compositionIdentity else {return}
@@ -356,18 +383,20 @@ private enum ComposerFailure: LocalizedError {
 private struct ComposerWebEditor: NSViewRepresentable {
     @ObservedObject var draft: DraftEditor
     @ObservedObject var editing: ComposerEditingSession
+    @Environment(\.colorScheme) private var scheme
     func makeCoordinator() -> ComposerWebCoordinator {ComposerWebCoordinator()}
-    func makeNSView(context: Context) -> WKWebView {context.coordinator.draft = draft; context.coordinator.editing = editing; editing.coordinator = context.coordinator; return context.coordinator.makeView()}
-    func updateNSView(_ view: WKWebView, context: Context) {context.coordinator.draft = draft; context.coordinator.editing = editing; editing.coordinator = context.coordinator; context.coordinator.update()}
+    func makeNSView(context: Context) -> WKWebView {context.coordinator.draft = draft; context.coordinator.editing = editing; editing.coordinator = context.coordinator; context.coordinator.setAppearance(scheme); return context.coordinator.makeView()}
+    func updateNSView(_ view: WKWebView, context: Context) {context.coordinator.draft = draft; context.coordinator.editing = editing; editing.coordinator = context.coordinator; context.coordinator.setAppearance(scheme); context.coordinator.update()}
     static func dismantleNSView(_ view: WKWebView, coordinator: ComposerWebCoordinator) {view.stopLoading();view.configuration.userContentController.removeAllScriptMessageHandlers(from: .defaultClient);coordinator.draft?.captureWriting = nil}
 }
 #else
 private struct ComposerWebEditor: UIViewRepresentable {
     @ObservedObject var draft: DraftEditor
     @ObservedObject var editing: ComposerEditingSession
+    @Environment(\.colorScheme) private var scheme
     func makeCoordinator() -> ComposerWebCoordinator {ComposerWebCoordinator()}
-    func makeUIView(context: Context) -> WKWebView {context.coordinator.draft = draft; context.coordinator.editing = editing; editing.coordinator = context.coordinator; return context.coordinator.makeView()}
-    func updateUIView(_ view: WKWebView, context: Context) {context.coordinator.draft = draft; context.coordinator.editing = editing; editing.coordinator = context.coordinator; context.coordinator.update()}
+    func makeUIView(context: Context) -> WKWebView {context.coordinator.draft = draft; context.coordinator.editing = editing; editing.coordinator = context.coordinator; context.coordinator.setAppearance(scheme); return context.coordinator.makeView()}
+    func updateUIView(_ view: WKWebView, context: Context) {context.coordinator.draft = draft; context.coordinator.editing = editing; editing.coordinator = context.coordinator; context.coordinator.setAppearance(scheme); context.coordinator.update()}
     static func dismantleUIView(_ view: WKWebView, coordinator: ComposerWebCoordinator) {view.stopLoading();view.configuration.userContentController.removeAllScriptMessageHandlers(from: .defaultClient);coordinator.draft?.captureWriting = nil}
 }
 #endif

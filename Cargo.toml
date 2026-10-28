@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/cs-mail-search",
     "crates/cs-mail-client-ffi",
     "crates/cs-mail-simulation",
     "crates/cs-mail-operations",

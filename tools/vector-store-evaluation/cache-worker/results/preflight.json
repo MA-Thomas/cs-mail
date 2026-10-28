@@ -1,0 +1,7 @@
+{
+  "first_10k_check": "failed: interruption during prepare was incorrectly fatal; diagnostic stderr retained",
+  "repair": "Handle SQLITE_INTERRUPT during prepare; synchronize recursive cancellation after actual progress; sample child RSS instead of restricted system time counters",
+  "second_10k_check": "both engines passed",
+  "full_run": "frozen only after the successful preflight",
+  "retention": "diagnostic and successful preflight support review until production worker integration is resolved"
+}

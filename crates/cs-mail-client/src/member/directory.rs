@@ -134,12 +134,23 @@ impl MemberClient {
         )?;
         let receipt = match response {
             Response::Published(receipt) => receipt,
-            Response::Refused { digest, .. }
+            Response::Refused { digest, error }
                 if digest == request.digest().map_err(|_| Error::InvalidData)? =>
             {
                 state.setup = None;
                 storage::save(self.store.as_ref(), keys, state)?;
-                return Err(Error::PublicationRefused);
+                return Err(match error {
+                    cs_mail_application::directory::Error::Collateral {
+                        class,
+                        minimum,
+                        maximum,
+                    } => Error::PublicationCollateral {
+                        class: class.0,
+                        minimum,
+                        maximum,
+                    },
+                    _ => Error::PublicationRefused,
+                });
             }
             _ => return Err(Error::InvalidData),
         };

@@ -379,19 +379,6 @@ impl MemberClient {
             sender_lanes,
         })
     }
-    /// Drop all session routing/search state when the session ends.
-    /// # Errors
-    /// Poisoned session lock.
-    pub fn clear_inboxes(&self) -> Result<(), Error> {
-        *self.receiving.lock().map_err(|_| Error::Unavailable)? = None;
-        {
-            let mut index = self.retained.lock().map_err(|_| Error::Unavailable)?;
-            *index = None;
-            self.retained_epoch
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-        self.clear_search()
-    }
     pub(super) fn scope_items(
         &self,
         state: &State,

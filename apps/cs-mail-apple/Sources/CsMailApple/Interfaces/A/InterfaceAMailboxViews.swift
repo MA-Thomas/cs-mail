@@ -121,7 +121,7 @@ struct MailboxesView: View {
     @ObservedObject var model: MemberModel
     @ObservedObject var navigation: MailboxNavigation
     let permissions: () -> Void
-    let open: (MailItem, String?) -> Void
+    let open: (MailItem, MailboxOpening) -> Void
     @FocusState private var finding: Bool
     private var visible: [MailItem] {
         var items = model.scopedMailItems.filter { item in
@@ -157,27 +157,33 @@ struct MailboxesView: View {
                 Spacer()
                 Toggle("A–Z", isOn: $navigation.alphabetical).toggleStyle(.button).help("Sort alphabetically instead of by message activity")
             }
-            TextField("Search subjects and message text", text: $navigation.query).textFieldStyle(.roundedBorder).modifier(SearchFieldInteraction(focus: $finding)).help("Search words, or use quotation marks for a phrase.")
-                .onSubmit { finding = false }
+            TextField("Search your correspondence", text: Binding(get: { navigation.query }, set: { navigation.editQuery($0) })).textFieldStyle(.roundedBorder).modifier(SearchFieldInteraction(focus: $finding)).help("Search by meaning or words; use quotation marks for an exact phrase.")
+                .onSubmit { navigation.submitted = true; finding = false }
             if let error = model.mailboxError { Text(error).foregroundStyle(.orange) }
             if !navigation.query.isEmpty {
                 Text("Results for “" + (model.searchResultsQuery ?? navigation.query) + "”").font(.caption).foregroundStyle(.secondary)
                 if let status = model.searchStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
-                Text("Search covers correspondence retained on this device. Referenced sources are not followed.").font(.caption).foregroundStyle(.secondary)
+                Text("Search finds related meaning and words in retained subjects and message text. Files, pictures and reference targets are not searched.").font(.caption).foregroundStyle(.secondary)
                 TimelineView(.periodic(from: .now, by: 1)) { timeline in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(model.searchMatches.filter { Double($0.expiresAt) / 1000 > timeline.date.timeIntervalSince1970 }, id: \.message) { match in
+                        ForEach(model.searchGroups) { group in
+                        if let title = group.title { Text(title).font(.headline).padding(.top, 12) }
+                        if let note = group.note { Text(note).font(.caption).foregroundStyle(.secondary) }
+                        ForEach(group.matches.filter { Double($0.expiresAt) / 1000 > timeline.date.timeIntervalSince1970 }, id: \.message) { match in
                             if let item = model.scopedMailItems.first(where: { $0.key == match.key }) {
-                                Button { open(item, match.message) } label: {
-                                    VStack(alignment: .leading, spacing: 8) { Text(MailboxLabels.subject(item, external: model.externalInbox)).font(.headline); if item.key.transport == .native, let contact = model.presentationContacts.first(where: { $0.sender == item.other }) { Text(contact.title).font(.subheadline).foregroundStyle(.secondary) }; Text(match.excerpt).lineLimit(4) }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+                                Button { open(item, .passage(match)) } label: {
+                                    VStack(alignment: .leading, spacing: 8) { Text(match.subject ?? MailboxLabels.subject(item, external: model.externalInbox)).font(.headline); if item.key.transport == .native, let contact = model.presentationContacts.first(where: { $0.sender == item.other }) { Text(contact.title).font(.subheadline).foregroundStyle(.secondary) }; Text(SidebarProjection.date(match.committedAt)).font(.caption).foregroundStyle(.secondary); Text(match.excerpt).lineLimit(4) }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
                                 }.buttonStyle(EditorialRegionButtonStyle()).privacySensitive().id(match.message)
                             }
                         }
-                        if model.hasMoreSearchResults {
-                            Color.clear.frame(height: 1).accessibilityHidden(true).task(id: model.searchPageCursor) { await model.loadMoreSearchResults() }
+                        if group.more {
+                            Button(group.mode == .words ? "Show more word matches" : "Show more related matches") { Task { await model.loadMoreSearchResults(mode: group.mode) } }.disabled(model.searching)
                         }
-                        if model.searchComplete && model.searchResultsQuery != nil && model.searchMatches.isEmpty { Text("No matching retained messages on this device.").foregroundStyle(.secondary) }
+                        if group.complete && model.searchResultsQuery != nil && group.matches.isEmpty { Text("No matches in the correspondence searched.").foregroundStyle(.secondary) }
+                        }
+                        if !model.searchSubmitted { Button("See full results") { navigation.submitted = true; finding = false } }
+
                     }.scrollTargetLayout()
                 }.scrollPosition(id: $navigation.searchAnchor)
                 }
@@ -201,7 +207,7 @@ struct MailboxesView: View {
                         ForEach(visible, id: \.key.stableID) { item in
                             HStack {
                                 if model.selectedInbox == nil { Toggle("Select \(item.title)", isOn: Binding(get: { navigation.selected.contains(item.key.stableID) }, set: { if $0 { navigation.selected.insert(item.key.stableID) } else { navigation.selected.remove(item.key.stableID) } })).labelsHidden() }
-                                Button { open(item, nil) } label: {
+                                Button { open(item, .conversation) } label: {
                                     VStack(alignment: .leading, spacing: 8) {
                                         HStack { Text(MailboxLabels.subject(item, external: model.externalInbox)).font(.headline); if item.flagged { Image(systemName: "flag.fill").accessibilityLabel("Flagged") }; Spacer(); if item.unread > 0 { Text("\(item.unread) unread").font(.caption).bold() } }
                                         if item.key.transport == .native, let contact = model.presentationContacts.first(where: { $0.sender == item.other }) { Text(contact.title).font(.subheadline).foregroundStyle(.secondary) }
@@ -219,7 +225,7 @@ struct MailboxesView: View {
             }
             if let at = model.inbox?.synchronizedAt { Text("Last complete refresh: \(SidebarProjection.date(at))\(model.connected ? "" : " · Saved information; may be out of date")").font(.caption).foregroundStyle(.secondary) }
         }.padding(28)
-            .task(id: (model.selectedInbox ?? "all") + "|" + navigation.query) { if !model.hasSearch(navigation.query) { await model.search(navigation.query) } }
+            .task(id: (model.selectedInbox ?? "all") + "|" + navigation.query + "|" + String(navigation.submitted)) { if !model.hasSearch(navigation.query, submitted: navigation.submitted) { await model.search(navigation.query, submitted: navigation.submitted) } }
             .onChange(of: navigation.folder) { _, _ in navigation.selected.removeAll() }
             .background { Button("Find", action: { finding = true }).keyboardShortcut("f", modifiers: .command).hidden() }
     }
@@ -245,7 +251,7 @@ struct MailboxesView: View {
                         Text(work.status.label).font(.headline)
                         Text(SidebarProjection.date(work.preparedAt)).font(.caption)
                         if let item = model.mailItems.first(where: { $0.key == work.key }) {
-                            Button("Open \(item.title)") { open(item, work.message) }
+                            Button("Open \(item.title)") { open(item, .message(work.message)) }
                         }
                         if work.status == .awaitingConfirmation {
                             Button("Check submission status") { Task { await model.retry() } }.disabled(model.busy)

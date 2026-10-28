@@ -2653,7 +2653,12 @@ mod request_pricing {
         use cs_mail_application::aliases::{
             AddressSelection, AliasCreation, AliasService, Command, Outcome, SignedCommand,
         };
-        let engine = provisioned("pricing-authority", 903);
+        let url = database_url();
+        let engine = PostgresDeployment::connect(&url)
+            .unwrap()
+            .relationship(aggregate_key("pricing-authority"), &state(903), UNIT)
+            .unwrap();
+        support::provision(&engine, &policy(), registry(), SENDER, test_time(0)).unwrap();
         let accounts = engine.deployment().accounts(|| test_time(1));
         let account = accounts.persona_account(RECIPIENT).unwrap();
         let alias = cs_mail_primitives::AliasId::new(400).unwrap();
@@ -2765,6 +2770,57 @@ mod request_pricing {
                 .selected_class
                 .description(),
             "Test class"
+        );
+        // Conjecture: the member's alias permission view agrees with quotation,
+        // and a live lane scoped to A never opens B. A counterexample hides B's bond.
+        engine
+            .configure_ingress(
+                DEPLOYMENT_DOMAIN,
+                &policy(),
+                &cs_mail_protocol::admission::AdmissionPolicy::default(),
+            )
+            .unwrap();
+        let signed = signed_lane_grant();
+        let receipt = engine
+            .receive_grant(
+                &signed,
+                IdempotencyKey(90),
+                DEPLOYMENT_DOMAIN,
+                || test_time(5),
+                policy(),
+            )
+            .unwrap();
+        engine.process_received(&receipt).unwrap();
+        fixture_lane_scope(&url, &engine, &signed, test_time(5));
+        let handle = cs_mail_application::members::RelationshipHandle {
+            relationship: signing_scope().relationship,
+            content_scope: cs_mail_primitives::ContentScopeRef::from_u128_for_test(1),
+            sender: SENDER,
+            recipient: RECIPIENT,
+        };
+        let direct = engine
+            .deployment()
+            .alias_request_permission(
+                handle,
+                cs_mail_primitives::AliasId::new(RECIPIENT.0).unwrap(),
+                OperationalKeyRef(1),
+                PROVIDER,
+                || test_time(6),
+            )
+            .unwrap();
+        let bonded = engine
+            .deployment()
+            .alias_request_permission(handle, alias, OperationalKeyRef(1), PROVIDER, || {
+                test_time(6)
+            })
+            .unwrap();
+        assert_eq!(
+            direct,
+            Some(cs_mail_protocol::RequestPermission::DirectContact)
+        );
+        assert_eq!(
+            bonded,
+            Some(cs_mail_protocol::RequestPermission::BondedRequest)
         );
     }
 

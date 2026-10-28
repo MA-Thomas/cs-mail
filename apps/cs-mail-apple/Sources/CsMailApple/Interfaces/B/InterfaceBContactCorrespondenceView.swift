@@ -226,10 +226,19 @@ struct InterfaceBContactCorrespondenceView: View {
                     model.beginReading(MailKey(transport: .native, conversation: opened))
                     await model.displayed(key: MailKey(transport: .native, conversation: opened), ids: messages.map(\.id))
                 }
+                if let opened, let hit = model.focusedSearchPassage, hit.key == MailKey(transport: .native, conversation: opened), messages.contains(where: { $0.id == hit.message }) {
+                    find.revealSearchPassage(hit, texts: messages.flatMap { ConversationText.displayed($0.content, message: $0.id) })
+                }
                 if let message = model.focusedMessage { proxy.scrollTo(message, anchor: .center) }
             }
             .onDisappear { if let opened { model.endReading(MailKey(transport: .native, conversation: opened)) } }
             .onChange(of: opened) { _, _ in find.reset() }
+            .onChange(of: model.focusedPassageRequest) { _, _ in
+                if let opened, let hit = model.focusedSearchPassage, hit.key == MailKey(transport: .native, conversation: opened), messages.contains(where: { $0.id == hit.message }) {
+                    find.revealSearchPassage(hit, texts: messages.flatMap { ConversationText.displayed($0.content, message: $0.id) })
+                    proxy.scrollTo(hit.message, anchor: .center)
+                }
+            }
             .onChange(of: model.focusedMessage) { _, message in if let message { proxy.scrollTo(message, anchor: .center) } }
     }
 }

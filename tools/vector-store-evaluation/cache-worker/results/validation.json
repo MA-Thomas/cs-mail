@@ -1,0 +1,12 @@
+{
+  "frozen_hashes_match": true,
+  "arms": 8,
+  "oracle_checks": 192,
+  "warm_measurements": 576,
+  "all_cancellation_cases_passed": true,
+  "databases_removed": true,
+  "member_app_integration": false,
+  "all_cache_and_engine_rankings_identical": true,
+  "p95_independently_recomputed": true,
+  "no_generated_database_run_directories_remain": true
+}

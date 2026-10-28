@@ -1,0 +1,66 @@
+{
+  "sources": {
+    "sqlcipher": [
+      "https://codeload.github.com/sqlcipher/sqlcipher/tar.gz/refs/tags/v4.19.0",
+      "7075f96cbabe45b4ecfc2e6b1745a625f856f695b0827a5506ce9ed85b906aa0"
+    ],
+    "sqlite-vec": [
+      "https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-amalgamation.tar.gz",
+      "3acd67cb4aff080c7050926fd3cf8227905fe5b7ee3829d8ee5024ab1283cf61"
+    ],
+    "vec1": [
+      "https://raw.githubusercontent.com/sqlite/sqlite/4012bdca5f1599d5dd3d6671112f170bfd48a26f/ext/vec1/vec1.c",
+      "01c91474cce6c1c4872b45e00d8d1934a909baa68ecac679bcdf1093fa054807"
+    ]
+  },
+  "commands": [
+    [
+      [
+        "./configure",
+        "--with-tempstore=always",
+        "--enable-fts5",
+        "CFLAGS=-O3 -DSQLITE_HAS_CODEC -DSQLITE_EXTRA_INIT=sqlcipher_extra_init -DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLITE_TEMP_STORE=3 -DSQLCIPHER_CRYPTO_CC",
+        "LDFLAGS=-framework Security -framework CoreFoundation"
+      ],
+      "target/vector-store-evaluation/sqlcipher"
+    ],
+    [
+      [
+        "make",
+        "-j4",
+        "libsqlite3.dylib",
+        "sqlite3"
+      ],
+      "target/vector-store-evaluation/sqlcipher"
+    ],
+    [
+      [
+        "clang",
+        "-O3",
+        "-DNDEBUG",
+        "-dynamiclib",
+        "-I/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/sqlcipher",
+        "/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/vec1.c",
+        "-o",
+        "/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/vec1.dylib"
+      ],
+      "."
+    ],
+    [
+      [
+        "clang",
+        "-DSQLITE_VEC_ENABLE_NEON",
+        "-O3",
+        "-DNDEBUG",
+        "-DSQLITE_VEC_OMIT_FS",
+        "-dynamiclib",
+        "-I/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/sqlcipher",
+        "/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/sqlite-vec/sqlite-vec.c",
+        "-o",
+        "/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/vec0.dylib"
+      ],
+      "."
+    ]
+  ],
+  "note": "SQLCipher/vec1 built via build.py; sqlite-vec subsequently recompiled with the recorded NEON flag before accepted measurements."
+}

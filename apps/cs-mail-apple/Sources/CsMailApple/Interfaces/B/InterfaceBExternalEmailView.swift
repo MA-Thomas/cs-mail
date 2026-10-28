@@ -85,14 +85,23 @@ struct InterfaceBExternalEmailView: View {
                         }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .onChange(of: find.selection?.request) { _, _ in
-                        if let message = find.selection?.occurrence.text.message { proxy.scrollTo(message, anchor: .center) }
+                        if let message = find.selection?.occurrence.text.message { proxy.scrollTo(message, anchor: .top) }
+                    }
+                    .onChange(of: model.focusedPassageRequest) { _, _ in
+                        if let hit = model.focusedSearchPassage, hit.key == MailKey(transport: .external, conversation: thread.id) {
+                            find.revealSearchPassage(hit, texts: thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }.flatMap { ConversationText.displayed($0.content, message: $0.id) })
+                            proxy.scrollTo(hit.message, anchor: .top)
+                        }
                     }
                     .onDisappear { model.endReading(MailKey(transport: .external, conversation: thread.id)) }
                     .task(id: thread.id + thread.messages.map(\.id).joined()) {
                         guard !Task.isCancelled else { return }
                         model.beginReading(MailKey(transport: .external, conversation: thread.id))
                         await model.displayed(key: MailKey(transport: .external, conversation: thread.id), ids: thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }.map(\.id))
-                        if let message = model.focusedMessage { proxy.scrollTo(message, anchor: .center) }
+                        if let hit = model.focusedSearchPassage, hit.key == MailKey(transport: .external, conversation: thread.id), thread.messages.contains(where: { $0.id == hit.message }) {
+                            find.revealSearchPassage(hit, texts: thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }.flatMap { ConversationText.displayed($0.content, message: $0.id) })
+                        }
+                        if let message = model.focusedMessage { proxy.scrollTo(message, anchor: .top) }
                     }
                 } else {
                     Text("This conversation is unavailable.").foregroundStyle(.secondary).padding(24)

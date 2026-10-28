@@ -928,3 +928,38 @@ The FFI exposes Composition and explicit checked import/presentation functions. 
 DraftEditor captures live writing before flush and coalesces nearby saves into a single revision-checked writer. The workspace identity scopes both editor and Column B lifetime. Attachments retain bytes and names inside the same encrypted draft and signed submission; native readers expose explicit attached-file saving. External transport renders deterministic multipart alternatives, related images and mixed attachments beneath the existing envelope, threading, consent and DKIM owners. Message HTTP bounds account for retained/recovery copies and JSON ciphertext expansion; alias/profile bounds remain unchanged.
 
 Large-file validation exposed repeated Personal decryption during alias projection. Inbox projection now reuses one validated personal snapshot for its scopes. The canonical development profile uses optimization level 1, with bulk cipher dependencies at level 3; debug symbols and application debug checks remain enabled. No owner schema or credential migration is required.
+
+### Interface C
+
+C has independent presentation source groups in CsMailApple and CsMailPresentation,
+selected through the existing interface registry and Home-only guards. It shares
+the sole MemberModel, client session, account, writing/search coordination and layout
+preferences. C-specific appearance storage contains light/dark mode and named
+mode-only profiles.
+
+InterfaceCWorkspaceBackdrop owns the material roles: a continuous satin white-gold
+surround for foundation/workspace/navigation and smooth opaque content/organizer
+interiors. A noninteractive macOS position probe supplies window coordinates across
+native hosting roots. A seven-stop diagonal reflection uses distinct highlight and
+shade bands with a warm-gray palladium-white-gold interpretation. Both endpoints
+are translated left by 10% of window width, preserving its angle and contrast.
+The gradient and one-sixth-strength stationary microdetail
+share that anchor; accessibility contrast/transparency preferences suppress modulation.
+No image resource bundle or member-facing texture controls are required.
+
+B and C share WorkspaceColumn sizing and WorkspaceSplitSurround decoration. The
+shared surround applies a noninteractive sidebar-cap/two-point-separator mask to a
+workspace-sized backdrop. Each interface supplies its own material. The native split
+view and its existing controller retain width constraints, cursor and drag ownership;
+there is no interface-specific cursor tracker or alternative resize controller.
+
+
+### Interface B fixed appearance defaults
+
+InterfaceBSystemAppearance owns immutable light (Light Terrazzo) and dark
+(Dark Green) snapshots. These are presentation values, independent of
+InterfaceBAppearanceProfiles and its editable device-local user library. Selecting
+a default clears only user-profile selection; existing snapshots remain intact.
+The appearance source distinguishes fixed defaults from custom settings across
+relaunch. User control edits and user-profile selection select custom settings;
+the light/dark toolbar applies the fixed default for the requested mode.

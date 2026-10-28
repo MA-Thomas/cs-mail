@@ -53,7 +53,7 @@ import CsMailPresentation
     }
     func refresh() async {
         switch screen {
-        case .profile(let approach, _): await open(AddressReference(approach.address))
+        case .profile(let approach, _): await openAlias(AliasReference(approach.alias))
         case .results(let results): await search(query: results.query, offset: results.offset)
         }
     }
@@ -70,6 +70,9 @@ import CsMailPresentation
             let page = try await self.worker.run(lifetime: self.lifetime) { try $0.directorySearch(text: query, offset: offset) }
             return .results(Results(query: query, offset: offset, page: page))
         }
+    }
+    func openAlias(_ alias: AliasReference) async {
+        await open(AddressReference(alias.value))
     }
     func open(_ reference: AddressReference) async {
         let results = screen.results

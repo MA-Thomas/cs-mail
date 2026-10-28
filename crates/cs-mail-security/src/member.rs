@@ -72,6 +72,11 @@ pub enum MemberRead {
     Account,
     /// The relationship in which `persona` sends to `recipient`.
     AsSender { recipient: ProtocolIdentity },
+    /// Current request route for one exact receiving alias; never send authorization.
+    AliasRequestPermission {
+        recipient: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
+    },
     /// The relationship in which `sender` writes to `persona`, with the content addressed
     /// to `persona`.
     AsRecipient { sender: ProtocolIdentity },

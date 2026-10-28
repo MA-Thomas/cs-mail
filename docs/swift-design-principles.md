@@ -118,6 +118,22 @@ replaces those results; stale responses cannot replace a newer generation. Routi
 per-keystroke loading indicators must not insert layout space or blank the result
 surface. Clearing search or changing receiving scope discards the old projection.
 
+Search has explicit typing and submitted states. Typing shows five suggestions;
+Enter or See full results requests exhaustive word/phrase matches and a separate
+Related by meaning group. Shared member coordination owns the result groups and
+page requests; each interface owns its row composition. Query editing starts a
+new suggestion request. Back restores the prior submitted state, expanded results
+and anchors. Explicit page controls never turn suggestions into an unbounded list.
+The semantic caveat is “These are the closest matches. There may be no relevant
+match.” Literal word/phrase groups do not carry that semantic caveat. Rust owns
+matching, scope and cursor validity; Swift does not infer matching from excerpts.
+
+Local search preparation starts in the background when the existing account opens,
+independently of mail refresh and retention. It does not block the mailbox or add a
+spinner, synthetic search result or separate application mode. Rust owns custody,
+projection eligibility and unlocked-lifetime checks; Lock cancels preparation and
+prevents a late completion from reopening search.
+
 ## Interface B main-space texture contract
 
 By default, whenever the main content column shows terrazzo, it uses one-quarter of the
@@ -132,6 +148,12 @@ existing contrast/transparency accessibility behavior.
 The email body retains its solid white background in light mode. Terrazzo remains
 visible in the surrounding main-space areas; do not make the writing area
 transparent to expose texture.
+
+The ordinary message editor follows appearance: an opaque dark canvas with light
+default text in dark mode, and white with dark default text in light mode. This is
+editor presentation, not authored message formatting. Switching appearance must not
+reload writing or serialize the canvas colors into saved or sent HTML. Explicit
+text colors and imported designs retain their authored meaning.
 
 The background outside the rounded main-space surface, including its padding
 behind the cove lighting, uses the normal workspace texture strength. Only the
@@ -231,7 +253,7 @@ Agreed 24 October 2026. The same Interface B palette popover contains Main-space
 texture and Surrounding texture opacity controls. The first sets absolute texture
 opacity inside the main space; the second sets outer workspace opacity and Column
 B at one-quarter of that value. Color saturation is labeled separately. Editing
-opacity preserves the selected default/custom color. Use defaults restores the
+opacity preserves the selected default/custom color. Use original terrazzo restores the
 original color rendering and removes both opacity overrides, retaining the
 scheme-specific original strengths. Overrides persist locally and update all
 surfaces in their scope immediately. Opaque writing surfaces remain opaque.
@@ -244,9 +266,22 @@ opacity overrides. Selecting a profile restores its snapshot; later live edits
 show Modified without changing the saved snapshot. Save as new profile, Update
 profile, Rename and Delete are explicit actions. Deletion leaves the current
 appearance intact. A single device-local encoded document owns profile snapshots
-and selection. First adoption preserves the current setup once; deleting all
-profiles does not recreate them on reopening. Unreadable profile data is retained
+and selection. Deleting all user profiles does not recreate them on reopening. Unreadable profile data is retained
 and reported without overwriting it. Profiles carry no account authority.
+
+### Fixed Interface B system defaults
+
+Agreed 28 October 2026. Light Terrazzo and Dark Green are fixed system defaults,
+matching the member’s saved light and dark snapshots respectively. Immutable Swift
+presentation values own these appearances independently of the editable profile
+library. They appear under Defaults, with no rename, update or delete actions.
+The original named profiles remain editable copies under Your profiles; users may
+save additional profiles. Changing live controls creates a custom appearance,
+without changing either fixed default. The light/dark toolbar switch applies the
+corresponding system default. The current system/custom selection persists locally;
+first adoption applies the default for the current mode without changing saved
+profile snapshots. System mode follows the operating system while using defaults.
+Unreadable user profile data does not prevent selection of the fixed defaults.
 
 ### Profile controls reveal the current task
 
@@ -358,3 +393,32 @@ still dismisses field focus without consuming the outside action. Selecting a na
 recipient populates To and switches Column B to its existing source picker. Choosing
 a source message exposes Quote selection and Reference selection, enabled by a valid
 text/image selection. Selection alone does not insert content or send anything.
+
+## Interface C presentation contract
+
+C is a selectable presentation of the unified member application, with the same
+MemberModel, account, Rust authority, navigation guards, search and writing owners.
+Its independent visual types and appearance profiles may evolve separately from B;
+layout preferences and equivalent interaction contracts remain shared.
+
+Column A, toolbar and the exterior around the main space form one continuous satin
+white-gold surface inspired by the supplied 14-carat palladium white-gold reference.
+The diagonal reflection retains distinct highlights, shaded bands and warm-gray
+tonal variation. Its full pattern is translated left by one-tenth of the window
+width without changing the reflection angle, stop colors or contrast. Stationary
+irregular microdetail shares its window anchor and remains faint at one-sixth strength. Main-space and organizer
+interiors are smooth and opaque. Small corners, spacing and scalable typography
+establish hierarchy. Hover emphasizes perimeters, with generous existing hit regions.
+Reduce Transparency and Increased Contrast suppress material modulation. Editor
+canvas colors remain presentation, never authored message formatting.
+
+B and C use WorkspaceColumn sizing and WorkspaceSplitSurround decoration. The latter
+conceals the native separator with a two-point, noninteractive material mask and
+paints the sidebar toolbar cap. The native split view owns resizing and cursor
+feedback; neither interface installs a separate cursor or drag controller. Each
+interface supplies its own backdrop, sampled at workspace size before masking.
+Validate line concealment, hover cursor and actual widening/narrowing together.
+
+C's light/dark mode and named mode-only profiles persist independently. No material
+controls, texture resource bundle or compatibility renderer is retained. Original
+visual references and asset provenance remain outside runtime code.

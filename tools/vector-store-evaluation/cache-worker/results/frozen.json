@@ -1,0 +1,19 @@
+{
+  "frozen_at_utc": "2026-10-25T20:15:31.715437+00:00",
+  "inputs": {
+    "tools/vector-store-evaluation/cache-worker/README.md": "137c496e1d356243ecd2c35caf6b61f956faa66f41a70d975911cd31446ed4f2",
+    "tools/vector-store-evaluation/cache-worker/run.py": "a0b71544ae75304d542f29fce138c3019e32c2a95e5041200da4ffb4e6a63855",
+    "tools/vector-store-evaluation/cache-worker/src/main.rs": "5889beb7c4150868ab36a004e1742004fcb6e3256c6467244c71eb10f69e05ae",
+    "tools/vector-store-evaluation/results/frozen.json": "529ffb1c26ffa1018234481004e7ae62d4731740df613236540b5d8aab843601",
+    "tools/vector-store-evaluation/store.py": "9953474d5c8c7579d7bd12524cc00f3592905a2757822f156c22e6b4b0748ed1",
+    "tools/vector-store-evaluation/sqlcipher_api.py": "8e19d2a0f0468e4b4e3bd524778937977a624cd1419902b4c2290f07f7a386b2",
+    "target/vector-store-evaluation/sqlcipher/libsqlite3.dylib": "4f4172283943dd289344cfe5849f6be641f0ecdac80db99b27995ac146376f9c",
+    "target/vector-store-evaluation/vec1.dylib": "77a782da96fc455439f0f0d4c7b2e01d797e5502a6fa056587eacc5a1f0fe8bf",
+    "target/vector-store-evaluation/vec0.dylib": "9d9ceb241fe656f0a4f1fd3ce8ce658741a0a6fd2e351170d69581447406465d",
+    "target/embedding-evaluation/gemma2-fictional-vectors.npz": "45f2e12e07eeacc60c5d71652f8a1cab02a78c04f77a36bc7bde65cb2a89c65b",
+    "target/vector-store-evaluation/cache-worker": "d97aa0edf71b0feaafd599255558bbb7d155ad7596d08d1876ef2775855bfedf"
+  },
+  "profile": "57d70c2fb8bae89b32a1759aaf6ebc4d2176dc20a323232260d93ae254ad3319",
+  "baseline_inputs_verified": true,
+  "scope": "declared-100k"
+}

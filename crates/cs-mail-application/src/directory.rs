@@ -18,6 +18,11 @@ pub enum Error {
     Invalid,
     Unauthorized,
     Conflict,
+    Collateral {
+        class: cs_mail_primitives::RequestClassId,
+        minimum: u64,
+        maximum: u64,
+    },
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -199,14 +204,16 @@ fn decide(
         }
     }
     match decide_checked(request, c, scope, now) {
-        Err(error @ (Error::Conflict | Error::Invalid)) => Ok(Decision {
-            response: Response::Refused {
-                digest: request.digest()?,
-                error,
-            },
-            effects: None,
-            record: true,
-        }),
+        Err(error @ (Error::Conflict | Error::Invalid | Error::Collateral { .. })) => {
+            Ok(Decision {
+                response: Response::Refused {
+                    digest: request.digest()?,
+                    error,
+                },
+                effects: None,
+                record: true,
+            })
+        }
         other => other,
     }
 }
@@ -283,6 +290,20 @@ fn decide_checked(
                 || mailbox.as_ref() != Some(c.alias.address())
             {
                 return Err(Error::Invalid);
+            }
+            if let Some(policy) = &c.policy {
+                if let Some(class) = classes
+                    .classes
+                    .classes()
+                    .iter()
+                    .find(|class| !policy.quotable(class))
+                {
+                    return Err(Error::Collateral {
+                        class: class.id(),
+                        minimum: policy.collateral_min().minor_units(),
+                        maximum: policy.collateral_max().minor_units(),
+                    });
+                }
             }
             crate::request_pricing::decide_classes(
                 classes,

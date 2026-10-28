@@ -1,3 +1,520 @@
+## Interface B fixed system appearance defaults — 28 October 2026
+
+Light Terrazzo is the fixed light default and Dark Green is the fixed dark default,
+using the member’s original saved snapshots exactly. The palette separates Defaults
+from Your profiles. System defaults cannot be renamed, updated or deleted; original
+user profiles remain editable and additional profiles may be saved. Live adjustments
+create a custom appearance. The toolbar light/dark switch applies the corresponding
+fixed default, and system/custom selection persists across reopening.
+
+Validation: focused disposable Swift checks passed for exact snapshot promotion,
+independence from user-profile CRUD, unchanged profiles when selection clears, and
+empty/corrupt user libraries. Canonical signed build/install and running-executable
+identity passed. Running Mac inspection covered both defaults, retained profile
+selection, toolbar mode switching and reopening. Preference checks confirmed exact
+values and unchanged original profile snapshots. Continuity checks preserved account
+state, nonsecret credential metadata, signing requirement and Interface C sources
+and preferences. Evidence: target/interface-b-system-defaults-{build,install,check}.log,
+target/interface-b-system-defaults-{preservation,running}.json and
+target/interface-b-system-defaults-profile-preservation.log. No credential bytes
+were read or replaced. iOS, OS-driven automatic appearance changes and unrelated
+Rust/PostgreSQL suites were not exercised; no persistent tests were added.
+
+## Interface C and shared split-view presentation — 28 October 2026
+
+C uses a continuous satin white-gold surface across Column A, the toolbar and outer
+workspace, inspired by the supplied 14-carat palladium white-gold ring reference.
+A seven-stop diagonal reflection retains distinct highlights, shaded bands and
+warm-gray tonal variation. The complete pattern is translated left by 10% of window
+width, preserving its angle, stop colors and contrast. Faint stationary microdetail,
+opaque content and independent mode-only profiles retain their existing owners.
+
+B and C use WorkspaceColumn sizing and WorkspaceSplitSurround decoration. The shared
+surround paints the sidebar toolbar cap and conceals the separator with a two-point,
+noninteractive mask, sampling each interface's backdrop at workspace size. macOS
+owns the divider cursor and dragging. No separate cursor/resize controller is used.
+
+Current validation: canonical signed build/install, strict signature, running-binary
+identity, continuity fingerprints and diff checks passed. Running inspection covered
+C's light Home and light/dark Inbox, including the translated reflection pattern and continuous surround.
+Left on light Inbox, matching the member's latest navigation. Original account state,
+nonsecret Keychain metadata, signing requirement and Interface B sources were
+preserved across installation. Evidence: target/interface-c-metal-baseline-build.log,
+target/interface-c-metal-baseline-install.log, target/interface-c-metal-baseline-preservation.json and
+target/interface-c-metal-baseline-running.json. No credential bytes were read or replaced.
+No persistent tests or unrelated backend suites were added/run. iOS and exhaustive
+resize/accessibility checks were outside this visual adjustment.
+
+Shared split validation is recorded in target/interface-bc-split-build.log,
+target/interface-bc-split-install.log, target/interface-bc-split-preservation.json and
+target/interface-bc-split-running.json. Pointer dragging in both interfaces changed
+Column B from 236 to 298 points and back. The inspection tool does not capture the
+system cursor glyph, so its visible shape was not independently confirmed.
+
+## Search engine preparation on account startup — 26 October 2026
+
+The unified Mac app now dispatches local search preparation immediately after the
+existing account's search lifetime opens, independently of mail refresh and the
+retention/download task. Rust preloads currently eligible ready projection rows and
+exercises the existing encoder with static non-mail text, discarding that temporary
+vector. No query identity, search result or retained-source publication is created.
+The numerical helper and model fingerprint are unchanged; existing embeddings need
+no reindexing. The first actual query still builds its current allowed-occurrence
+view and any needed vector index. No foreground/domain lock spans model startup.
+
+Lock invalidates the lifetime and terminates the helper. A late background completion
+cannot reopen the account; reopening starts preparation for the new lifetime. An
+early query shares the engine queue and may wait for the remainder of startup.
+Optional preparation failure does not strand mail download or conceal foreground
+search errors. No spinner, alternate app mode or permanent diagnostic log was added.
+
+Validation: ten client checks passed (`target/search-startup-client.log`), including
+preparation leaving captured query intent and retained ciphertext unchanged and
+closed-lifetime rejection. Focused client/bridge Clippy passed
+(`target/search-startup-clippy.log`). The packaged real-model/encrypted-store scenario
+passed (`target/search-startup-packaged-runtime.log`): explicit preparation took
+11.486 seconds and the subsequent first query took 44.479 milliseconds on isolated
+fictional data; allow-list, ciphertext and lock/reopen checks also passed. These
+timings are one small local experiment, not a large-mailbox performance guarantee.
+Native retention failure-isolation checks passed
+(`target/search-startup-native-scheduling.log`). Formatting and diff checks passed.
+PostgreSQL, iOS, broad energy/performance and live-provider suites were not run;
+this change has no service, schema or identity-model source alteration.
+
+The canonical signed app was built and installed (`target/search-startup-apple-build.log`,
+`target/search-startup-install.log`). Running-app inspection found the helper already
+running on Home before any query. Lock terminated it, immediate Lock after reopening
+left the account locked, and reopening started a fresh lifetime. The first inbox
+query after background preparation returned the five suggestions for “doctors
+appointment”. Existing account/credential/signing and model-profile preservation
+are recorded in `target/search-startup-install-preservation.json`; all encrypted
+device-state tables were unchanged across installation
+(`target/search-startup-state-install-check.json`).
+
+## First-search delay investigation — 26 October 2026
+
+An empty typing-suggestion surface was reproduced after app restart. A temporary
+trace recorded only query hashes, request identities, cancellation state and result
+counts, not search text or correspondence. The first query completed in 12.296
+seconds with five matches, all five present in the mailbox projection. Repeating
+the same query after initialization completed in 0.239 seconds with five matches;
+another warm query took 0.284 seconds. None of these requests was cancelled or
+returned a completed zero-match result. These are observations of this small local
+mailbox, not a general performance benchmark or proof about every reported empty
+surface (`target/search-investigation-timing.json`).
+
+The numerical helper initializes its model lazily on first inference. During that
+initial wait, Swift displays an empty Suggested matches section without a pending
+explanation. This reproduces the reported appearance without a ranking change;
+the earlier description of a confirmed intermittent cancellation failure was
+premature. Initialization and first-result presentation remain work to address.
+The temporary diagnostics were removed and the normal canonical app rebuilt and
+reinstalled. No search algorithm, threshold, publication, permission or credential
+was changed in this investigation. Existing account continuity and the running
+normal binary were checked before completion.
+
+## Request-class audit corrections — 26 October 2026
+
+Both Apple interfaces already offered request-class editing. This update corrects
+the existing workflow: directory rows and profile refresh retain the exact alias
+instead of substituting participant identity, with a distinct Swift alias reference.
+An authenticated member read now inspects permission for that alias using the same
+protected receiving-route rule as quote issuance. It waits for earlier received
+commands to resolve, samples time under protection, and grants no send authority.
+Pair-level pending-request limits and history remain separate from alias permission.
+
+The editor displays Rust's published-class quotability and Rust-owned collateral
+input feedback. Invalid amounts disable Save with a field-specific explanation;
+refresh preserves unfinished writing. Publication checks the current policy again.
+A definitive collateral refusal identifies the class and current bounds, preserves
+the authored edits and connection, and resolves only its original journaled
+operation. Uncertain acknowledgements retain the existing exact-operation retry.
+Obsolete implementation-pending pricing documentation was reconciled. No schema,
+identity-model source, owner publication or credential change was needed.
+
+Validation: ten client checks passed (`target/request-classes-client.log`), including
+exact-operation recovery after a definitive field refusal and accepted-pair versus
+selected-alias projection. Six PostgreSQL directory checks and three pricing checks
+passed (`target/request-classes-directory-postgres.log`,
+`target/request-classes-pricing-postgres.log`). These challenge independent same-owner
+alias publications with equal names/class IDs, policy changes and corrected saves,
+rollback, replay, publication authority and concurrent quote consistency. The final
+protected alias-read rerun passed (`target/request-classes-alias-read-postgres.log`),
+including a live lane scoped to A leaving B on the bonded route. Tests used isolated
+schemas in the local test database, without adding fixtures to the owner's account.
+An initial database URL lacking an explicit host failed before test setup; the
+reported successful runs used the configured localhost connection.
+
+Focused client/bridge/service/storage Clippy and final storage Clippy passed
+(`target/request-classes-clippy.log`, `target/request-classes-storage-final-clippy.log`),
+as did formatting and diff checks. Native SQLite and isolated Keychain checks passed
+(`target/request-classes-native-storage.log`); browser enrollment was explicitly
+skipped. No full quality gate, iOS, live payment-provider transaction or broad
+performance run was performed. Policy-narrowing behavior was challenged in the
+isolated database, not by changing the owner's operator policy to display that
+warning in the running app.
+
+The canonical signed app was staged and installed; the existing supervised backend
+was rebuilt and restarted in place, with its configuration/database and configured
+keys preserved (`target/request-classes-apple-build.log`,
+`target/request-classes-install.log`, `target/request-classes-service-build.log`).
+Running A/B inspection confirmed the formerly failing profile row opens, invalid
+collateral feedback, save prevention and recovery on correction. Interface A also
+restored a filtered directory search on Back and preserved an invalid unfinished
+amount across Refresh. All temporary form edits were restored without saving a
+publication. The app remains running in Interface B.
+
+Original Keychain and service-key fingerprints, signing requirement, private writing,
+personal mailbox and retained-copy ciphertexts passed preservation checks. App and
+backend executable inodes match the installed binaries. Observation-cache and
+retained-metadata snapshots changed during shutdown/ordinary refresh; those are
+reported separately from durable writing/copies. Evidence is in
+`target/request-classes-install-preservation.json`. No enrollment, account conversion,
+credential replacement, owner publication or permission grant was performed.
+
+## Typing suggestions and submitted search — 26 October 2026
+
+This is the current search contract, superseding the ordinary-query behavior in
+the historical records below. Typing shows up to five suggestions. Enter or
+“See full results” shows every eligible retained message containing all entered
+whole words, case-insensitively across its subject and message parts, with explicit
+25-result pagination and no fixed total cap. A separate “Related by meaning” group
+excludes all word matches. Suggestions and related results carry “These are the
+closest matches. There may be no relevant match.” No confidence threshold is used.
+Quoted queries require an exact case-insensitive phrase within one canonical part
+and show no meaning group or caveat. Editing returns to suggestions; Back restores
+the submitted intent, scope and expanded groups.
+
+Rust owns parsing, whole-word/phrase matching, group membership, source eligibility
+and independent group cursors. Swift owns presentation and navigation state. Word
+and phrase search work without the numerical runtime, including retained sources
+whose semantic projections are not yet ready. No schema or credential cutover was
+needed.
+
+Validation: ten client checks and three search checks passed
+(`target/search-modes-client.log`). The named completeness conjecture was challenged
+with 110 uniquely encrypted message occurrences, 25-result pages, cross-part words,
+phrase separation, semantic exclusion, stale requests and expiry. Those fixtures
+were isolated from the owner's mailbox. Focused client/search/bridge Clippy passed
+(`target/search-modes-clippy.log`), as did native scheduling and SQLite/isolated
+Keychain checks (`target/search-modes-native-scheduling.log` and
+`target/search-modes-native-storage.log`). Browser enrollment was explicitly skipped.
+The packaged isolated numerical roundtrip was not rerun for this change; actual
+semantic queries were inspected in the running app. PostgreSQL, iOS, large-mailbox
+latency and energy were not tested.
+
+The canonical app was built, signed, installed and reopened in the original account
+(`target/search-modes-apple-build.log`, `target/search-modes-install.log`). Interface
+A showed five typing suggestions, complete word results, quoted phrase results,
+the exact matched passage and Back restoration. Interface B showed five typing
+suggestions, keyboard Enter submission, all-word results separated from related
+results, editing back to suggestions and Back restoration. The app was left running
+in Interface B. Original Keychain and configured service-key fingerprints and the
+original signing requirement were preserved. Encrypted workspace, mailbox,
+metadata and copy snapshots were unchanged across installation; normal subsequent
+refresh may update encrypted observation caches. Signature and running-executable
+identity checks passed (`target/search-modes-install-preservation.json`). No account
+conversion, enrollment or credential replacement was performed.
+
+## Search audit corrections — 26 October 2026
+
+The audit's three corrections are implemented in the unified member app. Each
+query now captures a distinct Rust request identity before dispatch. Changing or
+clearing search supersedes it; the shared worker checks that identity after its
+queue wait, before adapter work and before disclosure. Superseding an active
+query terminates its subprocess; delayed cancellation cannot terminate a newer
+query or a background indexing turn. Pagination is bound to the original query.
+
+Pipe, startup and helper failures now report RetrievalUnavailable separately from
+contention and supersession. The shared Swift retention pass interleaves bounded
+indexing with downloads, pauses indexing after an encoder failure, and bounds
+contention retries to three attempts per stage. Refresh can start another pass.
+No spinner, technical status panel or alternate application mode was added.
+
+Quoted queries assemble contiguous, overlapping canonical text-part ranges and
+find the literal occurrence independently of individual embedding windows. The
+result carries the exact original range, including Unicode lowercase expansion;
+its text, source/version, current custody, receiving scope and expiry are still
+checked against authenticated original content before disclosure. This changes
+query behavior without changing model fingerprints, encrypted formats or schema.
+
+Validation: ten client checks and two search-domain checks passed, including new
+cross-window/Unicode, real-subprocess supersession and runtime-failure checks
+(`target/search-corrections-client.log`). Focused client/bridge Clippy passed.
+The packaged real-model inference/encrypted-store check passed separately
+(`target/search-corrections-packaged-runtime.log`). Native scheduling checks
+challenged permanent encoder failure, persistent index/download contention and
+stale passes (`target/search-corrections-retention.log`). Existing native SQLite
+and isolated Keychain checks passed; browser enrollment was explicitly skipped
+(`target/search-corrections-native-storage.log`). Sandbox restrictions required
+system access for signing, Metal and Keychain checks; successful reruns are the
+reported evidence. No PostgreSQL or identity-model sources changed; their suites
+and iOS were not run. Full-mailbox latency, energy and crash cleanup remain open.
+
+The canonical signed app was staged, installed and reopened in the original
+account. Interface B inspection confirmed quoted subject/body results, exact
+matched-passage display, Back restoration and final-query provenance after query
+changes. The boundary-crossing case was challenged in an isolated regression,
+without inserting synthetic correspondence into the owner's mailbox. Original
+Keychain and configured service-key fingerprints, private writing and retained
+copy ciphertexts were checked; signing and running-executable evidence is in
+`target/search-corrections-install-preservation.json`. Ordinary observation refresh
+may rewrite encrypted cache/alias metadata. No account conversion or enrollment
+was performed. The staged bundle was consumed by installation.
+
+## Retained-text semantic search in the member app — 26 October 2026
+
+The Mac member client now uses the provisionally selected offline EmbeddingGemma 2
+text-only configuration with SQLCipher/FTS5/vec1 exact retrieval. Ordinary searches
+combine meaning and words; quoted searches require literal text. Both A and B use
+the same Rust client, account, durable source records and source-bound navigation.
+Rust owns eligibility, profile compatibility, publication and final disclosure.
+Swift preserves query/result provenance, receiving scope, Back navigation and lock
+clearing. No spinner or extra application mode was added. A verified canonical
+Matched passage is visible beside the original inert HTML presentation; this is
+not a claimed DOM-coordinate map.
+
+Each encrypted authoritative index record owns Pending, Building or Ready model
+projection state. At most four token-bounded passages are inferred per turn outside
+foreground locks. Publication rechecks current source content/version, expiry,
+custody and unlocked lifetime before the existing atomic retained transaction.
+Rust supervises the offline numerical/storage subprocess using bounded anonymous
+pipes. Its SQLCipher session projection uses an HMAC-derived key, a 256 MiB cache
+suggestion and memory-only SQLite temporary storage. Lock/source removal interrupts
+it; normal parent exit also closes the pipe and removes the encrypted session
+cache. Durable vectors remain individually encrypted with their source records.
+The pinned Mac resource package is approximately 2.3 GB; iOS model packaging,
+full-mailbox end-to-end latency, memory/energy and crash/forensic-erasure guarantees
+remain unvalidated. No owner Takeout correspondence was imported into the app.
+
+The explicit v2→v3 derived-index cutover preserved all 15 original copy ciphertexts,
+account cache, private writing, personal organization, metadata and the existing
+Keychain credential. Rollback was rehearsed before atomic publication. The
+maintenance tool has guarded retry behavior; an exact retry was not exercised.
+The member runtime has no predecessor word-index reader or fallback implementation.
+Canonical builds compare the original designated signing requirement before
+replacement. `scripts/apple-build.sh --stage` leaves the installed app alone;
+`--install-staged` installs the checked staged bundle at the canonical path.
+
+Validation evidence: all seven enabled quality-gate checks passed, with PostgreSQL
+explicitly skipped (`target/semantic-integration-quality-final.log`). The seven
+existing Rust client authority/custody scenarios use deterministic numerical
+fixtures and do not establish model quality. The separately executed packaged
+real-model check challenges actual inference/storage, alias filtering, encrypted
+DB/WAL canaries, lock invalidation and reopened worker isolation. Native SQLite
+rollback/exclusivity and isolated Keychain checks passed
+(`target/semantic-native-storage-final.log`); inert HTML/resources/network/script
+and find checks passed (`target/semantic-reader-check.log`). Broader native fixture
+enrollment stopped with Offline: the existing mail service was healthy, but its
+separate local identity service was unavailable. This is not public/live-provider
+delivery evidence. No PostgreSQL schema or identity-model sources changed.
+
+Final canonical build/install and strict verification passed
+(`target/semantic-release-build.log`, `target/semantic-release-install.log`). The
+running executable matches that installation. Both A and B visibly show the
+verified matched-passage area and original email with its header; B is restored.
+Final client checks passed 7/7 (`target/semantic-client-final.log`), the real-model
+runtime check passed separately (`target/semantic-packaged-runtime-final.log`),
+and parent-pipe EOF cleanup passed (`target/semantic-runtime-exit-check.log`).
+Final reader checks and focused bridge Clippy passed. The completed encrypted
+cutover backup/plan were removed after continuity and source verification; compact
+hash evidence remains. Superseded compiler incremental artifacts were reclaimed;
+durable application stores were preserved.
+
+The running app walkthrough found the fictional appointment email first for a
+semantic paraphrase, verified quoted-phrase restriction, receiving-inbox exclusion,
+Back restoration and lock clearing. Original account contacts and aliases reopened;
+the existing Keychain fingerprint and configured service key fingerprints remain
+unchanged. Strict signing, installed/running executable evidence and preservation
+records are under `target/semantic-install-preservation.json`. The source format,
+structured filters, identifier-specific precedence, reliable no-answer decisions,
+attachment/OCR extraction, encrypted cross-device synchronization/draft conflicts,
+backup enforcement and composing recommendations remain separate work.
+
+## Small private-correspondence evaluation — 25 October 2026
+
+The owner authorized a local body-text sample and supplied five searches before
+results were shown. Generic tooling/protocol is in `tools/private-mail-evaluation`;
+correspondence, owner queries and aggregate run artifacts stay outside the
+repository. Temporary indices are SQLCipher-encrypted with ephemeral in-memory
+keys and removed after the run; the source archive is unchanged. No app store,
+account, signing requirement or Keychain entry was accessed or modified.
+
+Real MIME processing exposed empty plain alternatives with readable HTML bodies.
+The explicit fallback repair changes the preprocessing fingerprint and regenerates
+vectors. Both exact engines pass numerical/parity, source-passage verification,
+wrong-profile/key and owner-query path checks. A local Terminal grading workflow
+completed with 41 distinct query/message owner grades: useful first results were
+semantic 5/5, lexical 4/5 and hybrid 5/5; useful top-five counts were 17/25, 13/25
+and 18/25. Recall and no-answer behavior remain unmeasured. This is body
+text only, with attachment/OCR and full-mailbox scale still unvalidated. No message
+body, subject, address or ranking is written into repository evidence or agent
+tool output. Existing lock/concurrency/custody tests are not relabelled as private
+sample validation.
+
+The installed member app remains the previous drafting-appearance build. This
+evaluation adds no native semantic-search workflow. No app build or unrelated
+Rust/PostgreSQL suites were run for this development-tool-only pass.
+
+## Bounded vector cache and isolated Rust worker — 25 October 2026
+
+The follow-up experiment tests exact encrypted retrieval through a separate Rust
+connection-owning worker. It does not change the member app, owner store, account,
+Keychain or signing requirement. The installed app remains the previous
+drafting-appearance build; there is no new native semantic-search workflow here.
+
+Both engines meet the unchanged 100k warm-query p95 target with a 256 MiB cache
+suggestion: vec1 metadata about 26 ms broad / 11 ms filtered; sqlite-vec about
+99 / 9 ms. Actual SQLite caches reach about 224–227 MiB, with sampled Rust-process
+RSS about 290 MiB without the embedding model. The 2 and 64 MiB settings fail;
+512 MiB gives little additional benefit on this generated corpus. These are
+synthetic storage measurements, not real-mail semantic quality or cold-start/UI
+performance. No production engine is finally selected.
+
+All 192 exhaustive eligible-oracle comparisons and 576 warm timings completed;
+rankings match across cache settings and engines. The isolated worker passes
+deadline interruption, active-query lock, queued-work rejection, completed-result
+suppression, query replacement and old-ticket refusal after close/join/reopen.
+Its initial small harness check exposed interruption during prepare; the corrected
+worker passed before the full protocol was frozen. Earlier diagnostics and
+small-cache failures remain review evidence.
+
+See [the cache/worker report](../../docs/vector-cache-worker-evaluation.md) for frozen
+inputs, actual memory costs, individual timings and cancellation limits. All
+generated databases were removed. Production Rust/client custody integration,
+atomic source mutation, representative corpus, model packaging, energy, iOS and
+native interaction validation remain open. No app build or unrelated workspace/
+PostgreSQL suite was run for this tool-only pass.
+
+## Gemma 2 with encrypted vector storage — 25 October 2026
+
+Completed an isolated SQLCipher/FTS5/vector-store experiment with Gemma 2's measured
+512d vectors, comparing vec1 flat streaming joins, vec1 metadata prefilters with
+current-source joins, and sqlite-vec vec0 with eligible-rowid filtering. A fresh
+offline Gemma query also completed the path through keyword/vector retrieval to
+checksum-verified fixture passages. This is development evidence outside the app:
+no owner store, account or Keychain was opened, no store was migrated and the
+installed app remains the previous drafting-appearance build.
+
+All arms preserved the same 48 fixture query rankings and verified 434 returned
+passages each. Publication rollback, durable removal with failed cleanup/reopen,
+stale generation, profile substitution, query-time expiry and sequential lock
+counterexamples passed. Wrong/no-key access was refused; text/vector canaries were
+absent from database/live WAL, and compile-time memory-only temporary storage with
+a forced sort was checked. These are bounded experimental-adapter checks, not a
+production custody/concurrency or forensic-erasure audit.
+
+The scale run completed 144 exact oracle comparisons and 432 warm measurements.
+Initial plans missed the latency target and remain recorded. An explicit revision
+bounded vec1's candidate set before its outer sort and indexed source filters.
+All revised 100k plans still missed the unchanged 250 ms p95 target: vec1 metadata
+measured about 334 ms broad / 311 ms selectively filtered; sqlite-vec 473 / 351 ms.
+Sqlite-vec used about 229 MiB versus vec1's 418 MiB. No engine is finally selected.
+See [the measured report](../../docs/encrypted-vector-store-evaluation.md), including
+SQL plans, source/build hashes and preserved failures. Temporary test databases
+and their keys were removed. Cache-budget/Rust-worker, representative ANN recall if
+needed, battery, iOS and native foreground behavior remain unvalidated. No app build
+or unrelated Rust/PostgreSQL suite was run for these evaluation-only changes.
+
+## Local embedding-model comparison — 25 October 2026
+
+Measured Qwen3-Embedding-0.6B and, at the owner's direction, Apache-2.0
+EmbeddingGemma 2 with its vision/audio encoders disabled. The available M1 Max Mac
+with 32 GB is now the reference for this comparison. Both ran offline in the same
+pinned Metal/float32 runtime at 512 dimensions, against the same frozen fictional
+correspondence and relevance judgments. No owner mail, app store or Keychain was
+opened by the experiment, and the installed app is unchanged by this work.
+
+The 35 positive test queries gave embedding Recall@5 of 94.3% for Qwen and 100% for
+Gemma 2; both put relevant material first for 74.3%. Fixed BM25/embedding fusion
+raised first-result accuracy to 80.0% and 88.6% respectively. Exact identifiers,
+opposite meanings and no-answer behavior still need explicit retrieval rules.
+The paired MRR interval includes zero; this small agent-authored screen does not
+establish a general quality winner. Gemma 2's lower sampled resource cost supports
+using its text-only configuration in the next integration experiment.
+
+The [full measured report](../../docs/embedding-model-evaluation.md) records the
+protocol, checkpoint/runtime hashes, individual failures, frozen gates and resource
+measurements. Vector shape/norm, score-derived rankings, shared runtime versions,
+frozen inputs and fixture eligibility were checked against the saved results.
+Battery/energy, iOS, native foreground responsiveness, quantization and production
+storage/authorization boundaries were not measured. This evaluation does not add
+semantic inference or structured search to the app. No unrelated Rust/PostgreSQL
+suites or app rebuild were run for evaluation-only files.
+
+## Drafting surface follows appearance — 25 October 2026
+
+The shared A/B ordinary message editor now uses a dark opaque canvas with light
+default text in dark appearance, retaining white with dark text in light appearance.
+SwiftUI, the native WebKit background and document canvas share one presentation
+contract. Theme styles live in the document head, outside captured message HTML;
+switching appearance does not reload the draft. Explicit text colors and imported
+design content retain their authored formatting.
+
+Canonical build/install, original signing requirement and strict verification passed
+(`target/composer-appearance-build.log`). The normally reopened running executable
+matches the installation; configured key fingerprints remain unchanged
+(`target/composer-appearance-preservation.json`). Running Interface B verified readable
+writing in dark/light appearance, preserved text and caret when switching, and
+save/reopen with the same subject/body. Restored B dark; the unsent “Draft appearance
+review” is saved and open. No message was sent. The existing focused WebKit check
+passed (`target/composer-appearance-render.log`). Whitespace checks passed. No new
+tests or unrelated Rust/PostgreSQL suites; a separate A walkthrough and iOS runtime
+were not exercised for this presentation-only change.
+
+## Source-bound passage navigation and search lifetime — 25 October 2026
+
+The first private-navigation slice replaces the previous lexical-search owner with
+authenticated source/version/passage results. A/B open the matching message and
+reveal its exact canonical text occurrence; Back restores the query and results.
+Result subjects and dates belong to the matched message. The scope explanation
+identifies retained subjects/text and explicitly excludes files, pictures and
+reference targets. This remains lexical search, not semantic inference.
+
+Rust now owns explicit unlocked search lifetimes. Lock immediately invalidates
+dispatched work, including an unlock waiting on custody; old cleanup cannot close
+a newer lifetime. Pending signed copy deletion suspends retrieval even after a
+checkpoint failure/reopen. Bounded expiry cleanup removes retained copies and index
+words together. Background retention yields to foreground work and holds neither
+the foreground operation mutex nor device secrets across a network download.
+The new search domain owns checked occurrence/version/passage identities,
+compatibility fingerprints and lifecycle consequences. Its future extraction/sync
+work intents are contracts; their durable adapters are not implemented here.
+
+Validation: all seven enabled quality-gate checks passed on the final source
+(`target/semantic-navigation-quality-final.log`); PostgreSQL suites were explicitly
+skipped. Focused domain/client counterexamples passed, including late publication,
+warm/reopened deletion failure, lock during pending unlock, expiry after rebuild and
+a foreground send during a blocked background fetch
+(`target/semantic-navigation-domain-client.log`). The 100,000-entry retained-index
+experiment passed with an in-memory adapter; it is not a SQLite/device or semantic
+performance result (`target/semantic-navigation-retained-scale.log`). The isolated
+native SQLite/Keychain/HTTP journey passed against fresh local fixture databases
+(`target/semantic-navigation-native-journey.log`); final-build native storage and
+isolated Keychain checks also passed
+(`target/semantic-navigation-native-storage-final.log`). Public delivery was not tested.
+
+Canonical build, original signing comparison, strict verification and installation
+passed (`target/semantic-navigation-apple-build.log`). The app was normally reopened;
+its running executable matches the installed final executable. Running B dark
+opened and highlighted both a native exact phrase and an HTML body match, and Back
+restored the query/results. Lock removed reader/search content; Open account restored
+the original account. A also opened/highlighted the native phrase and restored its
+query on Back. Restored B dark on Home. No messages were sent and no owner copies
+were deleted during this walkthrough. Original signing requirement, configured key
+fingerprints, account/persona ownership and all four requested addresses match the
+preservation baseline (`target/semantic-navigation-preservation.json`); no original
+Keychain credential was replaced or migrated.
+
+Model inference, full file/OCR extraction, original HTML/DOM mapping, encrypted
+embedding/draft synchronization, concurrent draft resolution, SQLCipher/vector
+retrieval and composing-related retrieval remain unimplemented. Seven days is the
+selected backup-removal maximum in the domain; operational backup deletion has not
+been implemented or validated. iOS runtime, newest-reference-device performance,
+VoiceOver and exhaustive format/navigation cases were not exercised. See
+[the implementation record](../../docs/private-semantic-navigation-implementation.md)
+for ownership, decisions, remaining work and evidence limits.
+
 ## Composer click targets and recipient selection — 25 October 2026
 
 Fixed recipient suggestions disappearing on mouse-down before their buttons could

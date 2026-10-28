@@ -20,6 +20,9 @@ impl From<directory::Error> for StorageError {
                 Self::Security(cs_mail_security::SecurityError::ActorMismatch)
             }
             directory::Error::Conflict => Self::DuplicateConflict,
+            directory::Error::Collateral { .. } => {
+                Self::Protocol(cs_mail_protocol::ProtocolError::RequestClassOutsidePolicy)
+            }
         }
     }
 }

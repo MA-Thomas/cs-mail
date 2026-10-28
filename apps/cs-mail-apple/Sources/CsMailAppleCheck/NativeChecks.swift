@@ -51,8 +51,22 @@ private final class FixtureRoutes: @unchecked Sendable {
         fixtureRoutes.record(id, for: owner)
         return id
     }
+    // Challenge source and alias authority through the real offline encoder;
+    // explicit draining supplies the background work normally owned by MemberModel.
+    private static func finishSearchIndex(_ client: AppleClient) throws {
+        let session = try client.searchSession()
+        for _ in 0..<10_000 {
+            if try client.indexLocalMail(session: session, limit: 25) == 0 { return }
+        }
+        throw CheckFailure(code: "bounded-search-index-incomplete")
+    }
     static func main() async throws {
         setbuf(stdout, nil)
+        if ProcessInfo.processInfo.environment["CS_MAIL_RETENTION_CHECK"] == "1" {
+            try await retentionFailureIsolation()
+            print("PASS encoder failure preserves downloads; contention retries are bounded; stale passes stop")
+            return
+        }
         if ProcessInfo.processInfo.environment["CS_MAIL_EMAIL_RENDER_CHECK"] == "1" {
             try await inertEmailRendering()
             print("PASS WebKit HTML layout, embedded raster, blocked network, disabled script, and local find")
@@ -331,7 +345,8 @@ private final class FixtureRoutes: @unchecked Sendable {
         try require(try alice!.conversation(sender: bobID).threads.first { $0.id == original.id }?.label == "Native shared subject canary", "reply-changed-subject")
         alice = nil; alice = try openAlice()
         try require(try alice!.cachedConversation(sender: bobID).threads.first { $0.id == original.id }?.label == "Native shared subject canary", "retained-subject-not-reopened")
-        let localSubjectSearch = try alice!.searchMail(query: "Native shared subject canary", scope: .all, after: 0, limit: 25)
+        try finishSearchIndex(alice!)
+        let localSubjectSearch = try alice!.searchMail(session: try alice!.searchSession(), request: try alice!.beginSearch(session: try alice!.searchSession()), query: "\"Native shared subject canary\"", mode: .suggestions, scope: .all, after: 0, limit: 25)
         try require(!localSubjectSearch.matches.isEmpty, "reopened-subject-not-searchable")
         print("OBSERVE fixed shared subject and retained subject search after native SQLite reopening")
         print("OBSERVE native follow-up and confined answer delivered")
@@ -505,13 +520,15 @@ private final class FixtureRoutes: @unchecked Sendable {
         try bob.organizeMail(key: mail.key, scope: .all, action: .restore)
         try require(try bob.mailItems().first { $0.key == mail.key }?.folder == .archive, "trash-restored-wrong-folder")
         try require(try bob.conversation(sender: aliceID).messages.contains { $0.id == source.id }, "organization-removed-content")
-        let search = try bob.searchMail(query: "native-request-private-canary", scope: .all, after: 0, limit: 25)
+        try finishSearchIndex(bob)
+        let searchRequest = try bob.beginSearch(session: try bob.searchSession())
+        let search = try bob.searchMail(session: try bob.searchSession(), request: searchRequest, query: "\"native-request-private-canary\"", mode: .suggestions, scope: .all, after: 0, limit: 25)
         try require(!search.matches.isEmpty, "retained-text-not-searchable")
         try bob.clearSearch()
-        try refuses { _ = try bob.searchMail(query: "native-request-private-canary", scope: .all, after: search.next, limit: 25) }
+        try refuses { _ = try bob.searchMail(session: try bob.searchSession(), request: searchRequest, query: "\"native-request-private-canary\"", mode: .suggestions, scope: .all, after: search.next, limit: 25) }
         // Delete the fixture account's copies only; the peer must retain its copy.
         try bob.deleteNativeCopies(conversation: original.id)
-        try require(try bob.searchMail(query: "Native shared subject canary", scope: .all, after: 0, limit: 25).matches.isEmpty, "removed-copy-still-searchable")
+        try require(try bob.searchMail(session: try bob.searchSession(), request: try bob.beginSearch(session: try bob.searchSession()), query: "\"Native shared subject canary\"", mode: .suggestions, scope: .all, after: 0, limit: 25).matches.isEmpty, "removed-copy-still-searchable")
         let afterRemoval = try bob.conversation(sender: aliceID)
         try require(afterRemoval.messages.filter { $0.conversation == original.id }.allSatisfy { if case .unavailable = $0.content { return true }; return false }, "removed-copy-still-readable")
         try require(try alice!.conversation(sender: bobID).messages.contains { $0.conversation == original.id && $0.text.contains("native-request-private-canary") }, "peer-copy-deleted")
@@ -554,12 +571,14 @@ private final class FixtureRoutes: @unchecked Sendable {
         try recipient.organizeMail(key: item.key, scope: .alias(id: first), action: .read(displayed: [one]))
         workspace = try recipient.inboxWorkspace()
         try require(workspace.inboxes.first { $0.address.id == first }?.unread == 0 && workspace.inboxes.first { $0.address.id == second }?.unread == 1, "alias-read-escaped-scope")
-        _ = try recipient.retainMail(limit:25)
-        let search = try recipient.searchMail(query: "alias-inbox-second-canary", scope: .alias(id: first), after: 0, limit: 25)
+        _ = try recipient.retainMail(session: try recipient.searchSession(), limit:25)
+        try finishSearchIndex(recipient)
+        let search = try recipient.searchMail(session: try recipient.searchSession(), request: try recipient.beginSearch(session: try recipient.searchSession()), query: "\"alias-inbox-second-canary\"", mode: .suggestions, scope: .alias(id: first), after: 0, limit: 25)
         try require(search.total == 0 && search.searched == 1 && search.matches.isEmpty, "search-escaped-alias")
-        let matching = try recipient.searchMail(query: "alias-inbox-second-canary", scope: .alias(id: second), after: 0, limit: 25)
+        let matchingRequest = try recipient.beginSearch(session: try recipient.searchSession())
+        let matching = try recipient.searchMail(session: try recipient.searchSession(), request: matchingRequest, query: "\"alias-inbox-second-canary\"", mode: .suggestions, scope: .alias(id: second), after: 0, limit: 25)
         try require(matching.matches.map(\.message) == [two] && matching.next == 1, "matching-alias-copy-not-found")
-        try refuses { _ = try recipient.searchMail(query: "alias-inbox-second-canary", scope: .alias(id: first), after: matching.next, limit: 25) }
+        try refuses { _ = try recipient.searchMail(session: try recipient.searchSession(), request: matchingRequest, query: "\"alias-inbox-second-canary\"", mode: .suggestions, scope: .alias(id: first), after: matching.next, limit: 25) }
         print("OBSERVE indexed alias search and matched-ID cursor scope")
         // Conjecture: restricting preserves exact conversations; removal and sender replacement never grandfather others.
         guard case .applied = try recipient.updateAddress(mutation: .permission(id: second, revision: b.address.revision, permissionRevision: 1, action: .restrict)) else { throw CheckFailure(code: "restrict-lane") }
@@ -577,8 +596,8 @@ private final class FixtureRoutes: @unchecked Sendable {
         _ = try recipient.controlRelationship(sender: senderID, control: .block)
         do { _ = try sender.sendMessageToAlias(other: owner, alias: second, conversation: conversation, text: "blocked-must-not-deliver"); throw CheckFailure(code: "alias-bypassed-block") } catch ClientError.SendRefused { }
         _ = try recipient.controlRelationship(sender: senderID, control: .unblock)
-        try recipient.clearInboxes()
-        try refuses { _ = try recipient.searchMail(query: "alias-inbox", scope: .alias(id: second), after: 0, limit: 25) }
+        try recipient.closeSearchSession(session: try recipient.searchSession())
+        try refuses { _ = try recipient.searchMail(session: try recipient.searchSession(), request: try recipient.beginSearch(session: try recipient.searchSession()), query: "alias-inbox", mode: .suggestions, scope: .alias(id: second), after: 0, limit: 25) }
         print("PASS native receiving evidence, mixed-alias conversation membership, scoped unread/search, retirement history and cross-alias blocking")
     }
     private static func submitDraftForCheck(_ client: AppleClient, target: DraftTarget, body: DraftBody, disclose: Bool = false, reviewedRequest: String? = nil, subject: String = "") throws -> DraftSubmission {
@@ -617,8 +636,9 @@ private final class FixtureRoutes: @unchecked Sendable {
         _ = try client.sync()
         thread = try unwrap(client.externalInbox().threads.first { $0.id == id }, "external-reply")
         try require(thread.messages.contains { !$0.outgoing }, "external-authenticated-reply-missing")
-        _ = try client.indexLocalMail(limit:25)
-        let localSearch = try client.searchMail(query:"external-authored-private-canary",scope:.all,after:0,limit:25)
+        _ = try client.indexLocalMail(session: try client.searchSession(), limit:25)
+        try finishSearchIndex(client)
+        let localSearch = try client.searchMail(session: try client.searchSession(), request: try client.beginSearch(session: try client.searchSession()), query:"\"external-authored-private-canary\"",mode: .suggestions, scope:.all,after:0,limit:25)
         try require(localSearch.matches.contains { $0.key.transport == .external && $0.key.conversation == id }, "external-independent-index-search")
 
         try require(try client.conversation(sender: thread.guest).requests.isEmpty, "external-unpaid-reply-created-request")

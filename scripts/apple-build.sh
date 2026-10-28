@@ -14,7 +14,15 @@ if [[ "$signer" == "-" ]]; then
   echo "The unified account app requires its original stable code-signing identity. Set up app signing before building." >&2
   exit 1
 fi
+mode="${1:-build-install}"
+if [[ "$mode" != "build-install" && "$mode" != "--stage" && "$mode" != "--install-staged" ]]; then
+  echo "Usage: scripts/apple-build.sh [--stage|--install-staged]" >&2
+  exit 1
+fi
+staged="$root/target/apple/CsMail-staged.app"
+if [[ "$mode" != "--install-staged" ]]; then
 export MACOSX_DEPLOYMENT_TARGET=14.0
+python3 scripts/package-search-runtime.py --signer "$signer"
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$root/target/apple-module-cache}"
 export SWIFTPM_MODULECACHE_OVERRIDE="$CLANG_MODULE_CACHE_PATH"
 mkdir -p "$CLANG_MODULE_CACHE_PATH" "$root/target/apple-swift-cache"
@@ -33,6 +41,8 @@ destination="$root/target/apple/CsMail-continuity-20261012.app"
 mkdir -p "$root/target/apple"
 app="$(mktemp -d "$root/target/apple/.CsMail-build.XXXXXX")/CsMail.app"
 mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/Resources"
+cp -cR "$root/target/apple-search-runtime" "$app/Contents/Resources/Search"
 cp apps/cs-mail-apple/.build/debug/CsMailMac "$app/Contents/MacOS/CsMail"
 cp apps/cs-mail-apple/Info-macOS.plist "$app/Contents/Info.plist"
 python3 - "$app/Contents/Info.plist" "$signer" "$root/target/apple-continuity-state-20261012" <<'PYPLIST'
@@ -61,6 +71,12 @@ PYPLIST
 signing_identifier="com.csqd.member.dev"
 codesign --force --sign "$signer" --identifier "$signing_identifier" "$app"
 codesign --verify --strict "$app"
+fi
+destination="$root/target/apple/CsMail-continuity-20261012.app"
+if [[ "$mode" == "--install-staged" ]]; then
+  app="$staged"
+  codesign --verify --strict "$app"
+fi
 if [[ -d "$destination" ]]; then
   prior_requirement="$(codesign -d -r- "$destination" 2>/dev/null)"
   built_requirement="$(codesign -d -r- "$app" 2>/dev/null)"
@@ -69,11 +85,20 @@ if [[ -d "$destination" ]]; then
     exit 1
   fi
 fi
-previous="${app%/CsMail.app}/previous.app"
+if [[ "$mode" == "--stage" ]]; then
+  rm -rf "$staged"
+  mv "$app" "$staged"
+  rmdir "${app%/CsMail.app}"
+  echo "Staged $staged; installed application unchanged"
+  exit 0
+fi
+install_work="$(mktemp -d "$root/target/apple/.CsMail-install.XXXXXX")"
+previous="$install_work/previous.app"
 if [[ -d "$destination" ]]; then mv "$destination" "$previous"; fi
 if ! mv "$app" "$destination"; then
   if [[ -d "$previous" ]]; then mv "$previous" "$destination"; fi
   exit 1
 fi
-rm -rf "${app%/CsMail.app}"
+rm -rf "$install_work"
+if [[ "$mode" != "--install-staged" ]]; then rmdir "${app%/CsMail.app}"; fi
 echo "Built $destination"

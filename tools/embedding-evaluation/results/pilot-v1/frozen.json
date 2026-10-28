@@ -1,0 +1,13 @@
+{
+  "frozen_at_utc": "2026-10-25T19:22:18.569960+00:00",
+  "inputs": {
+    "tools/embedding-evaluation/fixture.json": "e4c49b870fcdf8142069af3f149a821c19744f9dc4743ac2d89eec1c3efceb5c",
+    "tools/embedding-evaluation/README.md": "6cea49224b783eddc5c483750b89a2ab3909f8fe0095a5714a737223d125597a",
+    "tools/embedding-evaluation/common.py": "f89411791fee4d89ec8262c71beb91113f6d8ea5e020c9b022c216ce968e0825",
+    "tools/embedding-evaluation/evaluate.py": "f64093e7fb275c457710363f6e6f1dd4661d67a15a11402704a95cc1d8f1ef1a",
+    "tools/embedding-evaluation/requirements.txt": "5fc92db98693274603957c3b89f3298db904756d2baf796f7c0b646b74de0635"
+  },
+  "documents": 54,
+  "queries": 48,
+  "test_queries": 40
+}

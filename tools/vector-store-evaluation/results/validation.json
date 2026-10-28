@@ -1,0 +1,10 @@
+{
+  "frozen_input_hashes_match": true,
+  "all_arms_same_48_vector_and_hybrid_rankings": true,
+  "all_lifecycle_and_protection_cases_passed": true,
+  "both_extensions_neon_enabled": true,
+  "scale_oracle_cases": 144,
+  "scale_warm_measurements": 432,
+  "live_query_profile_matches": true,
+  "all_100k_latency_targets_passed": false
+}

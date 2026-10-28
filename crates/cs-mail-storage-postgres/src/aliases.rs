@@ -381,3 +381,43 @@ impl super::PostgresDeployment {
         Ok(owner)
     }
 }
+
+impl super::PostgresDeployment {
+    /// Inspect exactly the same protected route facts as quote issuance, with trusted
+    /// time sampled after the receipt barrier. This read grants no delivery authority.
+    /// # Errors
+    /// Unavailable storage or inconsistent pair/route evidence.
+    pub fn alias_request_permission(
+        &self,
+        handle: cs_mail_application::members::RelationshipHandle,
+        alias: AliasId,
+        key: cs_mail_primitives::OperationalKeyRef,
+        provider: cs_mail_primitives::ProviderRef,
+        clock: impl FnOnce() -> CanonicalTime,
+    ) -> Result<Option<cs_mail_protocol::RequestPermission>, StorageError> {
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut tx = client.transaction()?;
+        ingress::require_drained(&mut tx)?;
+        let (relationship, lane) =
+            participant_permission(&mut tx, handle.sender, handle.recipient)?;
+        let relationship = relationship.ok_or(StorageError::NumericRange)?;
+        if relationship.key.reference != handle.relationship {
+            return Err(StorageError::NumericRange);
+        }
+        let result = match ingress::alias_request_permission(
+            &mut tx,
+            &relationship,
+            lane.as_ref(),
+            alias,
+            clock(),
+            provider,
+            key,
+        ) {
+            Ok(permission) => Some(permission),
+            Err(StorageError::Protocol(cs_mail_protocol::ProtocolError::ContactBlocked)) => None,
+            Err(error) => return Err(error),
+        };
+        tx.commit()?;
+        Ok(result)
+    }
+}

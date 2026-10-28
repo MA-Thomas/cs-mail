@@ -31,6 +31,26 @@ class.
 issued terms, partition principal-recipient history, or provide extra pending
 request slots. There is no misclassification penalty beyond ordinary rejection.
 
+## Apple publication and request entry — 26 October 2026
+
+Both interfaces expose each bonded alias's profile and classes through alias
+management. Directory rows, selected-profile refresh and row identity use the
+alias, keeping participant identity separate for relationship operations. Back
+retains the directory query, page and selection context.
+
+An authenticated alias-permission read uses the same protected route inspection
+and deterministic admission rule as quotation. Current permission for alias A
+cannot suppress bonded-request entry for alias B. Pending requests and history
+remain participant-pair facts; this presentation read grants no sending authority.
+
+Rust supplies published-class quotability and collateral input feedback. Swift
+shows unavailable published classes and field-specific corrections beside their
+amounts, without rewriting saved terms or discarding edits. Observed policy bounds
+support form feedback; the atomic publication decision checks current bounds again.
+A definitive collateral refusal identifies its class and current bounds, clears
+only the original resolved operation, and leaves the account connected. Lost
+acknowledgements retain their exact-operation retry path.
+
 ## Permission and settlement
 
 Standing acceptance uses the existing signed relationship command. Express-lane

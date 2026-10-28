@@ -389,6 +389,21 @@ impl<C: CanonicalClock + Clone + 'static> MemberGateway<C> {
                     .billing_account(accounts.product_account(account)?.billing)?;
                 MemberAnswer::Account(AccountView::of(account, &state, &billing, now))
             }
+            MemberRead::AliasRequestPermission { recipient, alias } => {
+                let address = self.address(signed.persona, recipient)?;
+                self.open(&address)?;
+                MemberAnswer::AliasRequestPermission {
+                    recipient,
+                    alias,
+                    permission: self.deployment.alias_request_permission(
+                        address.public(),
+                        alias,
+                        signed.operational_key,
+                        self.record.record().provider,
+                        || self.clock.now(),
+                    )?,
+                }
+            }
             MemberRead::AsSender { recipient } => {
                 let address = self.address(signed.persona, recipient)?;
                 self.open(&address)?;

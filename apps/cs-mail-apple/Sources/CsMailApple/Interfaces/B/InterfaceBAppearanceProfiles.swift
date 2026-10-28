@@ -7,6 +7,21 @@ struct InterfaceBAppearanceSnapshot: Codable, Equatable {
     var texture: InterfaceBTerrazzoAppearance
 }
 
+/// Fixed product defaults; selecting or editing a user profile cannot mutate these values.
+enum InterfaceBSystemAppearance {
+    static let light = InterfaceBAppearanceSnapshot(mode: .light, texture: InterfaceBTerrazzoAppearance(
+        usesDefault: true, hue: 0.5309795673076924, brightness: 0.5143624441964286, intensity: 1))
+    static let dark = InterfaceBAppearanceSnapshot(mode: .dark, texture: InterfaceBTerrazzoAppearance(
+        usesDefault: false, hue: 0.2596003605769231, brightness: 0.30139508928571423, intensity: 1,
+        mainOpacity: 0.11289713541666666, surroundingOpacity: 0.3268977864583333))
+    static func snapshot(for mode: InterfaceBAppearanceSnapshot.Mode) -> InterfaceBAppearanceSnapshot {
+        mode == .light ? light : dark
+    }
+    static func name(for mode: InterfaceBAppearanceSnapshot.Mode) -> String {
+        mode == .light ? "Light Terrazzo" : "Dark Green"
+    }
+}
+
 private struct AppearanceProfile: Codable, Identifiable {
     let id: UUID
     var name: String
@@ -49,10 +64,6 @@ private struct AppearanceProfile: Codable, Identifiable {
     func isModified(_ current: InterfaceBAppearanceSnapshot) -> Bool {
         selectedProfile.map { $0.appearance != current } ?? false
     }
-    func preserveInitial(_ current: InterfaceBAppearanceSnapshot) {
-        guard readable, defaults.object(forKey: key) == nil else { return }
-        saveNew(name: current.mode == .dark ? "Dark Green" : "Saved appearance", current: current)
-    }
     @discardableResult func saveNew(name: String, current: InterfaceBAppearanceSnapshot) -> Bool {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard validName(name) else { return false }
@@ -65,6 +76,11 @@ private struct AppearanceProfile: Codable, Identifiable {
         guard let profile = library.profiles.first(where: { $0.id == id }) else { return nil }
         var next = library; next.selected = id
         return commit(next) ? profile.appearance : nil
+    }
+    func clearSelection() {
+        guard library.selected != nil else { return }
+        var next = library; next.selected = nil
+        commit(next)
     }
     func update(_ current: InterfaceBAppearanceSnapshot) {
         guard let index = library.profiles.firstIndex(where: { $0.id == library.selected }) else { return }
@@ -104,6 +120,8 @@ private struct AppearanceProfile: Codable, Identifiable {
 struct InterfaceBAppearanceProfileControls: View {
     @ObservedObject var profiles: InterfaceBAppearanceProfiles
     @Binding var current: InterfaceBAppearanceSnapshot
+    let isSystemDefault: Bool
+    let useSystemDefault: (InterfaceBAppearanceSnapshot.Mode) -> Void
     private struct NameForm {
         enum Purpose { case new, rename(UUID) }
         let purpose: Purpose
@@ -116,7 +134,11 @@ struct InterfaceBAppearanceProfileControls: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Profiles").font(.headline)
+            Text("Defaults").font(.headline)
+            systemDefaultRow(.light)
+            systemDefaultRow(.dark)
+            Divider().padding(.vertical, 4)
+            Text("Your profiles").font(.headline)
             if let form {
                 Text(formTitle(form)).font(.subheadline)
                 TextField("Profile name", text: name).textFieldStyle(.roundedBorder)
@@ -170,6 +192,20 @@ struct InterfaceBAppearanceProfileControls: View {
             }
             if let error = profiles.error { Text(error).font(.caption).foregroundStyle(.orange) }
         }.padding(20)
+    }
+    private func systemDefaultRow(_ mode: InterfaceBAppearanceSnapshot.Mode) -> some View {
+        let selected = isSystemDefault && current.mode == mode
+        return Button { useSystemDefault(mode) } label: {
+            HStack {
+                Text(InterfaceBSystemAppearance.name(for: mode))
+                Spacer()
+                Text(mode == .light ? "Light" : "Dark").font(.caption).foregroundStyle(.secondary)
+                if selected { Image(systemName: "checkmark").accessibilityHidden(true) }
+            }.padding(.vertical, 9).padding(.horizontal, 4)
+                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+            .accessibilityLabel(InterfaceBSystemAppearance.name(for: mode) + (mode == .light ? ", system light default" : ", system dark default"))
+            .accessibilityAddTraits(selected ? .isSelected : [])
     }
     private func formTitle(_ form: NameForm) -> String {
         switch form.purpose {

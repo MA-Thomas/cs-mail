@@ -1100,3 +1100,193 @@ fn challenge_readable_generation(f: &Fixture) {
         0
     );
 }
+
+// Conjecture: a policy change can refuse a reviewed publication with a field-specific
+// problem, leaving the old profile/classes intact; the member can correct and republish.
+#[test]
+#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+fn collateral_refusal_preserves_publication_and_can_be_corrected() {
+    let f = Fixture::new();
+    f.send(&publication(1, 0, 9001, true, "Original")).unwrap();
+    let edited = publication(1, 1, 9002, true, "Edited");
+    support::operator(
+        &f.deployment,
+        cs_mail_operations::OperatorCommand::PublishRequestPricing(
+            cs_mail_protocol::pricing::RequestPricingPolicy::new(
+                PolicyVersion(2),
+                UNIT,
+                Money::from_minor_units(2),
+                Money::from_minor_units(10),
+                Money::from_minor_units(20),
+            )
+            .unwrap(),
+        ),
+        AT,
+    )
+    .unwrap();
+    assert!(matches!(
+        f.send(&edited).unwrap(),
+        Response::Refused {
+            error: Error::Collateral {
+                class: RequestClassId(1),
+                minimum: 10,
+                maximum: 20
+            },
+            ..
+        }
+    ));
+    assert!(matches!(
+        f.send(&edited).unwrap(),
+        Response::Refused {
+            error: Error::Collateral { .. },
+            ..
+        }
+    ));
+    let read = SignedRequest {
+        scope: signing_scope(),
+        address: ProtocolIdentity(1),
+        alias: AliasId::new(1).unwrap(),
+        key: OperationalKeyRef(1),
+        operation: IdempotencyKey(9003),
+        command: Command::Inspect { at: AT },
+        signature: vec![],
+    }
+    .sign(&[1; 32])
+    .unwrap();
+    let Response::Settings(settings) = f.send(&read).unwrap() else {
+        panic!()
+    };
+    assert_eq!(settings.entry.unwrap().profile().display_name(), "Original");
+    let policy = settings.policy.unwrap();
+    assert!(!policy.quotable(&settings.classes.unwrap().classes()[0]));
+    let mut corrected = publication(1, 1, 9004, true, "Edited");
+    if let Command::Publish { classes, .. } = &mut corrected.command {
+        **classes = CommandSigner::from_secret_bytes(
+            ActorRef::Recipient(ProtocolIdentity(1)),
+            OperationalKeyRef(1),
+            &[1; 32],
+        )
+        .sign_request_classes(
+            signing_scope(),
+            RecipientRequestClasses::new(
+                ProtocolIdentity(1),
+                AliasId::new(1).unwrap(),
+                2,
+                vec![
+                    RequestClass::new(
+                        RequestClassId(1),
+                        "Research collaboration".into(),
+                        Money::from_minor_units(10),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    corrected = corrected.sign(&[1; 32]).unwrap();
+    assert_eq!(revision(f.send(&corrected).unwrap()), 2);
+}
+
+// Conjecture: two listed aliases of one participant retain distinct publication
+// identity, even with equal display names and class IDs. Collapsing them would open
+// the wrong invitation or expose one alias's classes under another address.
+#[test]
+#[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+fn two_alias_publications_remain_independently_addressable() {
+    use cs_mail_application::aliases::{
+        AddressSelection, AliasCreation, AliasService, Command as AliasCommand,
+    };
+    let f = Fixture::new();
+    let repo = f.deployment.accounts(|| AT);
+    for n in 820..822 {
+        let alias = AliasId::new(n).unwrap();
+        let mailbox: MemberAddress = format!("invitation-{n}@csqd-mail.com").try_into().unwrap();
+        let create = alias_request(
+            &f,
+            1,
+            n,
+            AliasCommand::Create {
+                id: alias,
+                creation: AliasCreation {
+                    address: AddressSelection::Chosen {
+                        address: mailbox.clone(),
+                    },
+                    configuration: cs_mail_accounts::aliases::AliasConfiguration {
+                        description: "Private purpose".to_owned().try_into().unwrap(),
+                        receiving: cs_mail_accounts::aliases::ReceivingPolicy::Bonded,
+                    },
+                },
+            },
+        );
+        AliasService(&repo)
+            .handle(&create, signing_scope(), "csqd-mail.com", &|| Ok([9; 16]))
+            .unwrap();
+        let classes = CommandSigner::from_secret_bytes(
+            ActorRef::Recipient(ProtocolIdentity(1)),
+            OperationalKeyRef(1),
+            &[1; 32],
+        )
+        .sign_request_classes(
+            signing_scope(),
+            RecipientRequestClasses::new(
+                ProtocolIdentity(1),
+                alias,
+                1,
+                vec![
+                    RequestClass::new(
+                        RequestClassId(1),
+                        format!("Invitation {n}"),
+                        Money::from_minor_units(8),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let publication = SignedRequest {
+            scope: signing_scope(),
+            address: ProtocolIdentity(1),
+            alias,
+            key: OperationalKeyRef(1),
+            operation: IdempotencyKey(n + 100),
+            command: Command::Publish {
+                expected: DirectoryRevision(0),
+                profile: PublicProfile::new("Two invitations".into(), "Same owner".into(), None)
+                    .unwrap(),
+                mailbox: Some(mailbox),
+                visibility: DiscoveryVisibility::Listed,
+                classes: Box::new(classes),
+            },
+            signature: vec![],
+        }
+        .sign(&[1; 32])
+        .unwrap();
+        assert_eq!(revision(f.send(&publication).unwrap()), 1);
+    }
+    let entries = f.search("Two invitations").entries;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.entry.alias())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2
+    );
+    let reopened = PostgresDeployment::connect_existing(&f.url).unwrap();
+    for n in 820..822 {
+        let found = reopened
+            .directory_lookup(DirectoryReference::Alias(AliasId::new(n).unwrap()), || AT)
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.entry.address(), ProtocolIdentity(1));
+        assert_eq!(found.entry.alias(), AliasId::new(n).unwrap());
+        assert_eq!(
+            found.offer.unwrap().classes[0].description(),
+            format!("Invitation {n}")
+        );
+    }
+}

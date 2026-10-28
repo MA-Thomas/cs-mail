@@ -1572,8 +1572,30 @@ fn request_permission(
         }
         _ => return Ok(RequestPermission::NotRequested),
     };
+    alias_request_permission(
+        tx,
+        &snapshot.state.relationship,
+        snapshot.lane.as_ref(),
+        id,
+        at,
+        provider,
+        authorized.operational_key(),
+    )
+}
+
+/// Shared protected route inspection for quotation and the authenticated member view.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn alias_request_permission(
+    tx: &mut Transaction<'_>,
+    relationship: &cs_mail_protocol::Relationship,
+    lane: Option<&cs_mail_capabilities::SenderScopedLane>,
+    id: cs_mail_primitives::AliasId,
+    at: CanonicalTime,
+    provider: cs_mail_primitives::ProviderRef,
+    sender_key: cs_mail_primitives::OperationalKeyRef,
+) -> Result<cs_mail_protocol::RequestPermission, StorageError> {
+    use cs_mail_protocol::RequestPermission;
     let route = super::aliases::load_alias(tx, id)?;
-    let relationship = &snapshot.state.relationship;
     if route.owner() != relationship.key.recipient {
         return Err(ProtocolError::InvalidState.into());
     }
@@ -1595,7 +1617,7 @@ fn request_permission(
             authority: if guest {
                 cs_mail_primitives::DeclarationAuthority::GuestSmtp(provider)
             } else {
-                cs_mail_primitives::DeclarationAuthority::NativeSender(authorized.operational_key())
+                cs_mail_primitives::DeclarationAuthority::NativeSender(sender_key)
             },
         },
         payload_schema: None,
@@ -1615,7 +1637,7 @@ fn request_permission(
             ),
             relationship: Some(relationship),
             sender_scope: scope.as_ref(),
-            lane: snapshot.lane.as_ref(),
+            lane,
             declarations: &declarations,
             lane_evidence: Some(&evidence),
             domain_evidence: None,

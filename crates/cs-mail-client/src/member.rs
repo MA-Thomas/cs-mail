@@ -16,16 +16,21 @@ mod reading;
 mod resources;
 mod retained;
 mod retained_index;
+mod retrieval_runtime;
+mod search;
+mod search_lifetime;
+mod semantic;
+pub use cs_mail_search::{SourceVersion, TextPart};
 pub use drafts::{
     Draft, DraftBody, DraftId, DraftIssue, DraftRevision, DraftSubmission, DraftTarget,
 };
-pub use personal::{
-    MailAction, MailFolder, MailItem, MailKey, OutgoingWork, SearchMatch, SearchPage, WorkStatus,
-};
+pub use personal::{MailAction, MailFolder, MailItem, MailKey, OutgoingWork, WorkStatus};
 pub use reading::{
     PictureStatus, ReadingBlock, ReadingContent, ReadingEmail, ReadingPart, ReadingPicture,
 };
 pub use retained::RetentionProgress;
+pub use search::{SearchMatch, SearchMode, SearchPage, SearchRequestId};
+pub use search_lifetime::SearchSessionId;
 mod directory;
 pub use correspondence::{ConversationSummary, ReplyRoute};
 pub use directory::ComposerRecipient;
@@ -90,6 +95,8 @@ pub enum Error {
     Offline,
     Unauthorized,
     Unavailable,
+    RetrievalUnavailable,
+    SearchSuperseded,
     ExternalPending,
     ExternalRefused,
     DecisionPending,
@@ -105,6 +112,11 @@ pub enum Error {
     NoPendingRequest,
     DecisionRefused,
     PublicationRefused,
+    PublicationCollateral {
+        class: u128,
+        minimum: u64,
+        maximum: u64,
+    },
     AddressUnavailable,
     EnrollmentRequired,
     LoginUnavailable,
@@ -226,10 +238,13 @@ pub struct MemberClient {
     clock: Arc<dyn Fn() -> CanonicalTime + Send + Sync>,
     operation: Mutex<()>,
     workspace: Mutex<()>,
-    search: Mutex<Option<personal::SearchSession>>,
+    search: Mutex<Option<search::SearchSession>>,
+    search_revision: std::sync::atomic::AtomicU64,
     receiving: Mutex<Option<inboxes::InboxCatalog>>,
     retained: Mutex<Option<retained_index::Retained>>,
-    retained_epoch: std::sync::atomic::AtomicU64,
+    retained_epoch: Arc<std::sync::atomic::AtomicU64>,
+    retrieval: Option<retrieval_runtime::Runtime>,
+    retention: Mutex<()>,
     login: Mutex<Option<login::Attempt>>,
 }
 impl MemberClient {
@@ -238,6 +253,11 @@ impl MemberClient {
         transport: Arc<dyn Transport>,
         clock: Arc<dyn Fn() -> CanonicalTime + Send + Sync>,
     ) -> Self {
+        let retained_epoch = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        #[cfg(test)]
+        let retrieval = Some(retrieval_runtime::Runtime::fixture(retained_epoch.clone()));
+        #[cfg(not(test))]
+        let retrieval = None;
         Self {
             store,
             transport,
@@ -245,11 +265,24 @@ impl MemberClient {
             operation: Mutex::new(()),
             workspace: Mutex::new(()),
             search: Mutex::new(None),
+            search_revision: std::sync::atomic::AtomicU64::new(1),
             receiving: Mutex::new(None),
             retained: Mutex::new(None),
-            retained_epoch: std::sync::atomic::AtomicU64::new(0),
+            retained_epoch,
+            retrieval,
+            retention: Mutex::new(()),
             login: Mutex::new(None),
         }
+    }
+    /// Configure the packaged local runtime. Resource selection establishes no source access.
+    /// # Errors
+    /// Missing or incompatible packaged artifacts.
+    pub fn with_search_resources(mut self, resources: &std::path::Path) -> Result<Self, Error> {
+        self.retrieval = Some(retrieval_runtime::Runtime::new(
+            resources,
+            self.retained_epoch.clone(),
+        )?);
+        Ok(self)
     }
     fn call<T: serde::de::DeserializeOwned>(
         &self,

@@ -1,0 +1,24 @@
+{
+  "status": "interrupted_before_accepted_comparison",
+  "reason": "correct sqlite-vec NEON build flag and bound query work",
+  "original_frozen": {
+    "frozen_at_utc": "2026-10-25T19:51:25.785214+00:00",
+    "inputs": {
+      "tools/vector-store-evaluation/README.md": "d5302d94fdf5855c9b15f639ac4e3aa9e8a237d392c0fbc7ff946d2ce1e8b83b",
+      "tools/vector-store-evaluation/store.py": "ae4dd8a08f806f1ebf27a0a459e3922e8dcab6cd5de9057b3162e3dea38480b2",
+      "tools/vector-store-evaluation/sqlcipher_api.py": "504a5542ca642c4aa266bc303e35c41a4027f837db6a83f07392b7f294245d80",
+      "tools/vector-store-evaluation/experiment.py": "bd2eed9d5dbdd3bffeecb9b42ecaa2abb4d09c1d7d6236f811f471d769477007",
+      "tools/vector-store-evaluation/build.py": "7e9fc0017a417b3f808f94d0126fac490eeb4a27e7484598636e8a58add9a424",
+      "tools/embedding-evaluation/fixture.json": "e4c49b870fcdf8142069af3f149a821c19744f9dc4743ac2d89eec1c3efceb5c",
+      "target/embedding-evaluation/gemma2.json": "4af910e22f614c70c74c6436a66fd8e111e865a740a8de4997ff68649a147386",
+      "target/embedding-evaluation/gemma2-fictional-vectors.npz": "45f2e12e07eeacc60c5d71652f8a1cab02a78c04f77a36bc7bde65cb2a89c65b",
+      "target/vector-store-evaluation/vec1.c": "01c91474cce6c1c4872b45e00d8d1934a909baa68ecac679bcdf1093fa054807",
+      "target/vector-store-evaluation/sqlite-vec/sqlite-vec.c": "ba081a47fa02eadc3cf6b16c314b695b84081269349aac722b4efa338fe8fd85",
+      "target/vector-store-evaluation/sqlcipher/sqlite3.c": "8640c653acadf665cce6331646f60b5b74a4690746f2c4a2d8f688a0570a0c0c",
+      "target/vector-store-evaluation/sqlcipher/libsqlite3.dylib": "4f4172283943dd289344cfe5849f6be641f0ecdac80db99b27995ac146376f9c",
+      "target/vector-store-evaluation/vec1.dylib": "77a782da96fc455439f0f0d4c7b2e01d797e5502a6fa056587eacc5a1f0fe8bf",
+      "target/vector-store-evaluation/vec0.dylib": "d94b50c9901c0dc44927f09f45f9bc296fc5e4995f5bc33e41716eda91bb4541"
+    },
+    "profile": "57d70c2fb8bae89b32a1759aaf6ebc4d2176dc20a323232260d93ae254ad3319"
+  }
+}

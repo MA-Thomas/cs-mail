@@ -6,6 +6,18 @@ extension MailKey {
     var stableID: String { (transport == .native ? "native-" : "external-") + conversation }
 }
 
+/// A conversation opening, an exact outgoing message and a retrieved passage have
+/// different navigation consequences while sharing the existing reader.
+enum MailboxOpening {
+    case conversation
+    case message(String)
+    case passage(SearchMatch)
+    var message: String? {
+        switch self { case .conversation: nil; case .message(let id): id; case .passage(let hit): hit.message }
+    }
+    var passage: SearchMatch? { if case .passage(let hit) = self { hit } else { nil } }
+}
+
 enum MailboxFolder: String, CaseIterable, Identifiable {
     case inbox = "Inbox", unread = "Unread", flagged = "Flagged", archive = "Archive", trash = "Trash", sent = "Sent", outbox = "Outbox"
     var id: Self { self }
@@ -14,6 +26,8 @@ enum MailboxFolder: String, CaseIterable, Identifiable {
 @MainActor final class MailboxNavigation: ObservableObject {
     @Published var folder = MailboxFolder.inbox
     @Published var query = ""
+    @Published var submitted = false
+    func editQuery(_ value: String) { if value != query { submitted = false; query = value } }
     @Published var alphabetical = false
     @Published var selected: Set<String> = []
     @Published var threadAnchor: String?
@@ -21,21 +35,22 @@ enum MailboxFolder: String, CaseIterable, Identifiable {
     struct Context {
         let folder: MailboxFolder
         let query: String
+        let submitted: Bool
         let alphabetical: Bool
         let selected: Set<String>
         let threadAnchor: String?
         let searchAnchor: String?
     }
     func snapshot() -> Context {
-        Context(folder: folder, query: query, alphabetical: alphabetical, selected: selected,
+        Context(folder: folder, query: query, submitted: submitted, alphabetical: alphabetical, selected: selected,
             threadAnchor: threadAnchor, searchAnchor: searchAnchor)
     }
     func restore(_ context: Context) {
-        folder = context.folder; query = context.query; alphabetical = context.alphabetical
+        folder = context.folder; query = context.query; submitted = context.submitted; alphabetical = context.alphabetical
         selected = context.selected; threadAnchor = context.threadAnchor; searchAnchor = context.searchAnchor
     }
     var returnTitle: String { query.isEmpty ? folder.rawValue : "Search results" }
-    func reset() { folder = .inbox; query = ""; alphabetical = false; selected = []; threadAnchor = nil; searchAnchor = nil }
+    func reset() { folder = .inbox; query = ""; submitted = false; alphabetical = false; selected = []; threadAnchor = nil; searchAnchor = nil }
 }
 
 extension WorkStatus {
@@ -88,4 +103,15 @@ enum MailboxLabels {
         }
         return item.title
     }
+}
+
+/// Shared result-group interaction; each interface retains its row appearance.
+struct MailSearchGroup: Identifiable {
+    let mode: SearchMode
+    let title: String?
+    let note: String?
+    let matches: [SearchMatch]
+    let more: Bool
+    let complete: Bool
+    var id: SearchMode { mode }
 }

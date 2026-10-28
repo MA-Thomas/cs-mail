@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-28",
+  "tool": "Built-in image_gen",
+  "method": "AI-assisted material adaptation from the supplied photograph; not exact pixel crops.",
+  "reference": "WatchHouse-Coffee-London-3.jpg",
+  "assets": [
+    {
+      "prompt": "Edit the provided photograph to extract its actual warm oak wall material as a flat rectangular texture asset for a native app. Use the large unobstructed LEFT wall panel below the ceiling as the edit target. Preserve its photographed fine irregular oak grain, subtle cathedrals, real color and pore detail. Correct perspective so the surface faces the camera squarely, vertical grain. Remove the room, ceiling, floor, fixtures, highlights and shadows from architecture. Extend the photographed material only as needed to fill a 1024x1536 portrait texture edge to edge. Normalize illumination gently and make edges continuous for unobtrusive tiling. Matte, quiet architectural oak, low contrast but detailed. No drawn lines, no artificial plank seams, no illustration, no CGI, no stylization, no objects, no border. It must look like the photographed wood in this supplied image, not an imagined wood pattern.",
+      "sha256": "d27fbdbcdd66fe4582d7e896b5f1ec38f84e8d071d8de0b8b75fb15de404f695",
+      "retired": "2026-10-28: flat white-gold-inspired color replaces wood; runtime asset removed.",
+      "former_path": "apps/cs-mail-apple/Sources/CsMailPresentation/Resources/InterfaceC/watchhouse-oak.png"
+    },
+    {
+      "prompt": "Edit the supplied photograph: extract and rectify the actual gray limestone floor material in the unobstructed FOREGROUND bottom-left area as a 1536x1024 landscape texture. Preserve the photographed mineral inclusions and fine irregular stone detail and their natural nonuniformity. Correct floor perspective to a straight-on orthographic material photograph. Fill the entire image only with this photographed stone surface, extending locally as needed. Remove furniture, wall, plinth, shadows and floor boundary lines. Gently even lighting and neutralize the warm room illumination to a light warm-gray, matte honed stone; avoid strong contrast or large dark blobs behind UI text. Make edges continuous for unobtrusive tiling. No invented procedural speckles, no illustration, no CGI, no drawing, no polished reflective marble, no seams or objects. This is a photograph-derived material asset for quiet readable native UI.",
+      "sha256": "cee08f87d2b2d96a2be1a7ef3c58977d77edb041519d88e409428f2094b44f46",
+      "retired": "2026-10-28: smooth content surfaces replace the stone texture; generated runtime asset removed.",
+      "former_path": "apps/cs-mail-apple/Sources/CsMailPresentation/Resources/InterfaceC/watchhouse-stone.png"
+    }
+  ],
+  "reference_sha256": "3af9d483c8f3e22c1d0ec47f25bf6b52e341a3d7be53f7811c26d8c65a8a7df4"
+}

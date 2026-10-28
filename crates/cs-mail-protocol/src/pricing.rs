@@ -81,7 +81,7 @@ impl RequestPricingPolicy {
     }
     /// Whether one class's collateral lies within the current bounds.
     pub fn quotable(&self, class: &RequestClass) -> bool {
-        self.collateral_min <= class.collateral && class.collateral <= self.collateral_max
+        collateral_in_bounds(class.collateral, self.collateral_min, self.collateral_max)
     }
     /// Whether every class of a publication lies within the current bounds.
     pub fn permits(&self, classes: &RecipientRequestClasses) -> bool {
@@ -133,6 +133,34 @@ impl RequestPricingPolicy {
             selected: class.selection.clone(),
         })
     }
+}
+
+/// One policy owner for form feedback and authoritative class bounds.
+fn collateral_in_bounds(amount: Money, minimum: Money, maximum: Money) -> bool {
+    !amount.is_zero() && minimum <= amount && amount <= maximum
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollateralInputIssue {
+    WholeAmountRequired,
+    OutsideBounds,
+    PolicyUnavailable,
+}
+pub fn collateral_input_issue(
+    input: &str,
+    minimum: Option<Money>,
+    maximum: Option<Money>,
+) -> Option<CollateralInputIssue> {
+    let (Some(minimum), Some(maximum)) = (minimum, maximum) else {
+        return Some(CollateralInputIssue::PolicyUnavailable);
+    };
+    if minimum.is_zero() || minimum > maximum {
+        return Some(CollateralInputIssue::PolicyUnavailable);
+    }
+    let Ok(amount) = input.parse::<u64>() else {
+        return Some(CollateralInputIssue::WholeAmountRequired);
+    };
+    (!collateral_in_bounds(Money::from_minor_units(amount), minimum, maximum))
+        .then_some(CollateralInputIssue::OutsideBounds)
 }
 
 pub const MAX_REQUEST_CLASSES: usize = 8;

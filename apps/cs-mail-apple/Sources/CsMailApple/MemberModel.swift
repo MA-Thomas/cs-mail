@@ -56,8 +56,8 @@ actor ClientWorker {
     @Published private(set) var selectedInbox: String?
     @Published private(set) var senderLaneScopes: [SenderLaneScope] = []
     func changeInbox(_ id: String?) {
-        endReading(); selectedInbox = id; searchComplete = false; searchGeneration += 1
-        searchMatches = []; searchResultsQuery = nil; searchStatus = nil; searchContext = nil; searching = false
+        endReading(); try? draftClient?.clearSearch(); focusedSearchPassage = nil; selectedInbox = id; searchComplete = false; searchGeneration += 1
+        searchMatches = []; searchRelatedMatches = []; relatedContext = nil; searchResultsQuery = nil; searchStatus = nil; searchContext = nil; searching = false
     }
     var mailScope: InboxScope { selectedInbox.map { .alias(id: $0) } ?? .all }
     var scopedMailItems: [MailItem] { selectedInbox.map { id in aliasInboxes.first(where: { $0.address.id == id })?.items ?? [] } ?? mailItems }
@@ -73,26 +73,46 @@ actor ClientWorker {
     @Published private(set) var outgoingWork: [OutgoingWork] = []
     @Published private(set) var mailboxError: String?
     @Published private(set) var searchMatches: [SearchMatch] = []
+    @Published private(set) var searchRelatedMatches: [SearchMatch] = []
+    @Published private(set) var searchSubmitted = false
+    @Published private(set) var searchLiteral = false
     @Published private(set) var searchResultsQuery: String?
     @Published private(set) var searchStatus: String?
     @Published private(set) var searching = false
     @Published var openedThread: String?
     @Published var focusedMessage: String?
+    @Published var focusedSearchPassage: SearchMatch? { didSet { focusedPassageRequest = UUID() } }
+    @Published private(set) var focusedPassageRequest = UUID()
     private struct SearchContext {
         let query: String
         let scope: InboxScope
         let request: Int
         let lifetime: Int
+        let session: UInt64
+        let queryRequest: UInt64
+        let mode: SearchMode
         var cursor: UInt64 = 0
         var total: UInt64 = 0
         var indexed: UInt64 = 0
         var unavailable: UInt64 = 0
         var notRetained: UInt64 = 0
+        var preparing: UInt64 = 0
     }
     @Published private var searchContext: SearchContext?
-    var hasMoreSearchResults: Bool { searchContext.map { $0.request == searchGeneration && $0.cursor < $0.total } ?? false }
-    var searchPageCursor: UInt64? { searchContext?.cursor }
-    func hasSearch(_ query: String) -> Bool { searchContext.map { $0.query == query && $0.scope == mailScope && $0.request == searchGeneration } ?? false }
+    @Published private var relatedContext: SearchContext?
+    private func context(for mode: SearchMode) -> SearchContext? { mode == .related ? relatedContext : searchContext }
+    private func hasMore(_ context: SearchContext?) -> Bool { context.map { $0.request == searchGeneration && $0.cursor < $0.total } ?? false }
+    func hasSearch(_ query: String, submitted: Bool? = nil) -> Bool {
+        searchContext.map { $0.query == query && $0.scope == mailScope && $0.request == searchGeneration && (submitted == nil || self.searchSubmitted == submitted) } ?? false
+    }
+    var searchGroups: [MailSearchGroup] {
+        if !searchSubmitted {
+            return [MailSearchGroup(mode: .suggestions, title: "Suggested matches", note: searchLiteral ? nil : "These are the closest matches. There may be no relevant match.", matches: Array(searchMatches.prefix(5)), more: false, complete: searchComplete)]
+        }
+        let words = MailSearchGroup(mode: .words, title: searchLiteral ? "Phrase matches" : "Word matches", note: nil, matches: searchMatches, more: hasMore(searchContext), complete: searchComplete)
+        if searchLiteral { return [words] }
+        return [words, MailSearchGroup(mode: .related, title: "Related by meaning", note: "These are the closest matches. There may be no relevant match.", matches: searchRelatedMatches, more: hasMore(relatedContext), complete: relatedContext.map { $0.cursor >= $0.total } ?? false)]
+    }
     private(set) var searchQuery = ""
     private(set) var searchComplete = true
     private var pendingSelection: SenderReference?
@@ -106,7 +126,9 @@ actor ClientWorker {
         let draft = ApproachEditorDraft(); publicationDrafts[alias] = draft; return draft
     }
     private var retaining: Task<Void, Never>?
+    private var preparingSearch: Task<Void, Never>?
     private var searchGeneration = 0
+    private var searchSession: UInt64?
     let directory: DirectoryModel
     enum Connection { case synchronized, saved }
     enum Session { case locked, open(Inbox, Connection) }
@@ -195,9 +217,11 @@ actor ClientWorker {
         pendingSelection = nil; readingContext = nil; publicationDrafts.removeAll(); emptyPublicationDraft.clear(); editingAlias = nil; aliasCreationDraft.clear()
         searchQuery = ""; searchComplete = true
         mailItems = []; aliasInboxes = []; senderLaneScopes = []; selectedInbox = nil; outgoingWork = []; mailboxError = nil
-        searchGeneration += 1; searchMatches = []; searchResultsQuery = nil; searchStatus = nil; searchContext = nil; searching = false
-        openedThread = nil; focusedMessage = nil
-        if let client = draftClient { Task.detached { try? client.clearInboxes() } }
+        searchGeneration += 1; searchMatches = []; searchRelatedMatches = []; relatedContext = nil; searchResultsQuery = nil; searchStatus = nil; searchContext = nil; searching = false
+        openedThread = nil; focusedMessage = nil; focusedSearchPassage = nil
+        if let client = draftClient { try? client.invalidateSearchSession() }
+        preparingSearch?.cancel(); preparingSearch = nil
+        searchSession = nil
         draftClient = nil
         connected = false; failure = nil; notice = nil; operation = .idle
     }
@@ -210,6 +234,8 @@ actor ClientWorker {
                 try await self.showEnrollment(status)
                 return
             }
+            self.searchSession = try await self.call { try $0.openSearchSession() }
+            self.prepareSearchEngine()
             self.externalInbox = try await self.call { try $0.externalInbox() }
             self.notice = nil
             self.connected = false
@@ -261,6 +287,10 @@ actor ClientWorker {
         switch status {
         case .ready:
             inbox = try await call { try $0.sync() }
+            draftClient = try await call { $0 }
+            searchSession = try await call { try $0.openSearchSession() }
+            prepareSearchEngine()
+            retainAvailableMail()
             connected = true; notice = "Device enrolled. Your inbox is ready."
         case .awaitingLogin: notice = "Enrollment is reserved. Continue with the same details and sign in."
         case .reviewRequired: notice = "Bank evidence requires review before enrollment can continue."
@@ -391,6 +421,7 @@ actor ClientWorker {
             let settings = try await self.call { try $0.addressSettings(alias: alias) }
             guard self.editingAlias == alias else { return }
             self.addressSettings = settings
+            self.publicationDrafts[alias]?.observe(settings)
         }
     }
     func publishAddress(alias: String, expected: UInt64, classVersion: UInt64, name: String, description: String,
@@ -589,8 +620,9 @@ actor ClientWorker {
         if connected { retainAvailableMail() }
     }
     func deleteCopies(_ item: MailItem) async {
-        searchGeneration += 1; searchMatches = []; searchResultsQuery = nil; searchStatus = nil; searchContext = nil
+        searchGeneration += 1; searchMatches = []; searchRelatedMatches = []; relatedContext = nil; searchResultsQuery = nil; searchStatus = nil; searchContext = nil
         clearSourceContact(); reference = nil
+        focusedSearchPassage = nil
         conversation = nil
         await perform(.message) {
             try await self.call { try $0.deleteNativeCopies(conversation: item.key.conversation) }
@@ -614,29 +646,33 @@ actor ClientWorker {
             outgoingWork = work; mailboxError = nil
         } catch { if started == generation { mailboxError = Self.explanation(error) } }
     }
+    private func prepareSearchEngine() {
+        guard preparingSearch == nil, let client = draftClient, let session = searchSession else { return }
+        let started = generation
+        preparingSearch = Task {
+            defer { if generation == started { preparingSearch = nil } }
+            do { try await Task.detached(priority: .utility) { try client.prepareLocalSearch(session: session) }.value }
+            catch { /* Optional preparation: foreground search reports a current engine failure. */ }
+        }
+    }
     private func retainAvailableMail() {
-        guard retaining == nil else { return }
+        guard retaining == nil, let client = draftClient, let session = searchSession else { return }
         let started = generation
         retaining = Task {
             defer { if generation == started { retaining = nil } }
-            do {
-                while generation == started && !Task.isCancelled {
-                    let indexed = try await call { try $0.indexLocalMail(limit: 10) }
-                    if indexed < 10 { break }
-                    await Task.yield()
-                }
+            let complete = await runRetentionPass(whileCurrent: {
+                self.generation == started && !Task.isCancelled
+            }, index: {
+                try await Task.detached(priority: .utility) { try client.indexLocalMail(session: session, limit: 1) }.value
+            }, download: {
+                try await Task.detached(priority: .utility) { try client.retainMail(session: session, limit: 1) }.value
+            }, checkpoint: {
+                await self.reloadMailbox()
+            })
+            if complete, generation == started, !Task.isCancelled {
+                prepareSearchEngine()
                 if !searchQuery.isEmpty { await search(searchQuery) }
-                while generation == started && !Task.isCancelled {
-                    let progress = try await call { try $0.retainMail(limit: 5) }
-                    guard generation == started else { return }
-                    await reloadMailbox()
-                    if progress.remaining == 0 {
-                        if !searchQuery.isEmpty { await search(searchQuery) }
-                        return
-                    }
-                    try await Task.sleep(for: .milliseconds(100))
-                }
-            } catch { /* Retained mail remains usable; a later refresh resumes downloads. */ }
+            }
         }
     }
     func organize(_ item: MailItem, _ action: MailAction) async {
@@ -652,64 +688,79 @@ actor ClientWorker {
         guard !Task.isCancelled, inbox != nil, readingContext == key, !ids.isEmpty, ids.allSatisfy({ visibleInInbox(key, $0) }), let item = scopedMailItems.first(where: { $0.key == key }) else { return }
         await organize(item, .read(displayed: ids))
     }
-    func search(_ query: String) async {
-        let restoreCursor = hasSearch(query) ? (searchContext?.cursor ?? 0) : 0
-        searchQuery = query
-        searchGeneration += 1
-        let context = SearchContext(query: query, scope: mailScope, request: searchGeneration, lifetime: generation)
-        // Retain the last completed projection while typing. Its query remains
-        // visible until the first page for the latest generation replaces it.
+    func search(_ query: String, submitted: Bool? = nil) async {
+        let full = submitted ?? (query == searchQuery && searchSubmitted)
+        let restoreWords = hasSearch(query, submitted: full) ? (searchContext?.cursor ?? 0) : 0
+        let restoreRelated = hasSearch(query, submitted: full) ? (relatedContext?.cursor ?? 0) : 0
+        guard let session = searchSession, let client = draftClient else { return }
+        let queryRequest: UInt64
+        do { queryRequest = try client.beginSearch(session: session) } catch { return }
+        searchQuery = query; searchGeneration += 1
+        let context = SearchContext(query: query, scope: mailScope, request: searchGeneration, lifetime: generation, session: session, queryRequest: queryRequest, mode: full ? .words : .suggestions)
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            searchComplete = true
-            searchMatches = []; searchResultsQuery = nil; searchStatus = nil; searchContext = nil; searching = false
+            searchComplete = true; searchMatches = []; searchRelatedMatches = []; relatedContext = nil
+            searchResultsQuery = nil; searchStatus = nil; searchContext = nil; searching = false; searchSubmitted = false
             return
         }
         searching = true
         do {
-            try await Task.sleep(for: .milliseconds(100))
+            if !full { try await Task.sleep(for: .milliseconds(100)) }
             await fetchSearchPage(context)
             while let loaded = searchContext, loaded.request == context.request,
-                  loaded.cursor < restoreCursor, loaded.cursor < loaded.total, !Task.isCancelled {
-                searching = true
+                  loaded.cursor < restoreWords, loaded.cursor < loaded.total, !Task.isCancelled {
                 await fetchSearchPage(loaded)
             }
-        } catch is CancellationError {
-            if context.request == searchGeneration { searching = false }
-        } catch { }
+            guard context.request == searchGeneration, context.lifetime == generation, !Task.isCancelled else { return }
+            if full && !searchLiteral {
+                let related = SearchContext(query: query, scope: context.scope, request: context.request, lifetime: context.lifetime, session: session, queryRequest: queryRequest, mode: .related)
+                await fetchSearchPage(related)
+                while let loaded = relatedContext, loaded.request == context.request,
+                      loaded.cursor < restoreRelated, loaded.cursor < loaded.total, !Task.isCancelled {
+                    await fetchSearchPage(loaded)
+                }
+            }
+        } catch { if context.request == searchGeneration { searching = false } }
     }
-    func loadMoreSearchResults() async {
-        guard !searching, hasMoreSearchResults, let context = searchContext else { return }
-        searching = true
+    func loadMoreSearchResults(mode: SearchMode) async {
+        guard !searching, let context = context(for: mode), hasMore(context) else { return }
         await fetchSearchPage(context)
     }
     private func fetchSearchPage(_ initial: SearchContext) async {
-        guard initial.request == searchGeneration, initial.lifetime == generation, let client = draftClient else { return }
+        guard initial.request == searchGeneration, initial.lifetime == generation, !Task.isCancelled, let client = draftClient else { return }
+        searching = true
+        defer { if initial.request == searchGeneration, initial.lifetime == generation { searching = false } }
         do {
-            let page = try await Task.detached { try client.searchMail(query: initial.query, scope: initial.scope, after: initial.cursor, limit: 10) }.value
-            guard initial.request == searchGeneration, initial.lifetime == generation else { return }
+            let page = try await Task.detached { try client.searchMail(session: initial.session, request: initial.queryRequest, query: initial.query, mode: initial.mode, scope: initial.scope, after: initial.cursor, limit: initial.mode == .suggestions ? 5 : 25) }.value
+            guard initial.request == searchGeneration, initial.lifetime == generation, !Task.isCancelled else { return }
             var context = initial
             context.cursor = page.next; context.total = page.total
-            context.indexed += page.searched; context.unavailable += page.unavailable; context.notRetained += page.notRetained
-            if initial.cursor == 0 {
-                searchMatches = page.matches
-                searchResultsQuery = initial.query
+            context.indexed += page.searched; context.unavailable += page.unavailable; context.notRetained += page.notRetained; context.preparing += page.preparing
+            if initial.mode == .related {
+                if initial.cursor == 0 { searchRelatedMatches = page.matches } else { searchRelatedMatches += page.matches }
+                relatedContext = context
             } else {
-                searchMatches += page.matches
+                if initial.cursor == 0 {
+                    searchMatches = page.matches; searchRelatedMatches = []; relatedContext = nil
+                    searchResultsQuery = initial.query; searchSubmitted = initial.mode == .words; searchLiteral = page.literalQuery
+                } else { searchMatches += page.matches }
+                searchContext = context
+                searchStatus = context.notRetained > 0 ? "Some correspondence has not downloaded to this device yet." :
+                    context.unavailable > 0 ? "Some correspondence is unavailable and cannot be searched." :
+                    context.preparing > 0 ? "Search doesn’t cover all retained correspondence yet." : nil
+                searchComplete = context.cursor >= context.total && context.notRetained == 0 && context.unavailable == 0 && context.preparing == 0
             }
-            searchContext = context
-            searchStatus = "On this device: \(context.indexed) searchable · \(context.notRetained) not downloaded · \(context.unavailable) unavailable · \(context.total - context.cursor) more possible matches"
-            searchComplete = context.cursor >= context.total && context.notRetained == 0 && context.unavailable == 0
         } catch {
             if initial.request == searchGeneration, initial.lifetime == generation {
-                searchContext = nil
-                searchStatus = "Couldn’t update search. " + Self.explanation(error) + " Search is incomplete."
+                if initial.mode == .related { relatedContext = nil; searchStatus = "Couldn’t update related matches. " + Self.explanation(error) }
+                else { searchContext = nil; searchStatus = "Couldn’t update search. " + Self.explanation(error) + " Search is incomplete." }
             }
         }
-        if initial.request == searchGeneration, initial.lifetime == generation { searching = false }
     }
     nonisolated static func explanation(_ error: Error) -> String {
         guard let error = error as? ClientError else { return "The operation could not finish. No success has been assumed." }
         switch error {
+        case .RetrievalUnavailable: return "Search by meaning is temporarily unavailable. Your correspondence is retained; try Refresh."
+        case .SearchSuperseded: return "Search changed before this request finished."
         case .CopyDeletionRefused: return "The service refused copy removal. No deletion has been assumed."
         case .DraftChanged: return "This draft changed or was submitted. Reopen it from Drafts before editing again."
         case .ExternalPending: return "Your last email change has not been confirmed. Check its status before composing again."
@@ -733,6 +784,7 @@ actor ClientWorker {
         case .SetupRefused: return "The service refused the setup operation. Its saved operation is resolved; review current terms before trying again."
         case .SetupPending: return "Account setup is unfinished. Refresh to continue."
         case .NoPendingRequest: return "This request is no longer awaiting a decision. Refresh its current state."
+        case .PublicationCollateral: return "An approach’s collateral needs correction. Your edits are preserved."
         case .PublicationRefused: return "Your changes were declined. Refresh your page before editing again."
         case .AddressUnavailable: return "This address is currently unavailable."
         case .DecisionRefused: return "The service refused the decision. Refresh to see the current request."

@@ -17,6 +17,10 @@ public struct MessageID: Hashable, Sendable {
     public let value: String
     public init(_ value: String) { self.value = value }
 }
+public struct AliasReference: Hashable, Sendable {
+    public let value: String
+    public init(_ value: String) { self.value = value }
+}
 public struct AddressReference: Hashable, Sendable {
     public let value: String
     public init(_ value: String) { self.value = value }

@@ -1,0 +1,34 @@
+{
+  "commands": [
+    [
+      "rustc",
+      "--edition=2024",
+      "-O",
+      "/Users/marcus/Work_Data/cs-mail/tools/vector-store-evaluation/cache-worker/src/main.rs",
+      "-L",
+      "native=/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/sqlcipher",
+      "-l",
+      "dylib=sqlite3",
+      "-C",
+      "link-arg=-Wl,-headerpad_max_install_names",
+      "-o",
+      "/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/cache-worker"
+    ],
+    [
+      "install_name_tool",
+      "-change",
+      "/usr/local/lib/libsqlite3.dylib",
+      "/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/sqlcipher/libsqlite3.dylib",
+      "/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/cache-worker"
+    ],
+    [
+      "codesign",
+      "--force",
+      "--sign",
+      "-",
+      "/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/cache-worker"
+    ]
+  ],
+  "links": "/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/cache-worker:\n\t/Users/marcus/Work_Data/cs-mail/target/vector-store-evaluation/sqlcipher/libsqlite3.dylib (compatibility version 9.0.0, current version 9.6.0)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.0.0)\n",
+  "rustc": "rustc 1.88.0 (6b00bc388 2025-06-23)"
+}

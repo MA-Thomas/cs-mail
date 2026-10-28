@@ -1,0 +1,16 @@
+{
+  "reason": "initial exact plans missed fixed 250ms target; query-plan evidence showed full streaming sort and source filter scan",
+  "changes": [
+    "vec1 materialized eligible candidate LIMIT before outer ORDER BY",
+    "covering source-filter index"
+  ],
+  "unchanged": [
+    "fixture",
+    "vectors",
+    "criteria",
+    "2s cooperative deadline",
+    "model profile",
+    "runtime",
+    "cache budget"
+  ]
+}

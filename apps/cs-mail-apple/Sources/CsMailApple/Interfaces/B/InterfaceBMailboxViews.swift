@@ -115,7 +115,7 @@ struct InterfaceBMailboxesView: View {
     @ObservedObject var model: MemberModel
     @ObservedObject var navigation: MailboxNavigation
     let permissions: () -> Void
-    let open: (MailItem, String?) -> Void
+    let open: (MailItem, MailboxOpening) -> Void
     @FocusState private var finding: Bool
     @FocusState private var focusedRow: String?
     private var visible: [MailItem] {
@@ -151,28 +151,34 @@ struct InterfaceBMailboxesView: View {
             if !navigation.query.isEmpty {
                 Text("Results for “" + (model.searchResultsQuery ?? navigation.query) + "”").font(.caption).foregroundStyle(.secondary)
                 if let status = model.searchStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
-                Text("Search covers correspondence retained on this device. Referenced sources are not followed.").font(.caption).foregroundStyle(.secondary)
+                Text("Search finds related meaning and words in retained subjects and message text. Files, pictures and reference targets are not searched.").font(.caption).foregroundStyle(.secondary)
                 TimelineView(.periodic(from: .now, by: 1)) { timeline in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(model.searchMatches.filter { Double($0.expiresAt) / 1000 > timeline.date.timeIntervalSince1970 }, id: \.message) { match in
+                        ForEach(model.searchGroups) { group in
+                        if let title = group.title { Text(title).font(.headline).padding(.top, 12) }
+                        if let note = group.note { Text(note).font(.caption).foregroundStyle(.secondary) }
+                        ForEach(group.matches.filter { Double($0.expiresAt) / 1000 > timeline.date.timeIntervalSince1970 }, id: \.message) { match in
                             if let item = model.scopedMailItems.first(where: { $0.key == match.key }) {
-                                Button { open(item, match.message) } label: {
-                                    InterfaceBMailboxRowContent(correspondent: correspondent(item), subject: MailboxLabels.subject(item, external: model.externalInbox),
-                                        date: Date(timeIntervalSince1970: Double(item.lastAt) / 1000),
+                                Button { open(item, .passage(match)) } label: {
+                                    InterfaceBMailboxRowContent(correspondent: correspondent(item), subject: match.subject ?? MailboxLabels.subject(item, external: model.externalInbox),
+                                        date: Date(timeIntervalSince1970: Double(match.committedAt) / 1000),
                                         unread: item.unread > 0, flagged: item.flagged, secondary: match.excerpt)
                                 }.buttonStyle(InterfaceBMailboxRowButtonStyle(focused: focusedRow == match.message))
                                     .focusable().focusEffectDisabled().focused($focusedRow, equals: match.message)
-                                    .onKeyPress(.space) { open(item, match.message); return .handled }
-                                    .onKeyPress(.return) { open(item, match.message); return .handled }
+                                    .onKeyPress(.space) { open(item, .passage(match)); return .handled }
+                                    .onKeyPress(.return) { open(item, .passage(match)); return .handled }
                                     .privacySensitive().id(match.message)
                                 Divider().opacity(0.35)
                             }
                         }
-                        if model.hasMoreSearchResults {
-                            Color.clear.frame(height: 1).accessibilityHidden(true).task(id: model.searchPageCursor) { await model.loadMoreSearchResults() }
+                        if group.more {
+                            Button(group.mode == .words ? "Show more word matches" : "Show more related matches") { Task { await model.loadMoreSearchResults(mode: group.mode) } }.disabled(model.searching)
                         }
-                        if model.searchComplete && model.searchResultsQuery != nil && model.searchMatches.isEmpty { Text("No matching retained messages on this device.").foregroundStyle(.secondary) }
+                        if group.complete && model.searchResultsQuery != nil && group.matches.isEmpty { Text("No matches in the correspondence searched.").foregroundStyle(.secondary) }
+                        }
+                        if !model.searchSubmitted { Button("See full results") { navigation.submitted = true; finding = false } }
+
                     }.scrollTargetLayout()
                 }.scrollPosition(id: $navigation.searchAnchor)
                 }
@@ -193,15 +199,15 @@ struct InterfaceBMailboxesView: View {
                         ForEach(visible, id: \.key.stableID) { item in
                             HStack {
                                 if model.selectedInbox == nil { Toggle("Select \(item.title)", isOn: Binding(get: { navigation.selected.contains(item.key.stableID) }, set: { if $0 { navigation.selected.insert(item.key.stableID) } else { navigation.selected.remove(item.key.stableID) } })).labelsHidden().frame(width: 32).frame(minHeight: 44) }
-                                Button { open(item, nil) } label: {
+                                Button { open(item, .conversation) } label: {
                                     InterfaceBMailboxRowContent(correspondent: correspondent(item), subject: MailboxLabels.subject(item, external: model.externalInbox),
                                         date: Date(timeIntervalSince1970: Double(item.lastAt) / 1000),
                                         unread: item.unread > 0, flagged: item.flagged,
                                         secondary: model.receivingLabel(item.key))
                                 }.buttonStyle(InterfaceBMailboxRowButtonStyle(focused: focusedRow == item.key.stableID))
                                     .focusable().focusEffectDisabled().focused($focusedRow, equals: item.key.stableID)
-                                    .onKeyPress(.space) { open(item, nil); return .handled }
-                                    .onKeyPress(.return) { open(item, nil); return .handled }
+                                    .onKeyPress(.space) { open(item, .conversation); return .handled }
+                                    .onKeyPress(.return) { open(item, .conversation); return .handled }
                                 InterfaceBMailOrganizationMenu(model: model, key: item.key, displayed: item.messages)
                             }.id(item.key.stableID)
                             Divider().opacity(0.35)
@@ -212,7 +218,7 @@ struct InterfaceBMailboxesView: View {
             }
             if !model.connected { Text("Offline · Saved information may be out of date.").font(.caption).foregroundStyle(.secondary) }
         }.padding(20)
-            .task(id: (model.selectedInbox ?? "all") + "|" + navigation.query) { if !model.hasSearch(navigation.query) { await model.search(navigation.query) } }
+            .task(id: (model.selectedInbox ?? "all") + "|" + navigation.query + "|" + String(navigation.submitted)) { if !model.hasSearch(navigation.query, submitted: navigation.submitted) { await model.search(navigation.query, submitted: navigation.submitted) } }
             .onChange(of: navigation.folder) { _, _ in navigation.selected.removeAll() }
             .background { Button("Find", action: { finding = true }).keyboardShortcut("f", modifiers: .command).hidden() }
     }
@@ -228,11 +234,11 @@ struct InterfaceBMailboxesView: View {
             .font(.title2).lineLimit(2).frame(minWidth: 140, alignment: .leading)
     }
     private var searchField: some View {
-        TextField("Search mail", text: $navigation.query)
+        TextField("Search mail", text: Binding(get: { navigation.query }, set: { navigation.editQuery($0) }))
             .modifier(InterfaceBSearchFieldSurface(focused: finding))
             .modifier(SearchFieldInteraction(focus: $finding))
-            .help("Search retained subjects and message text; use quotation marks for a phrase.")
-            .onSubmit { finding = false }
+            .help("Search by meaning or words; use quotation marks for an exact phrase.")
+            .onSubmit { navigation.submitted = true; finding = false }
     }
     private var mailboxOptions: some View {
         Menu {
@@ -279,7 +285,7 @@ struct InterfaceBMailboxesView: View {
                         Text(outgoingStatus(work.status)).font(.subheadline)
                         Text(SidebarProjection.date(work.preparedAt)).font(.caption)
                         if let item = model.mailItems.first(where: { $0.key == work.key }) {
-                            Button("Open \(item.title)") { open(item, work.message) }
+                            Button("Open \(item.title)") { open(item, .message(work.message)) }
                         }
                         if work.status == .awaitingConfirmation {
                             Button("Check submission status") { Task { await model.retry() } }.disabled(model.busy)

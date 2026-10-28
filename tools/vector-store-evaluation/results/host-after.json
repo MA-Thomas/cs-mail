@@ -1,0 +1,6 @@
+{
+  "recorded_at_utc": "2026-10-25T20:06:19.924296+00:00",
+  "observation": "after completed measurements; not a before/after controlled experiment",
+  "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (identifier omitted)\t100%; charged; 0:00 remaining present: true\n",
+  "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded\n"
+}

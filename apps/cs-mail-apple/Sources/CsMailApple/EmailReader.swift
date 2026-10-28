@@ -30,6 +30,13 @@ struct EmailReader: View {
         let prefix = email.subject.map { ("Subject: " + $0 + "\n\n").utf16.count } ?? 0
         return ReadingMatches.ranges(in: email.text, query: findQuery).filter { $0.location >= prefix }.firstIndex(of: selectedRange)
     }
+    private var selectedPassage: String? {
+        guard let selectedRange, selectedRange.location != NSNotFound,
+              selectedRange.location >= 0, selectedRange.length > 0,
+              selectedRange.location <= (email.text as NSString).length,
+              selectedRange.length <= (email.text as NSString).length - selectedRange.location else { return nil }
+        return (email.text as NSString).substring(with: selectedRange)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let subject = email.subject {
@@ -47,6 +54,15 @@ struct EmailReader: View {
             if showsFiles && !email.files.isEmpty {ComposerReceivedFiles(files: email.files)}
             if formattedUnavailable { Text("Couldn’t display this email’s formatting. Showing text.").font(.caption).foregroundStyle(.orange) }
             if let retrievalError { Text(retrievalError).font(.caption).foregroundStyle(.orange) }
+            if let selectedPassage {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Matched passage").font(.caption).foregroundStyle(.secondary)
+                    ScrollView {
+                        Text(verbatim: selectedPassage).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 200)
+                }.padding(12).background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+            }
             if let html = email.html, !formattedUnavailable {
                 InertEmailWebView(html: html, resources: email.resources, query: findQuery, occurrence: bodyOccurrence, heightChanged: { bodyHeight = $0 }, open: { url in openURL(url) }, failed: { formattedUnavailable = true })
                     .frame(height: bodyHeight)

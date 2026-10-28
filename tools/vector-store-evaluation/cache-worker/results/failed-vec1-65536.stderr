@@ -1,0 +1,9 @@
+
+thread '<unnamed>' panicked at /Users/marcus/Work_Data/cs-mail/tools/vector-store-evaluation/cache-worker/src/main.rs:71:5:
+SQLite status 9
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' panicked at /Users/marcus/Work_Data/cs-mail/tools/vector-store-evaluation/cache-worker/src/main.rs:455:76:
+called `Result::unwrap()` on an `Err` value: Disconnected
+        0.63 real         0.39 user         0.02 sys
+time: sysctl kern.clockrate: Operation not permitted

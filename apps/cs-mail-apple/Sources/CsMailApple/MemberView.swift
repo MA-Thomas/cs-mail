@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The registry is the only list the selector reads. Each case owns its screen tree.
 private enum MemberInterface: String, CaseIterable, Identifiable {
-    case a, b
+    case a, b, c
     var id: String { rawValue }
     var title: String { "Interface " + rawValue.uppercased() }
 
@@ -11,6 +11,7 @@ private enum MemberInterface: String, CaseIterable, Identifiable {
         switch self {
         case .a: InterfaceAView(model: model, accountAccess: accountAccess, serviceURL: serviceURL)
         case .b: InterfaceBView(model: model, accountAccess: accountAccess, serviceURL: serviceURL)
+        case .c: InterfaceCView(model: model, accountAccess: accountAccess, serviceURL: serviceURL)
         }
     }
 }

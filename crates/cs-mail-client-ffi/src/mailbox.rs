@@ -328,13 +328,76 @@ pub struct SearchMatch {
     pub message: String,
     pub excerpt: String,
     pub expires_at: u64,
+    pub passage: SearchPassage,
+    pub subject: Option<String>,
+    pub committed_at: u64,
+}
+#[derive(Clone, Copy, uniffi::Enum)]
+pub enum SearchMode {
+    Suggestions,
+    Words,
+    Related,
+}
+impl From<SearchMode> for core::SearchMode {
+    fn from(value: SearchMode) -> Self {
+        match value {
+            SearchMode::Suggestions => Self::Suggestions,
+            SearchMode::Words => Self::Words,
+            SearchMode::Related => Self::Related,
+        }
+    }
+}
+#[derive(Clone, uniffi::Enum)]
+pub enum SearchLocation {
+    Subject,
+    Body { part: u32 },
+    Quotation { part: u32, block: u32 },
+    SharedCopy { part: u32, block: u32 },
+}
+impl From<core::TextPart> for SearchLocation {
+    fn from(value: core::TextPart) -> Self {
+        match value {
+            core::TextPart::Subject => Self::Subject,
+            core::TextPart::Body { part } => Self::Body { part },
+            core::TextPart::Quotation { part, block } => Self::Quotation { part, block },
+            core::TextPart::SharedCopy { part, block } => Self::SharedCopy { part, block },
+        }
+    }
+}
+#[derive(Clone, uniffi::Enum)]
+pub enum SearchSourceVersion {
+    Message { digest: Vec<u8> },
+    PrivateDraft { revision: u64, checksum: Vec<u8> },
+}
+impl From<core::SourceVersion> for SearchSourceVersion {
+    fn from(value: core::SourceVersion) -> Self {
+        match value {
+            core::SourceVersion::Message(v) => Self::Message {
+                digest: v.0.to_vec(),
+            },
+            core::SourceVersion::PrivateDraft { revision, checksum } => Self::PrivateDraft {
+                revision: revision.get(),
+                checksum: checksum.to_vec(),
+            },
+        }
+    }
+}
+#[derive(Clone, uniffi::Record)]
+pub struct SearchPassage {
+    pub version: SearchSourceVersion,
+    pub location: SearchLocation,
+    pub start_utf16: u64,
+    pub end_utf16: u64,
+    pub text: String,
 }
 #[derive(uniffi::Record)]
 pub struct SearchPage {
+    pub literal_query: bool,
     pub matches: Vec<SearchMatch>,
     pub searched: u64,
     pub unavailable: u64,
     pub not_retained: u64,
+    pub preparing: u64,
     pub next: u64,
     pub total: u64,
 }
@@ -353,6 +416,15 @@ impl AppleClient {
         let id = ConversationId::new(conversation.parse().map_err(|_| ClientError::InvalidData)?)
             .map_err(|_| ClientError::InvalidData)?;
         self.0.delete_native_copies(id).map_err(Into::into)
+    }
+    /// Capture the latest query intent before dispatching work.
+    /// # Errors
+    /// Closed lifetime or exhausted query identities.
+    pub fn begin_search(&self, session: u64) -> Result<u64, ClientError> {
+        self.0
+            .begin_search(core::SearchSessionId::try_from(session)?)
+            .map(core::SearchRequestId::value)
+            .map_err(Into::into)
     }
     /// # Errors
     /// The search session cannot be cleared.
@@ -441,17 +513,29 @@ impl AppleClient {
     }
     /// # Errors
     /// Invalid query or cursor, denied content access, or interrupted transport.
-    #[allow(clippy::needless_pass_by_value)] // UniFFI owns values across its language boundary.
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Explicit query, group and page boundary across UniFFI.
     pub fn search_mail(
         &self,
+        session: u64,
+        request: u64,
         query: String,
+        mode: SearchMode,
         scope: InboxScope,
         after: u64,
         limit: u16,
     ) -> Result<SearchPage, ClientError> {
         self.0
-            .search_mail(&query, scope.try_into()?, after, limit)
+            .search_mail(
+                core::SearchSessionId::try_from(session)?,
+                core::SearchRequestId::try_from(request)?,
+                &query,
+                mode.into(),
+                scope.try_into()?,
+                after,
+                limit,
+            )
             .map(|p| SearchPage {
+                literal_query: p.literal_query,
                 matches: p
                     .matches
                     .into_iter()
@@ -460,11 +544,21 @@ impl AppleClient {
                         message: m.message,
                         excerpt: m.excerpt,
                         expires_at: m.expires_at,
+                        subject: m.subject,
+                        committed_at: m.committed_at,
+                        passage: SearchPassage {
+                            version: m.passage.version().into(),
+                            location: m.passage.location().into(),
+                            start_utf16: m.start_utf16,
+                            end_utf16: m.end_utf16,
+                            text: m.selected_text,
+                        },
                     })
                     .collect(),
                 searched: p.searched,
                 unavailable: p.unavailable,
                 not_retained: p.not_retained,
+                preparing: p.preparing,
                 next: p.next,
                 total: p.total,
             })
@@ -553,16 +647,26 @@ impl AppleClient {
             .map(Into::into)
             .map_err(Into::into)
     }
+    /// Start the existing unlocked session's numerical engine without making a query.
+    /// # Errors
+    /// Closed lifetime, unavailable custody or packaged engine failure.
+    pub fn prepare_local_search(&self, session: u64) -> Result<(), ClientError> {
+        self.0
+            .prepare_local_search(core::SearchSessionId::try_from(session)?)
+            .map_err(Into::into)
+    }
     /// # Errors
     /// Invalid retained content, limits or unavailable local persistence.
-    pub fn index_local_mail(&self, limit: u16) -> Result<u64, ClientError> {
-        self.0.index_local_mail(limit).map_err(Into::into)
+    pub fn index_local_mail(&self, session: u64, limit: u16) -> Result<u64, ClientError> {
+        self.0
+            .index_local_mail(core::SearchSessionId::try_from(session)?, limit)
+            .map_err(Into::into)
     }
     /// # Errors
     /// Interrupted transport, invalid content or failed protected persistence.
-    pub fn retain_mail(&self, limit: u16) -> Result<RetentionProgress, ClientError> {
+    pub fn retain_mail(&self, session: u64, limit: u16) -> Result<RetentionProgress, ClientError> {
         self.0
-            .retain_mail(limit)
+            .retain_mail(core::SearchSessionId::try_from(session)?, limit)
             .map(|p| RetentionProgress {
                 retained: p.retained,
                 unavailable: p.unavailable,
@@ -572,8 +676,31 @@ impl AppleClient {
     }
     /// # Errors
     /// The session locks could not be acquired.
-    pub fn clear_inboxes(&self) -> Result<(), ClientError> {
-        self.0.clear_inboxes().map_err(Into::into)
+    pub fn close_search_session(&self, session: u64) -> Result<(), ClientError> {
+        self.0
+            .close_search_session(core::SearchSessionId::try_from(session)?)
+            .map_err(Into::into)
+    }
+    /// # Errors
+    /// The lifetime generation space is exhausted.
+    pub fn invalidate_search_session(&self) -> Result<(), ClientError> {
+        self.0.invalidate_search_session().map_err(Into::into)
+    }
+    /// # Errors
+    /// Existing device custody or retained account state is unavailable.
+    pub fn open_search_session(&self) -> Result<u64, ClientError> {
+        self.0
+            .open_search_session()
+            .map(core::SearchSessionId::value)
+            .map_err(Into::into)
+    }
+    /// # Errors
+    /// The search lifetime has ended.
+    pub fn search_session(&self) -> Result<u64, ClientError> {
+        self.0
+            .search_session()
+            .map(core::SearchSessionId::value)
+            .map_err(Into::into)
     }
 }
 

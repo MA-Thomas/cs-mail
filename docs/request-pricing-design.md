@@ -28,15 +28,11 @@ switching remain deferred; no alias fee is charged. Pricing rules
 apply only to published bonded-request routes. An empty class publication offers
 no paid route and does not itself grant express-lane permission.
 
-**Further alias clarification (2026-10-14; implementation pending).** One
-participant protocol identity may control multiple alias routes without public
-linkage. Sender-identity blocks apply across all receiving aliases. Aliases
-have no automatic expiry and offer Restrict, Replace, Retire. Suspicious or
-insufficiently authenticated alias mail is held for review without ongoing
-permission or payment. SMTP envelope recipients and authenticated native targets
-establish receiving-route evidence. The [domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope)
-owns these rules and remaining delivery, transition, reply and held-message contracts;
-implementation and validation records below do not establish this cutover.
+**Current alias boundary (26 October 2026).** Alias-bound publication, explicit
+receiving scopes and independent visibility are implemented. Sender blocks remain
+participant-wide. Receiving-policy switching, detailed held-message handling and
+the remaining replacement/reply contracts are deferred as recorded in the
+[domain model](../DOMAIN_MODEL.md#aliases-and-express-lane-scope).
 
 - CSQD is the only provider. There is one request pricing policy for all of
   cs-mail.
@@ -52,7 +48,9 @@ implementation and validation records below do not establish this cutover.
   cannot be quoted until the recipient republishes. Nothing is rewritten or
   clamped on the recipient's behalf.
 
-## What the current implementation gets wrong
+## Historical problems replaced by the September cutover
+
+The following describes the replaced implementation, not current behavior.
 
 1. **Publication is bound to a relationship.** `SignedRequestClasses` signs over a
    `SigningScope` that names one relationship, and the PostgreSQL adapter
@@ -81,7 +79,7 @@ implementation and validation records below do not establish this cutover.
   `C + collateral_max` does not overflow. A published version is immutable.
 - `RequestClass`: stable `RequestClassId`, recipient-authored description, and
   collateral `S`. Unchanged.
-- `RecipientRequestClasses` (owned by one protocol identity): recipient address,
+- `RecipientRequestClasses` (owned by one protocol identity): recipient identity, selected alias,
   publication version, and at most eight classes with unique IDs. Unchanged.
 - `RecipientSigningScope`: deployment domain and provider, with no relationship.
   It is a distinct type from the relationship `SigningScope`, so a publication
@@ -202,9 +200,10 @@ Decisions made during implementation:
   are never captured at receipt, and draining would refuse an address's publication
   whenever any command in the deployment was in flight. The concurrency test exposed
   this.
-- Until the Milestone 1 administration API exists, `publish_policy` is a trusted
-  startup API like the other `configure_*` calls, and policy versions record their
-  publication time but not an authorizing administration command.
+- At the September checkpoint, before the Milestone 1 administration API existed, `publish_policy` was a trusted
+  startup API like the other `configure_*` calls, and policy versions recorded their
+  publication time but not an authorizing administration command. The current
+  implementation uses authenticated operator commands.
 
 Open follow-ups:
 

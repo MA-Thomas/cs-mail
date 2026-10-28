@@ -99,6 +99,40 @@ pub(super) fn request_entry(
     RequestEntry::ReviewApproaches
 }
 
+/// Pair-level pending/history is retained, but permission is for the selected entrance.
+pub(super) fn alias_request_entry(
+    receiving: Option<&RelationshipView>,
+    sending: Option<&RelationshipView>,
+    permission: Option<cs_mail_protocol::RequestPermission>,
+    now: cs_mail_primitives::CanonicalTime,
+) -> RequestEntry {
+    let pair = request_entry(receiving, sending, now);
+    match pair {
+        RequestEntry::IncomingPending { .. }
+        | RequestEntry::OutgoingPending { .. }
+        | RequestEntry::Unavailable => pair,
+        _ => match permission {
+            Some(cs_mail_protocol::RequestPermission::DirectContact) => {
+                RequestEntry::AlreadyPermitted
+            }
+            Some(cs_mail_protocol::RequestPermission::BondedRequest) => {
+                // Existing preparations remain pair-scoped even when another alias is permitted.
+                sending
+                    .and_then(|view| {
+                        view.requests.iter().find(|r| {
+                            r.lifecycle.is_preparing_submission()
+                                || r.lifecycle.awaits_decision_at(now)
+                        })
+                    })
+                    .map_or(RequestEntry::ReviewApproaches, |r| {
+                        RequestEntry::OutgoingPending { request: r.id }
+                    })
+            }
+            _ => RequestEntry::Unavailable,
+        },
+    }
+}
+
 /// Current facts for contact management; commands are authorized again by the server.
 #[derive(Clone, Debug)]
 pub struct RelationshipControls {

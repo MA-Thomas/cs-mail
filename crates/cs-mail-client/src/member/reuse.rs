@@ -313,7 +313,19 @@ impl MemberClient {
             &keys,
             Command::DeleteCopies { id: conversation },
         )?);
-        super::storage::save(self.store.as_ref(), &keys, &state)?;
+        {
+            // The journal commit and its visibility projection share protection
+            // with readers. No warm query can pass between those two effects.
+            let _visibility = self.workspace.lock().map_err(|_| Error::Unavailable)?;
+            let mut index = self.retained.lock().map_err(|_| Error::Unavailable)?;
+            super::storage::save(self.store.as_ref(), &keys, &state)?;
+            if let Some(index) = index.as_mut() {
+                index.suspend(conversation);
+                if let Some(runtime) = &self.retrieval {
+                    runtime.interrupt();
+                }
+            }
+        }
         self.transmit_conversation_edit(&mut state, &keys)
     }
 
@@ -362,9 +374,26 @@ impl MemberClient {
             drop(retained);
             self.forget_resources(state, keys, super::MailKey::Native(id))?;
         }
+        // Serialize terminal publication with readers that captured the pending
+        // intent, so an old snapshot cannot re-suspend a durably refused deletion.
+        let _visibility = if deleting {
+            Some(self.workspace.lock().map_err(|_| Error::Unavailable)?)
+        } else {
+            None
+        };
         state.editing_conversation = None;
         super::storage::save(self.store.as_ref(), keys, state)?;
         if deleting {
+            if refused {
+                if let Some(index) = self
+                    .retained
+                    .lock()
+                    .map_err(|_| Error::Unavailable)?
+                    .as_mut()
+                {
+                    index.resume(id);
+                }
+            }
             self.clear_search()?;
         }
         if refused {

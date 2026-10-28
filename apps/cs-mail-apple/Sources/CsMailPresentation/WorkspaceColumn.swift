@@ -38,6 +38,38 @@ private struct WorkspaceColumnSizing: ViewModifier {
     }
 }
 
+/// B and C share native split interaction and a noninteractive separator treatment.
+/// Sampling the backdrop at workspace size keeps each interface's material continuous.
+public struct WorkspaceSplitSurround<Backdrop: View>: View {
+    private let sidebarBounds: CGRect
+    private let topInset: CGFloat
+    private let backdrop: Backdrop
+    public init(sidebarBounds: CGRect, topInset: CGFloat, @ViewBuilder backdrop: () -> Backdrop) {
+        self.sidebarBounds = sidebarBounds
+        self.topInset = topInset
+        self.backdrop = backdrop()
+    }
+    public var body: some View {
+        GeometryReader { geometry in
+            backdrop
+                .frame(width: geometry.size.width, height: geometry.size.height + topInset)
+                .mask(alignment: .topLeading) {
+                    Path { path in
+                        path.addRect(CGRect(x: sidebarBounds.minX, y: 0,
+                                            width: sidebarBounds.width, height: sidebarBounds.minY + topInset))
+                        #if os(macOS)
+                        path.addRect(CGRect(x: sidebarBounds.maxX - 1, y: 0,
+                                            width: 2, height: geometry.size.height + topInset))
+                        #endif
+                    }
+                }
+                .offset(y: -topInset)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 #if os(macOS)
 /// Enforce the same layout contract on the native split item without replacing
 /// SwiftUI’s navigation owner or its split-view delegate.

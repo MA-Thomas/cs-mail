@@ -39,9 +39,9 @@ struct DirectoryView: View {
                         if let error = model.error { Text(error).foregroundStyle(.orange) }
                         if let page = model.screen.results.page {
                             if page.entries.isEmpty { Text("No listed addresses match this search.").foregroundStyle(.secondary) }
-                            ForEach(page.entries, id: \.address) { entry in
+                            ForEach(page.entries, id: \.alias) { entry in
                                 let copyLabel = [entry.displayName, entry.mailbox ?? entry.address, entry.description].joined(separator: "\n")
-                                Button { Task { await model.open(AddressReference(entry.address)) } } label: {
+                                Button { Task { await model.openAlias(AliasReference(entry.alias)) } } label: {
                                     HStack(alignment: .top, spacing: 16) {
                                         PublicImage(bytes: entry.image)
                                         VStack(alignment: .leading, spacing: 6) {
@@ -169,6 +169,10 @@ struct AddressEditor: View {
                             VStack(alignment: .leading) {
                                 TextField("Approach description", text: $row.description)
                                 TextField("Collateral · simulated units", text: $row.collateral)
+                                if let published = settings.classes.first(where: { $0.id == row.id.value }), !published.quotable {
+                                    Text("This published approach cannot currently receive requests. Update its collateral and save to offer it again.").font(.caption).foregroundStyle(.orange)
+                                }
+                                if let problem = draft.collateralProblem(row) { Text(problem).font(.caption).foregroundStyle(.orange) }
                                 Button("Remove approach", role: .destructive) { draft.classes.removeAll { $0.id == row.id } }
                             }
                         }
@@ -183,7 +187,7 @@ struct AddressEditor: View {
                     Section {
                         if draft.isDirty { Text("Unsaved changes").font(.caption).foregroundStyle(.orange) }
                         Button(settings.revision == 0 ? "Publish approach page" : "Save changes") { save() }
-                            .disabled(pendingChanges || !draft.valid || draft.loadedRevision != settings.revision || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.classes.contains { $0.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || UInt64($0.collateral) == nil })
+                            .disabled(pendingChanges || !draft.valid || draft.loadedRevision != settings.revision)
                         if let loadedRevision = draft.loadedRevision, loadedRevision != settings.revision {
                             Text("Your page has changed since you began editing. Your edits are still here.").foregroundStyle(.orange)
                             Button("Discard edits and load saved page") { loadDraft() }

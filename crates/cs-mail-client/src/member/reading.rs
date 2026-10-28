@@ -81,6 +81,42 @@ pub enum ReadingContent {
     AccessDenied,
 }
 impl ReadingContent {
+    pub(super) fn text_parts(&self) -> Vec<(cs_mail_search::TextPart, &str)> {
+        use cs_mail_search::TextPart;
+        let Self::Readable(parts) = self else {
+            return vec![];
+        };
+        let mut result = Vec::new();
+        for (part, value) in parts.iter().enumerate() {
+            let part = u32::try_from(part).expect("checked document bounds part count");
+            match value {
+                ReadingPart::Text(text) => result.push((TextPart::Body { part }, text.as_str())),
+                ReadingPart::Email(email) => {
+                    if let Some(subject) = &email.subject {
+                        result.push((TextPart::Subject, subject.as_str()));
+                    }
+                    result.push((TextPart::Body { part }, email.text.as_str()));
+                }
+                ReadingPart::Quotation { blocks, .. } | ReadingPart::SharedCopy { blocks, .. } => {
+                    let quotation = matches!(value, ReadingPart::Quotation { .. });
+                    for (block, value) in blocks.iter().enumerate() {
+                        if let ReadingBlock::Text(text) = value {
+                            let block =
+                                u32::try_from(block).expect("checked document bounds block count");
+                            let location = if quotation {
+                                TextPart::Quotation { part, block }
+                            } else {
+                                TextPart::SharedCopy { part, block }
+                            };
+                            result.push((location, text.as_str()));
+                        }
+                    }
+                }
+                ReadingPart::Image { .. } | ReadingPart::Reference { .. } => (),
+            }
+        }
+        result
+    }
     pub(super) fn from_external_document(doc: &Document) -> Self {
         let mut content = Self::from_document(doc);
         if let (Some(subject), Self::Readable(parts)) = (doc.subject(), &mut content) {
@@ -216,6 +252,23 @@ impl MemberClient {
         key: super::MailKey,
         message: MessageId,
     ) -> Result<String, Error> {
+        let (doc, _, _) = self.external_source(state, keys, key, message)?;
+        ReadingContent::from_external_document(&doc).search_text()
+    }
+    pub(super) fn external_source(
+        &self,
+        state: &State,
+        keys: &Secrets,
+        key: super::MailKey,
+        message: MessageId,
+    ) -> Result<
+        (
+            Document,
+            cs_mail_correspondence::MessageVersion,
+            cs_mail_primitives::CanonicalTime,
+        ),
+        Error,
+    > {
         let super::MailKey::External(id) = key else {
             return Err(Error::InvalidData);
         };
@@ -251,6 +304,10 @@ impl MemberClient {
         {
             return Err(Error::InvalidData);
         }
-        ReadingContent::from_external_document(&doc).search_text()
+        Ok((
+            doc,
+            entry.message.manifest.version(),
+            entry.message.committed_at,
+        ))
     }
 }

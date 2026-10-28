@@ -432,6 +432,13 @@ after its decision deadline. Already-terminal financial settlements stay fixed.
 The lane determines future access without a new bond, subject to its scope and
 validity. Native correspondence enforces that permission across conversations.
 
+The Apple app exposes per-alias class editing and publication in both interfaces.
+Recipients see when a published class cannot currently be quoted, and invalid
+collateral is explained beside the amount while edits are preserved. Directory
+selection and request entry retain the exact alias; permission on another alias
+cannot suppress its bonded-request route. Quoting and publication recheck current
+policy and authority independently of these presentation views.
+
 The Rust implementation uses checked class publications, immutable signed class
 snapshots, and atomic lane/settlement effects. See
 [implementation and cutover](docs/request-classes-implementation.md). The operator
@@ -559,6 +566,59 @@ for atomicity and concurrency claims. Previously delivered copies remain readabl
 under their existing retention/custody rules; historical replay never supplies
 new send authority.
 
+## Private semantic navigation
+
+Confirmed direction, 25 October 2026. The architectural memorandum
+`docs/CSQD_Private_Semantic_Navigation.docx`, including its confirmed Appendix B,
+governs the implementation. Native and external correspondence, sent mail,
+private drafts, attachments, quoted occurrences, multiple languages and
+mathematical content belong in the design. Semantic resemblance is derived
+evidence; it establishes neither recorded history nor reading or reuse authority.
+
+For embedding-model comparison, the owner's follow-up designates the available
+M1 Max MacBook Pro with 32 GB as the reference device, replacing the earlier
+newest-Mac proposal. Mobile validation remains separate. The owner delegated
+selection of a conservative backup-deletion deadline.
+The selected maximum is **seven days from source deletion** for source content
+and its derived embeddings in server backups. Known removal excludes retrieval
+immediately; this maximum does not extend access or active-record retention.
+Authenticated deletion markers must survive stale-device replay and are distinct
+from content-bearing backups. This policy is not a claim that the server backup
+and synchronization mechanisms have been deployed or validated.
+
+Private draft content and model-specific embeddings must synchronize encrypted
+between authorized devices, preserving concurrent revisions explicitly. Neither
+provider-readable embeddings nor last-arrival-wins replacement of writing is
+authorized. Text, HTML, LaTeX, PDF, DOCX, XLSX and local OCR are the confirmed initial
+format scope. Model, database and vector-engine recommendations require evaluation.
+
+The initial implementation establishes checked source/passage and compatibility
+types, source-generation decisions with explicit work consequences, revoked search
+lifetimes, pending-deletion suppression and exact retained-text navigation. The subsequent Mac retained-text integration provisionally uses offline
+EmbeddingGemma 2 with SQLCipher/FTS5/vec1, atomically storing source-bound passages
+and vectors under an exact model compatibility profile. It does not establish
+attachment extraction, structured search or encrypted cross-device synchronization. Current implementation and validation limits are
+recorded in `docs/private-semantic-navigation-implementation.md` and the Apple runbook.
+
+### Typing suggestions and submitted search — agreed 26 October 2026
+
+While typing, show up to five suggested message matches. Enter (or See full
+results) opens the full search: all eligible retained messages containing every
+entered word, case-insensitively, anywhere in their searchable subject or message
+parts. Literal word matching uses complete alphanumeric words; semantic retrieval
+can still find different wording. Quotation marks require a literal phrase within
+one canonical text part. Full word/phrase results have no fixed total-result cap;
+fetching them in pages does not truncate the search.
+
+Additional semantic candidates appear separately under Related by meaning,
+excluding the word matches. Suggested and related semantic results carry the
+quiet caveat: “These are the closest matches. There may be no relevant match.”
+No score is represented as confidence and no relevance threshold is introduced.
+Editing a query returns to suggestions. Opening a result and returning preserves
+submitted/typing intent, query, scope, expanded results and position. Account,
+receiving scope, expiry, deletion and source-reading authority remain independent
+of matching or ranking; coverage describes correspondence available on the device.
+
 ## Private writing on a device
 
 Agreed usability slice, 15 October 2026. Drafts belong to a portable client
@@ -620,9 +680,11 @@ read, follow references implicitly or grant access or reuse authority.
 
 The client stores authenticated copies and per-message index records independently,
 encrypted at rest. Each incremental transaction commits the affected copy, index
-record and progress marker together. Unlock reconstructs the in-memory word lookup
-from index records without opening message copies. Connected downloads extend coverage. Search covers subjects and text, supports words
-and quoted phrases, and clears transient results on lock. It distinguishes content
+record and progress marker together. Bounded local work derives source-bound passages and model-specific vectors from
+verified copies. Session retrieval uses an encrypted SQLCipher projection; Rust
+rechecks the original source before revealing a result. Connected downloads extend
+coverage. Search covers subjects and text, combines meaning and words, requires
+literal text for quoted phrases, and clears transient results on lock. It distinguishes content
 not downloaded from content known unavailable; neither becomes a false complete result.
 Readers distinguish service commit time from provider-reported event time.
 

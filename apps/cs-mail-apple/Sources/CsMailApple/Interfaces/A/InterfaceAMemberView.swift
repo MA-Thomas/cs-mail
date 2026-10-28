@@ -56,6 +56,7 @@ struct InterfaceAView: View {
         let sender: SenderReference?
         let thread: String?
         let message: String?
+        let passage: SearchMatch?
         let title: String
         let inbox: String?
         let mailbox: MailboxNavigation.Context
@@ -303,7 +304,7 @@ struct InterfaceAView: View {
         default: title = destination.area.title
         }
         return NavigationCheckpoint(destination: destination, sidebar: sidebarTarget, sender: model.selectedSender,
-            thread: model.openedThread, message: model.focusedMessage, title: title, inbox: model.selectedInbox,
+            thread: model.openedThread, message: model.focusedMessage, passage: model.focusedSearchPassage, title: title, inbox: model.selectedInbox,
             mailbox: mailboxNavigation.snapshot(),
             laneQuery: laneQuery, laneDirection: laneDirection, laneReceivingAlias: laneReceivingAlias,
             address: managedAddressDestination)
@@ -354,7 +355,7 @@ struct InterfaceAView: View {
             laneQuery = source.laneQuery; laneDirection = source.laneDirection; laneReceivingAlias = source.laneReceivingAlias
             managedAddressDestination = source.address
             sidebarTarget = source.sidebar; destination = source.destination
-            model.openedThread = source.thread; model.focusedMessage = source.message
+            model.openedThread = source.thread; model.focusedMessage = source.message; model.focusedSearchPassage = source.passage
             model.chooseSender(source.sender)
             if let sender = source.sender, showsCorrespondence { Task { await model.select(sender) } }
         }
@@ -413,7 +414,7 @@ struct InterfaceAView: View {
     }
     private func resetInbox() {
         model.chooseSender(nil)
-        model.openedThread = nil; model.focusedMessage = nil
+        model.openedThread = nil; model.focusedMessage = nil; model.focusedSearchPassage = nil
         model.changeInbox(nil)
         sidebarTarget = nil; destination = .communications
         mailboxNavigation.reset(); returnStack = []; navigationRevision += 1
@@ -423,7 +424,7 @@ struct InterfaceAView: View {
         navigateSafely {
             if area == .communications { resetInbox() }
             else {
-                model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil
+                model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil; model.focusedSearchPassage = nil
                 returnStack = []; navigationRevision += 1
                 destination = area.destination; sidebarTarget = nil; model.changeInbox(nil)
             }
@@ -451,7 +452,7 @@ struct InterfaceAView: View {
 
     private func selectMailbox(_ folder: MailboxFolder) {
         navigateSafely {
-            model.endReading(); model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil
+            model.endReading(); model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil; model.focusedSearchPassage = nil
             sidebarTarget = nil; destination = .communications; returnStack.removeAll()
             mailboxNavigation.reset(); mailboxNavigation.folder = folder
         }
@@ -598,7 +599,7 @@ struct InterfaceAView: View {
                     pushNavigation { model.chooseSender(nil); sidebarTarget = nil; destination = .addresses }
                 }, select: { id in
                     navigateSafely {
-                        model.endReading(); model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil
+                        model.endReading(); model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil; model.focusedSearchPassage = nil
                         model.changeInbox(id); sidebarTarget = nil; destination = .communications
                         mailboxNavigation.reset(); returnStack.removeAll()
                     }
@@ -802,7 +803,7 @@ struct InterfaceAView: View {
                     }
                 }) { item, message in
                     pushNavigation {
-                        model.openedThread = item.key.conversation; model.focusedMessage = message
+                        model.openedThread = item.key.conversation; model.focusedMessage = message.message; model.focusedSearchPassage = message.passage
                         showContact(SenderReference(item.other), area: .communications)
                     }
                 }

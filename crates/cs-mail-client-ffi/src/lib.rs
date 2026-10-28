@@ -24,6 +24,8 @@ pub enum ClientError {
     Offline,
     Unauthorized,
     Unavailable,
+    RetrievalUnavailable,
+    SearchSuperseded,
     ExternalPending,
     ExternalRefused,
     DecisionPending,
@@ -39,6 +41,11 @@ pub enum ClientError {
     NoPendingRequest,
     DecisionRefused,
     PublicationRefused,
+    PublicationCollateral {
+        class_id: String,
+        minimum: u64,
+        maximum: u64,
+    },
     AddressUnavailable,
     EnrollmentRequired,
     LoginUnavailable,
@@ -66,6 +73,8 @@ impl From<core::Error> for ClientError {
             core::Error::Offline => Self::Offline,
             core::Error::Unauthorized => Self::Unauthorized,
             core::Error::Unavailable => Self::Unavailable,
+            core::Error::RetrievalUnavailable => Self::RetrievalUnavailable,
+            core::Error::SearchSuperseded => Self::SearchSuperseded,
             core::Error::DecisionPending => Self::DecisionPending,
             core::Error::SendPending => Self::SendPending,
             core::Error::SendRefused => Self::SendRefused,
@@ -79,6 +88,15 @@ impl From<core::Error> for ClientError {
             core::Error::NoPendingRequest => Self::NoPendingRequest,
             core::Error::DecisionRefused => Self::DecisionRefused,
             core::Error::PublicationRefused => Self::PublicationRefused,
+            core::Error::PublicationCollateral {
+                class,
+                minimum,
+                maximum,
+            } => Self::PublicationCollateral {
+                class_id: class.to_string(),
+                minimum,
+                maximum,
+            },
             core::Error::AddressUnavailable => Self::AddressUnavailable,
             core::Error::EnrollmentRequired => Self::EnrollmentRequired,
             core::Error::LoginUnavailable => Self::LoginUnavailable,
@@ -585,8 +603,11 @@ impl AppleClient {
     /// # Errors
     /// HTTP runtime cannot initialize.
     #[uniffi::constructor]
-    pub fn new(store: Box<dyn AppleStore>) -> Result<Self, ClientError> {
-        Ok(Self(core::MemberClient::new(
+    pub fn new(
+        store: Box<dyn AppleStore>,
+        search_resources: Option<String>,
+    ) -> Result<Self, ClientError> {
+        let client = core::MemberClient::new(
             Arc::new(Store(store)),
             Arc::new(core::HttpTransport::new()?),
             Arc::new(|| {
@@ -596,7 +617,13 @@ impl AppleClient {
                     .as_millis();
                 cs_mail_primitives::CanonicalTime(u64::try_from(millis).unwrap_or(u64::MAX))
             }),
-        )))
+        );
+        let client = if let Some(resources) = search_resources {
+            client.with_search_resources(std::path::Path::new(&resources))?
+        } else {
+            client
+        };
+        Ok(Self(client))
     }
     /// # Errors
     /// Invalid enrollment input, denied key custody, login configuration or transport failure.
@@ -946,6 +973,23 @@ impl AppleClient {
         let profile =
             cs_mail_accounts::directory::PublicProfile::new(display_name, description, image)
                 .map_err(|_| ClientError::InvalidData)?;
+        let current = self.0.directory_settings(id)?;
+        if let Some(policy) = &current.policy {
+            if let Some(class) = classes.iter().find(|class| {
+                cs_mail_protocol::pricing::collateral_input_issue(
+                    &class.collateral_minor_units.to_string(),
+                    Some(policy.collateral_min()),
+                    Some(policy.collateral_max()),
+                )
+                .is_some()
+            }) {
+                return Err(ClientError::PublicationCollateral {
+                    class_id: class.id.clone(),
+                    minimum: policy.collateral_min().minor_units(),
+                    maximum: policy.collateral_max().minor_units(),
+                });
+            }
+        }
         let classes = classes
             .into_iter()
             .map(|c| {
@@ -1002,7 +1046,7 @@ impl AppleClient {
             .map_err(ClientError::from)?;
         let entry = self
             .0
-            .relationship_request_entry(public.entry.address())
+            .relationship_request_entry(public.entry.address(), public.entry.alias())
             .map_err(ClientError::from)?;
         let mut result = Approach::from(public);
         result.request_entry = entry.into();
@@ -1691,4 +1735,31 @@ impl AppleClient {
             }
         }
     }
+}
+
+/// Pure Rust form feedback. These observed bounds are rechecked at publication.
+#[derive(uniffi::Enum)]
+pub enum ClassCollateralIssue {
+    WholeAmountRequired,
+    OutsideBounds,
+    PolicyUnavailable,
+}
+#[allow(clippy::needless_pass_by_value)] // UniFFI takes owned strings across the foreign boundary.
+#[uniffi::export]
+pub fn class_collateral_issue(
+    input: String,
+    minimum: Option<u64>,
+    maximum: Option<u64>,
+) -> Option<ClassCollateralIssue> {
+    use cs_mail_protocol::pricing::CollateralInputIssue;
+    cs_mail_protocol::pricing::collateral_input_issue(
+        &input,
+        minimum.map(cs_mail_primitives::Money::from_minor_units),
+        maximum.map(cs_mail_primitives::Money::from_minor_units),
+    )
+    .map(|issue| match issue {
+        CollateralInputIssue::WholeAmountRequired => ClassCollateralIssue::WholeAmountRequired,
+        CollateralInputIssue::OutsideBounds => ClassCollateralIssue::OutsideBounds,
+        CollateralInputIssue::PolicyUnavailable => ClassCollateralIssue::PolicyUnavailable,
+    })
 }

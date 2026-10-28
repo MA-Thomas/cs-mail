@@ -29,6 +29,7 @@ struct Store {
     retained_bytes_written: AtomicU64,
     lose_retained_ack: AtomicBool,
     key: Mutex<Option<Vec<u8>>>,
+    secret_gate: Mutex<Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
     cache: Mutex<Option<Vec<u8>>>,
     workspace: Mutex<Option<Vec<u8>>>,
     personal: Mutex<Option<Vec<u8>>>,
@@ -100,6 +101,11 @@ impl DeviceStore for Store {
         Ok(())
     }
     fn load_secret(&self) -> Result<Vec<u8>, Error> {
+        let gate = self.secret_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.0.wait();
+            gate.1.wait();
+        }
         if self.denied.load(Ordering::SeqCst) {
             return Err(Error::KeyUnavailable);
         }
@@ -444,6 +450,8 @@ fn lost_decision_response_and_failed_local_commit_replay_exact_operation_after_r
 }
 
 struct ContentNetwork {
+    fail_deletion_checkpoint: AtomicBool,
+    deletions: Mutex<Vec<Vec<u8>>>,
     fail_mailbox_page: AtomicBool,
     view: cs_mail_application::members::RelationshipView,
     message: cs_mail_application::correspondence::MessageView,
@@ -481,7 +489,7 @@ impl Transport for ContentNetwork {
                     },
                     next_after: 1,
                 },
-                Command::Policy { id } => {
+                Command::Policy { id } | Command::Create { id, .. } => {
                     Response::Conversation(cs_mail_correspondence::Conversation::new(
                         id,
                         cs_mail_correspondence::CorrespondenceRef::new(
@@ -511,6 +519,13 @@ impl Transport for ContentNetwork {
                     }
                     Response::Committed(package.manifest.message())
                 }
+                Command::DeleteCopies { .. } => {
+                    self.deletions.lock().unwrap().push(body.unwrap().to_vec());
+                    if self.fail_deletion_checkpoint.swap(false, Ordering::SeqCst) {
+                        self.store.fail_save.store(true, Ordering::SeqCst);
+                    }
+                    Response::CopiesDeleted
+                }
                 _ => panic!("unexpected correspondence command"),
             };
             serde_json::to_value(response).unwrap()
@@ -530,6 +545,13 @@ impl Transport for ContentNetwork {
             let read: cs_mail_security::SignedMemberRead =
                 serde_json::from_slice(body.unwrap()).unwrap();
             let answer = match read.read {
+                cs_mail_security::MemberRead::AliasRequestPermission { recipient, alias } => {
+                    MemberAnswer::AliasRequestPermission {
+                        recipient,
+                        alias,
+                        permission: Some(cs_mail_protocol::RequestPermission::BondedRequest),
+                    }
+                }
                 cs_mail_security::MemberRead::AsRecipient { .. } => MemberAnswer::Receiving {
                     handle: self.view.handle,
                     view: Some(self.view.clone()),
@@ -576,6 +598,14 @@ impl Transport for ContentNetwork {
 }
 #[allow(clippy::too_many_lines)] // Keep the complete endpoint, assignment and ciphertext fixture visible together.
 fn content_fixture(keys: &storage::Secrets, store: Arc<Store>) -> ContentNetwork {
+    content_fixture_message(keys, store, p::MessageId(1))
+}
+#[allow(clippy::too_many_lines)] // One authenticated encrypted-message fixture with explicit occurrence identity.
+fn content_fixture_message(
+    keys: &storage::Secrets,
+    store: Arc<Store>,
+    message: p::MessageId,
+) -> ContentNetwork {
     use crate::correspondence::{EndpointKeys, compose, prepare};
     use cs_mail_application::{
         correspondence::{MessageRecord, MessageView},
@@ -619,8 +649,8 @@ fn content_fixture(keys: &storage::Secrets, store: Arc<Store>) -> ContentNetwork
         deployment().custody_key,
         ContentBinding {
             wire_version: p::WireVersion(1),
-            content_ref: p::ContentRef(1),
-            message_id: p::MessageId(1),
+            content_ref: p::ContentRef(message.0),
+            message_id: message,
             sender: handle.sender,
             recipient: handle.recipient,
             protocol_version: p::ProtocolVersion(2),
@@ -675,6 +705,8 @@ fn content_fixture(keys: &storage::Secrets, store: Arc<Store>) -> ContentNetwork
             ciphertext: package.recipient_copy,
         },
         store,
+        fail_deletion_checkpoint: AtomicBool::new(false),
+        deletions: Mutex::new(vec![]),
         fail_mailbox_page: AtomicBool::new(false),
         deny_during_fetch: AtomicBool::new(false),
         fetch_gate: Mutex::new(None),
@@ -724,8 +756,28 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         last_request: None,
         setup: None,
     };
+    challenge_complete_word_search(&state, &keys);
     storage::save(store.as_ref(), &keys, &state).unwrap();
     let network = Arc::new(content_fixture(&keys, store.clone()));
+    // An accepted pair cannot hide requests at a different, unpermitted entrance.
+    assert_eq!(
+        super::views::alias_request_entry(
+            None,
+            Some(&network.view),
+            Some(cs_mail_protocol::RequestPermission::BondedRequest),
+            p::CanonicalTime(100)
+        ),
+        super::RequestEntry::ReviewApproaches
+    );
+    assert_eq!(
+        super::views::alias_request_entry(
+            None,
+            Some(&network.view),
+            Some(cs_mail_protocol::RequestPermission::DirectContact),
+            p::CanonicalTime(100)
+        ),
+        super::RequestEntry::AlreadyPermitted
+    );
     let client = MemberClient::new(
         store.clone(),
         network.clone(),
@@ -914,22 +966,79 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     );
     assert!(
         !offline
-            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .search_mail(
+                offline.search_session().unwrap(),
+                offline
+                    .begin_search(offline.search_session().unwrap())
+                    .unwrap(),
+                "\"private-message-canary\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                25
+            )
             .unwrap()
             .matches
             .is_empty()
     );
     assert!(
         !offline
-            .search_mail("Fixture conversation", super::InboxScope::All, 0, 25)
+            .search_mail(
+                offline.search_session().unwrap(),
+                offline
+                    .begin_search(offline.search_session().unwrap())
+                    .unwrap(),
+                "\"Fixture conversation\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                25
+            )
             .unwrap()
             .matches
             .is_empty()
     );
     let before_index_reads = store.index_reads.load(Ordering::SeqCst);
+    // A hit must map to the authenticated source version and actual body location,
+    // not merely to identical text held elsewhere in the account.
+    let located = offline
+        .search_mail(
+            offline.search_session().unwrap(),
+            offline
+                .begin_search(offline.search_session().unwrap())
+                .unwrap(),
+            "\"private-message-canary\"",
+            super::SearchMode::Suggestions,
+            super::InboxScope::All,
+            0,
+            1,
+        )
+        .unwrap();
+    let hit = &located.matches[0];
+    assert_eq!(
+        hit.passage.version(),
+        super::SourceVersion::Message(network.message.record.manifest.version())
+    );
+    assert_eq!(hit.passage.source().account(), p::AccountId(17));
+    assert_eq!(hit.passage.location(), super::TextPart::Body { part: 0 });
+    assert_eq!(
+        hit.passage.verify("private-message-canary").unwrap(),
+        hit.selected_text
+    );
+    assert_eq!((hit.start_utf16, hit.end_utf16), (0, 22));
     let before_copy_reads = store.copy_reads.load(Ordering::SeqCst);
     let empty = offline
-        .search_mail("wordthatdoesnotexist", super::InboxScope::All, 0, 25)
+        .search_mail(
+            offline.search_session().unwrap(),
+            offline
+                .begin_search(offline.search_session().unwrap())
+                .unwrap(),
+            "\"wordthatdoesnotexist\"",
+            super::SearchMode::Suggestions,
+            super::InboxScope::All,
+            0,
+            25,
+        )
         .unwrap();
     assert!(empty.matches.is_empty());
     assert_eq!(
@@ -952,7 +1061,17 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
 
     assert!(
         !offline
-            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .search_mail(
+                offline.search_session().unwrap(),
+                offline
+                    .begin_search(offline.search_session().unwrap())
+                    .unwrap(),
+                "\"private-message-canary\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                25
+            )
             .unwrap()
             .matches
             .is_empty()
@@ -974,7 +1093,17 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     );
     assert_eq!(
         offline
-            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .search_mail(
+                offline.search_session().unwrap(),
+                offline
+                    .begin_search(offline.search_session().unwrap())
+                    .unwrap(),
+                "\"private-message-canary\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                25
+            )
             .unwrap()
             .matches
             .len(),
@@ -992,7 +1121,17 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     offline.rebuild_search_index().unwrap();
     assert!(
         offline
-            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .search_mail(
+                offline.search_session().unwrap(),
+                offline
+                    .begin_search(offline.search_session().unwrap())
+                    .unwrap(),
+                "\"private-message-canary\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                25
+            )
             .unwrap()
             .matches
             .is_empty(),
@@ -1010,7 +1149,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         "failed rebuild changed its checkpoint"
     );
     store.fail_save.store(false, Ordering::SeqCst);
-    *store.retained.lock().unwrap() = prior_retained;
+    *store.retained.lock().unwrap() = prior_retained.clone();
     let expired = MemberClient::new(
         store.clone(),
         network.clone(),
@@ -1018,7 +1157,53 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     );
     assert!(
         expired
-            .search_mail("private-message-canary", super::InboxScope::All, 0, 25)
+            .search_mail(
+                expired.search_session().unwrap(),
+                expired
+                    .begin_search(expired.search_session().unwrap())
+                    .unwrap(),
+                "\"private-message-canary\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                25
+            )
+            .unwrap()
+            .matches
+            .is_empty()
+    );
+    // Known expiry denies retrieval before cleanup; bounded cleanup also removes
+    // sensitive derived words/copies and survives a rebuild/reopen.
+    let expiry_store = Arc::new(Store::default());
+    *expiry_store.key.lock().unwrap() = store.key.lock().unwrap().clone();
+    *expiry_store.cache.lock().unwrap() = store.cache.lock().unwrap().clone();
+    *expiry_store.retained.lock().unwrap() = prior_retained.clone();
+    let cleanup = MemberClient::new(
+        expiry_store.clone(),
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(u64::MAX)),
+    );
+    assert_eq!(
+        cleanup
+            .index_local_mail(cleanup.search_session().unwrap(), 1)
+            .unwrap(),
+        1
+    );
+    assert!(expiry_store.retained.lock().unwrap().copies.is_empty());
+    cleanup.rebuild_search_index().unwrap();
+    assert!(
+        cleanup
+            .search_mail(
+                cleanup.search_session().unwrap(),
+                cleanup
+                    .begin_search(cleanup.search_session().unwrap())
+                    .unwrap(),
+                "\"private-message-canary\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                10
+            )
             .unwrap()
             .matches
             .is_empty()
@@ -1054,6 +1239,27 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     // Even the decrypted device snapshot contains only HPKE ciphertext, never display text.
     let snapshot = serde_json::to_vec(&storage::open(store.as_ref(), &keys).unwrap()).unwrap();
     assert!(!snapshot.windows(marker.len()).any(|part| part == marker));
+    // Startup preparation cannot supersede captured query intent or alter source ciphertext.
+    let preparing_session = offline.search_session().unwrap();
+    let preparing_request = offline.begin_search(preparing_session).unwrap();
+    let before_preparing = store.retained.lock().unwrap().clone();
+    offline.prepare_local_search(preparing_session).unwrap();
+    assert_eq!(*store.retained.lock().unwrap(), before_preparing);
+    assert!(
+        !offline
+            .search_mail(
+                preparing_session,
+                preparing_request,
+                "private-message-canary",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                5
+            )
+            .unwrap()
+            .matches
+            .is_empty()
+    );
     let retained_bytes = store.retained.lock().unwrap().clone();
     for bytes in retained_bytes
         .indexes
@@ -1062,7 +1268,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     {
         assert!(!bytes.windows(marker.len()).any(|part| part == marker));
     }
-    challenge_index_scale(&store, &keys);
+
     // Conjecture: a blocked download cannot block local queries or repopulate a locked session.
     let isolated = Arc::new(Store::default());
     *isolated.key.lock().unwrap() = store.key.lock().unwrap().clone();
@@ -1075,21 +1281,49 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     let gate = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
     *network.fetch_gate.lock().unwrap() = Some(gate.clone());
     let background = concurrent.clone();
-    let download = std::thread::spawn(move || background.retain_mail(1));
+    let download =
+        std::thread::spawn(move || background.retain_mail(background.search_session().unwrap(), 1));
     gate.0.wait();
     let (tx, rx) = std::sync::mpsc::channel();
     let querying = concurrent.clone();
     let query = std::thread::spawn(move || {
-        tx.send(querying.search_mail("absentword", super::InboxScope::All, 0, 10))
+        tx.send(
+            querying.search_mail(
+                querying.search_session().unwrap(),
+                querying
+                    .begin_search(querying.search_session().unwrap())
+                    .unwrap(),
+                "\"absentword\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                10,
+            ),
+        )
+        .unwrap();
+    });
+    // A real foreground send must commit while the background fetch remains blocked.
+    network.offline_after_ack.store(false, Ordering::SeqCst);
+    let (sent_tx, sent_rx) = std::sync::mpsc::channel();
+    let sending = concurrent.clone();
+    let foreground = std::thread::spawn(move || {
+        sent_tx
+            .send(sending.send_message("1", None, "foreground-during-retention-canary", &[]))
             .unwrap();
     });
     let outcome = rx.recv_timeout(std::time::Duration::from_secs(2));
+    let sent = sent_rx.recv_timeout(std::time::Duration::from_secs(2));
     if outcome.is_ok() {
-        concurrent.clear_inboxes().unwrap();
+        concurrent
+            .close_search_session(concurrent.search_session().unwrap())
+            .unwrap();
     }
     gate.1.wait();
     let download_outcome = download.join().unwrap();
     query.join().unwrap();
+    foreground.join().unwrap();
+    assert!(sent.is_ok(), "blocked download delayed a foreground send");
+    assert!(sent.unwrap().is_ok(), "foreground send did not commit");
     *network.fetch_gate.lock().unwrap() = None;
     assert!(
         outcome.is_ok(),
@@ -1102,9 +1336,153 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         "late download restored a locked index"
     );
 
+    // Conjecture: queued searches cannot recreate plaintext state after lock, even after unlock.
+    let old_session = concurrent.open_search_session().unwrap();
+    let old_request = concurrent.begin_search(old_session).unwrap();
+    concurrent.close_search_session(old_session).unwrap();
+    assert!(concurrent.prepare_local_search(old_session).is_err());
+    assert!(
+        concurrent
+            .search_mail(
+                old_session,
+                old_request,
+                "\"private-message-canary\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                10
+            )
+            .is_err()
+    );
+    let new_session = concurrent.open_search_session().unwrap();
+    concurrent.close_search_session(old_session).unwrap();
+    assert_eq!(
+        concurrent.search_session().unwrap(),
+        new_session,
+        "stale cleanup closed a newer lifetime"
+    );
+    assert!(
+        concurrent
+            .search_mail(
+                old_session,
+                old_request,
+                "\"private-message-canary\"",
+                super::SearchMode::Suggestions,
+                super::InboxScope::All,
+                0,
+                10
+            )
+            .is_err()
+    );
+    assert!(
+        concurrent.retained.lock().unwrap().is_none(),
+        "stale query recreated plaintext index"
+    );
+    // Lock must also invalidate an unlock whose credential read has not returned.
+    let opening_gate = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
+    // The isolated store is retained by the client; no production Keychain is involved.
+    let opening_store = Arc::new(Store::default());
+    *opening_store.key.lock().unwrap() = store.key.lock().unwrap().clone();
+    *opening_store.cache.lock().unwrap() = store.cache.lock().unwrap().clone();
+    *opening_store.secret_gate.lock().unwrap() = Some(opening_gate.clone());
+    let opening_client = Arc::new(MemberClient::new(
+        opening_store,
+        network.clone(),
+        Arc::new(|| p::CanonicalTime(100)),
+    ));
+    let opening = opening_client.clone();
+    let unlock = std::thread::spawn(move || opening.open_search_session());
+    opening_gate.0.wait();
+    opening_client.invalidate_search_session().unwrap();
+    opening_gate.1.wait();
+    assert_eq!(unlock.join().unwrap().unwrap_err(), Error::Unavailable);
+    assert!(
+        opening_client.search_session().is_err(),
+        "late unlock reopened the search lifetime"
+    );
+
+    // Conjecture: a confirmed deletion followed by a failed local write cannot disclose its copy.
+    // The signed pending deletion is durable before the failure and owns exact recovery.
+    let deleting_store = Arc::new(Store::default());
+    *deleting_store.key.lock().unwrap() = store.key.lock().unwrap().clone();
+    *deleting_store.cache.lock().unwrap() = store.cache.lock().unwrap().clone();
+    *deleting_store.retained.lock().unwrap() = prior_retained;
+    let deleting_network = Arc::new(content_fixture(&keys, deleting_store.clone()));
+    let deleting = MemberClient::new(
+        deleting_store.clone(),
+        deleting_network.clone(),
+        Arc::new(|| p::CanonicalTime(100)),
+    );
+    deleting
+        .search_mail(
+            deleting.search_session().unwrap(),
+            deleting
+                .begin_search(deleting.search_session().unwrap())
+                .unwrap(),
+            "\"private-message-canary\"",
+            super::SearchMode::Suggestions,
+            super::InboxScope::All,
+            0,
+            10,
+        )
+        .unwrap();
+    deleting_network
+        .fail_deletion_checkpoint
+        .store(true, Ordering::SeqCst);
+    assert_eq!(
+        deleting
+            .delete_native_copies(cs_mail_correspondence::ConversationId::new(1).unwrap())
+            .unwrap_err(),
+        Error::StorageUnavailable
+    );
+    let reopened = MemberClient::new(
+        deleting_store.clone(),
+        deleting_network.clone(),
+        Arc::new(|| p::CanonicalTime(100)),
+    );
+    for reader in [&deleting, &reopened] {
+        assert!(
+            reader
+                .search_mail(
+                    reader.search_session().unwrap(),
+                    reader
+                        .begin_search(reader.search_session().unwrap())
+                        .unwrap(),
+                    "\"private-message-canary\"",
+                    super::SearchMode::Suggestions,
+                    super::InboxScope::All,
+                    0,
+                    10
+                )
+                .unwrap()
+                .matches
+                .is_empty()
+        );
+        assert!(
+            reader
+                .cached_conversation("1")
+                .unwrap()
+                .messages
+                .iter()
+                .all(|m| !matches!(m.content, super::ReadingContent::Readable(_)))
+        );
+    }
+    deleting_store.fail_save.store(false, Ordering::SeqCst);
+    reopened.retry().unwrap();
+    let attempts = deleting_network.deletions.lock().unwrap();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(
+        attempts[0], attempts[1],
+        "recovery changed the signed deletion"
+    );
+    drop(attempts);
+
     // Force a fresh download in this fixture: denied custody must prevent its checkpoint.
     *store.retained.lock().unwrap() = RetainedData::default();
-    client.clear_inboxes().unwrap();
+    client
+        .close_search_session(client.search_session().unwrap())
+        .unwrap();
+    client.open_search_session().unwrap();
     network.deny_during_fetch.store(true, Ordering::SeqCst);
     assert_eq!(client.conversation("1").unwrap_err(), Error::KeyUnavailable);
     assert_eq!(store.load_cache().unwrap().unwrap(), ciphertext);
@@ -1193,14 +1571,33 @@ fn challenge_personal_reading(client: &MemberClient, store: &Arc<Store>, keys: &
     store.save_cache(original.as_ref().unwrap()).unwrap();
     assert_eq!(client.mail_items().unwrap()[0].folder, MailFolder::Archive);
     assert_eq!(client.mail_items().unwrap()[0].unread, 0);
+    let page_request = client
+        .begin_search(client.search_session().unwrap())
+        .unwrap();
     let page = client
-        .search_mail("private-message-canary", super::InboxScope::All, 0, 1)
+        .search_mail(
+            client.search_session().unwrap(),
+            page_request,
+            "\"private-message-canary\"",
+            super::SearchMode::Suggestions,
+            super::InboxScope::All,
+            0,
+            1,
+        )
         .unwrap();
     assert_eq!(page.matches.len(), 1);
     client.clear_search().unwrap();
     assert!(matches!(
-        client.search_mail("private-message-canary", super::InboxScope::All, 1, 1),
-        Err(Error::InvalidData)
+        client.search_mail(
+            client.search_session().unwrap(),
+            page_request,
+            "\"private-message-canary\"",
+            super::SearchMode::Suggestions,
+            super::InboxScope::All,
+            1,
+            1
+        ),
+        Err(Error::SearchSuperseded)
     ));
     let bytes = store.load_personal().unwrap().unwrap();
     assert!(
@@ -1221,6 +1618,7 @@ fn challenge_personal_reading(client: &MemberClient, store: &Arc<Store>, keys: &
 }
 
 struct DirectoryNetwork {
+    collateral_refuse: AtomicBool,
     alias_tamper: AtomicBool,
     alias_refuse: AtomicBool,
     sent: Mutex<Vec<Vec<u8>>>,
@@ -1289,6 +1687,7 @@ impl DirectoryNetwork {
     }
 }
 impl Transport for DirectoryNetwork {
+    #[allow(clippy::too_many_lines)] // One directory/alias wire dispatcher for exact-operation recovery.
     fn request(&self, _: &str, route: &str, body: Option<&[u8]>) -> Result<Vec<u8>, Error> {
         use cs_mail_accounts::directory::DirectoryRevision;
         use cs_mail_application::directory::{Command, Receipt, Response, SignedRequest};
@@ -1384,6 +1783,17 @@ impl Transport for DirectoryNetwork {
         let Command::Publish { expected, .. } = request.command else {
             panic!("expected publication")
         };
+        if self.collateral_refuse.swap(false, Ordering::SeqCst) {
+            return Ok(serde_json::to_vec(&Response::Refused {
+                digest: request.digest().unwrap(),
+                error: cs_mail_application::directory::Error::Collateral {
+                    class: p::RequestClassId(9),
+                    minimum: 100,
+                    maximum: 200,
+                },
+            })
+            .unwrap());
+        }
         Ok(serde_json::to_vec(&Response::Published(Receipt {
             digest: request.digest().unwrap(),
             revision: DirectoryRevision(expected.0 + 1),
@@ -1399,6 +1809,7 @@ impl Transport for DirectoryNetwork {
 // Agreed recovery conjecture: response loss and a failed local acknowledgement commit
 // cannot replace an address edit's exact operation or leave its public text in SQLite.
 #[test]
+#[allow(clippy::too_many_lines)] // One durable recovery narrative, including definitive field refusal.
 fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgement() {
     use cs_mail_accounts::directory::{DirectoryRevision, DiscoveryVisibility, PublicProfile};
     let store = Arc::new(Store::default());
@@ -1439,6 +1850,7 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
     };
     storage::save(store.as_ref(), &keys, &state).unwrap();
     let network = Arc::new(DirectoryNetwork {
+        collateral_refuse: AtomicBool::new(false),
         alias_tamper: AtomicBool::new(false),
         alias_refuse: AtomicBool::new(false),
         sent: Mutex::new(Vec::new()),
@@ -1499,6 +1911,30 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
     drop(sent);
     challenge_alias_client_recovery(&reopened, &store, &network, &keys);
     challenge_recipient_routing(&reopened);
+    // Conjecture: a definitive collateral refusal clears only its journaled
+    // operation and preserves the field-specific correction, allowing another save.
+    network.collateral_refuse.store(true, Ordering::SeqCst);
+    let publish = || {
+        reopened.publish_directory(
+            p::AliasId::new(1).unwrap(),
+            DirectoryRevision(1),
+            2,
+            PublicProfile::new("Still authored".into(), "Retained edits".into(), None).unwrap(),
+            DiscoveryVisibility::Listed,
+            vec![],
+            None,
+        )
+    };
+    assert_eq!(
+        publish(),
+        Err(Error::PublicationCollateral {
+            class: 9,
+            minimum: 100,
+            maximum: 200
+        })
+    );
+    assert_setup_complete(store.as_ref(), &keys);
+    publish().unwrap();
 }
 
 fn challenge_recipient_routing(client: &MemberClient) {
@@ -2315,96 +2751,6 @@ fn assert_setup_complete(store: &Store, keys: &storage::Secrets) {
     assert!(storage::open(store, keys).unwrap().setup.is_none());
 }
 
-// Conjecture: index growth does not increase an unchanged-sized copy's checkpoint size,
-// and a warm selective query fetches only its match. Excess bytes or unrelated copy reads falsify it.
-// Optional scale experiment inside the existing retained-custody scenario, not another test case.
-fn challenge_index_scale(source: &Arc<Store>, keys: &storage::Secrets) {
-    if std::env::var_os("CS_MAIL_SEARCH_BENCH").is_none() {
-        return;
-    }
-    let store = Arc::new(Store::default());
-    *store.key.lock().unwrap() = source.key.lock().unwrap().clone();
-    *store.cache.lock().unwrap() = source.cache.lock().unwrap().clone();
-    let client = MemberClient::new(
-        store.clone(),
-        Arc::new(EnrollmentNetwork::default()),
-        Arc::new(|| p::CanonicalTime(100)),
-    );
-    let state = storage::open(store.as_ref(), keys).unwrap();
-    let mut index = super::retained::Retained::load(&client, keys, &state).unwrap();
-    let started = std::time::Instant::now();
-    let mut largest = 0;
-    for n in 0..100_000u128 {
-        let key = super::retained::CopyKey {
-            thread: super::MailKey::External(
-                cs_mail_correspondence::ConversationId::new(n + 10_000).unwrap(),
-            ),
-            message: p::MessageId(n + 10_000),
-        };
-        let before = store.retained_bytes_written.load(Ordering::SeqCst);
-        index.insert(super::retained::Entry {
-            key,
-            native: None,
-            text: format!("common needle{n:06} {}", "x".repeat(1000)),
-            subject: None,
-            expires: p::CanonicalTime(1_000_000),
-        });
-        index.save(&client, keys).unwrap();
-        index.known_keys.insert(key);
-        let delta = store.retained_bytes_written.load(Ordering::SeqCst) - before;
-        largest = largest.max(delta);
-        assert!(
-            delta < 4096,
-            "checkpoint size grew with mailbox instead of this message"
-        );
-        if [1000, 10_000, 100_000].contains(&(n + 1)) {
-            drop(index);
-            let before = store.copy_reads.load(Ordering::SeqCst);
-            let query_started = std::time::Instant::now();
-            let result = client
-                .search_mail("needle000999", super::InboxScope::All, 0, 10)
-                .unwrap();
-            let query_time = query_started.elapsed();
-            assert_eq!(result.matches.len(), 1);
-            assert_eq!(store.copy_reads.load(Ordering::SeqCst) - before, 1);
-            let miss_started = std::time::Instant::now();
-            assert!(
-                client
-                    .search_mail("absentword", super::InboxScope::All, 0, 10)
-                    .unwrap()
-                    .matches
-                    .is_empty()
-            );
-            let miss_time = miss_started.elapsed();
-            eprintln!(
-                "SEARCH SCALE messages={} selective_us={} miss_us={} largest_checkpoint_bytes={} cumulative_write_bytes={} import_elapsed_ms={}",
-                n + 1,
-                query_time.as_micros(),
-                miss_time.as_micros(),
-                largest,
-                store.retained_bytes_written.load(Ordering::SeqCst),
-                started.elapsed().as_millis()
-            );
-            index = super::retained::Retained::load(&client, keys, &state).unwrap();
-        }
-    }
-    drop(index);
-    client.clear_inboxes().unwrap();
-    let reads = store.copy_reads.load(Ordering::SeqCst);
-    let cold = std::time::Instant::now();
-    let index = super::retained::Retained::load(&client, keys, &state).unwrap();
-    assert_eq!(index.matching("needle000999").len(), 1);
-    assert_eq!(
-        store.copy_reads.load(Ordering::SeqCst),
-        reads,
-        "cold index opening read message bodies"
-    );
-    eprintln!(
-        "SEARCH SCALE cold_index_messages=100000 cold_ms={} message_copy_reads=0",
-        cold.elapsed().as_millis()
-    );
-}
-
 fn fixture_assignment(
     sender: p::ProtocolIdentity,
     recipient: p::ProtocolIdentity,
@@ -2655,7 +3001,12 @@ fn email_picture_approval_is_scoped_durable_and_never_automatically_replayed() {
         // Reading after an uncertain fetch acknowledgement never resumes retrieval.
         // The new text interpretation must repair a stale derived email index from
         // the authenticated original without replacing the original message.
-        assert_eq!(reopened.index_local_mail(10).unwrap(), 1);
+        assert_eq!(
+            reopened
+                .index_local_mail(reopened.search_session().unwrap(), 10)
+                .unwrap(),
+            1
+        );
         let mut previous_index = super::retained::Retained::load(&reopened, &keys, &state).unwrap();
         let copy_key = super::retained::CopyKey {
             thread: key,
@@ -2674,7 +3025,9 @@ fn email_picture_approval_is_scoped_durable_and_never_automatically_replayed() {
         store
             .save_personal(&interpretation.bytes(&keys).unwrap())
             .unwrap();
-        reopened.index_local_mail(10).unwrap();
+        reopened
+            .index_local_mail(reopened.search_session().unwrap(), 10)
+            .unwrap();
         let repaired = super::retained::Retained::load(&reopened, &keys, &state).unwrap();
         let repaired = repaired
             .copy(&reopened, &keys, copy_key, p::CanonicalTime(120))
@@ -2689,4 +3042,176 @@ fn email_picture_approval_is_scoped_durable_and_never_automatically_replayed() {
         );
         assert_eq!(store.load_secret().unwrap(), credentials);
     }
+}
+
+// Conjecture: all-word pagination enumerates more than 100 retained messages
+// exactly once without a numerical runtime; expiry and supersession still fence pages.
+#[allow(clippy::too_many_lines)] // Keep the >100-source setup, pagination and authority challenges together.
+fn challenge_complete_word_search(template: &State, keys: &storage::Secrets) {
+    let store = Arc::new(Store::default());
+    store
+        .create_secret(&serde_json::to_vec(keys).unwrap())
+        .unwrap();
+    let mut state: State = serde_json::from_value(serde_json::to_value(template).unwrap()).unwrap();
+    let mut views = Vec::new();
+    for id in 1..=110u128 {
+        let view = content_fixture_message(keys, store.clone(), p::MessageId(id)).message;
+        state
+            .mailbox
+            .records
+            .push((u64::try_from(id).unwrap(), view.record.clone()));
+        views.push(view);
+    }
+    state.mailbox.participants.insert(1, p::ProtocolIdentity(1));
+    storage::save(store.as_ref(), keys, &state).unwrap();
+    let now = Arc::new(AtomicU64::new(100));
+    let clock = now.clone();
+    let mut client = MemberClient::new(
+        store.clone(),
+        Arc::new(content_fixture(keys, store.clone())),
+        Arc::new(move || p::CanonicalTime(clock.load(Ordering::SeqCst))),
+    );
+    client.retrieval = None;
+    {
+        let mut retained = super::retained::Retained::load(&client, keys, &state).unwrap();
+        for view in views {
+            let subject = cs_mail_correspondence::ConversationSubject::new(
+                "Fixture conversation",
+                p::CanonicalTime(0),
+                0,
+                [19; 32],
+            )
+            .unwrap();
+            retained.insert(super::retained::Entry {
+                key: super::retained::CopyKey {
+                    thread: super::MailKey::Native(view.record.manifest.conversation()),
+                    message: view.record.manifest.message(),
+                },
+                expires: view.ciphertext.expires_at,
+                native: Some(view),
+                text: "Fixture conversation\n\nprivate-message-canary".into(),
+                subject: Some(subject),
+            });
+        }
+        retained.save(&client, keys).unwrap();
+    }
+    let session = client.search_session().unwrap();
+    let request = client.begin_search(session).unwrap();
+    let mut after = 0;
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        let page = client
+            .search_mail(
+                session,
+                request,
+                "Fixture canary",
+                super::SearchMode::Words,
+                super::InboxScope::All,
+                after,
+                25,
+            )
+            .unwrap();
+        assert_eq!(page.total, 110);
+        for hit in page.matches {
+            assert!(seen.insert(hit.message), "duplicate word result");
+        }
+        after = page.next;
+        if after == page.total {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), 110, "word result cap omitted retained messages");
+    let quoted = client.begin_search(session).unwrap();
+    assert!(
+        client
+            .search_mail(
+                session,
+                quoted,
+                "\"Fixture canary\"",
+                super::SearchMode::Words,
+                super::InboxScope::All,
+                0,
+                5
+            )
+            .unwrap()
+            .matches
+            .is_empty()
+    );
+    assert_eq!(
+        client
+            .search_mail(
+                session,
+                request,
+                "Fixture canary",
+                super::SearchMode::Words,
+                super::InboxScope::All,
+                25,
+                25
+            )
+            .unwrap_err(),
+        Error::SearchSuperseded
+    );
+    let current = client.begin_search(session).unwrap();
+    let first = client
+        .search_mail(
+            session,
+            current,
+            "canary",
+            super::SearchMode::Words,
+            super::InboxScope::All,
+            0,
+            5,
+        )
+        .unwrap();
+    assert_eq!(first.matches.len(), 5);
+    client.retrieval = Some(super::retrieval_runtime::Runtime::fixture(
+        client.retained_epoch.clone(),
+    ));
+    let related = client
+        .search_mail(
+            session,
+            current,
+            "canary",
+            super::SearchMode::Related,
+            super::InboxScope::All,
+            0,
+            5,
+        )
+        .unwrap();
+    assert!(
+        related.matches.is_empty(),
+        "literal messages repeated in related group"
+    );
+    let second = client
+        .search_mail(
+            session,
+            current,
+            "canary",
+            super::SearchMode::Words,
+            super::InboxScope::All,
+            first.next,
+            25,
+        )
+        .unwrap();
+    assert_eq!(
+        second.matches.len(),
+        25,
+        "related paging replaced the word cursor"
+    );
+    now.store(1001, Ordering::SeqCst);
+    assert!(
+        client
+            .search_mail(
+                session,
+                current,
+                "canary",
+                super::SearchMode::Words,
+                super::InboxScope::All,
+                first.next,
+                25
+            )
+            .unwrap()
+            .matches
+            .is_empty()
+    );
 }

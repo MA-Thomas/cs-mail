@@ -631,6 +631,7 @@ impl MemberClient {
     pub fn relationship_request_entry(
         &self,
         other: ProtocolIdentity,
+        alias: cs_mail_primitives::AliasId,
     ) -> Result<super::RequestEntry, Error> {
         let _guard = self.operation.lock().map_err(|_| Error::Unavailable)?;
         let keys = super::storage::secrets(self.store.as_ref())?;
@@ -653,9 +654,28 @@ impl MemberClient {
             return Err(Error::InvalidData);
         }
         let (_, sending) = self.sending(&state.profile, &keys, other)?;
-        Ok(super::views::request_entry(
+        let MemberAnswer::AliasRequestPermission {
+            recipient,
+            alias: returned_alias,
+            permission,
+        } = self.read(
+            &state.profile,
+            &keys,
+            MemberRead::AliasRequestPermission {
+                recipient: other,
+                alias,
+            },
+        )?
+        else {
+            return Err(Error::InvalidData);
+        };
+        if recipient != other || returned_alias != alias {
+            return Err(Error::InvalidData);
+        }
+        Ok(super::views::alias_request_entry(
             view.as_ref(),
             sending.as_ref(),
+            permission,
             (self.clock)(),
         ))
     }

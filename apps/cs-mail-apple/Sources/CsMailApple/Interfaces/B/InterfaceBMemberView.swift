@@ -25,6 +25,8 @@ struct InterfaceBView: View {
     @AppStorage("csMailLaneSectionOrder") private var laneSectionOrder: LaneSectionOrder = .aliasesFirst
     @AppStorage("csMailNotesReadingWidth") private var notesReadingWidth: NotesReadingWidth = .wide
     @AppStorage("csMailRelationshipsOverview") private var relationshipOverview: RelationshipOverviewStyle = .map
+    private enum AppearanceSource: String { case systemDefault, custom }
+    @AppStorage("csMailInterfaceBAppearanceSource") private var appearanceSource: AppearanceSource = .systemDefault
     @AppStorage("csMailAppearance") private var appearance: Appearance = .system
     @AppStorage("csMailTerrazzoDefault") private var terrazzoDefault = true
     @AppStorage("csMailTerrazzoHue") private var terrazzoHue = 0.5
@@ -42,10 +44,21 @@ struct InterfaceBView: View {
                     terrazzoAppearance.wrappedValue = snapshot.texture
                 })
     }
+    private func useSystemAppearance(_ mode: InterfaceBAppearanceSnapshot.Mode, changeMode: Bool = true) {
+        let snapshot = InterfaceBSystemAppearance.snapshot(for: mode)
+        if changeMode { appearance = mode == .dark ? .dark : .light }
+        terrazzoAppearance.wrappedValue = snapshot.texture
+        appearanceSource = .systemDefault
+        appearanceProfiles.clearSelection()
+    }
+    private func followSystemAppearance() {
+        guard appearance == .system, appearanceSource == .systemDefault else { return }
+        useSystemAppearance(scheme == .dark ? .dark : .light, changeMode: false)
+    }
     @State private var showingTerrazzo = false
     private var terrazzoAppearance: Binding<InterfaceBTerrazzoAppearance> {
         Binding(get: { InterfaceBTerrazzoAppearance(usesDefault: terrazzoDefault, hue: terrazzoHue, brightness: terrazzoBrightness, intensity: terrazzoIntensity, mainOpacity: terrazzoMainOpacity < 0 ? nil : terrazzoMainOpacity, surroundingOpacity: terrazzoSurroundingOpacity < 0 ? nil : terrazzoSurroundingOpacity) },
-                set: { terrazzoDefault = $0.usesDefault; terrazzoHue = $0.hue; terrazzoBrightness = $0.brightness; terrazzoIntensity = $0.intensity; terrazzoMainOpacity = $0.mainOpacity ?? -1; terrazzoSurroundingOpacity = $0.surroundingOpacity ?? -1 })
+                set: { appearanceSource = .custom; terrazzoDefault = $0.usesDefault; terrazzoHue = $0.hue; terrazzoBrightness = $0.brightness; terrazzoIntensity = $0.intensity; terrazzoMainOpacity = $0.mainOpacity ?? -1; terrazzoSurroundingOpacity = $0.surroundingOpacity ?? -1 })
     }
     @ObservedObject private var model: MemberModel
     private let accountAccess: DevelopmentAccountAccess
@@ -77,6 +90,7 @@ struct InterfaceBView: View {
         let sender: SenderReference?
         let thread: String?
         let message: String?
+        let passage: SearchMatch?
         let title: String
         let inbox: String?
         let mailbox: MailboxNavigation.Context
@@ -129,13 +143,19 @@ struct InterfaceBView: View {
                 }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity).disabled(model.busy)
             }
         }
-        .task { appearanceProfiles.preserveInitial(appearanceSnapshot.wrappedValue) }
+        .task {
+            if appearanceSource == .systemDefault {
+                useSystemAppearance(appearanceSnapshot.wrappedValue.mode, changeMode: false)
+            }
+        }
+        .onChange(of: scheme) { _, _ in followSystemAppearance() }
         .preferredColorScheme(appearance.colorScheme)
         .toolbar {
             ToolbarItem {
                 Button(scheme == .dark ? "Use light appearance" : "Use dark appearance",
                        systemImage: scheme == .dark ? "sun.max" : "moon") {
-                    appearance = scheme == .dark ? .light : .dark
+                    let next: InterfaceBAppearanceSnapshot.Mode = scheme == .dark ? .light : .dark
+                    useSystemAppearance(next)
                 }
                 .help("Switch between light and dark appearance")
             }
@@ -145,7 +165,9 @@ struct InterfaceBView: View {
                     .popover(isPresented: $showingTerrazzo, arrowEdge: .top) {
                         ScrollView {
                             VStack(spacing: 0) {
-                                InterfaceBAppearanceProfileControls(profiles: appearanceProfiles, current: appearanceSnapshot)
+                                InterfaceBAppearanceProfileControls(profiles: appearanceProfiles, current: appearanceSnapshot,
+                                    isSystemDefault: appearanceSource == .systemDefault,
+                                    useSystemDefault: { useSystemAppearance($0) })
                                 Divider().padding(.horizontal, 20)
                                 InterfaceBTerrazzoControls(appearance: terrazzoAppearance)
                             }
@@ -341,7 +363,7 @@ struct InterfaceBView: View {
         default: title = destination.area.title
         }
         return NavigationCheckpoint(destination: destination, sidebar: sidebarTarget, sender: model.selectedSender,
-            thread: model.openedThread, message: model.focusedMessage, title: title, inbox: model.selectedInbox,
+            thread: model.openedThread, message: model.focusedMessage, passage: model.focusedSearchPassage, title: title, inbox: model.selectedInbox,
             mailbox: mailboxNavigation.snapshot(),
             laneQuery: laneQuery, laneDirection: laneDirection, laneReceivingAlias: laneReceivingAlias,
             address: managedAddressDestination)
@@ -392,7 +414,7 @@ struct InterfaceBView: View {
             laneQuery = source.laneQuery; laneDirection = source.laneDirection; laneReceivingAlias = source.laneReceivingAlias
             managedAddressDestination = source.address
             sidebarTarget = source.sidebar; destination = source.destination
-            model.openedThread = source.thread; model.focusedMessage = source.message
+            model.openedThread = source.thread; model.focusedMessage = source.message; model.focusedSearchPassage = source.passage
             model.chooseSender(source.sender)
             if let sender = source.sender, showsCorrespondence { Task { await model.select(sender) } }
         }
@@ -451,7 +473,7 @@ struct InterfaceBView: View {
     }
     private func resetInbox() {
         model.chooseSender(nil)
-        model.openedThread = nil; model.focusedMessage = nil
+        model.openedThread = nil; model.focusedMessage = nil; model.focusedSearchPassage = nil
         model.changeInbox(nil)
         sidebarTarget = nil; destination = .communications
         mailboxNavigation.reset(); returnStack = []; navigationRevision += 1
@@ -461,7 +483,7 @@ struct InterfaceBView: View {
         navigateSafely {
             if area == .communications { resetInbox() }
             else {
-                model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil
+                model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil; model.focusedSearchPassage = nil
                 returnStack = []; navigationRevision += 1
                 destination = area.destination; sidebarTarget = nil; model.changeInbox(nil)
             }
@@ -489,7 +511,7 @@ struct InterfaceBView: View {
 
     private func selectMailbox(_ folder: MailboxFolder) {
         navigateSafely {
-            model.endReading(); model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil
+            model.endReading(); model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil; model.focusedSearchPassage = nil
             sidebarTarget = nil; destination = .communications; returnStack.removeAll()
             mailboxNavigation.reset(); mailboxNavigation.folder = folder
         }
@@ -540,24 +562,11 @@ struct InterfaceBView: View {
             .overlayPreferenceValue(InterfaceBColumnBBounds.self) { anchor in
                 GeometryReader { geometry in
                     if let anchor {
-                        let bounds = geometry[anchor]
-                        ZStack {
-                            // The native sidebar's toolbar cap must match the workspace
-                            // now that the bowed panel no longer covers it.
+                        WorkspaceSplitSurround(sidebarBounds: geometry[anchor], topInset: geometry.safeAreaInsets.top) {
                             InterfaceBWorkspaceBackdrop()
-                                .frame(width: bounds.width, height: bounds.minY + geometry.safeAreaInsets.top)
-                                .position(x: bounds.midX, y: (bounds.minY - geometry.safeAreaInsets.top) / 2)
-                            #if os(macOS)
-                            // Cover the native divider without adding a sidebar rim or spill.
-                            // Its resize hit region and column geometry remain native.
-                            InterfaceBWorkspaceBackdrop()
-                                .frame(width: 2, height: geometry.size.height + geometry.safeAreaInsets.top)
-                                .position(x: bounds.maxX, y: (geometry.size.height - geometry.safeAreaInsets.top) / 2)
-                            #endif
                         }
                     }
                 }
-                .allowsHitTesting(false).accessibilityHidden(true)
             }
         }
     }
@@ -651,7 +660,7 @@ struct InterfaceBView: View {
                     pushNavigation { model.chooseSender(nil); sidebarTarget = nil; destination = .addresses }
                 }, select: { id in
                     navigateSafely {
-                        model.endReading(); model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil
+                        model.endReading(); model.chooseSender(nil); model.openedThread = nil; model.focusedMessage = nil; model.focusedSearchPassage = nil
                         model.changeInbox(id); sidebarTarget = nil; destination = .communications
                         mailboxNavigation.reset(); returnStack.removeAll()
                     }
@@ -856,7 +865,7 @@ struct InterfaceBView: View {
                     }
                 }) { item, message in
                     pushNavigation {
-                        model.openedThread = item.key.conversation; model.focusedMessage = message
+                        model.openedThread = item.key.conversation; model.focusedMessage = message.message; model.focusedSearchPassage = message.passage
                         showContact(SenderReference(item.other), area: .communications)
                     }
                 }

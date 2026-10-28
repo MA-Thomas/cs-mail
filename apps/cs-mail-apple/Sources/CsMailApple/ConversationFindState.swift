@@ -49,6 +49,29 @@ struct ConversationText: Equatable {
         self.texts = texts
         rebuild(preserving: selection?.occurrence)
     }
+    /// Coordinates are supplied by Rust. Verify them against the displayed projection;
+    /// navigation never interprets a search hit as reading or reuse authority.
+    func revealSearchPassage(_ hit: SearchMatch, texts: [ConversationText]) {
+        update(texts)
+        let location: ConversationText.ID.Location
+        switch hit.passage.location {
+        case .subject: return
+        case .body(let part): location = .body(Int(part))
+        case .quotation(let part, let block), .sharedCopy(let part, let block):
+            location = .excerpt(part: Int(part), block: Int(block))
+        }
+        let id = ConversationText.ID(message: hit.message, location: location)
+        guard let source = texts.first(where: { $0.id == id }),
+              let start = Int(exactly: hit.passage.startUtf16),
+              let end = Int(exactly: hit.passage.endUtf16), end > start,
+              end <= (source.text as NSString).length else { return }
+        let range = NSRange(location: start, length: end - start)
+        guard (source.text as NSString).substring(with: range) == hit.passage.text else { return }
+        query = hit.passage.text
+        let occurrence = Occurrence(text: id, range: range)
+        guard let index = occurrences.firstIndex(of: occurrence) else { return }
+        select(index)
+    }
     func reset() { query = ""; occurrences = []; selection = nil }
     func move(_ direction: Int) {
         guard !occurrences.isEmpty else { return }
