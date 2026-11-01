@@ -64,7 +64,7 @@ package final class SQLiteDeviceStore: AppleStore, @unchecked Sendable {
         guard sqlite3_prepare_v2(database,"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='retained_mail'",-1,&legacy,nil) == SQLITE_OK else { throw ClientError.StorageUnavailable }
         defer { sqlite3_finalize(legacy) }
         guard sqlite3_step(legacy) == SQLITE_ROW,sqlite3_column_int(legacy,0) == 0 else { throw ClientError.InvalidData }
-        try execute("CREATE TABLE IF NOT EXISTS retained_progress(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL CHECK(revision>0)); CREATE TABLE IF NOT EXISTS retained_metadata(id INTEGER PRIMARY KEY CHECK(id=1),ciphertext BLOB NOT NULL); CREATE TABLE IF NOT EXISTS retained_index(id BLOB PRIMARY KEY CHECK(length(id)=32),ciphertext BLOB NOT NULL) WITHOUT ROWID; CREATE TABLE IF NOT EXISTS retained_copies(id BLOB PRIMARY KEY CHECK(length(id)=32),ciphertext BLOB NOT NULL) WITHOUT ROWID;")
+        try execute("CREATE TABLE IF NOT EXISTS mailbox_records(id BLOB PRIMARY KEY CHECK(length(id)=32),ciphertext BLOB NOT NULL) WITHOUT ROWID; CREATE TABLE IF NOT EXISTS retained_progress(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL CHECK(revision>0)); CREATE TABLE IF NOT EXISTS retained_metadata(id INTEGER PRIMARY KEY CHECK(id=1),ciphertext BLOB NOT NULL); CREATE TABLE IF NOT EXISTS retained_index(id BLOB PRIMARY KEY CHECK(length(id)=32),ciphertext BLOB NOT NULL) WITHOUT ROWID; CREATE TABLE IF NOT EXISTS retained_copies(id BLOB PRIMARY KEY CHECK(length(id)=32),ciphertext BLOB NOT NULL) WITHOUT ROWID;")
     }
     deinit {
         if let database { sqlite3_close(database) }
@@ -175,6 +175,54 @@ package final class SQLiteDeviceStore: AppleStore, @unchecked Sendable {
         try bind(id,statement,1);try bind(bytes,statement,2)
         guard sqlite3_step(statement) == SQLITE_DONE else { throw ClientError.StorageUnavailable }
     }
+    package func cacheRecord(id: Data) throws -> Data? {
+        guard id.count == 32 else { throw ClientError.InvalidData }
+        access.lock(); defer { access.unlock() }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT ciphertext FROM mailbox_records WHERE id=?", -1, &statement, nil) == SQLITE_OK else { throw ClientError.StorageUnavailable }
+        defer { sqlite3_finalize(statement) }
+        try bind(id, statement, 1)
+        let status = sqlite3_step(statement)
+        if status == SQLITE_DONE { return nil }
+        guard status == SQLITE_ROW else { throw ClientError.StorageUnavailable }
+        return try blob(statement, 0)
+    }
+    package func commitCache(change: CacheCommit) throws {
+        try commit(cache: nil, workspace: nil, mailbox: change)
+    }
+    private func replaceMailbox(_ change: CacheCommit) throws {
+        let kept = Set(change.keep)
+        guard kept.count == change.keep.count,
+              kept.allSatisfy({ $0.count == 32 }),
+              Set(change.writes.map(\.id)).count == change.writes.count,
+              change.writes.allSatisfy({ kept.contains($0.id) }) else { throw ClientError.InvalidData }
+        try execute("CREATE TEMP TABLE IF NOT EXISTS mailbox_keep(id BLOB PRIMARY KEY) WITHOUT ROWID; DELETE FROM mailbox_keep;")
+        var keepStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "INSERT INTO mailbox_keep(id) VALUES(?)", -1, &keepStatement, nil) == SQLITE_OK else { throw ClientError.StorageUnavailable }
+        defer { sqlite3_finalize(keepStatement) }
+        for id in change.keep {
+            try bind(id, keepStatement, 1)
+            guard sqlite3_step(keepStatement) == SQLITE_DONE,
+                  sqlite3_reset(keepStatement) == SQLITE_OK,
+                  sqlite3_clear_bindings(keepStatement) == SQLITE_OK else { throw ClientError.StorageUnavailable }
+        }
+        var writeStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "INSERT INTO mailbox_records(id,ciphertext) VALUES(?,?) ON CONFLICT(id) DO NOTHING", -1, &writeStatement, nil) == SQLITE_OK else { throw ClientError.StorageUnavailable }
+        defer { sqlite3_finalize(writeStatement) }
+        for row in change.writes {
+            try bind(row.id, writeStatement, 1)
+            try bind(row.ciphertext, writeStatement, 2)
+            guard sqlite3_step(writeStatement) == SQLITE_DONE,
+                  sqlite3_reset(writeStatement) == SQLITE_OK,
+                  sqlite3_clear_bindings(writeStatement) == SQLITE_OK else { throw ClientError.StorageUnavailable }
+        }
+        var check: OpaquePointer?
+        guard sqlite3_prepare_v2(database, "SELECT count(*) FROM mailbox_keep k LEFT JOIN mailbox_records r ON r.id=k.id WHERE r.id IS NULL", -1, &check, nil) == SQLITE_OK else { throw ClientError.StorageUnavailable }
+        defer { sqlite3_finalize(check) }
+        guard sqlite3_step(check) == SQLITE_ROW, sqlite3_column_int64(check,0) == 0 else { throw ClientError.InvalidData }
+        try replace(table: "device_cache", bytes: change.head)
+        try execute("DELETE FROM mailbox_records WHERE id NOT IN (SELECT id FROM mailbox_keep); DELETE FROM mailbox_keep;")
+    }
     package func loadCache() throws -> Data? { try loadCiphertext(table: "device_cache") }
     package func loadWorkspace() throws -> Data? { try loadCiphertext(table: "member_workspace") }
     package func loadPersonal() throws -> Data? { try loadCiphertext(table: "personal_mailbox") }
@@ -195,7 +243,7 @@ package final class SQLiteDeviceStore: AppleStore, @unchecked Sendable {
     }
     package func saveCache(bytes: Data) throws { try commit(cache: bytes, workspace: nil) }
     package func saveWorkspace(bytes: Data) throws { try commit(cache: nil, workspace: bytes) }
-    package func saveSubmission(cache: Data, workspace: Data, personal: Data) throws { try commit(cache: cache, workspace: workspace, personal: personal) }
+    package func saveSubmission(cache: CacheCommit, workspace: Data, personal: Data) throws { try commit(cache: nil, workspace: workspace, personal: personal, mailbox: cache) }
     private func replace(table: String, bytes: Data) throws {
         guard !bytes.isEmpty, bytes.count <= 64 * 1024 * 1024 else { throw ClientError.InvalidData }
         var statement: OpaquePointer?
@@ -206,10 +254,11 @@ package final class SQLiteDeviceStore: AppleStore, @unchecked Sendable {
                   sqlite3_step(statement) == SQLITE_DONE else { throw ClientError.StorageUnavailable }
         }
     }
-    private func commit(cache: Data?, workspace: Data?, personal: Data? = nil) throws {
+    private func commit(cache: Data?, workspace: Data?, personal: Data? = nil, mailbox: CacheCommit? = nil) throws {
         access.lock(); defer { access.unlock() }
         try execute("BEGIN IMMEDIATE")
         do {
+            if let mailbox { try replaceMailbox(mailbox) }
             if let cache { try replace(table: "device_cache", bytes: cache) }
             if let workspace { try replace(table: "member_workspace", bytes: workspace) }
             if let personal { try replace(table: "personal_mailbox", bytes: personal) }

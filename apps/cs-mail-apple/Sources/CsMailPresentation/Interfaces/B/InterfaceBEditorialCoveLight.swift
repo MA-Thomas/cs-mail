@@ -6,14 +6,13 @@ public struct InterfaceBEditorialCoveLight: View {
     private let role: Role
     /// Space around the rim reserved for the complete soft lighting falloff.
     public static let spillExtent: CGFloat = 24
-    private let area: MemberArea
     private let bounds: CGRect
     private let cornerRadius: CGFloat
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.interfaceBAppearance) private var appearance
 
-    public init(area: MemberArea, bounds: CGRect, cornerRadius: CGFloat = 8, role: Role = .surface) {
+    public init(bounds: CGRect, cornerRadius: CGFloat = 8, role: Role = .surface) {
         self.role = role
-        self.area = area
         self.bounds = bounds
         self.cornerRadius = cornerRadius
     }
@@ -22,9 +21,8 @@ public struct InterfaceBEditorialCoveLight: View {
         Canvas { context, _ in
             // Continuous shadow-style blur; the column interior stays unpainted.
             context.translateBy(x: Self.spillExtent, y: Self.spillExtent)
-            let palette = InterfaceBEditorialAreaPalette.palette(for: area)
-            let glowColor = role == .navigationSelection ? palette.reflection : palette.wash
-            let glowOpacity = role == .navigationSelection ? (scheme == .dark ? 0.6 : 0.25) : palette.spillOpacity(scheme)
+            let glowColor = appearance.coveColor
+            let glowOpacity = role == .navigationSelection ? (scheme == .dark ? 0.6 : 0.25) : (scheme == .dark ? 0.45 : 0.12)
             let outline = Path(roundedRect: bounds, cornerRadius: cornerRadius)
             do {
                 var exterior = Path(bounds.insetBy(dx: -Self.spillExtent, dy: -Self.spillExtent))
@@ -36,7 +34,7 @@ public struct InterfaceBEditorialCoveLight: View {
                     layer.stroke(outline, with: .color(glowColor.opacity(glowOpacity)), lineWidth: 8)
                 }
             }
-            let rim = scheme == .dark ? glowColor : palette.rim
+            let rim = scheme == .dark ? glowColor : glowColor.opacity(0.5)
             context.stroke(outline, with: .color(rim.opacity(role == .navigationSelection ? 0.85 : (scheme == .dark ? 0.55 : 0.65))), lineWidth: 1)
         }
         .padding(-Self.spillExtent)

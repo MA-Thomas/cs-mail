@@ -96,6 +96,8 @@ const MIGRATION_4: &str = include_str!("../migrations/0004_express_lanes.sql");
 const MIGRATION_5: &str = include_str!("../migrations/0005_protocol_foundations.sql");
 const MIGRATION_6: &str = include_str!("../migrations/0006_authenticated_message_envelopes.sql");
 const CURRENT_PROTOCOL_FORMAT_VERSION: i16 = 11;
+const MIGRATION_46: &str = include_str!("../migrations/0046_processing_owners.sql");
+const MIGRATION_45: &str = include_str!("../migrations/0045_external_observations.sql");
 const MIGRATION_44: &str = include_str!("../migrations/0044_unified_aliases.sql");
 const MIGRATION_43: &str = include_str!("../migrations/0043_required_receiving_inboxes.sql");
 const MIGRATION_42: &str = include_str!("../migrations/0042_shared_subjects.sql");
@@ -852,7 +854,7 @@ impl PostgresEngine {
         let now = to_i64(now.0)?;
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut transaction = client.transaction()?;
-        ingress::require_drained(&mut transaction)?;
+        ingress::require_relationship_drained(&mut transaction, &self.aggregate_key)?;
         let rows = transaction.query(
             "SELECT aggregate_key, task_key, task, due_at FROM cs_schedules \
              WHERE aggregate_key = $1 AND due_at <= $2 AND (status = 'pending' \
@@ -1060,6 +1062,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (42_i64, MIGRATION_42),
     (43_i64, MIGRATION_43),
     (44_i64, MIGRATION_44),
+    (45_i64, MIGRATION_45),
+    (46_i64, MIGRATION_46),
 ];
 
 fn migrate(client: &mut Client) -> Result<(), StorageError> {

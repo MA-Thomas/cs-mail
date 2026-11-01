@@ -44,10 +44,10 @@ public struct InterfaceCEditorialMembraneView: View {
     private var history: [EditorialConversationSummary] { conversations.filter { $0.route == .closed && !$0.awaitingDecision } }
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
+            VStack(alignment: .leading, spacing: 24) {
                 Text("Your communication space").font(InterfaceCEditorialStyle.heading(28))
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("At the boundary").font(InterfaceCEditorialStyle.text(13)).accessibilityAddTraits(.isHeader)
+                    Text("At the boundary").font(InterfaceCEditorialStyle.sectionHeading).accessibilityAddTraits(.isHeader)
                     LazyVGrid(columns: portalColumns, spacing: 18) {
                         ForEach(approaches) { person in portal(person) }
                     }
@@ -55,12 +55,12 @@ public struct InterfaceCEditorialMembraneView: View {
                 }
                 VStack(alignment: .leading, spacing: 24) {
                     Text("Within your space").font(InterfaceCEditorialStyle.heading(21)).accessibilityAddTraits(.isHeader)
-                    Text("Standing contacts").font(InterfaceCEditorialStyle.text(13)).accessibilityAddTraits(.isHeader)
+                    Text("Standing contacts").font(InterfaceCEditorialStyle.sectionHeading).accessibilityAddTraits(.isHeader)
                     LazyVGrid(columns: portalColumns, spacing: 22) {
                         ForEach(conversations.filter { $0.route == .standing }) { person in portal(person) }
                     }
                     InterfaceCMaterialDivider()
-                    Text("Express lanes").font(InterfaceCEditorialStyle.text(13)).accessibilityAddTraits(.isHeader)
+                    Text("Express lanes").font(InterfaceCEditorialStyle.sectionHeading).accessibilityAddTraits(.isHeader)
                     LazyVGrid(columns: portalColumns, spacing: 22) {
                         ForEach(conversations.filter { $0.route == .bounded }) { person in portal(person) }
                     }
@@ -68,13 +68,13 @@ public struct InterfaceCEditorialMembraneView: View {
                 .padding(.vertical, 18).frame(maxWidth: .infinity, alignment: .leading)
                 if !history.isEmpty {
                     VStack(alignment: .leading, spacing: 16) {
-                        Text("History outside the boundary").font(InterfaceCEditorialStyle.text(13)).accessibilityAddTraits(.isHeader)
+                        Text("History outside the boundary").font(InterfaceCEditorialStyle.sectionHeading).accessibilityAddTraits(.isHeader)
                         LazyVGrid(columns: portalColumns, spacing: 18) {
                             ForEach(history) { person in portal(person) }
                         }
                     }
                 }
-            }.padding(48).frame(maxWidth: 1020, alignment: .leading).frame(maxWidth: .infinity)
+            }.padding(32).frame(maxWidth: 1020, alignment: .leading).frame(maxWidth: .infinity)
         }.foregroundStyle(InterfaceCEditorialStyle.ink(scheme), InterfaceCEditorialStyle.secondaryInk(scheme)).background { InterfaceCWorkspaceBackdrop() }
     }
     private var portalColumns: [GridItem] { [GridItem(listLayout ? .flexible() : .adaptive(minimum: 200), spacing: 22)] }
@@ -83,8 +83,8 @@ public struct InterfaceCEditorialMembraneView: View {
         Button { open(person) } label: {
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(person.title).font(InterfaceCEditorialStyle.text(15)).lineLimit(2)
-                    Text(person.subtitle).font(InterfaceCEditorialStyle.text(12))
+                    Text(person.title).font(InterfaceCEditorialStyle.text(15).weight(.medium)).lineLimit(2)
+                    Text(person.subtitle).font(InterfaceCEditorialStyle.text(13))
                         .foregroundStyle(InterfaceCEditorialStyle.secondaryInk(scheme))
                 }
                 Spacer(minLength: 0)

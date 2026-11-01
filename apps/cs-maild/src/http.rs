@@ -128,6 +128,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/directory/lookup", post(crate::directory::lookup))
         .route("/ready", get(ready))
         .route("/v1/operator/commands", post(operator_command))
+        .route("/v1/operator/processing", post(processing_command))
         .route("/v1/operator/reviews", post(crate::review::command))
         .route("/v1/enrollments", post(crate::enrollment::begin))
         .route(
@@ -219,8 +220,8 @@ async fn health() -> Json<serde_json::Value> {
 async fn ready(State(state): State<AppState>) -> Response {
     let deployment = state.deployment.clone();
     match state.blocking.run(move || deployment.readiness()).await {
-        Ok(Ok(readiness)) if readiness.bootstrapped && readiness.command_failure.is_none() => {
-            Json(json!({ "database": "ok", "bootstrapped": true })).into_response()
+        Ok(Ok(readiness)) if readiness.bootstrapped => {
+            Json(json!({ "database": "ok", "bootstrapped": true, "processing": if readiness.command_failure.is_some() { "degraded" } else { "ready" }, "command_failure": readiness.command_failure })).into_response()
         }
         Ok(Ok(readiness)) => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -257,4 +258,22 @@ async fn operator_command(
         "operator command answered (a repeat returns the recorded outcome)"
     );
     Ok(Json(outcome))
+}
+
+async fn processing_command(
+    State(state): State<AppState>,
+    Json(signed): Json<
+        cs_mail_operations::SignedOperatorCommand<cs_mail_operations::ProcessingCommand>,
+    >,
+) -> Result<Json<cs_mail_operations::ProcessingResponse>, ApiError> {
+    let deployment = state.deployment.clone();
+    Ok(Json(
+        state
+            .blocking
+            .run(move || {
+                cs_mail_application::processing::manage_processing(&deployment, &signed, now)
+            })
+            .await
+            .map_err(|_| ApiError::unavailable())??,
+    ))
 }

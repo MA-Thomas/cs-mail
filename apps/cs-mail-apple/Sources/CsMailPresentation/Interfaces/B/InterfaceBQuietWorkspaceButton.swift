@@ -18,7 +18,6 @@ struct InterfaceBQuietWorkspaceButtonStyle: ButtonStyle {
         @State private var hovered = false
         @Environment(\.colorScheme) private var scheme
         @Environment(\.colorSchemeContrast) private var contrast
-        @Environment(\.interfaceBGlassArea) private var area
         @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
         @Environment(\.isEnabled) private var enabled
         var body: some View {
@@ -35,8 +34,7 @@ struct InterfaceBQuietWorkspaceButtonStyle: ButtonStyle {
                                 .allowsHitTesting(false)
                         } else {
                             GeometryReader { geometry in
-                                InterfaceBEditorialCoveLight(area: area,
-                                    bounds: CGRect(origin: .zero, size: geometry.size), cornerRadius: 10, role: .navigationSelection)
+                                InterfaceBEditorialCoveLight(bounds: CGRect(origin: .zero, size: geometry.size), cornerRadius: 10, role: .navigationSelection)
                             }.allowsHitTesting(false).accessibilityHidden(true)
                         }
                     }

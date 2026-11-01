@@ -58,7 +58,15 @@ impl Member {
         .map_err(|e| e.to_string())
     }
     fn external_read_value(&self, conversation: u128, after: u64) -> Result<Response, String> {
-        let signed = self.external_signed(conversation, Command::Read { after })?;
+        let signed = self.external_signed(
+            conversation,
+            Command::Read {
+                after: cs_mail_application::correspondence::external::ObservationRevision::new(
+                    after,
+                ),
+                through: None,
+            },
+        )?;
         decode(
             self.api
                 .post("v1/external/commands", &signed)
@@ -207,12 +215,13 @@ impl Member {
             relationship,
             messages,
             next_after,
+            through,
         } = response
         else {
             return Err("unexpected external response".into());
         };
         print(
-            &json!({ "conversation": conversation, "relationship": relationship, "next_after": next_after }),
+            &json!({ "conversation": conversation, "relationship": relationship, "next_after": next_after, "through": through }),
         );
         let (secret, _) = self.content_key()?;
         for view in messages {

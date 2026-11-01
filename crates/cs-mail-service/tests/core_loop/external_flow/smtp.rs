@@ -642,7 +642,14 @@ fn member_address_lane_admission_is_atomic_and_member_reply_requires_consent() {
     assert!(app::Service(&f.repository()).handle(&replacement).is_err());
     assert_eq!(f.read(id).1.len(), 1);
     if let app::Response::Conversation { conversation, .. } = app::Service(&f.repository())
-        .handle(&f.command(id, 900_001, app::Command::Read { after: 0 }))
+        .handle(&f.command(
+            id,
+            900_001,
+            app::Command::Read {
+                after: app::ObservationRevision::default(),
+                through: None,
+            },
+        ))
         .unwrap()
     {
         assert!(

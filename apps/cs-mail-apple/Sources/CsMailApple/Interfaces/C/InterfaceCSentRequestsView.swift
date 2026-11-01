@@ -12,7 +12,7 @@ struct InterfaceCSentRequestsView: View {
                 InterfaceCEditorialReadingView(blocks: requestBlocks(request))
                 if request.awaitingDecision {
                     Button("Send a follow-up under this request") { target = request }
-                        .disabled(model.busy || !model.connected || model.inbox?.pendingRequest == true || model.inbox?.pendingSend != nil || model.inbox?.pendingSender != nil || model.inbox?.pendingPolicy == true || model.inbox?.pendingSetup != nil)
+                        .disabled(model.busy || !model.nativeCurrent || model.inbox?.pendingRequest == true || model.inbox?.pendingSend != nil || model.inbox?.pendingSender != nil || model.inbox?.pendingPolicy == true || model.inbox?.pendingSetup != nil)
                 }
             }
         }

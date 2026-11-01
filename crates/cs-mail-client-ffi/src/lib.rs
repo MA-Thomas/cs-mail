@@ -127,8 +127,41 @@ pub struct RetainedWrite {
     pub copy: RetainedCopyWrite,
 }
 
+#[derive(uniffi::Record)]
+pub struct CacheCommit {
+    pub head: Vec<u8>,
+    pub keep: Vec<Vec<u8>>,
+    pub writes: Vec<RetainedIndexRow>,
+}
+impl From<core::CacheCommit> for CacheCommit {
+    fn from(change: core::CacheCommit) -> Self {
+        Self {
+            head: change.head,
+            keep: change
+                .keep
+                .into_iter()
+                .map(|id| id.bytes().to_vec())
+                .collect(),
+            writes: change
+                .writes
+                .into_iter()
+                .map(|row| RetainedIndexRow {
+                    id: row.id.bytes().to_vec(),
+                    ciphertext: row.ciphertext,
+                })
+                .collect(),
+        }
+    }
+}
+
 #[uniffi::export(callback_interface)]
 pub trait AppleStore: Send + Sync {
+    /// # Errors
+    /// Mailbox record storage cannot be read.
+    fn cache_record(&self, id: Vec<u8>) -> Result<Option<Vec<u8>>, ClientError>;
+    /// # Errors
+    /// Atomic head/record replacement failed.
+    fn commit_cache(&self, change: CacheCommit) -> Result<(), ClientError>;
     /// # Errors
     /// Retained metadata or progress cannot be read.
     fn retained_state(&self) -> Result<RetainedState, ClientError>;
@@ -178,13 +211,23 @@ pub trait AppleStore: Send + Sync {
     /// The complete three-record transaction failed; all writes must roll back.
     fn save_submission(
         &self,
-        cache: Vec<u8>,
+        cache: CacheCommit,
         workspace: Vec<u8>,
         personal: Vec<u8>,
     ) -> Result<(), ClientError>;
 }
 struct Store(Box<dyn AppleStore>);
 impl core::DeviceStore for Store {
+    fn cache_record(&self, id: core::RetainedRecordId) -> Result<Option<Vec<u8>>, core::Error> {
+        self.0
+            .cache_record(id.bytes().to_vec())
+            .map_err(|_| core::Error::StorageUnavailable)
+    }
+    fn commit_cache(&self, change: core::CacheCommit) -> Result<(), core::Error> {
+        self.0
+            .commit_cache(change.into())
+            .map_err(|_| core::Error::StorageUnavailable)
+    }
     fn retained_state(&self) -> Result<(u64, Option<Vec<u8>>), core::Error> {
         let state = self
             .0
@@ -280,12 +323,12 @@ impl core::DeviceStore for Store {
     }
     fn save_submission(
         &self,
-        cache: &[u8],
+        cache: core::CacheCommit,
         workspace: &[u8],
         personal: &[u8],
     ) -> Result<(), core::Error> {
         self.0
-            .save_submission(cache.to_vec(), workspace.to_vec(), personal.to_vec())
+            .save_submission(cache.into(), workspace.to_vec(), personal.to_vec())
             .map_err(|_| core::Error::StorageUnavailable)
     }
 }
@@ -367,11 +410,10 @@ impl From<core::PendingSetup> for PendingSetup {
 }
 #[derive(uniffi::Record)]
 pub struct Conversation {
+    pub actions: ContactActions,
     pub sent_requests: Vec<Request>,
     pub controls: RelationshipControls,
     pub threads: Vec<ConversationSummary>,
-    pub reply: ReplyRoute,
-    pub request_entry: RequestEntry,
     pub sender: String,
     pub title: String,
     pub permission: String,
@@ -531,9 +573,10 @@ pub enum Decision {
     Reject,
     ExpressLane { lifetime_ms: u64 },
 }
-impl From<core::Inbox> for Inbox {
-    fn from(value: core::Inbox) -> Self {
-        Self {
+impl TryFrom<core::Inbox> for Inbox {
+    type Error = ClientError;
+    fn try_from(value: core::Inbox) -> Result<Self, Self::Error> {
+        Ok(Self {
             last_send: value.last_send.map(Into::into),
             pending_request: value.pending_request,
             request_progress: value.request_progress.map(Into::into),
@@ -543,16 +586,23 @@ impl From<core::Inbox> for Inbox {
             account: value.account,
             persona: value.persona,
             synchronized_at: value.synchronized_at,
-            conversations: value.conversations.into_iter().map(Into::into).collect(),
+            conversations: value
+                .conversations
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
             pending_sender: value.pending_sender,
             pending_setup: value.pending_setup.map(Into::into),
             last_decision: value.last_decision,
-        }
+        })
     }
 }
-impl From<core::Conversation> for Conversation {
-    fn from(value: core::Conversation) -> Self {
-        Self {
+impl TryFrom<core::Conversation> for Conversation {
+    type Error = ClientError;
+    fn try_from(value: core::Conversation) -> Result<Self, Self::Error> {
+        let actions = value.actions()?.into();
+        Ok(Self {
+            actions,
             sent_requests: value
                 .sent_requests
                 .into_iter()
@@ -560,8 +610,6 @@ impl From<core::Conversation> for Conversation {
                 .collect(),
             controls: value.controls.into(),
             threads: value.threads.into_iter().map(Into::into).collect(),
-            reply: value.reply.into(),
-            request_entry: value.request_entry.into(),
             sender: value.sender,
             title: value.title,
             permission: value.permission,
@@ -582,7 +630,7 @@ impl From<core::Conversation> for Conversation {
                     references: m.references,
                 })
                 .collect(),
-        }
+        })
     }
 }
 
@@ -595,6 +643,80 @@ pub struct RequestClassDraft {
     pub description: String,
     pub collateral_minor_units: u64,
 }
+#[derive(uniffi::Enum)]
+pub enum InitiationAction {
+    ComposeStanding,
+    ComposeWithinLane,
+    ReviewApproaches,
+    ReviewIncoming { request: String },
+    AwaitRequest { request: String },
+    RefreshRequired,
+    Unavailable,
+}
+#[derive(uniffi::Enum)]
+pub enum ContactObservation {
+    Current,
+    Saved,
+}
+#[derive(uniffi::Record)]
+pub struct ContactActions {
+    pub observation: ContactObservation,
+    pub reply: ReplyRoute,
+    pub observed_at: Option<u64>,
+    pub initiation: InitiationAction,
+    pub reply_conversations: Vec<String>,
+}
+impl From<core::ContactActions> for ContactActions {
+    fn from(view: core::ContactActions) -> Self {
+        Self {
+            observation: match view.observation {
+                core::ContactObservation::Current => ContactObservation::Current,
+                core::ContactObservation::Saved => ContactObservation::Saved,
+            },
+            reply: view.reply.into(),
+            observed_at: view.observed_at.map(|at| at.0),
+            reply_conversations: view
+                .reply_conversations
+                .into_iter()
+                .map(|id| id.value().to_string())
+                .collect(),
+            initiation: match view.initiation {
+                core::InitiationAction::ComposeStanding => InitiationAction::ComposeStanding,
+                core::InitiationAction::ComposeWithinLane => InitiationAction::ComposeWithinLane,
+                core::InitiationAction::ReviewApproaches => InitiationAction::ReviewApproaches,
+                core::InitiationAction::ReviewIncoming(id) => InitiationAction::ReviewIncoming {
+                    request: id.0.to_string(),
+                },
+                core::InitiationAction::AwaitRequest(id) => InitiationAction::AwaitRequest {
+                    request: id.0.to_string(),
+                },
+                core::InitiationAction::RefreshRequired => InitiationAction::RefreshRequired,
+                core::InitiationAction::Unavailable => InitiationAction::Unavailable,
+            },
+        }
+    }
+}
+#[derive(uniffi::Enum)]
+pub enum RecoveryCustody {
+    CsqdHostManaged { key: String },
+}
+// UniFFI exports owned arguments across the foreign-language boundary.
+#[allow(clippy::needless_pass_by_value)]
+#[uniffi::export]
+impl AppleClient {
+    /// # Errors
+    /// The authenticated local deployment snapshot is unavailable.
+    pub fn recovery_custody(&self) -> Result<RecoveryCustody, ClientError> {
+        match self.0.recovery_custody()? {
+            core::RecoveryCustody::CsqdHostManaged { key } => {
+                Ok(RecoveryCustody::CsqdHostManaged {
+                    key: key.0.to_string(),
+                })
+            }
+        }
+    }
+}
+
 // UniFFI exports owned arguments across the foreign-language boundary.
 #[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
@@ -676,12 +798,18 @@ impl AppleClient {
     /// # Errors
     /// Local cache or key custody is unavailable.
     pub fn cached_inbox(&self) -> Result<Inbox, ClientError> {
-        self.0.cached_inbox().map(Into::into).map_err(Into::into)
+        self.0
+            .cached_inbox()
+            .map_err(ClientError::from)
+            .and_then(TryInto::try_into)
     }
     /// # Errors
     /// Network, authorization or durable cache replacement failed.
     pub fn sync(&self) -> Result<Inbox, ClientError> {
-        self.0.sync().map(Into::into).map_err(Into::into)
+        self.0
+            .sync()
+            .map_err(ClientError::from)
+            .and_then(TryInto::try_into)
     }
     /// # Errors
     /// Custody, authentication, transport or navigation record binding failed.
@@ -703,16 +831,16 @@ impl AppleClient {
     pub fn cached_conversation(&self, sender: String) -> Result<Conversation, ClientError> {
         self.0
             .cached_conversation(&sender)
-            .map(Into::into)
-            .map_err(Into::into)
+            .map_err(ClientError::from)
+            .and_then(TryInto::try_into)
     }
     /// # Errors
     /// Authority, binding or decryption failed.
     pub fn conversation(&self, sender: String) -> Result<Conversation, ClientError> {
         self.0
             .conversation(&sender)
-            .map(Into::into)
-            .map_err(Into::into)
+            .map_err(ClientError::from)
+            .and_then(TryInto::try_into)
     }
     /// # Errors
     /// An operation is pending, authority failed or the outcome is unknown/refused.
@@ -736,8 +864,8 @@ impl AppleClient {
                     }
                 },
             )
-            .map(Into::into)
-            .map_err(Into::into)
+            .map_err(ClientError::from)
+            .and_then(TryInto::try_into)
     }
     /// # Errors
     /// Preserves the exact pending send through uncertainty and custody failure.
@@ -781,7 +909,10 @@ impl AppleClient {
     /// # Errors
     /// The original operation still has no authenticated outcome.
     pub fn retry(&self) -> Result<Inbox, ClientError> {
-        self.0.retry().map(Into::into).map_err(Into::into)
+        self.0
+            .retry()
+            .map_err(ClientError::from)
+            .and_then(TryInto::try_into)
     }
 }
 
@@ -863,6 +994,8 @@ pub struct DirectoryPage {
     pub entries: Vec<Approach>,
     pub next_offset: Option<u32>,
 }
+#[allow(clippy::needless_pass_by_value)]
+// UniFFI exports owned arguments across the foreign-language boundary.
 #[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
 impl AppleClient {
@@ -1073,7 +1206,6 @@ pub struct ConversationSummary {
     pub request: Option<String>,
     pub sent_request: Option<String>,
     pub last_at: u64,
-    pub reply_allowed: bool,
     pub policy: Option<ConversationPolicy>,
 }
 impl From<core::ConversationSummary> for ConversationSummary {
@@ -1084,7 +1216,6 @@ impl From<core::ConversationSummary> for ConversationSummary {
             request: value.request,
             sent_request: value.sent_request,
             last_at: value.last_at,
-            reply_allowed: value.reply_allowed,
             policy: value.policy.map(Into::into),
         }
     }
@@ -1140,6 +1271,8 @@ pub enum RelationshipControl {
         interval_ms: u64,
     },
 }
+// UniFFI exports owned arguments across the foreign-language boundary.
+#[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
 impl AppleClient {
     /// # Errors
@@ -1170,8 +1303,8 @@ impl AppleClient {
         };
         self.0
             .control_relationship(&sender, control)
-            .map(Into::into)
-            .map_err(Into::into)
+            .map_err(ClientError::from)
+            .and_then(TryInto::try_into)
     }
 }
 
@@ -1301,6 +1434,8 @@ pub enum PolicyAction {
     ProposeRelaxation,
     ApproveRelaxation,
 }
+// UniFFI exports owned arguments across the foreign-language boundary.
+#[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
 impl AppleClient {
     /// # Errors
@@ -1419,6 +1554,8 @@ impl From<core::RequestProgress> for RequestProgress {
         }
     }
 }
+// UniFFI exports owned arguments across the foreign-language boundary.
+#[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
 impl AppleClient {
     /// # Errors
@@ -1517,6 +1654,8 @@ pub enum ReferenceContent {
     Unavailable,
     AccessDenied,
 }
+// UniFFI exports owned arguments across the foreign-language boundary.
+#[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
 impl AppleClient {
     /// # Errors
@@ -1604,6 +1743,8 @@ pub enum ExternalAction {
     WithdrawDisclosure,
     GrantDisclosure,
 }
+// UniFFI exports owned arguments across the foreign-language boundary.
+#[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
 impl AppleClient {
     /// # Errors
@@ -1714,7 +1855,10 @@ pub enum ComposerRecipient {
         mailbox: String,
     },
 }
-#[allow(clippy::needless_pass_by_value)] // UniFFI takes owned strings at the language boundary.
+#[allow(clippy::needless_pass_by_value)]
+// UniFFI takes owned strings at the language boundary.
+// UniFFI exports owned arguments across the foreign-language boundary.
+#[allow(clippy::needless_pass_by_value)]
 #[uniffi::export]
 impl AppleClient {
     /// # Errors

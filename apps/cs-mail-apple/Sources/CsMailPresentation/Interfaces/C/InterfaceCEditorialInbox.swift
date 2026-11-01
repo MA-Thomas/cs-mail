@@ -30,7 +30,7 @@ public struct InterfaceCEditorialLaneOrganizer: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Aliases and Express Lanes").font(InterfaceCEditorialStyle.heading(23)).accessibilityAddTraits(.isHeader)
-            TextField("Find an alias", text: $search).textFieldStyle(.roundedBorder).modifier(SearchFieldInteraction(focus: $searchFocused))
+            TextField("Find an alias", text: $search).modifier(InterfaceCSearchFieldSurface(focused: searchFocused)).modifier(SearchFieldInteraction(focus: $searchFocused))
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     Button(action: showGuide) {
@@ -62,14 +62,14 @@ public struct InterfaceCEditorialLaneOrganizer: View {
         }.padding(22).foregroundStyle(InterfaceCEditorialStyle.ink(scheme), InterfaceCEditorialStyle.secondaryInk(scheme))
     }
     private func heading(_ title: String) -> some View {
-        Text(title).font(.headline).accessibilityAddTraits(.isHeader).padding(.top, 12)
+        Text(title).font(InterfaceCEditorialStyle.sectionHeading).accessibilityAddTraits(.isHeader).padding(.top, 12)
     }
     private func row(_ item: EditorialNavigationItem) -> some View {
         Button { select(item.id) } label: {
             VStack(alignment: .leading, spacing: 6) {
-                Text(item.title).font(.headline)
-                Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
-            }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                Text(item.title).font(InterfaceCEditorialStyle.text(14).weight(.medium))
+                Text(item.subtitle).font(InterfaceCEditorialStyle.metadata).foregroundStyle(.secondary)
+            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
         }.buttonStyle(InterfaceCEditorialRegionButtonStyle(selected: selection == item.id))
             .editorialCopyableLabel(item.title + "\n" + item.subtitle)
             .accessibilityAddTraits(selection == item.id ? .isSelected : [])
@@ -107,7 +107,7 @@ public struct InterfaceCSenderPermissionsView: View {
                 Text("Permissions for particular senders").font(InterfaceCEditorialStyle.heading(30)).accessibilityAddTraits(.isHeader)
                 Text("Review ongoing permission and express lanes for particular people or senders. Access opened to new correspondents through an alias is managed in My aliases.")
                     .foregroundStyle(.secondary)
-                TextField("Find a sender", text: $search).textFieldStyle(.roundedBorder).modifier(SearchFieldInteraction(focus: $searchFocused))
+                TextField("Find a sender", text: $search).modifier(InterfaceCSearchFieldSurface(focused: searchFocused)).modifier(SearchFieldInteraction(focus: $searchFocused))
                 Picker("Permission direction", selection: $direction) {
                     ForEach(EditorialDirection.allCases) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.segmented)
@@ -138,14 +138,14 @@ public struct InterfaceCSenderPermissionsView: View {
         }.foregroundStyle(InterfaceCEditorialStyle.ink(scheme), InterfaceCEditorialStyle.secondaryInk(scheme))
     }
     private func heading(_ title: String) -> some View {
-        Text(title).font(.headline).accessibilityAddTraits(.isHeader).padding(.top, 12)
+        Text(title).font(InterfaceCEditorialStyle.sectionHeading).accessibilityAddTraits(.isHeader).padding(.top, 12)
     }
     private func row(_ item: EditorialNavigationItem) -> some View {
         Button { select(item.id) } label: {
             VStack(alignment: .leading, spacing: 6) {
-                Text(item.title).font(.headline)
-                Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
-            }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                Text(item.title).font(InterfaceCEditorialStyle.text(14).weight(.medium))
+                Text(item.subtitle).font(InterfaceCEditorialStyle.metadata).foregroundStyle(.secondary)
+            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
         }.buttonStyle(InterfaceCEditorialRegionButtonStyle(selected: selection == item.id))
             .editorialCopyableLabel(item.title + "\n" + item.subtitle)
             .accessibilityAddTraits(selection == item.id ? .isSelected : [])

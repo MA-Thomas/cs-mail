@@ -28,11 +28,11 @@ public struct InterfaceBEditorialLaneOrganizer: View {
         self.aliasLoaded = aliasLoaded; self.aliasError = aliasError; self.selection = selection; self.select = select
     }
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Aliases and Express Lanes").font(InterfaceBEditorialStyle.heading(23)).accessibilityAddTraits(.isHeader)
             TextField("Find an alias", text: $search).textFieldStyle(.roundedBorder).modifier(SearchFieldInteraction(focus: $searchFocused))
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                LazyVStack(alignment: .leading, spacing: 6) {
                     Button(action: showGuide) {
                         Label("How aliases and express lanes work", systemImage: "questionmark.circle")
                             .padding(12).frame(maxWidth: .infinity, alignment: .leading)
@@ -62,14 +62,14 @@ public struct InterfaceBEditorialLaneOrganizer: View {
         }.padding(22).foregroundStyle(InterfaceBEditorialStyle.ink(scheme))
     }
     private func heading(_ title: String) -> some View {
-        Text(title).font(.headline).accessibilityAddTraits(.isHeader).padding(.top, 12)
+        InterfaceBOrganizerHeading(title).padding(.top, 12)
     }
     private func row(_ item: EditorialNavigationItem) -> some View {
         Button { select(item.id) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 Text(item.title).font(.headline)
                 Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
-            }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            }.padding(12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }.buttonStyle(InterfaceBEditorialRegionButtonStyle(selected: selection == item.id))
             .editorialCopyableLabel(item.title + "\n" + item.subtitle)
             .accessibilityAddTraits(selection == item.id ? .isSelected : [])

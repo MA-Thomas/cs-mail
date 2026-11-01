@@ -261,7 +261,9 @@ pub struct Preparation {
     pub member_key: EndpointPublicKey,
 }
 impl Store for Repository {
+    // Page loading and mutation share the protected authority/context boundary.
     type Error = StorageError;
+    #[allow(clippy::too_many_lines)]
     fn transact(
         &self,
         request: &SignedCommand,
@@ -273,7 +275,8 @@ impl Store for Repository {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::lock_receipt_order(&mut tx)?;
+        ingress::require_personas_drained(&mut tx, &[request.persona])?;
         let authority = authority(&mut tx, request.account, request.persona)?;
         request.authenticate(&authority, self.scope(), self.accounts.clock.now())?;
         let prior = tx
@@ -313,13 +316,45 @@ impl Store for Repository {
         };
         let relationship = relationship(&mut tx, &key)?;
         let mut messages = vec![];
-        if let Command::Read { after } = request.command {
-            for row in tx.query("SELECT m.sequence,m.record,d.state FROM cs_external_messages m LEFT JOIN cs_external_deliveries d ON d.message=m.id WHERE m.conversation=$1 AND m.sequence>$2 ORDER BY m.sequence LIMIT 100",
-                &[&request.conversation.value().to_string(), &super::to_i64(after)?])? {
-                messages.push(MessageView { sequence: super::to_u64(row.try_get(0)?)?, message: row.try_get::<_, Json<Message>>(1)?.0,
-                    delivery: row.try_get::<_, Option<Json<DeliveryState>>>(2)?.map(|j| j.0),
-                    provider_events: tx.query("SELECT record FROM cs_external_provider_events WHERE message=$1 ORDER BY received_at,id", &[&row.try_get::<_, Json<Message>>(1)?.0.manifest.message().0.to_string()])?.into_iter().map(|r| r.try_get::<_, Json<cs_mail_correspondence::external::delivery::ProviderEvent>>(0).map(|j| j.0)).collect::<Result<Vec<_>, _>>()? });
+        let mut next_observation = app_revision(0);
+        let mut through_revision = app_revision(0);
+        if let Command::Read { after, through } = request.command {
+            let high: i64 = tx
+                .query_one(
+                    "SELECT revision FROM cs_external_observation_clock WHERE singleton",
+                    &[],
+                )?
+                .get(0);
+            let high = super::to_u64(high)?;
+            let bound = through.map_or(
+                high,
+                cs_mail_application::correspondence::external::ObservationRevision::value,
+            );
+            if after.value() > bound || bound > high {
+                return Err(Error::Invalid.into());
             }
+            through_revision = app_revision(bound);
+            next_observation = through_revision;
+            let mut bytes = 0;
+            // Rows moved beyond the bound by later feedback are observed on the next refresh.
+            // The bound is a progress watermark, not a historical snapshot of mutable delivery.
+            for row in tx.query("SELECT o.revision,m.sequence,m.record,d.state FROM cs_external_observations o JOIN cs_external_messages m ON m.id=o.message LEFT JOIN cs_external_deliveries d ON d.message=m.id WHERE o.conversation=$1 AND o.revision>$2 AND o.revision<=$3 ORDER BY o.revision LIMIT 100",
+                &[&request.conversation.value().to_string(), &super::to_i64(after.value())?, &super::to_i64(bound)?])? {
+                let message = row.try_get::<_, Json<Message>>(2)?.0;
+                let view = MessageView {
+                    sequence: super::to_u64(row.try_get(1)?)?,
+                    provider_events: tx.query("SELECT record FROM cs_external_provider_events WHERE message=$1 ORDER BY received_at,id", &[&message.manifest.message().0.to_string()])?.into_iter().map(|r| r.try_get::<_, Json<cs_mail_correspondence::external::delivery::ProviderEvent>>(0).map(|j| j.0)).collect::<Result<Vec<_>, _>>()?,
+                    message,
+                    delivery: row.try_get::<_, Option<Json<DeliveryState>>>(3)?.map(|j| j.0),
+                };
+                let size = serde_json::to_vec(&view)?.len();
+                if size > 48 * 1024 * 1024 { return Err(Error::Invalid.into()); }
+                if bytes + size > 48 * 1024 * 1024 { break; }
+                bytes += size;
+                next_observation = app_revision(super::to_u64(row.try_get(0)?)?);
+                messages.push(view);
+            }
+            // A nonempty prefix is acknowledged exactly; an empty page acknowledges the bound.
         }
         let receiving_inbox = match &request.command {
             Command::Start {
@@ -338,6 +373,8 @@ impl Store for Repository {
             member_key: member_key(&mut tx, request.persona)?,
             prior,
             messages,
+            next_observation,
+            through: through_revision,
         };
         let Decision { response, effects } = decide(context, &*self.accounts.clock)?;
         if let Some(e) = effects {
@@ -388,11 +425,28 @@ fn persist_changes(
         tx.execute("INSERT INTO cs_external_deliveries(message,account,operational_key,relay_copy,state) VALUES($1,$2,$3,$4,$5)",
                     &[&message.manifest.message().0.to_string(),&request.account.0.to_string(),&request.key.0.to_string(),&Json(p.relay_copy),&Json(DeliveryState::Waiting)])?;
     }
+    if let Command::Start { message, .. } | Command::Send { message, .. } = &request.command {
+        observe_message(tx, message.manifest.message())?;
+    }
     if changes.cancel_waiting {
         for row in tx.query("SELECT d.message,d.state FROM cs_external_deliveries d JOIN cs_external_messages m ON m.id=d.message WHERE m.conversation=$1 FOR UPDATE OF d", &[&id])? {
                     let old = row.try_get::<_, Json<DeliveryState>>(1)?.0;
                     tx.execute("UPDATE cs_external_deliveries SET state=$2 WHERE message=$1", &[&row.try_get::<_, String>(0)?, &Json(old.cancel(at))])?;
+                    let message = row.try_get::<_, String>(0)?.parse().map(MessageId).map_err(|_| Error::Invalid)?;
+                    observe_message(tx, message)?;
                 }
+    }
+    Ok(())
+}
+
+fn app_revision(value: u64) -> cs_mail_application::correspondence::external::ObservationRevision {
+    cs_mail_application::correspondence::external::ObservationRevision::new(value)
+}
+fn observe_message(tx: &mut Transaction<'_>, id: MessageId) -> Result<(), StorageError> {
+    let revision: i64 = tx.query_one("UPDATE cs_external_observation_clock SET revision=revision+1 WHERE singleton RETURNING revision", &[])?.get(0);
+    let changed = tx.execute("INSERT INTO cs_external_observations(message,conversation,revision) SELECT id,conversation,$2 FROM cs_external_messages WHERE id=$1 ON CONFLICT(message) DO UPDATE SET revision=EXCLUDED.revision", &[&id.0.to_string(), &revision])?;
+    if changed != 1 {
+        return Err(Error::Unavailable.into());
     }
     Ok(())
 }
@@ -473,7 +527,7 @@ impl IncomingRepository {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::lock_receipt_order(&mut tx)?;
         let alias = match mail.destination() {
             cs_mail_smtp_gateway::incoming::MailDestination::Address(address) => {
                 alias_by_address(&mut tx, &address)?
@@ -486,6 +540,7 @@ impl IncomingRepository {
             }
         };
         let member = alias.owner();
+        ingress::require_personas_drained(&mut tx, &[member])?;
 
         if let Some(row) = tx.query_opt(
             "SELECT content_digest FROM cs_request_link_receipts WHERE identity=$1",
@@ -605,7 +660,8 @@ impl IncomingRepository {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::lock_receipt_order(&mut tx)?;
+        ingress::require_personas_drained(&mut tx, &[reply.message.member_copy.binding.recipient])?;
         if let Some(row) = tx.query_opt(
             "SELECT content_digest FROM cs_request_link_receipts WHERE identity=$1",
             &[&authenticated.arrival().bytes().as_slice()],
@@ -635,6 +691,7 @@ impl IncomingRepository {
                     }
                 };
                 let member = alias.owner();
+                ingress::require_personas_drained(&mut tx, &[member])?;
                 let account = member_account(&mut tx, member)?;
                 let (key, r) = mailbox_relationship(
                     &mut tx,
@@ -765,6 +822,7 @@ impl IncomingRepository {
         message.validate(&c, &r)?;
         tx.execute("INSERT INTO cs_external_messages(id,conversation,record,inbound_digest,inbound_evidence,incoming_message_id) VALUES($1,$2,$3,$4,$5,$6)",
             &[&id.0.to_string(), &reply.conversation.value().to_string(), &Json(message), &digest.as_slice(), &Json(&reply.evidence), &authenticated.rfc_message_id()])?;
+        observe_message(&mut tx, id)?;
         if let Some(lane) = next_lane {
             let paired = super::aliases::persist_paired_lane(&mut tx, &delivered_route, &lane)?;
             if !paired {
@@ -789,7 +847,7 @@ impl Repository {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::lock_receipt_order(&mut tx)?;
         let row = tx.query_opt("SELECT m.conversation,m.record,d.account,d.operational_key,d.relay_copy,d.state FROM cs_external_messages m JOIN cs_external_deliveries d ON d.message=m.id WHERE m.id=$1 FOR UPDATE OF d", &[&id.0.to_string()])?.ok_or(Error::Unavailable)?;
         let conversation_id = ConversationId::new(
             row.try_get::<_, String>(0)?
@@ -798,6 +856,7 @@ impl Repository {
         )?;
         let (c, key, account) =
             conversation(&mut tx, conversation_id)?.ok_or(Error::Unavailable)?;
+        ingress::require_personas_drained(&mut tx, &[c.member(), c.guest()])?;
         if row.try_get::<_, String>(2)? != account.0.to_string() {
             return Err(Error::Invalid.into());
         }
@@ -838,6 +897,7 @@ impl Repository {
             "UPDATE cs_external_deliveries SET state=$2 WHERE message=$1",
             &[&id.0.to_string(), &Json(next)],
         )?;
+        observe_message(&mut tx, id)?;
         tx.commit()?;
         Ok(dispatch)
     }
@@ -856,6 +916,7 @@ impl Repository {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
+        ingress::lock_receipt_order(&mut tx)?;
         let row = tx
             .query_opt(
                 "SELECT state FROM cs_external_deliveries WHERE message=$1 FOR UPDATE",
@@ -876,6 +937,7 @@ impl Repository {
             "UPDATE cs_external_deliveries SET state=$2 WHERE message=$1",
             &[&id.0.to_string(), &Json(next)],
         )?;
+        observe_message(&mut tx, id)?;
         tx.commit()?;
         Ok(())
     }
@@ -1099,7 +1161,7 @@ impl Repository {
             .map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
         // Same protection order as begin_dispatch and member decisions.
-        ingress::require_drained(&mut tx)?;
+        ingress::lock_receipt_order(&mut tx)?;
         if let Some(row) = tx.query_opt(
             "SELECT record FROM cs_external_provider_events WHERE id=$1",
             &[&event.id.as_str()],
@@ -1145,6 +1207,7 @@ impl Repository {
             &[&event.message.0.to_string(), &Json(next)],
         )?;
         tx.execute("INSERT INTO cs_external_provider_events(id,message,record,received_at) VALUES($1,$2,$3,$4)", &[&event.id.as_str(), &event.message.0.to_string(), &Json(event), &super::to_i64(now.0)?])?;
+        observe_message(&mut tx, event.message)?;
         tx.commit()?;
         Ok(())
     }
@@ -1182,9 +1245,10 @@ impl IncomingRepository {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::lock_receipt_order(&mut tx)?;
         let alias = alias_by_address(&mut tx, address)?;
         let owner = alias.owner();
+        ingress::require_personas_drained(&mut tx, &[owner])?;
         let guest = mail
             .mailbox()
             .synthetic_protocol_identity(&self.scope.deployment_domain);

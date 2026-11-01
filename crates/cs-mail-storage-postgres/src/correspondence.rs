@@ -344,7 +344,7 @@ fn load_contact(
         context.receiver_contact = tx.query_opt("SELECT relationship_state FROM cs_relationship_aggregates WHERE relationship_state#>>'{relationship,key,sender}'=$1 AND relationship_state#>>'{relationship,key,recipient}'=$2 AND protocol_format_version=$3 FOR SHARE", &[&other.0.to_string(),&request.persona.0.to_string(),&super::CURRENT_PROTOCOL_FORMAT_VERSION])?.map(|row| row.try_get::<_,Json<RelationshipRecord>>(0).map(|r| r.0.into_state().relationship)).transpose()?;
         // A received but unprocessed block/revocation must not be overtaken by
         // this separate mailbox commit. The host drains the existing inbox then retries.
-        ingress::require_drained(tx)?;
+        ingress::require_personas_drained(tx, &[request.persona, other])?;
         let recipient = tx.query_opt("SELECT a.control FROM cs_persona_owners p JOIN cs_product_accounts a ON a.id=p.account WHERE p.identity=$1 FOR SHARE OF a", &[&other.0.to_string()])?;
         let recipient_active = recipient
             .map(|r| {

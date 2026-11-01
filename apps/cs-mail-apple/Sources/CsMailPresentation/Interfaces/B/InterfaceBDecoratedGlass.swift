@@ -76,7 +76,7 @@ public struct InterfaceBGlassRim<S: InsettableShape>: View {
     private let shape: S
     private let emphasized: Bool
     private let innerReflection: Bool
-    @Environment(\.interfaceBGlassArea) private var area
+    @Environment(\.interfaceBAppearance) private var appearance
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -95,9 +95,9 @@ public struct InterfaceBGlassRim<S: InsettableShape>: View {
                 shape.strokeBorder(
                     LinearGradient(colors: [
                         .white.opacity(scheme == .dark ? 0.7 : 0.95),
-                        InterfaceBEditorialAreaPalette.palette(for: area).wash.opacity(0.90),
+                        appearance.coveColor.opacity(0.90),
                         .white.opacity(0.38),
-                        InterfaceBEditorialAreaPalette.palette(for: area).reflection.opacity(0.92),
+                        appearance.coveColor.opacity(0.92),
                         .white.opacity(0.9)
                     ], startPoint: .topLeading, endPoint: .bottomTrailing),
                     lineWidth: emphasized ? 3 : 2)
@@ -115,7 +115,7 @@ public struct InterfaceBGlassRim<S: InsettableShape>: View {
 /// Hover lights only the outline. The body and labels never wash out or move.
 public struct InterfaceBPerimeterLight<S: Shape>: View {
     private let shape: S
-    @Environment(\.interfaceBGlassArea) private var area
+    @Environment(\.interfaceBAppearance) private var appearance
     private let active: Bool
     private let pressed: Bool
     @Environment(\.colorScheme) private var scheme
@@ -130,8 +130,8 @@ public struct InterfaceBPerimeterLight<S: Shape>: View {
                 shape.stroke(InterfaceBEditorialStyle.ink(scheme), lineWidth: pressed ? 2 : 1.5)
             } else {
                 shape.stroke(LinearGradient(colors: [
-                    .white, InterfaceBEditorialAreaPalette.palette(for: area).wash,
-                    InterfaceBEditorialAreaPalette.palette(for: area).reflection, .white
+                    .white, appearance.coveColor,
+                    appearance.coveColor, .white
                 ], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: pressed ? 2 : 1.5)
                 .shadow(color: .white.opacity(scheme == .dark ? 0.28 : 0.45), radius: 2)
             }

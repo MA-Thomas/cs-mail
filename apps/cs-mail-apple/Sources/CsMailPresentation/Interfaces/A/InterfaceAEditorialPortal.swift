@@ -19,7 +19,7 @@ public struct EditorialPortalView<Content: View>: View {
     public var body: some View {
         VStack(spacing: 18) {
             HStack {
-                Button(action: returnToSpace) { Label(returnTitle, systemImage: "chevron.left").padding(.horizontal, 10).padding(.vertical, 8).contentShape(Rectangle()) }.buttonStyle(.plain)
+                Button(action: returnToSpace) { Label(returnTitle, systemImage: "chevron.left").lineLimit(1).fixedSize(horizontal: true, vertical: false).padding(.horizontal, 10).padding(.vertical, 8).contentShape(Rectangle()) }.buttonStyle(.plain)
                 Spacer()
                 Text(person).lineLimit(1)
             }.font(EditorialStyle.text(13)).foregroundStyle(EditorialStyle.secondaryInk(scheme))

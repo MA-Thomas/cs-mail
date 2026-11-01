@@ -46,7 +46,7 @@ impl Store for PostgresAccountRepository {
     ) -> Result<Receipt, StorageError> {
         let mut db = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = db.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::require_personas_drained(&mut tx, &[request.owner])?;
         let account = request.account.0.to_string();
         let owner = request.owner.0.to_string();
         let row = tx.query_opt("SELECT a.control,a.registry,a.product,e.persona FROM cs_product_accounts a JOIN cs_persona_owners p ON p.account=a.id JOIN cs_enrollment_operations e ON e.account=a.id WHERE a.id=$1 AND p.identity=$2 FOR UPDATE OF a", &[&account, &owner])?.ok_or(AliasError::Permission)?;
@@ -397,7 +397,7 @@ impl super::PostgresDeployment {
     ) -> Result<Option<cs_mail_protocol::RequestPermission>, StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::require_personas_drained(&mut tx, &[handle.sender, handle.recipient])?;
         let (relationship, lane) =
             participant_permission(&mut tx, handle.sender, handle.recipient)?;
         let relationship = relationship.ok_or(StorageError::NumericRange)?;

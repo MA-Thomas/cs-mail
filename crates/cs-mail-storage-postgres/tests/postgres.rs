@@ -207,17 +207,80 @@ impl TestExecute for PostgresEngine {
             &policy,
             &cs_mail_protocol::admission::AdmissionPolicy::default(),
         )?;
-        let handle = self.receive_signed(&command, DEPLOYMENT_DOMAIN, || now, policy)?;
-        let outcome = self.process_received(&handle)?;
-        self.sign_artifacts_batch(&provider_signer(), test_time(0), Duration(30_000), 100)?;
-        match outcome {
-            cs_mail_application::receipts::ReceivedOutcome::Protocol(o) => Ok(*o),
-            cs_mail_application::receipts::ReceivedOutcome::Refused(e) => {
-                Err(cs_mail_storage_postgres::StorageError::from(e))
-            }
-            _ => unreachable!(),
-        }
+        execute_prepared(self, &command, now, policy)
     }
+}
+
+fn execute_prepared(
+    engine: &PostgresEngine,
+    command: &SignedCommandBytes,
+    now: CanonicalTime,
+    policy: PolicySnapshot,
+) -> Result<DurableExecutionOutcome, StorageError> {
+    let handle = engine.receive_signed(command, DEPLOYMENT_DOMAIN, || now, policy)?;
+    let outcome = engine.process_received(&handle)?;
+    engine.sign_artifacts_batch(&provider_signer(), test_time(0), Duration(30_000), 100)?;
+    match outcome {
+        cs_mail_application::receipts::ReceivedOutcome::Protocol(o) => Ok(*o),
+        cs_mail_application::receipts::ReceivedOutcome::Refused(e) => {
+            Err(cs_mail_storage_postgres::StorageError::from(e))
+        }
+        _ => unreachable!(),
+    }
+}
+
+// Challenge authenticated recovery: retry retains the original receipt's operation and authority.
+fn resume_processing(
+    engine: &PostgresEngine,
+    db: &mut postgres::Client,
+    handle: &cs_mail_storage_postgres::ReceivedCommand,
+) {
+    use cs_mail_operations::{ProcessingCommand, ProcessingResponse, SignedOperatorCommand};
+    let row = db
+        .query_one(
+            "SELECT digest,failed_attempts FROM cs_received_commands WHERE position=$1",
+            &[&i64::try_from(handle.position().0).unwrap()],
+        )
+        .unwrap();
+    let digest = cs_mail_security::CommandDigest(row.get::<_, Vec<u8>>(0).try_into().unwrap());
+    let attempt = u128::try_from(row.get::<_, i64>(1)).unwrap();
+    let command = SignedOperatorCommand::sign(
+        DEPLOYMENT_DOMAIN,
+        cs_mail_operations::OperatorKeyRef(1),
+        IdempotencyKey(0xa000_0000 + u128::from(handle.position().0) * 1000 + attempt),
+        ProcessingCommand::Resume {
+            position: handle.position(),
+            digest,
+        },
+        &support::FIXTURE_OPERATOR_SECRET,
+    )
+    .unwrap();
+    let mut foreign = command.clone();
+    foreign.signature[0] ^= 1;
+    assert!(matches!(
+        cs_mail_application::processing::manage_processing(engine.deployment(), &foreign, || {
+            test_time(0)
+        }),
+        Err(StorageError::Operations(
+            cs_mail_operations::OperationsError::Unauthorized
+        ))
+    ));
+    let outcome =
+        cs_mail_application::processing::manage_processing(engine.deployment(), &command, || {
+            test_time(0)
+        })
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        ProcessingResponse::Resumed { changed: true, .. }
+    ));
+    assert_eq!(
+        cs_mail_application::processing::manage_processing(engine.deployment(), &command, || {
+            test_time(0)
+        })
+        .unwrap(),
+        outcome
+    );
 }
 
 fn native_declarations() -> MessageDeclarations {
@@ -516,9 +579,12 @@ fn database_row_lock_serializes_conflicting_decisions() {
         .unwrap()
         .relationship(&key, &state(3), UNIT)
         .unwrap();
+    // Establish fixture authority once. Concurrent account/bootstrap setup is a different claim.
+    support::provision(&first, &policy(), registry(), SENDER, test_time(0)).unwrap();
     let accept = thread::spawn(move || {
-        first.execute(
-            recipient(
+        execute_prepared(
+            &first,
+            &recipient(
                 ProtocolCommand::AcceptRelationship {
                     expected_version: Version(0),
                 },
@@ -529,8 +595,9 @@ fn database_row_lock_serializes_conflicting_decisions() {
         )
     });
     let block = thread::spawn(move || {
-        second.execute(
-            recipient(
+        execute_prepared(
+            &second,
+            &recipient(
                 ProtocolCommand::BlockRelationship {
                     expected_version: Version(0),
                 },
@@ -550,7 +617,8 @@ fn database_row_lock_serializes_conflicting_decisions() {
                 Err(StorageError::Protocol(ProtocolError::VersionConflict))
             ))
             .count(),
-        1
+        1,
+        "conflicting decisions: {results:?}"
     );
 }
 
@@ -2213,6 +2281,7 @@ fn ciphertext_retention_honors_extended_deadlines_and_scoped_holds() {
 
 #[test]
 #[ignore = "requires CS_MAIL_TEST_DATABASE_URL"]
+#[allow(clippy::too_many_lines)] // One rollback, owner isolation and authenticated recovery scenario.
 fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
     use cs_mail_application::receipts::ReceivedOutcome;
     let url = database_url();
@@ -2220,6 +2289,51 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
     let engine = PostgresDeployment::connect(&url)
         .unwrap()
         .relationship(&key, &state(204), UNIT)
+        .unwrap();
+    // An independent pair is prepared before either receipt. It must progress while
+    // this pair's payment-work insertion is failing, without repairing that failure.
+    let independent = engine
+        .deployment()
+        .relationship(
+            aggregate_key("independent-owner"),
+            &ProtocolState::initial_scoped(
+                RelationshipRef::from_u128_for_test(910),
+                RequestHistoryRef::from_u128_for_test(910),
+                ProtocolIdentity(110),
+                ProtocolIdentity(120),
+                test_time(0),
+            ),
+            UNIT,
+        )
+        .unwrap();
+    let mut keys = KeyRegistry::default();
+    for (key, actor, secret) in [
+        (111, ActorRef::Sender(ProtocolIdentity(110)), 111),
+        (112, ActorRef::Recipient(ProtocolIdentity(120)), 112),
+        (3, ActorRef::Provider(PROVIDER), 3),
+    ] {
+        keys.register(
+            OperationalKeyRef(key),
+            actor,
+            command_signer(actor, OperationalKeyRef(key), secret).verifying_key_bytes(),
+            test_time(0),
+        )
+        .unwrap();
+    }
+    support::provision(
+        &independent,
+        &policy(),
+        keys,
+        ProtocolIdentity(999),
+        test_time(0),
+    )
+    .unwrap();
+    independent
+        .configure_ingress(
+            DEPLOYMENT_DOMAIN,
+            &policy(),
+            &cs_mail_protocol::admission::AdmissionPolicy::default(),
+        )
         .unwrap();
     let issued = engine
         .execute(
@@ -2262,6 +2376,37 @@ fn failed_work_insert_rolls_back_every_owner_but_preserves_received_command() {
         Err(StorageError::Database(_))
     ));
     assert_eq!(engine.snapshot().unwrap(), before);
+    let unrelated = command_signer(
+        ActorRef::Recipient(ProtocolIdentity(120)),
+        OperationalKeyRef(112),
+        112,
+    )
+    .sign(
+        SigningScope {
+            relationship: RelationshipRef::from_u128_for_test(910),
+            ..signing_scope()
+        },
+        ProtocolVersion(2),
+        IdempotencyKey(912),
+        ProtocolCommand::BlockRelationship {
+            expected_version: Version(0),
+        },
+    )
+    .unwrap();
+    let unrelated = independent
+        .receive_signed(&unrelated, DEPLOYMENT_DOMAIN, || test_time(3), policy())
+        .unwrap();
+    independent.process_received(&unrelated).unwrap();
+    assert_eq!(
+        independent.snapshot().unwrap().state.relationship.state,
+        RelationshipState::Blocked
+    );
+    assert_eq!(
+        engine.snapshot().unwrap(),
+        before,
+        "independent progress altered the blocked owner's consequence"
+    );
+
     let pending: i64 = db
         .query_one(
             "SELECT count(*) FROM cs_received_commands WHERE aggregate_key=$1 AND outcome IS NULL",
@@ -2977,6 +3122,7 @@ fn restored_grant_rechecks_signed_evidence_using_frozen_authority() {
         ),
         Err(StorageError::Security(_))
     ));
+    resume_processing(&engine, &mut db, &handle);
     assert!(matches!(
         engine.process_received(&handle).unwrap(),
         cs_mail_application::receipts::ReceivedOutcome::Lane(_)
@@ -3196,6 +3342,7 @@ fn challenge_corrupt_restore(engine: &PostgresEngine, db: &mut postgres::Client,
     ));
     db.execute("UPDATE cs_requests SET request=jsonb_set(request,'{id}','false') WHERE aggregate_key=$1 AND request_id='1'", &[&key]).unwrap();
     assert!(matches!(engine.snapshot(), Err(StorageError::Database(_))));
+    resume_processing(engine, db, &handle);
     assert!(matches!(
         engine.process_received(&handle),
         Err(StorageError::Database(_))
@@ -3214,6 +3361,7 @@ fn challenge_corrupt_restore(engine: &PostgresEngine, db: &mut postgres::Client,
         &[&key, &postgres::types::Json(original)],
     )
     .unwrap();
+    resume_processing(engine, db, &handle);
     assert!(matches!(
         engine.process_received(&handle).unwrap(),
         cs_mail_application::receipts::ReceivedOutcome::Protocol(_)

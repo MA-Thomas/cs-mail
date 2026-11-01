@@ -51,7 +51,7 @@ struct InterfaceBRequestComposerView: View {
                             quoteReview(quote)
                             Button("Authorize charge and send request") { confirming = true }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.canSubmit || model.busy || !model.connected)
+                                .disabled(draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.canSubmit || model.busy || !model.nativeCurrent)
                         } else {
                             InterfaceBEditorialReadingView("Your request is saved. Checking it will not create another charge or change your message.", style: .caption)
                             Button("Check request") { Task { await model.retry() } }.disabled(model.busy)

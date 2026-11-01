@@ -434,14 +434,12 @@ impl AppleClient {
     /// # Errors
     /// Authentication, custody, malformed observations or failed local persistence.
     pub fn refresh_mail(&self) -> Result<MailRefresh, ClientError> {
-        self.0
-            .refresh_mail()
-            .map(|r| MailRefresh {
-                inbox: r.inbox.into(),
-                native_current: r.native_current,
-                external_current: r.external_current,
-            })
-            .map_err(Into::into)
+        let result = self.0.refresh_mail()?;
+        Ok(MailRefresh {
+            inbox: result.inbox.try_into()?,
+            native_current: result.native_current,
+            external_current: result.external_current,
+        })
     }
     /// # Errors
     /// Unavailable custody or invalid local mailbox state.

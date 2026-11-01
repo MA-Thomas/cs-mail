@@ -8,6 +8,7 @@ struct InterfaceBExternalEmailView: View {
     @Environment(\.workspaceCompose) private var compose
     @StateObject private var find = ConversationFind()
     @State private var showingFind = false
+    @State private var readingPresentation = CorrespondencePresentation.original
     @State private var confirmation: Change?
     @Environment(\.colorScheme) private var scheme
     private struct Change {
@@ -43,27 +44,35 @@ struct InterfaceBExternalEmailView: View {
                                     Button("Check status") { Task { await model.retry() } }
                                 }
                             }
+                            if let explanation = model.mailFreshness.externalNotice { Text(explanation).font(.caption).foregroundStyle(.secondary) }
                             if let error = model.memberError { Text(error).foregroundStyle(.orange) }
                             if thread.blocked { Text("This sender is blocked.").font(.callout).foregroundStyle(.secondary) }
                             if model.selectedInbox != nil { Button("View full conversation") { model.changeInbox(nil) } }
+                            CorrespondenceBody(messages: thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }.map {
+                                CorrespondenceMessage(id: $0.id, sender: $0.outgoing ? "You" : thread.mailbox,
+                                    date: SidebarProjection.messageDate($0.committedAt), content: $0.content,
+                                    notes: ($0.outgoing ? [$0.delivery.label] : []) + $0.providerEvents.map { "Provider reports: " + $0.kind.label + " · " + $0.providerTime }, recipient: $0.outgoing ? .correspondent : .you)
+                            }, find: find, focusedMessage: model.focusedMessage, navigationRequest: model.focusedPassageRequest,
+                                ink: InterfaceBEditorialStyle.ink(scheme), secondaryInk: InterfaceBEditorialStyle.secondaryInk(scheme), headingFontName: "HelveticaNeue-Light", presentation: $readingPresentation) {
                             ForEach(thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }, id: \.id) { message in
                                 VStack(alignment: .leading, spacing: 12) {
-                                    HStack {
-                                        Text(message.outgoing ? "You" : thread.mailbox).lineLimit(1)
-                                        Spacer()
-                                        Text(SidebarProjection.date(message.committedAt))
-                                    }.font(.caption).foregroundStyle(.secondary)
+                                    CorrespondenceMessageHeader(sender: message.outgoing ? "You" : thread.mailbox,
+                                        date: SidebarProjection.messageDate(message.committedAt), ink: InterfaceBEditorialStyle.ink(scheme),
+                                        secondaryInk: InterfaceBEditorialStyle.secondaryInk(scheme))
                                     InterfaceBDocumentReader(content: message.content, messageID: message.id, findQuery: find.query, findSelection: find.selection, loadPictures: { ids in await model.loadEmailPictures(key: MailKey(transport: .external, conversation: thread.id), message: message.id, ids: ids) })
                                     if message.outgoing { Text(message.delivery.label).font(.caption).foregroundStyle(.secondary) }
                                     ForEach(message.providerEvents, id: \.id) { event in Text("Provider reports: " + event.kind.label + " · " + event.providerTime).font(.caption) }
-                                }.id(message.id)
+                                }.modifier(CorrespondenceRecipientRule(recipient: message.outgoing ? .correspondent : .you)).id(message.id)
                             }
+
+                            }.id(thread.id)
                             HStack {
                                 Button("Reply", systemImage: "arrowshape.turn.up.left") { compose(.external(thread, nil)) }
                                     .buttonStyle(InterfaceBEditorialButtonStyle(prominent: true))
-                                    .disabled(thread.blocked || model.selectedInbox != nil || !model.connected || model.externalInbox?.pending != nil)
+                                    .disabled(thread.blocked || model.selectedInbox != nil || !model.externalCurrent || model.externalInbox?.pending != nil)
                                 Spacer()
                                 InterfaceBMailOrganizationMenu(model: model, key: MailKey(transport: .external, conversation: thread.id), displayed: thread.messages.map(\.id)) {
+                                    CorrespondencePresentationMenu(contents: thread.messages.filter { model.visibleInInbox(MailKey(transport: .external, conversation: thread.id), $0.id) }.map(\.content), selection: $readingPresentation)
                                     Divider()
                                     Menu("Manage contact") {
                                         Text(thread.permission)
@@ -82,7 +91,7 @@ struct InterfaceBExternalEmailView: View {
                                     }
                                 }
                             }
-                        }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+                        }.padding(28).frame(maxWidth: 760, alignment: .leading).frame(maxWidth: .infinity, alignment: .top)
                     }
                     .onChange(of: find.selection?.request) { _, _ in
                         if let message = find.selection?.occurrence.text.message { proxy.scrollTo(message, anchor: .top) }
@@ -110,7 +119,7 @@ struct InterfaceBExternalEmailView: View {
         }
             .task { if model.externalInbox == nil { await model.loadExternal() } }
             .onChange(of: model.selectedSender) { _, _ in confirmation = nil }
-            .onChange(of: thread?.id) { _, _ in find.reset() }
+            .onChange(of: thread?.id) { _, _ in find.reset(); readingPresentation = .original }
             .confirmationDialog(confirmation?.title ?? "Confirm change", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
                 if let change = confirmation {
                     Button("Confirm") {
@@ -161,7 +170,7 @@ struct InterfaceBExternalEmailComposer: View {
                         } else { await draft.reload(); workspace.finishing = false }
                     }
                 }.buttonStyle(InterfaceBEditorialButtonStyle(prominent: true))
-                    .disabled(workspace.recipientEditing || workspace.recipientPicker.busy || !draft.canSubmit || !model.connected || model.busy || model.externalInbox?.pending != nil || !draft.hasContent || (thread == nil && draft.mailbox.isEmpty))
+                    .disabled(workspace.recipientEditing || workspace.recipientPicker.busy || !draft.canSubmit || !model.externalCurrent || model.busy || model.externalInbox?.pending != nil || !draft.hasContent || (thread == nil && draft.mailbox.isEmpty))
             }
         }.disabled(workspace.finishing || workspace.savingForNavigation).padding(28).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task {

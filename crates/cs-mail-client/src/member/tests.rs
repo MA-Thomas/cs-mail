@@ -31,12 +31,29 @@ struct Store {
     key: Mutex<Option<Vec<u8>>>,
     secret_gate: Mutex<Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
     cache: Mutex<Option<Vec<u8>>>,
+    cache_records: Mutex<std::collections::BTreeMap<super::RetainedRecordId, Vec<u8>>>,
     workspace: Mutex<Option<Vec<u8>>>,
     personal: Mutex<Option<Vec<u8>>>,
     denied: AtomicBool,
     fail_save: AtomicBool,
 }
 impl DeviceStore for Store {
+    fn cache_record(&self, id: super::RetainedRecordId) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self.cache_records.lock().unwrap().get(&id).cloned())
+    }
+    fn commit_cache(&self, change: super::CacheCommit) -> Result<(), Error> {
+        if self.fail_save.load(Ordering::SeqCst) {
+            return Err(Error::StorageUnavailable);
+        }
+        let mut cache = self.cache.lock().unwrap();
+        let mut records = self.cache_records.lock().unwrap();
+        for row in change.writes {
+            records.insert(row.id, row.ciphertext);
+        }
+        records.retain(|id, _| change.keep.contains(id));
+        *cache = Some(change.head);
+        Ok(())
+    }
     fn retained_state(&self) -> Result<(u64, Option<Vec<u8>>), Error> {
         let d = self.retained.lock().unwrap();
         Ok((d.revision, d.metadata.clone()))
@@ -151,7 +168,7 @@ impl DeviceStore for Store {
     }
     fn save_submission(
         &self,
-        cache: &[u8],
+        cache: super::CacheCommit,
         workspace: &[u8],
         personal: &[u8],
     ) -> Result<(), Error> {
@@ -160,7 +177,12 @@ impl DeviceStore for Store {
         }
         let mut a = self.cache.lock().unwrap();
         let mut b = self.workspace.lock().unwrap();
-        *a = Some(cache.to_vec());
+        let mut records = self.cache_records.lock().unwrap();
+        for row in cache.writes {
+            records.insert(row.id, row.ciphertext);
+        }
+        records.retain(|id, _| cache.keep.contains(id));
+        *a = Some(cache.head);
         *b = Some(workspace.to_vec());
         *self.personal.lock().unwrap() = Some(personal.to_vec());
         Ok(())
@@ -383,7 +405,7 @@ fn lost_decision_response_and_failed_local_commit_replay_exact_operation_after_r
             .unwrap();
     let mut state = State {
         external: None,
-        format: 5,
+        format: 6,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -733,7 +755,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         .unwrap();
     let state = State {
         external: None,
-        format: 5,
+        format: 6,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -787,6 +809,16 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
         client.conversation("1").unwrap().messages[0].text,
         "private-message-canary"
     );
+    // Action and content projection must describe one observation, including cached uncertainty.
+    let current = client.conversation("1").unwrap();
+    let actions = current.actions().unwrap();
+    assert_eq!(actions.observed_at, current.observed_at);
+    let cached = client.cached_conversation("1").unwrap();
+    assert!(matches!(
+        cached.actions().unwrap().initiation,
+        super::InitiationAction::RefreshRequired
+    ));
+    assert!(cached.actions().unwrap().reply_conversations.is_empty());
     challenge_personal_reading(&client, &store, &keys);
     // Losing a later mailbox page must not persist early headers with the old cursor.
     let complete = store.load_cache().unwrap().unwrap();
@@ -794,7 +826,8 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     empty.mailbox = super::correspondence::Mailbox::default();
     storage::save(store.as_ref(), &keys, &empty).unwrap();
     network.fail_mailbox_page.store(true, Ordering::SeqCst);
-    assert!(!client.refresh_mail().unwrap().native_current);
+    let partial = client.refresh_mail().unwrap();
+    assert!(!partial.native_current && partial.external_current);
     assert!(
         storage::open(store.as_ref(), &keys)
             .unwrap()
@@ -1177,6 +1210,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     let expiry_store = Arc::new(Store::default());
     *expiry_store.key.lock().unwrap() = store.key.lock().unwrap().clone();
     *expiry_store.cache.lock().unwrap() = store.cache.lock().unwrap().clone();
+    *expiry_store.cache_records.lock().unwrap() = store.cache_records.lock().unwrap().clone();
     *expiry_store.retained.lock().unwrap() = prior_retained.clone();
     let cleanup = MemberClient::new(
         expiry_store.clone(),
@@ -1273,6 +1307,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     let isolated = Arc::new(Store::default());
     *isolated.key.lock().unwrap() = store.key.lock().unwrap().clone();
     *isolated.cache.lock().unwrap() = store.cache.lock().unwrap().clone();
+    *isolated.cache_records.lock().unwrap() = store.cache_records.lock().unwrap().clone();
     let concurrent = Arc::new(MemberClient::new(
         isolated,
         network.clone(),
@@ -1384,6 +1419,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     let opening_store = Arc::new(Store::default());
     *opening_store.key.lock().unwrap() = store.key.lock().unwrap().clone();
     *opening_store.cache.lock().unwrap() = store.cache.lock().unwrap().clone();
+    *opening_store.cache_records.lock().unwrap() = store.cache_records.lock().unwrap().clone();
     *opening_store.secret_gate.lock().unwrap() = Some(opening_gate.clone());
     let opening_client = Arc::new(MemberClient::new(
         opening_store,
@@ -1406,6 +1442,7 @@ fn reading_never_persists_plaintext_and_custody_denied_during_fetch_releases_not
     let deleting_store = Arc::new(Store::default());
     *deleting_store.key.lock().unwrap() = store.key.lock().unwrap().clone();
     *deleting_store.cache.lock().unwrap() = store.cache.lock().unwrap().clone();
+    *deleting_store.cache_records.lock().unwrap() = store.cache_records.lock().unwrap().clone();
     *deleting_store.retained.lock().unwrap() = prior_retained;
     let deleting_network = Arc::new(content_fixture(&keys, deleting_store.clone()));
     let deleting = MemberClient::new(
@@ -1825,7 +1862,7 @@ fn directory_edit_reopens_and_replays_exact_signed_bytes_after_lost_acknowledgem
         .unwrap();
     let state = State {
         external: None,
-        format: 5,
+        format: 6,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -1959,6 +1996,7 @@ fn challenge_recipient_routing(client: &MemberClient) {
 // Conjecture: losing an external command acknowledgement cannot create a second
 // disclosure on reopen. A different signed operation/ciphertext on retry falsifies it.
 struct ExternalNetwork {
+    revision: AtomicU64,
     native: ContentNetwork,
     commands: Mutex<Vec<Vec<u8>>>,
     lose: AtomicBool,
@@ -1969,6 +2007,7 @@ struct ExternalNetwork {
     pages: Mutex<Vec<u64>>,
 }
 impl Transport for ExternalNetwork {
+    #[allow(clippy::too_many_lines)] // One interrupted external-command transport scenario.
     fn request(&self, server: &str, route: &str, body: Option<&[u8]>) -> Result<Vec<u8>, Error> {
         use cs_mail_application::correspondence::external::{
             Acknowledgement, Command, Outcome, Receipt, Response, SignedCommand,
@@ -1986,7 +2025,8 @@ impl Transport for ExternalNetwork {
         }
         if route == "v1/external/commands" {
             let signed: SignedCommand = serde_json::from_slice(body.unwrap()).unwrap();
-            if let Command::Read { after } = signed.command {
+            if let Command::Read { after, .. } = signed.command {
+                let after = after.value();
                 self.pages.lock().unwrap().push(after);
                 let calls = self.commands.lock().unwrap();
                 let start: SignedCommand = serde_json::from_slice(&calls[0]).unwrap();
@@ -2014,12 +2054,13 @@ impl Transport for ExternalNetwork {
                     p::CanonicalTime(100),
                 )
                 .unwrap();
-                let page = if after == 7 {
+                let revision = self.revision.load(Ordering::SeqCst);
+                let page = if after == 7 || (after == 8 && revision == 9) {
                     vec![cs_mail_application::correspondence::external::MessageView {
                     sequence: 8, message: cs_mail_application::correspondence::external::Message::new(cs_mail_application::correspondence::external::MessageFields {
                         manifest: message.manifest, sender_key: message.sender_key, member_copy: message.member_copy,
                         direction: cs_mail_application::correspondence::external::Direction::MemberToGuest,
-                        committed_at: p::CanonicalTime(100), }).unwrap(), delivery: None, provider_events: vec![] }]
+                        committed_at: p::CanonicalTime(100), }).unwrap(), delivery: Some(if revision == 9 { cs_mail_correspondence::external::delivery::DeliveryState::Failed { at: p::CanonicalTime(110) } } else { cs_mail_correspondence::external::delivery::DeliveryState::Waiting }), provider_events: vec![] }]
                 } else {
                     vec![]
                 };
@@ -2027,7 +2068,14 @@ impl Transport for ExternalNetwork {
                     conversation: Box::new(conversation),
                     relationship: Box::new(relationship),
                     messages: page,
-                    next_after: if after == 0 { 7 } else { 8 },
+                    next_after:
+                        cs_mail_application::correspondence::external::ObservationRevision::new(
+                            if after == 0 { 7 } else { revision },
+                        ),
+                    through:
+                        cs_mail_application::correspondence::external::ObservationRevision::new(
+                            revision,
+                        ),
                 })
                 .unwrap());
             }
@@ -2073,6 +2121,7 @@ impl Transport for ExternalNetwork {
 fn external_response_loss_reopens_exact_ciphertext_and_blocks_replacement() {
     let (store, keys, state) = external_device();
     let network = Arc::new(ExternalNetwork {
+        revision: AtomicU64::new(8),
         native: content_fixture(&keys, store.clone()),
         commands: Mutex::new(vec![]),
         lose: AtomicBool::new(true),
@@ -2571,7 +2620,44 @@ fn challenge_external_pages(
         vec![cs_mail_correspondence::ConversationId::new(original.parse().unwrap()).unwrap()];
     restored.inbox = vec![view];
     client.sync_external(&mut restored, keys).unwrap();
-    assert_eq!(*network.pages.lock().unwrap(), vec![0, 7, 8]);
+    assert_eq!(*network.pages.lock().unwrap(), vec![0, 7]);
+    // Conjecture: a later delivery observation replaces the same occurrence after reopening,
+    // and a failed cursor/record commit cannot make that observation disappear.
+    network.revision.store(9, Ordering::SeqCst);
+    store.fail_save.store(true, Ordering::SeqCst);
+    assert_eq!(
+        client.sync_external(&mut restored, keys),
+        Err(Error::StorageUnavailable)
+    );
+    store.fail_save.store(false, Ordering::SeqCst);
+    restored = storage::open(store.as_ref(), keys).unwrap();
+    client.sync_external(&mut restored, keys).unwrap();
+    let observed = storage::open(store.as_ref(), keys).unwrap();
+    let record = observed
+        .external
+        .as_ref()
+        .unwrap()
+        .records
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(record.messages.len(), 1);
+    assert_eq!(record.observed.value(), 9);
+    assert!(matches!(
+        record.messages[0].delivery,
+        Some(cs_mail_correspondence::external::delivery::DeliveryState::Failed { .. })
+    ));
+    assert!(
+        network
+            .pages
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .take(2)
+            .all(|after| *after == 8)
+    );
+
     let inbox = client.external_inbox().unwrap();
     assert_eq!(inbox.threads[0].messages.len(), 1);
     assert_eq!(
@@ -2635,7 +2721,7 @@ fn external_device() -> (Arc<Store>, storage::Secrets, State) {
         .unwrap();
     let state = State {
         external: None,
-        format: 5,
+        format: 6,
         mailbox: super::correspondence::Mailbox::default(),
         sending: None,
         profile: Profile {
@@ -2894,6 +2980,9 @@ fn email_picture_approval_is_scoped_durable_and_never_automatically_replayed() {
             records: [(
                 id.value(),
                 super::external::Record {
+                    observed:
+                        cs_mail_application::correspondence::external::ObservationRevision::default(
+                        ),
                     conversation,
                     relationship,
                     messages: vec![MessageView {

@@ -92,7 +92,7 @@ struct MessageComposerView: View {
     @State private var confirmingDiscard = false
     private var ready: Bool {
         guard let inbox = model.inbox else { return false }
-        return model.connected && !model.busy && inbox.pendingSend == nil && inbox.pendingSender == nil && inbox.pendingSetup == nil && !inbox.pendingPolicy && !inbox.pendingRequest
+        return model.nativeCurrent && !model.busy && inbox.pendingSend == nil && inbox.pendingSender == nil && inbox.pendingSetup == nil && !inbox.pendingPolicy && !inbox.pendingRequest
     }
     var body: some View {
         Group {
@@ -148,7 +148,7 @@ struct MessageComposerView: View {
             if workspace.canChangeRecipient {
                 InterfaceARecipientField(model: model, workspace: workspace, label: workspace.recipientLabel ?? contact.title)
             } else { Text("To: \(workspace.recipientLabel ?? contact.title)").font(.headline) }
-            if conversationID == nil, case .reviewApproaches = contact.requestEntry, let requestRelationship {
+            if conversationID == nil, case .reviewApproaches = contact.actions.initiation, let requestRelationship {
                 Button("Request a relationship", action: requestRelationship).buttonStyle(ComposerActionStyle()).disabled(!ready)
             }
             if conversationID == nil {

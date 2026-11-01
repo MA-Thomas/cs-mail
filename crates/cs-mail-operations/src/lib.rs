@@ -12,6 +12,11 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 mod commands;
+mod processing;
+pub use processing::{
+    ProcessingCommand, ProcessingFailure, ProcessingInspection, ProcessingResponse,
+    ProcessingStatus,
+};
 mod review;
 pub use commands::{OperatorCommand, OperatorOutcome};
 pub use review::ReviewCommand;

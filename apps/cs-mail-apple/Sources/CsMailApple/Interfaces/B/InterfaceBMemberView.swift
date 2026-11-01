@@ -10,55 +10,19 @@ private struct InterfaceBColumnBBounds: PreferenceKey {
 }
 
 struct InterfaceBView: View {
-    private enum Appearance: String {
-        case system, light, dark
-        var colorScheme: ColorScheme? {
-            switch self {
-            case .system: return nil
-            case .light: return .light
-            case .dark: return .dark
-            }
-        }
-    }
     @AppStorage("csMailHomeArrangement") private var homeArrangement: HomeArrangement = .cards
     @AppStorage("csMailMailboxSectionOrder") private var mailboxSectionOrder: MailboxSectionOrder = .receivingFirst
     @AppStorage("csMailLaneSectionOrder") private var laneSectionOrder: LaneSectionOrder = .aliasesFirst
     @AppStorage("csMailNotesReadingWidth") private var notesReadingWidth: NotesReadingWidth = .wide
     @AppStorage("csMailRelationshipsOverview") private var relationshipOverview: RelationshipOverviewStyle = .map
-    private enum AppearanceSource: String { case systemDefault, custom }
-    @AppStorage("csMailInterfaceBAppearanceSource") private var appearanceSource: AppearanceSource = .systemDefault
-    @AppStorage("csMailAppearance") private var appearance: Appearance = .system
-    @AppStorage("csMailTerrazzoDefault") private var terrazzoDefault = true
-    @AppStorage("csMailTerrazzoHue") private var terrazzoHue = 0.5
-    @AppStorage("csMailTerrazzoBrightness") private var terrazzoBrightness = 0.8
-    @AppStorage("csMailTerrazzoIntensity") private var terrazzoIntensity = 0.5
-    // Negative storage values mean no override; presentation receives optional opacity.
-    @AppStorage("csMailTerrazzoMainOpacity") private var terrazzoMainOpacity = -1.0
-    @AppStorage("csMailTerrazzoSurroundingOpacity") private var terrazzoSurroundingOpacity = -1.0
-    @StateObject private var appearanceProfiles = InterfaceBAppearanceProfiles()
-    private var appearanceSnapshot: Binding<InterfaceBAppearanceSnapshot> {
-        Binding(get: { InterfaceBAppearanceSnapshot(mode: (appearance.colorScheme ?? scheme) == .dark ? .dark : .light,
-                                                  texture: terrazzoAppearance.wrappedValue) },
-                set: { snapshot in
-                    appearance = snapshot.mode == .dark ? .dark : .light
-                    terrazzoAppearance.wrappedValue = snapshot.texture
-                })
-    }
-    private func useSystemAppearance(_ mode: InterfaceBAppearanceSnapshot.Mode, changeMode: Bool = true) {
-        let snapshot = InterfaceBSystemAppearance.snapshot(for: mode)
-        if changeMode { appearance = mode == .dark ? .dark : .light }
-        terrazzoAppearance.wrappedValue = snapshot.texture
-        appearanceSource = .systemDefault
-        appearanceProfiles.clearSelection()
-    }
-    private func followSystemAppearance() {
-        guard appearance == .system, appearanceSource == .systemDefault else { return }
-        useSystemAppearance(scheme == .dark ? .dark : .light, changeMode: false)
-    }
+    @StateObject private var appearanceController = InterfaceBAppearanceController()
     @State private var showingTerrazzo = false
-    private var terrazzoAppearance: Binding<InterfaceBTerrazzoAppearance> {
-        Binding(get: { InterfaceBTerrazzoAppearance(usesDefault: terrazzoDefault, hue: terrazzoHue, brightness: terrazzoBrightness, intensity: terrazzoIntensity, mainOpacity: terrazzoMainOpacity < 0 ? nil : terrazzoMainOpacity, surroundingOpacity: terrazzoSurroundingOpacity < 0 ? nil : terrazzoSurroundingOpacity) },
-                set: { appearanceSource = .custom; terrazzoDefault = $0.usesDefault; terrazzoHue = $0.hue; terrazzoBrightness = $0.brightness; terrazzoIntensity = $0.intensity; terrazzoMainOpacity = $0.mainOpacity ?? -1; terrazzoSurroundingOpacity = $0.surroundingOpacity ?? -1 })
+    private var appearanceContext: InterfaceBAppearanceContext {
+        appearanceController.context(scheme: scheme, area: destination.area)
+    }
+    private var materialBinding: Binding<InterfaceBMaterialDefinition> {
+        Binding(get: { appearanceController.snapshot(in: appearanceContext).material },
+                set: { appearanceController.edit($0) })
     }
     @ObservedObject private var model: MemberModel
     private let accountAccess: DevelopmentAccountAccess
@@ -143,19 +107,12 @@ struct InterfaceBView: View {
                 }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity).disabled(model.busy)
             }
         }
-        .task {
-            if appearanceSource == .systemDefault {
-                useSystemAppearance(appearanceSnapshot.wrappedValue.mode, changeMode: false)
-            }
-        }
-        .onChange(of: scheme) { _, _ in followSystemAppearance() }
-        .preferredColorScheme(appearance.colorScheme)
+        .preferredColorScheme(appearanceController.preferredColorScheme)
         .toolbar {
             ToolbarItem {
                 Button(scheme == .dark ? "Use light appearance" : "Use dark appearance",
                        systemImage: scheme == .dark ? "sun.max" : "moon") {
-                    let next: InterfaceBAppearanceSnapshot.Mode = scheme == .dark ? .light : .dark
-                    useSystemAppearance(next)
+                    appearanceController.switchMode(to: scheme == .dark ? .light : .dark)
                 }
                 .help("Switch between light and dark appearance")
             }
@@ -165,11 +122,11 @@ struct InterfaceBView: View {
                     .popover(isPresented: $showingTerrazzo, arrowEdge: .top) {
                         ScrollView {
                             VStack(spacing: 0) {
-                                InterfaceBAppearanceProfileControls(profiles: appearanceProfiles, current: appearanceSnapshot,
-                                    isSystemDefault: appearanceSource == .systemDefault,
-                                    useSystemDefault: { useSystemAppearance($0) })
-                                Divider().padding(.horizontal, 20)
-                                InterfaceBTerrazzoControls(appearance: terrazzoAppearance)
+                                InterfaceBAppearanceProfileControls(controller: appearanceController, context: appearanceContext)
+                                if appearanceController.canEdit {
+                                    Divider().padding(.horizontal, 20)
+                                    InterfaceBTerrazzoControls(appearance: materialBinding)
+                                }
                             }
                         }.frame(width: 340, height: 640)
                     }
@@ -179,7 +136,7 @@ struct InterfaceBView: View {
         .foregroundStyle(InterfaceBEditorialStyle.ink(scheme))
         .tint(InterfaceBEditorialStyle.ink(scheme))
         .background { InterfaceBWorkspaceBackdrop().ignoresSafeArea() }
-        .environment(\.interfaceBTerrazzoAppearance, terrazzoAppearance.wrappedValue)
+        .environment(\.interfaceBAppearance, appearanceController.resolved(in: appearanceContext))
         .coordinateSpace(name: InterfaceBWorkspaceBackdrop.coordinateSpace)
         #if os(macOS)
         .toolbarBackground(.hidden, for: .windowToolbar)
@@ -523,7 +480,7 @@ struct InterfaceBView: View {
                     .labelStyle(.titleAndIcon).help("Return to Inbox")
                 Button("Write an email", systemImage: "square.and.pencil") {
                     openComposition(.unaddressed(nil))
-                }.disabled(model.busy || !model.connected || model.externalInbox?.pending != nil)
+                }.disabled(model.busy)
             }
             if destination != .notes {
                 Button("Refresh", systemImage: "arrow.clockwise") { Task {
@@ -546,7 +503,7 @@ struct InterfaceBView: View {
         } else {
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 navigationColumn(area: destination.area)
-                    .workspaceColumn()
+                    .workspaceColumn(backTitle: backTitle)
                     #if os(macOS)
                     .toolbar(removing: .sidebarToggle)
                     #endif
@@ -603,7 +560,7 @@ struct InterfaceBView: View {
         .padding(.horizontal, hasContactSurface ? 0 : InterfaceBWorkspaceLayout.horizontalInset)
         .padding(.vertical, hasContactSurface ? 0 : InterfaceBWorkspaceLayout.verticalInset)
         .background { InterfaceBWorkspaceBackdrop(textureStrength: .workspace) }
-        .environment(\.interfaceBTextureStrength, .mainSpace)
+        .environment(\.interfaceBSurfaceRole, .mainSpace)
     }
     private var hasContactSurface: Bool { composition == nil && ((showsCorrespondence && model.selectedSender != nil) || destination == .externalEmails) }
     private var detailHasReturn: Bool {
@@ -768,7 +725,7 @@ struct InterfaceBView: View {
                 if let sender { openContact(sender, area: .communications) }
             }))
         case .externalEmails:
-            InterfaceBEditorialPortalView(person: "", route: .closed, returnTitle: backTitle, returnToSpace: goBack) {
+            InterfaceBEditorialPortalView(person: "", returnTitle: backTitle, returnToSpace: goBack) {
                 InterfaceBExternalEmailView(model: model)
             }
         case .directory:
@@ -835,7 +792,6 @@ struct InterfaceBView: View {
         Group {
             if let conversation = model.conversation, conversation.sender == model.selectedSender?.value {
                 InterfaceBEditorialPortalView(person: conversation.title,
-                    route: route(conversation.permissionRoute),
                     returnTitle: backTitle, returnToSpace: goBack) {
                     InterfaceBContactCorrespondenceView(model: model, conversation: conversation, inbox: inbox,
                         selectedRequest: selectedRequest,

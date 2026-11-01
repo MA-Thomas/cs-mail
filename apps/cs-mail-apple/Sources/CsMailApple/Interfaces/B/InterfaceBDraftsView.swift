@@ -31,7 +31,7 @@ struct InterfaceBFollowupComposer: View {
                         if let saved = await draft.flush(), await model.submitDraft(saved) { close() }
                         else { await draft.reload(); finishing = false }
                     }
-                }.disabled(!draft.canSubmit || model.busy || !model.connected || draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }.disabled(!draft.canSubmit || model.busy || !model.nativeCurrent || draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if let error = model.memberError { Text(error).foregroundStyle(.orange) }
         }.disabled(finishing).padding(24).frame(idealWidth: 540, idealHeight: 430)

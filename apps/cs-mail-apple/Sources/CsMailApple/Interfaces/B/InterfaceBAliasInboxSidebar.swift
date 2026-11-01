@@ -19,14 +19,14 @@ struct InterfaceBAliasInboxSidebar: View {
     }
     private var matching: [AliasInbox] { model.aliasInboxes.filter { filter.isEmpty || (($0.address.description ?? "") + " " + $0.address.address).localizedCaseInsensitiveContains(filter) } }
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Communications").font(WorkspaceColumnLayout.headingFont).fixedSize(horizontal: true, vertical: false).accessibilityAddTraits(.isHeader)
             if model.aliasInboxes.count > 6 { TextField("Find an inbox", text: $filter).textFieldStyle(.roundedBorder).modifier(SearchFieldInteraction(focus: $searchFocused)) }
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(sectionOrder == .receivingFirst ? ["receiving", "mailboxes"] : ["mailboxes", "receiving"], id: \.self) { sectionID in
                         if sectionID == "receiving" { receivingSection } else { mailboxSection }
-                        Divider().padding(.vertical, 8)
+                        Divider().padding(.vertical, 6)
                     }
                     Button("Drafts", systemImage: "doc", action: drafts).buttonStyle(InterfaceBEditorialRegionButtonStyle())
                     if let error = model.mailboxError { Text(error).font(.caption).foregroundStyle(.orange) }
@@ -41,7 +41,7 @@ struct InterfaceBAliasInboxSidebar: View {
         Group {
                     section("Receiving inboxes")
                     row("All inboxes", id: nil, unread: model.mailItems.filter { $0.folder == .inbox }.reduce(0) { $0 + $1.unread })
-                    Divider().padding(.vertical, 8)
+                    Divider().padding(.vertical, 6)
                     ForEach(matching.filter { !isHistorical($0) }, id: \.address.id) { inbox in aliasRow(inbox) }
                     if matching.contains(where: isHistorical) {
                         DisclosureGroup("Historical inboxes", isExpanded: $historical) {
@@ -51,8 +51,8 @@ struct InterfaceBAliasInboxSidebar: View {
         }
     }
     private var mailboxSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-                    section("Mailboxes")
+        VStack(alignment: .leading, spacing: 2) {
+                    section("Mail views")
                     ForEach(MailboxFolder.allCases.filter { model.selectedInbox == nil || ($0 != .sent && $0 != .outbox) }) { folder in
                         Button { selectMailbox(folder) } label: {
                             Label(folder.rawValue, systemImage: icon(folder))
@@ -64,7 +64,7 @@ struct InterfaceBAliasInboxSidebar: View {
         }
     }
     private func section(_ title: String) -> some View {
-        Text(title).font(.caption.bold()).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader).padding(.top, 8)
+        InterfaceBOrganizerHeading(title).padding(.top, 8)
     }
     private func icon(_ folder: MailboxFolder) -> String {
         switch folder {
@@ -88,8 +88,8 @@ struct InterfaceBAliasInboxSidebar: View {
     }
     private func row(_ title: String, id: String?, unread: UInt64) -> some View {
         Button { select(id) } label: {
-            HStack { Text(title).lineLimit(2); Spacer(); if unread > 0 { Text("\(unread)").font(.caption).bold().accessibilityLabel("\(unread) unread") } }
-                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            HStack { Text(title).lineLimit(2); Spacer(); if unread > 0 { Text("\(unread)").font(.caption).monospacedDigit().bold().accessibilityLabel("\(unread) unread") } }
+                .padding(.horizontal, 12).padding(.vertical, 12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }.buttonStyle(InterfaceBEditorialRegionButtonStyle(selected: model.selectedInbox == id))
             .accessibilityAddTraits(model.selectedInbox == id ? .isSelected : [])
     }

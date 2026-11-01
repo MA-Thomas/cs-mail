@@ -485,7 +485,7 @@ struct InterfaceCView: View {
                     .labelStyle(.titleAndIcon).help("Return to Inbox")
                 Button("Write an email", systemImage: "square.and.pencil") {
                     openComposition(.unaddressed(nil))
-                }.disabled(model.busy || !model.connected || model.externalInbox?.pending != nil)
+                }.disabled(model.busy)
             }
             if destination != .notes {
                 Button("Refresh", systemImage: "arrow.clockwise") { Task {
@@ -508,7 +508,7 @@ struct InterfaceCView: View {
         } else {
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 navigationColumn(area: destination.area)
-                    .workspaceColumn()
+                    .workspaceColumn(backTitle: backTitle)
                     #if os(macOS)
                     .toolbar(removing: .sidebarToggle)
                     #endif

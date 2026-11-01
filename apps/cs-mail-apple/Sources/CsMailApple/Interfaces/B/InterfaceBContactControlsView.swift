@@ -19,11 +19,15 @@ struct InterfaceBContactControlsView: View {
         Form {
             if let conversation = model.conversation, conversation.sender == sender.value {
                 Section("Your contact with \(conversation.title)") {
-                    switch conversation.reply {
-                    case .standing: Text("You have standing permission to start conversations.")
-                    case .lane: Text("You can start conversations within your express lane’s limits.")
-                    case .conversation: Text("You can reply in existing conversations.")
-                    case .closed: Text("You currently have no permission to start conversations.")
+                    if conversation.actions.observation == .saved {
+                        Text("Refresh to check available actions.")
+                    } else {
+                        switch conversation.actions.reply {
+                        case .standing: Text("You have standing permission to start conversations.")
+                        case .lane: Text("You can start conversations within your express lane’s limits.")
+                        case .conversation: Text("You can reply in existing conversations.")
+                        case .closed: Text("You currently have no permission to start conversations.")
+                        }
                     }
                 }
                 Section("Permission for contact from this person") {
@@ -58,7 +62,7 @@ struct InterfaceBContactControlsView: View {
             }
         }
         .padding().frame(idealWidth: 550, idealHeight: 530)
-        .disabled(model.busy || !model.connected || model.inbox?.pendingRequest == true || model.inbox?.pendingPolicy == true || model.inbox?.pendingSender != nil || model.inbox?.pendingSend != nil || model.inbox?.pendingSetup != nil)
+        .disabled(model.busy || !model.nativeCurrent || model.conversation?.actions.observation != .current || model.inbox?.pendingRequest == true || model.inbox?.pendingPolicy == true || model.inbox?.pendingSender != nil || model.inbox?.pendingSend != nil || model.inbox?.pendingSetup != nil)
         .onAppear {
             if let controls = model.conversation?.controls {
                 maximum = String(controls.followupMax); perInterval = String(controls.followupPerInterval)

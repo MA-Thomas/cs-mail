@@ -57,9 +57,9 @@ struct InterfaceCRelationshipOverviewList: View {
                 ForEach(people.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }) { person in
                     Button { open(person.id) } label: {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(person.title).font(.headline)
-                            Text(person.subtitle).font(.callout).foregroundStyle(.secondary)
-                        }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(person.title).font(InterfaceCEditorialStyle.text(15).weight(.medium))
+                            Text(person.subtitle).font(InterfaceCEditorialStyle.text(13)).foregroundStyle(.secondary)
+                        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
                     }.buttonStyle(InterfaceCEditorialRegionButtonStyle())
                 }
                 if people.isEmpty { Text("No correspondence yet.").foregroundStyle(.secondary) }
@@ -89,12 +89,12 @@ struct InterfaceCRelationshipOrganizer: View {
         }.padding(22)
     }
     private func management(_ title: String, icon: String, target: MemberDestination) -> some View {
-        Button { navigate(target) } label: { Label(title, systemImage: icon).padding(14).frame(maxWidth: .infinity, alignment: .leading) }
+        Button { navigate(target) } label: { Label(title, systemImage: icon).padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading) }
             .buttonStyle(InterfaceCEditorialRegionButtonStyle(selected: destination == target))
             .accessibilityAddTraits(destination == target ? .isSelected : [])
     }
 }
 
 private func organizerHeading(_ text: String) -> some View {
-    Text(text).font(.caption.bold()).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader).padding(.top, 8)
+    Text(text).font(InterfaceCEditorialStyle.sectionHeading).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader).padding(.top, 8)
 }

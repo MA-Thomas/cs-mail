@@ -417,7 +417,7 @@ impl GuestStore for GuestTransaction<'_> {
             .map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
         // Ordered with receipts: history merges change what later commands see.
-        ingress::require_drained(&mut tx)?;
+        ingress::require_personas_drained(&mut tx, &[recipient, approach.identity])?;
         let registered = subject_of(&mut tx, approach.identity)?;
         let mailbox_history = linked_history(
             &mut tx,

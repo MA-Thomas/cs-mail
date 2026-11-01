@@ -54,7 +54,7 @@ impl PostgresEngine {
     pub fn configure_lifecycle(&self, policy: &LifecyclePolicy) -> Result<(), StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::require_relationship_drained(&mut tx, &self.aggregate_key)?;
         let inserted=tx.execute("INSERT INTO cs_lifecycle_policies(aggregate_key,version,policy) VALUES($1,$2,$3) ON CONFLICT(aggregate_key,version) DO UPDATE SET policy=EXCLUDED.policy WHERE cs_lifecycle_policies.policy=EXCLUDED.policy",&[&self.aggregate_key,&i64::from(policy.version.0),&Json(policy)])?;
         if inserted != 1 {
             return Err(StorageError::DuplicateConflict);
@@ -84,7 +84,7 @@ impl PostgresEngine {
         }
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::require_relationship_drained(&mut tx, &self.aggregate_key)?;
         let row=tx.query_opt("SELECT record_ref,delete_after FROM cs_retention_records WHERE aggregate_key=$1 AND record_domain=$2 AND object_ref=$3 AND state='active' FOR UPDATE",&[&self.aggregate_key,&domain,&object])?.ok_or(StorageError::Protocol(ProtocolError::MissingRecord))?;
         let reference: Vec<u8> = row.get(0);
         let old: i64 = row.get(1);
@@ -118,7 +118,7 @@ impl PostgresEngine {
         }
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::require_relationship_drained(&mut tx, &self.aggregate_key)?;
         let rows=tx.query("SELECT record_ref,record_domain,object_ref,policy_version FROM cs_retention_records WHERE aggregate_key=$1 AND state='active' AND delete_after<=$2 AND next_check_at<=$2 AND (hold_until IS NULL OR hold_until<=$2) ORDER BY delete_after,record_ref LIMIT $3 FOR UPDATE",&[&self.aggregate_key,&to_i64(now.0)?,&limit])?;
         let mut report = RetentionReport {
             examined: rows.len(),
@@ -161,7 +161,7 @@ impl PostgresEngine {
     pub fn reconcile_restored_deletions(&self) -> Result<usize, StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
-        ingress::require_drained(&mut tx)?;
+        ingress::require_relationship_drained(&mut tx, &self.aggregate_key)?;
         let rows=tx.query("SELECT record_ref,record_domain,object_ref FROM cs_deletion_manifests WHERE aggregate_key=$1 ORDER BY id",&[&self.aggregate_key])?;
         for row in &rows {
             if !delete_record(

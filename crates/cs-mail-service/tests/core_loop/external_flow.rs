@@ -188,7 +188,14 @@ impl External {
     }
     fn read(&self, id: u128) -> (cs_mail_protocol::Relationship, Vec<app::MessageView>) {
         match app::Service(&self.repository())
-            .handle(&self.command(id, 900_000, app::Command::Read { after: 0 }))
+            .handle(&self.command(
+                id,
+                900_000,
+                app::Command::Read {
+                    after: app::ObservationRevision::default(),
+                    through: None,
+                },
+            ))
             .unwrap()
         {
             app::Response::Conversation {

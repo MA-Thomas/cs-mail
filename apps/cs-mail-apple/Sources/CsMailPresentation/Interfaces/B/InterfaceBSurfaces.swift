@@ -35,7 +35,7 @@ public struct InterfaceBSidebarSurface: View {
 /// The one active content surface receives the light; its interior stays neutral.
 public struct InterfaceBMainSpacePerimeter<S: Shape>: View {
     private let shape: S
-    @Environment(\.interfaceBGlassArea) private var area
+    @Environment(\.interfaceBAppearance) private var appearance
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -54,23 +54,23 @@ public struct InterfaceBMainSpacePerimeter<S: Shape>: View {
                         var exterior = Path(CGRect(x: -20, y: -20, width: size.width, height: size.height))
                         exterior.addPath(RoundedRectangle(cornerRadius: InterfaceBWorkspaceLayout.surfaceCornerRadius).path(in: bounds))
                         context.clip(to: exterior, style: FillStyle(eoFill: true))
-                        let color = InterfaceBEditorialAreaPalette.palette(for: area).reflection
+                        let color = appearance.coveColor
                         var spill = context
                         spill.addFilter(.blur(radius: 6))
                         spill.drawLayer { layer in
-                            layer.stroke(outline, with: .color(color.opacity(scheme == .dark ? 0.55 : 0.42)), lineWidth: 16)
+                            layer.stroke(outline, with: .color(color.opacity(scheme == .dark ? 0.44 : 0.42)), lineWidth: 16)
                         }
                         var near = context
                         near.addFilter(.blur(radius: 1))
                         near.drawLayer { layer in
-                            layer.stroke(outline, with: .color(color.opacity(scheme == .dark ? 0.80 : 0.65)), lineWidth: 3)
+                            layer.stroke(outline, with: .color(color.opacity(scheme == .dark ? 0.64 : 0.65)), lineWidth: 3)
                         }
                     }
                     .padding(-20)
                 }
                 // A soft embossed shoulder instead of a sharply ruled border.
                 shape.stroke(LinearGradient(colors: [
-                    .white.opacity(scheme == .dark ? 0.18 : 0.8),
+                    .white.opacity(scheme == .dark ? 0.14 : 0.8),
                     .clear,
                     .black.opacity(scheme == .dark ? 0.35 : 0.12)
                 ], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 6)

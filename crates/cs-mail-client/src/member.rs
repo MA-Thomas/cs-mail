@@ -1,5 +1,7 @@
 //! Portable member application slice. Server rules stay in their existing owners.
 //! All mutable device progress is serialized and committed before external effects.
+mod actions;
+pub use actions::{ContactActions, ContactObservation, InitiationAction, RecoveryCustody};
 mod alias_views;
 mod aliases;
 pub use alias_views::{
@@ -51,14 +53,16 @@ pub use reuse::{
 };
 mod navigation;
 mod storage;
+#[cfg(feature = "device-maintenance")]
+pub use storage::prepare_mailbox_upgrade;
 mod transport;
 mod views;
 pub use enrollment::{EnrollmentDetails, EnrollmentStatus, LoginStart};
 pub use login::Authorization;
 pub use navigation::{NavigationContact, NavigationLane, NavigationRequest};
 pub use storage::{
-    DeviceStore, RetainedCommit, RetainedCopyWrite, RetainedIndexRow, RetainedRecordId,
-    RetainedWrite,
+    CacheCommit, CacheRecord, DeviceStore, RetainedCommit, RetainedCopyWrite, RetainedIndexRow,
+    RetainedRecordId, RetainedWrite,
 };
 pub use transport::{HttpTransport, Transport};
 pub use views::{

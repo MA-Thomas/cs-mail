@@ -28,11 +28,16 @@ public enum InterfaceCEditorialStyle {
     public static func secondaryInk(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(red: 0.69, green: 0.68, blue: 0.64) : Color(red: 0.26, green: 0.27, blue: 0.25)
     }
+    static let headingFontName = "HelveticaNeue-Medium"
+    static let bodyFontName = "HelveticaNeue"
     public static func heading(_ size: CGFloat) -> Font {
-        .custom("HelveticaNeue-Medium", size: size, relativeTo: .title)
+        .custom(headingFontName, size: size, relativeTo: .title)
     }
+    public static let sectionHeading = text(12, relativeTo: .caption).weight(.medium)
+    public static let metadata = text(12, relativeTo: .caption)
+
     public static func text(_ size: CGFloat, relativeTo style: Font.TextStyle = .body) -> Font {
-        .custom("HelveticaNeue", size: size, relativeTo: style)
+        .custom(bodyFontName, size: size, relativeTo: style)
     }
     public static let reading = text(16)
 }
@@ -85,8 +90,16 @@ private struct InterfaceCControlLabel: View {
             .frame(minHeight: metrics.height)
             .foregroundStyle(InterfaceCEditorialStyle.ink(scheme), InterfaceCEditorialStyle.secondaryInk(scheme))
             .background {
-                InterfaceCControlSurface(in: RoundedRectangle(cornerRadius: metrics.radius),
-                                        emphasized: pressed)
+                if selected {
+                    InterfaceCControlSurface(in: RoundedRectangle(cornerRadius: metrics.radius), emphasized: true)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: metrics.radius)
+                                .fill(InterfaceCEditorialStyle.ink(scheme).opacity(scheme == .dark ? 0.12 : 0.06))
+                        }
+                } else {
+                    InterfaceCControlSurface(in: RoundedRectangle(cornerRadius: metrics.radius),
+                                             emphasized: pressed)
+                }
             }
             .overlay {
                 InterfaceCPerimeterLight(in: RoundedRectangle(cornerRadius: metrics.radius), active: enabled && (hovered || pressed), pressed: pressed)
@@ -133,6 +146,8 @@ public struct InterfaceCEditorialRegionButtonStyle: ButtonStyle {
         var body: some View {
             label
                 .textSelection(.disabled)
+                .font(InterfaceCEditorialStyle.text(14))
+                .frame(minHeight: 44, alignment: .leading)
                 .modifier(ColumnBNavigationSelection(selected: columnBNavigation && selected))
                 .background(InterfaceCEditorialStyle.ink(scheme).opacity(!columnBNavigation && selected ? 0.09 : 0), in: RoundedRectangle(cornerRadius: 10))
                 .overlay {

@@ -780,6 +780,7 @@ impl MemberClient {
                 || super::views::unestablished(other),
                 |view| super::views::summary(view, Some((self.clock)())),
             );
+        result.observed_at = state.synchronized_at;
         result.threads = data.threads;
         result.messages = data
             .items

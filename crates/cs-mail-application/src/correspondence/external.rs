@@ -42,7 +42,8 @@ pub enum Command {
     WithdrawDisclosure,
     GrantDisclosure,
     Read {
-        after: u64,
+        after: ObservationRevision,
+        through: Option<ObservationRevision>,
     },
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -191,6 +192,19 @@ pub struct MessageView {
     pub delivery: Option<DeliveryState>,
     pub provider_events: Vec<cs_mail_correspondence::external::delivery::ProviderEvent>,
 }
+/// Progress through external observations, independent of immutable message order.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ObservationRevision(u64);
+impl ObservationRevision {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Outcome {
     Queued(MessageId),
@@ -206,7 +220,8 @@ pub enum Response {
         conversation: Box<ExternalConversation>,
         relationship: Box<Relationship>,
         messages: Vec<MessageView>,
-        next_after: u64,
+        next_after: ObservationRevision,
+        through: ObservationRevision,
     },
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -274,6 +289,8 @@ pub struct Context {
     pub member_key: EndpointPublicKey,
     pub prior: Option<Receipt>,
     pub messages: Vec<MessageView>,
+    pub next_observation: ObservationRevision,
+    pub through: ObservationRevision,
 }
 pub struct Effects {
     pub changes: Option<Changes>,
@@ -449,12 +466,18 @@ fn decide(request: &SignedCommand, c: Context, now: CanonicalTime) -> Result<Dec
     {
         return Err(Error::Unauthorized);
     }
-    if let Command::Read { after } = request.command {
+    if let Command::Read { after, through } = request.command {
         let conversation = c.conversation.as_ref().ok_or(Error::Unavailable)?;
         for view in &c.messages {
             view.message.validate(conversation, &c.relationship)?;
         }
-        let next_after = c.messages.last().map_or(after, |m| m.sequence);
+        if c.next_observation < after
+            || c.next_observation > c.through
+            || through.is_some_and(|bound| bound != c.through)
+        {
+            return Err(Error::Invalid);
+        }
+        let next_after = c.next_observation;
         return Ok(Decision {
             response: Response::Conversation {
                 conversation: Box::new(c.conversation.ok_or(Error::Unavailable)?),
@@ -465,6 +488,7 @@ fn decide(request: &SignedCommand, c: Context, now: CanonicalTime) -> Result<Dec
                     .filter(|m| m.message.member_copy.expires_at > now)
                     .collect(),
                 next_after,
+                through: c.through,
             },
             effects: None,
         });

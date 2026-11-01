@@ -7,7 +7,7 @@ use chacha20poly1305::{
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-const CONTEXT: &[u8] = b"cs-mail/apple-member-cache/v5";
+const CONTEXT: &[u8] = b"cs-mail/apple-member-cache/v6";
 
 /// Opaque storage address; it is neither a message identity nor an encryption key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -58,9 +58,30 @@ pub struct RetainedCommit {
     pub writes: Vec<RetainedWrite>,
 }
 
+/// Independently authenticated mailbox records have content-derived opaque addresses.
+#[derive(Clone, Debug)]
+pub struct CacheRecord {
+    pub id: RetainedRecordId,
+    pub ciphertext: Vec<u8>,
+}
+/// The exclusive store owner commits the complete head and its referenced records together.
+#[derive(Clone, Debug)]
+pub struct CacheCommit {
+    pub head: Vec<u8>,
+    pub keep: Vec<RetainedRecordId>,
+    pub writes: Vec<CacheRecord>,
+}
 /// The host must hold exclusive ownership of this store for the client's lifetime.
 /// Cache replacement must be durable and atomic, including on process termination.
 pub trait DeviceStore: Send + Sync {
+    /// Read an independently encrypted mailbox record; absence is never an empty message.
+    /// # Errors
+    /// Storage is unavailable.
+    fn cache_record(&self, id: RetainedRecordId) -> Result<Option<Vec<u8>>, Error>;
+    /// Atomically replace the head, add its missing records and remove unreferenced records.
+    /// # Errors
+    /// No partial head, cursor or record changes may survive a failed commit.
+    fn commit_cache(&self, change: CacheCommit) -> Result<(), Error>;
     /// Independently encrypted metadata and its committed progress revision.
     /// # Errors
     /// Retained storage cannot be read.
@@ -104,8 +125,12 @@ pub trait DeviceStore: Send + Sync {
     /// Commit prepared operation and consumed draft together, or neither. No I/O to providers.
     /// # Errors
     /// The complete local transaction could not commit.
-    fn save_submission(&self, cache: &[u8], workspace: &[u8], personal: &[u8])
-    -> Result<(), Error>;
+    fn save_submission(
+        &self,
+        cache: CacheCommit,
+        workspace: &[u8],
+        personal: &[u8],
+    ) -> Result<(), Error>;
     /// # Errors
     /// Personal-state storage cannot be read.
     fn load_personal(&self) -> Result<Option<Vec<u8>>, Error>;
@@ -140,31 +165,86 @@ pub(super) fn open(store: &dyn DeviceStore, keys: &Secrets) -> Result<State, Err
         DeviceState::Enrolling(_) => Err(Error::EnrollmentRequired),
     }
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActiveSnapshot {
+    state: Box<State>,
+    records: Vec<RetainedRecordIdBytes>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(transparent)]
+struct RetainedRecordIdBytes([u8; 32]);
+#[derive(Deserialize)]
+enum Snapshot {
+    Enrolling(Box<Enrollment>),
+    Active(ActiveSnapshot),
+}
+#[derive(Serialize, Deserialize)]
+enum MailboxRecord {
+    Native {
+        sequence: u64,
+        record: Box<cs_mail_application::correspondence::MessageRecord>,
+    },
+    External {
+        conversation: u128,
+        view: Box<cs_mail_application::correspondence::external::MessageView>,
+    },
+}
+fn record_id(keys: &Secrets, bytes: &[u8]) -> RetainedRecordId {
+    use hmac::{Hmac, Mac};
+    let mut mac = <Hmac<sha2::Sha256> as hmac::KeyInit>::new_from_slice(&keys.cache)
+        .expect("32-byte HMAC key");
+    mac.update(b"cs-mail/mailbox-record-id/v1");
+    mac.update(bytes);
+    RetainedRecordId(mac.finalize().into_bytes().into())
+}
+fn record_context(id: RetainedRecordId) -> Vec<u8> {
+    [b"cs-mail/mailbox-record/v1".as_slice(), id.bytes()].concat()
+}
 pub(super) fn open_device(store: &dyn DeviceStore, keys: &Secrets) -> Result<DeviceState, Error> {
     let bytes = store.load_cache()?.ok_or(Error::NotConfigured)?;
-    if bytes.len() < 40 || bytes.len() > super::MAX_CACHE {
-        return Err(Error::InvalidData);
+    let plain = decrypt(keys, &bytes, CONTEXT)?;
+    match serde_json::from_slice(&plain).map_err(|_| Error::InvalidData)? {
+        Snapshot::Enrolling(enrollment) => Ok(DeviceState::Enrolling(enrollment)),
+        Snapshot::Active(snapshot) => {
+            let mut state = snapshot.state;
+            if state.format != 6
+                || !state.mailbox.records.is_empty()
+                || state
+                    .external
+                    .as_ref()
+                    .is_some_and(|w| w.records.values().any(|r| !r.messages.is_empty()))
+            {
+                return Err(Error::InvalidData);
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for reference in snapshot.records {
+                let id = RetainedRecordId::try_from(reference.0)?;
+                if !seen.insert(id) {
+                    return Err(Error::InvalidData);
+                }
+                let bytes = store.cache_record(id)?.ok_or(Error::InvalidData)?;
+                let bytes = decrypt(keys, &bytes, &record_context(id))?;
+                if record_id(keys, &bytes) != id {
+                    return Err(Error::InvalidData);
+                }
+                match serde_json::from_slice(&bytes).map_err(|_| Error::InvalidData)? {
+                    MailboxRecord::Native { sequence, record } => {
+                        state.mailbox.records.push((sequence, *record));
+                    }
+                    MailboxRecord::External { conversation, view } => state
+                        .external
+                        .as_mut()
+                        .and_then(|w| w.records.get_mut(&conversation))
+                        .ok_or(Error::InvalidData)?
+                        .messages
+                        .push(*view),
+                }
+            }
+            validate_mailbox(&state)?;
+            Ok(DeviceState::Active(state))
+        }
     }
-    let cipher = XChaCha20Poly1305::new((&keys.cache).into());
-    let plain = Zeroizing::new(
-        cipher
-            .decrypt(
-                &XNonce::try_from(&bytes[..24]).map_err(|_| Error::InvalidData)?,
-                Payload {
-                    msg: &bytes[24..],
-                    aad: CONTEXT,
-                },
-            )
-            .map_err(|_| Error::InvalidData)?,
-    );
-    let state: DeviceState = serde_json::from_slice(&plain).map_err(|_| Error::InvalidData)?;
-    if matches!(&state, DeviceState::Active(s) if s.format != 5) {
-        return Err(Error::InvalidData);
-    }
-    if let DeviceState::Active(active) = &state {
-        validate_mailbox(active)?;
-    }
-    Ok(state)
 }
 fn validate_mailbox(state: &State) -> Result<(), Error> {
     let owner = state.profile.persona;
@@ -198,14 +278,57 @@ fn validate_mailbox(state: &State) -> Result<(), Error> {
 
 pub(super) fn save(store: &dyn DeviceStore, keys: &Secrets, state: &State) -> Result<(), Error> {
     check_keys(store, keys)?;
-    store.save_cache(&state_bytes(keys, state)?)
+    store.commit_cache(state_commit(store, keys, state)?)
 }
-pub(super) fn state_bytes(keys: &Secrets, state: &State) -> Result<Vec<u8>, Error> {
-    #[derive(Serialize)]
-    enum ActiveRef<'a> {
-        Active(&'a State),
+pub(super) fn state_commit(
+    store: &dyn DeviceStore,
+    keys: &Secrets,
+    state: &State,
+) -> Result<CacheCommit, Error> {
+    let mut head = serde_json::to_value(state).map_err(|_| Error::InvalidData)?;
+    let mut records = Vec::new();
+    for (sequence, record) in &state.mailbox.records {
+        records.push(MailboxRecord::Native {
+            sequence: *sequence,
+            record: Box::new(record.clone()),
+        });
     }
-    encrypt(keys, &ActiveRef::Active(state), CONTEXT)
+    head["mailbox"]["records"] = serde_json::json!([]);
+    if let Some(external) = &state.external {
+        for (conversation, record) in &external.records {
+            for view in &record.messages {
+                records.push(MailboxRecord::External {
+                    conversation: *conversation,
+                    view: Box::new(view.clone()),
+                });
+            }
+            head["external"]["records"][conversation.to_string()]["messages"] =
+                serde_json::json!([]);
+        }
+    }
+    let mut keep = Vec::with_capacity(records.len());
+    let mut writes = Vec::new();
+    for record in records {
+        let plain = Zeroizing::new(serde_json::to_vec(&record).map_err(|_| Error::InvalidData)?);
+        let id = record_id(keys, &plain);
+        if store.cache_record(id)?.is_none() {
+            writes.push(CacheRecord {
+                id,
+                ciphertext: encrypt(keys, &record, &record_context(id))?,
+            });
+        }
+        keep.push(id);
+    }
+    let references: Vec<_> = keep
+        .iter()
+        .map(|id| RetainedRecordIdBytes(*id.bytes()))
+        .collect();
+    let head = encrypt(
+        keys,
+        &serde_json::json!({"Active": {"state": head, "records": references}}),
+        CONTEXT,
+    )?;
+    Ok(CacheCommit { head, keep, writes })
 }
 pub(super) fn save_value(
     store: &dyn DeviceStore,
@@ -266,4 +389,55 @@ pub(super) fn decrypt(
         )
         .map(Zeroizing::new)
         .map_err(|_| Error::InvalidData)
+}
+
+/// Explicit offline conversion; excluded from the supported member application's build.
+#[cfg(feature = "device-maintenance")]
+/// # Errors
+/// Refuses another account, invalid predecessor ciphertext, or any invalid restored message.
+pub fn prepare_mailbox_upgrade(
+    store: &dyn DeviceStore,
+    account: cs_mail_primitives::AccountId,
+    persona: cs_mail_primitives::ProtocolIdentity,
+) -> Result<CacheCommit, Error> {
+    let keys = secrets(store)?;
+    let source = store.load_cache()?.ok_or(Error::NotConfigured)?;
+    let plain = decrypt(&keys, &source, b"cs-mail/apple-member-cache/v5")?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&plain).map_err(|_| Error::InvalidData)?;
+    let active = &mut value["Active"];
+    if active["format"] != 5
+        || active["profile"]["account"] != serde_json::json!(account)
+        || active["profile"]["persona"] != serde_json::json!(persona)
+    {
+        return Err(Error::Unauthorized);
+    }
+    let original = active.clone();
+    active["format"] = serde_json::json!(6);
+    if let Some(records) = active["external"]["records"].as_object_mut() {
+        for record in records.values_mut() {
+            record["observed"] = serde_json::json!(0);
+        }
+    }
+    let state: State = serde_json::from_value(active.clone()).map_err(|_| Error::InvalidData)?;
+    validate_mailbox(&state)?;
+    let restored = serde_json::to_value(&state).map_err(|_| Error::InvalidData)?;
+    if &restored != active {
+        return Err(Error::InvalidData);
+    }
+    let mut preserved = restored;
+    preserved["format"] = serde_json::json!(5);
+    if let Some(records) = preserved["external"]["records"].as_object_mut() {
+        for record in records.values_mut() {
+            record
+                .as_object_mut()
+                .ok_or(Error::InvalidData)?
+                .remove("observed");
+        }
+    }
+    if preserved != original {
+        return Err(Error::InvalidData);
+    }
+    check_keys(store, &keys)?;
+    state_commit(store, &keys, &state)
 }

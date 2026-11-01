@@ -75,10 +75,10 @@ struct InterfaceBRelationshipOrganizer: View {
     let navigate: (MemberDestination) -> Void
     let reviewSaved: () -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Relationships").font(InterfaceBEditorialStyle.heading(23)).accessibilityAddTraits(.isHeader)
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                LazyVStack(alignment: .leading, spacing: 6) {
                     management("Your relationships", icon: "person.2", target: .relationships)
                     organizerHeading("Manage")
                     management("Directory", icon: "person.text.rectangle", target: .directory)
@@ -89,12 +89,12 @@ struct InterfaceBRelationshipOrganizer: View {
         }.padding(22)
     }
     private func management(_ title: String, icon: String, target: MemberDestination) -> some View {
-        Button { navigate(target) } label: { Label(title, systemImage: icon).padding(14).frame(maxWidth: .infinity, alignment: .leading) }
+        Button { navigate(target) } label: { Label(title, systemImage: icon).padding(12).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading) }
             .buttonStyle(InterfaceBEditorialRegionButtonStyle(selected: destination == target))
             .accessibilityAddTraits(destination == target ? .isSelected : [])
     }
 }
 
-private func organizerHeading(_ text: String) -> some View {
-    Text(text).font(.caption.bold()).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader).padding(.top, 8)
+@MainActor private func organizerHeading(_ text: String) -> some View {
+    InterfaceBOrganizerHeading(text).padding(.top, 8)
 }

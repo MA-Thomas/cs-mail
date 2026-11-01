@@ -87,7 +87,7 @@ public struct InterfaceBEditorialNavigationShell<Content: View, Preview: View>: 
                                 .allowsHitTesting(false)
                         } else {
                             GeometryReader { geometry in
-                                InterfaceBEditorialCoveLight(area: area, bounds: CGRect(origin: .zero, size: geometry.size), cornerRadius: 14)
+                                InterfaceBEditorialCoveLight(bounds: CGRect(origin: .zero, size: geometry.size), cornerRadius: 14)
                             }
                             .allowsHitTesting(false).accessibilityHidden(true)
                         }

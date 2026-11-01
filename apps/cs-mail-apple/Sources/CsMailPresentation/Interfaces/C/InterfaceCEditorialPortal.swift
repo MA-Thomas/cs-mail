@@ -56,6 +56,7 @@ public struct InterfaceCBackButton: View {
     public var body: some View {
         Button(action: action) {
             Label(title, systemImage: "chevron.left")
+                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 .font(InterfaceCEditorialStyle.text(13))
                 .foregroundStyle(InterfaceCEditorialStyle.secondaryInk(scheme))
                 .padding(.horizontal, 10)

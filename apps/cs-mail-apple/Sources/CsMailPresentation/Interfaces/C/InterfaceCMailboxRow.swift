@@ -17,7 +17,7 @@ public struct InterfaceCMailboxRowContent: View {
         VStack(alignment: .leading, spacing: 4) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .firstTextBaseline, spacing: 16) {
-                    sender.frame(width: 150, alignment: .leading)
+                    sender.frame(width: 180, alignment: .leading)
                     topic.frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
                     timestamp
                 }
@@ -27,27 +27,27 @@ public struct InterfaceCMailboxRowContent: View {
                 }
             }
             if let secondary, !secondary.isEmpty {
-                Text(secondary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(secondary).font(InterfaceCEditorialStyle.metadata).foregroundStyle(.secondary).lineLimit(2)
             }
-        }.padding(.horizontal, 12).padding(.vertical, 10)
+        }.padding(.horizontal, 12).padding(.vertical, 12)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle()).textSelection(.disabled)
     }
     private var sender: some View {
         HStack(spacing: 6) {
             if unread { Circle().fill(.primary).frame(width: 5, height: 5).accessibilityLabel("Unread") }
-            Text(correspondent).font(.subheadline).fontWeight(unread ? .semibold : .regular).lineLimit(1)
+            Text(correspondent).font(InterfaceCEditorialStyle.text(14)).fontWeight(.medium).lineLimit(1)
         }
     }
     private var topic: some View {
         HStack(spacing: 6) {
-            Text(subject).font(.subheadline).fontWeight(unread ? .semibold : .regular).lineLimit(2)
+            Text(subject).font(InterfaceCEditorialStyle.text(14)).fontWeight(unread ? .semibold : .regular).lineLimit(2)
             if flagged { Image(systemName: "flag.fill").font(.caption).accessibilityLabel("Flagged") }
         }
     }
     private var timestamp: some View {
         Text(date, format: .dateTime.month(.abbreviated).day())
-            .font(.caption).foregroundStyle(.secondary).fixedSize()
+            .font(InterfaceCEditorialStyle.metadata).foregroundStyle(.secondary).monospacedDigit().fixedSize()
             .help(date.formatted(date: .complete, time: .shortened))
             .accessibilityLabel(date.formatted(date: .complete, time: .shortened))
     }

@@ -4,7 +4,8 @@ use super::{
     storage::{self, Secrets},
 };
 use cs_mail_application::correspondence::external::{
-    Command, Direction, MessageView, Outcome, PreparedMessage, Response, SignedCommand,
+    Command, Direction, MessageView, ObservationRevision, Outcome, PreparedMessage, Response,
+    SignedCommand,
 };
 use cs_mail_content::{ContentBinding, ContentCertificateDigest, EndpointPublicKey};
 use cs_mail_correspondence::{
@@ -32,6 +33,7 @@ pub(super) struct Record {
     pub(super) conversation: ExternalConversation,
     pub(super) relationship: cs_mail_protocol::Relationship,
     pub(super) messages: Vec<MessageView>,
+    pub(super) observed: ObservationRevision,
 }
 #[derive(Clone, Debug)]
 pub struct ExternalInbox {
@@ -177,15 +179,21 @@ impl MemberClient {
         keys: &Secrets,
         id: ConversationId,
     ) -> Result<(), Error> {
-        let mut messages = Vec::new();
-        let mut after = 0;
-        let record = loop {
-            let command = Self::external_signed(&state.profile, keys, id, Command::Read { after })?;
+        let mut after = state
+            .external
+            .as_ref()
+            .and_then(|w| w.records.get(&id.value()))
+            .map_or(ObservationRevision::default(), |r| r.observed);
+        let mut through = None;
+        loop {
+            let command =
+                Self::external_signed(&state.profile, keys, id, Command::Read { after, through })?;
             let Response::Conversation {
                 conversation,
                 relationship,
                 messages: page,
                 next_after,
+                through: bound,
             } = self.external_call(&state.profile, &command)?
             else {
                 return Err(Error::InvalidData);
@@ -194,41 +202,63 @@ impl MemberClient {
                 || conversation.member() != state.profile.persona
                 || relationship.key.sender != conversation.guest()
                 || relationship.key.recipient != state.profile.persona
+                || next_after < after
+                || next_after > bound
+                || through.is_some_and(|previous| previous != bound)
+                || (next_after == after && next_after != bound)
             {
                 return Err(Error::InvalidData);
             }
+            let mut seen = std::collections::BTreeSet::new();
             for entry in &page {
                 entry
                     .message
                     .validate(&conversation, &relationship)
                     .map_err(|_| Error::InvalidData)?;
+                if entry.sequence == 0 || !seen.insert(entry.message.manifest.message().0) {
+                    return Err(Error::InvalidData);
+                }
             }
-            if page.is_empty() && next_after == after {
-                break Record {
-                    conversation: *conversation,
-                    relationship: *relationship,
-                    messages,
-                };
+            let record = state
+                .external
+                .get_or_insert_with(Workspace::default)
+                .records
+                .entry(id.value())
+                .or_insert_with(|| Record {
+                    conversation: (*conversation).clone(),
+                    relationship: (*relationship).clone(),
+                    messages: Vec::new(),
+                    observed: ObservationRevision::default(),
+                });
+            for entry in page {
+                if let Some(old) = record
+                    .messages
+                    .iter_mut()
+                    .find(|old| old.message.manifest.message() == entry.message.manifest.message())
+                {
+                    // Delivery observations can change; the committed message cannot.
+                    if old.message != entry.message || old.sequence != entry.sequence {
+                        return Err(Error::InvalidData);
+                    }
+                    *old = entry;
+                } else {
+                    record.messages.push(entry);
+                }
             }
-            if next_after <= after
-                || page
-                    .iter()
-                    .any(|v| v.sequence <= after || v.sequence > next_after)
-            {
-                return Err(Error::InvalidData);
-            }
-            messages.extend(page);
-            if messages.len() > 10000 {
-                return Err(Error::InvalidData);
+            record.messages.sort_by_key(|entry| entry.sequence);
+            record
+                .messages
+                .retain(|entry| entry.message.member_copy.expires_at > (self.clock)());
+            record.conversation = *conversation;
+            record.relationship = *relationship;
+            record.observed = next_after;
+            storage::save(self.store.as_ref(), keys, state)?;
+            if next_after == bound {
+                return Ok(());
             }
             after = next_after;
-        };
-        state
-            .external
-            .get_or_insert_with(Workspace::default)
-            .records
-            .insert(id.value(), record);
-        storage::save(self.store.as_ref(), keys, state)
+            through = Some(bound);
+        }
     }
     /// Opens encrypted copies in memory; a saved snapshot establishes no current authority.
     /// # Errors

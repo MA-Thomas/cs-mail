@@ -947,8 +947,8 @@ fn mailbox_and_live_authority_do_not_inherit_permission_from_correspondence_scop
     // No command is evaluated here; only the ordering barrier is exercised.
     db.execute(
         "INSERT INTO cs_received_commands
-         (aggregate_key,idempotency_key,replay_fingerprint,content_available,digest,deployment,received_at)
-         VALUES ('pair-0-1','pending-authority-change',$1,TRUE,$1,$1,1000)",
+         (aggregate_key,idempotency_key,replay_fingerprint,content_available,digest,deployment,received_at,ordering_scopes)
+         VALUES ('pair-0-1','pending-authority-change',$1,TRUE,$1,$1,1000,ARRAY['persona:1','persona:2'])",
         &[&vec![0_u8; 32]],
     ).unwrap();
     assert!(matches!(

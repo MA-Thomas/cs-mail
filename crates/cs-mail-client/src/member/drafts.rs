@@ -754,7 +754,7 @@ impl MemberClient {
         personal.prepare(state, draft, (self.clock)())?;
         storage::check_keys(self.store.as_ref(), keys)?;
         self.store.save_submission(
-            &storage::state_bytes(keys, state)?,
+            storage::state_commit(self.store.as_ref(), keys, state)?,
             &next.bytes(keys)?,
             &personal.bytes(keys)?,
         )
@@ -780,7 +780,7 @@ impl MemberClient {
         );
         storage::check_keys(self.store.as_ref(), keys)?;
         self.store.save_submission(
-            &storage::state_bytes(keys, state)?,
+            storage::state_commit(self.store.as_ref(), keys, state)?,
             &decision.next.bytes(keys)?,
             &personal.bytes(keys)?,
         )

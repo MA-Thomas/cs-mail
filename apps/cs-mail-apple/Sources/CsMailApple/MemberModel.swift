@@ -130,8 +130,7 @@ actor ClientWorker {
     private var searchGeneration = 0
     private var searchSession: UInt64?
     let directory: DirectoryModel
-    enum Connection { case synchronized, saved }
-    enum Session { case locked, open(Inbox, Connection) }
+    enum Session { case locked, open(Inbox, MailFreshness) }
     enum Work { case pictures, aliasLoad, aliasUpdate, aliasResume, source, reference, request, policy, relationship, unlock, signIn, enrollment, refresh, conversation, decision, retry, addressLoad, publication, purchase, message }
     enum Operation { case idle, working(Work), authenticating }
     struct Failure {
@@ -143,7 +142,7 @@ actor ClientWorker {
     @Published private(set) var operation: Operation = .idle
     package private(set) var inbox: Inbox? {
         get { if case .open(let inbox, _) = session { return inbox }; return nil }
-        set { if let newValue { session = .open(newValue, connected ? .synchronized : .saved) } else { session = .locked } }
+        set { if let newValue { session = .open(newValue, mailFreshness) } else { session = .locked } }
     }
     @Published package private(set) var sourceConversation: Conversation?
     @Published private(set) var sourceMessage: SourceMessage?
@@ -163,10 +162,12 @@ actor ClientWorker {
         return contacts
     }
     package var busy: Bool { if case .idle = operation { return false }; return true }
-    private(set) var connected: Bool {
-        get { if case .open(_, .synchronized) = session { return true }; return false }
-        set { if let inbox { session = .open(inbox, newValue ? .synchronized : .saved) } }
+    package private(set) var mailFreshness: MailFreshness {
+        get { if case .open(_, let freshness) = session { return freshness }; return .saved }
+        set { if let inbox { session = .open(inbox, newValue) } }
     }
+    package var nativeCurrent: Bool { mailFreshness.nativeCurrent }
+    package var externalCurrent: Bool { mailFreshness.externalCurrent }
     private(set) var authenticating: Bool {
         get { if case .authenticating = operation { return true }; return false }
         set { operation = newValue ? .authenticating : .working(.signIn) }
@@ -223,7 +224,7 @@ actor ClientWorker {
         preparingSearch?.cancel(); preparingSearch = nil
         searchSession = nil
         draftClient = nil
-        connected = false; failure = nil; notice = nil; operation = .idle
+        mailFreshness = .saved; failure = nil; notice = nil; operation = .idle
     }
     package func unlock() async {
         await perform(.unlock) {
@@ -238,13 +239,13 @@ actor ClientWorker {
             self.prepareSearchEngine()
             self.externalInbox = try await self.call { try $0.externalInbox() }
             self.notice = nil
-            self.connected = false
+            self.mailFreshness = .saved
             await self.reloadMailbox()
             self.retainAvailableMail()
             try await self.observeMail()
             self.externalInbox = try await self.call { try $0.externalInbox() }
         }
-        if connected { await loadAddressSettings() }
+        if nativeCurrent { await loadAddressSettings() }
     }
     func signIn(server: String, details: EnrollmentDetails) async {
         await perform(.signIn) {
@@ -275,7 +276,7 @@ actor ClientWorker {
             case .status(let status): try await self.showEnrollment(status)
             }
         }
-        if connected { await loadAddressSettings() }
+        if nativeCurrent { await loadAddressSettings() }
     }
     func resumeEnrollment() async {
         await perform(.enrollment) {
@@ -291,7 +292,7 @@ actor ClientWorker {
             searchSession = try await call { try $0.openSearchSession() }
             prepareSearchEngine()
             retainAvailableMail()
-            connected = true; notice = "Device enrolled. Your inbox is ready."
+            mailFreshness = .current; notice = "Device enrolled. Your inbox is ready."
         case .awaitingLogin: notice = "Enrollment is reserved. Continue with the same details and sign in."
         case .reviewRequired: notice = "Bank evidence requires review before enrollment can continue."
         case .underReview: notice = "Enrollment is under review. Check its status again after a decision."
@@ -303,7 +304,7 @@ actor ClientWorker {
         await perform(.refresh) {
             try await self.observeMail()
             self.externalInbox = try await self.call { try $0.externalInbox() }
-            if let sender = self.selectedSender { self.conversation = try await self.call { try $0.conversation(sender: sender.value) } }
+            try await self.refreshSelectedConversation()
         }
     }
     package func chooseSender(_ sender: SenderReference?) {
@@ -327,7 +328,7 @@ actor ClientWorker {
             guard selectedSender == sender else { continue }
             await perform(.conversation) {
                 let opened: Conversation
-                if !self.connected, let client = self.draftClient {
+                if !self.nativeCurrent, let client = self.draftClient {
                     opened = try await Task.detached { try client.cachedConversation(sender: sender.value) }.value
                 } else { opened = try await self.call { try $0.conversation(sender: sender.value) } }
                 if self.selectedSender == sender { self.conversation = opened }
@@ -339,21 +340,21 @@ actor ClientWorker {
     func decide(sender: SenderReference, request: RequestID, decision: Decision) async {
         guard selectedSender == sender, conversation?.sender == sender.value,
               conversation?.requests.contains(where: { $0.id == request.value && $0.awaitingDecision }) == true,
-              connected, inbox?.pendingSender == nil else { return }
+              nativeCurrent, inbox?.pendingSender == nil else { return }
         await perform(.decision) {
             self.inbox = try await self.call { try $0.decide(sender: sender.value, request: request.value, decision: decision) }
             self.conversation = try await self.call { try $0.conversation(sender: sender.value) }
-            self.connected = true
+            self.mailFreshness = MailFreshness(nativeCurrent: true, externalCurrent: self.externalCurrent)
         }
     }
     func retry() async {
         await perform(.retry) {
             self.inbox = try await self.call { try $0.retry() }
-            self.connected = true
+            self.mailFreshness = .current
             self.externalInbox = try await self.call { try $0.externalInbox() }
-            if let sender = self.selectedSender { self.conversation = try await self.call { try $0.conversation(sender: sender.value) } }
+            try await self.refreshSelectedConversation()
         }
-        if connected { await loadAddressSettings() }
+        if nativeCurrent { await loadAddressSettings() }
     }
     func purchaseDevelopmentService() async {
         await perform(.purchase) {
@@ -437,7 +438,7 @@ actor ClientWorker {
         }
     }
     func controlRelationship(sender: SenderReference, control: RelationshipControl) async {
-        guard selectedSender == sender, connected else { return }
+        guard selectedSender == sender, nativeCurrent else { return }
         await perform(.relationship) {
             self.inbox = try await self.call { try $0.controlRelationship(sender: sender.value, control: control) }
             self.conversation = try await self.call { try $0.conversation(sender: sender.value) }
@@ -453,7 +454,11 @@ actor ClientWorker {
     }
     func clearSourceContact() { clearSource(); sourceConversation = nil }
     private func refreshSelectedConversation() async throws {
-        if let sender = selectedSender { conversation = try await call { try $0.conversation(sender: sender.value) } }
+        if let sender = selectedSender {
+            let current = nativeCurrent
+            let result = try await call { try current ? $0.conversation(sender: sender.value) : $0.cachedConversation(sender: sender.value) }
+            if selectedSender == sender { conversation = result }
+        }
     }
     func openSource(_ message: String) async {
         clearSource()
@@ -488,7 +493,7 @@ actor ClientWorker {
         }
     }
     func changePolicy(conversationID: String, revision: UInt64, action: PolicyAction) async {
-        guard let sender = selectedSender, connected else { return }
+        guard let sender = selectedSender, nativeCurrent else { return }
         await perform(.policy) {
             try await self.call { try $0.changeConversationPolicy(conversation: conversationID, revision: revision, action: action) }
             self.inbox = try await self.call { try $0.sync() }
@@ -496,7 +501,7 @@ actor ClientWorker {
         }
     }
     func submitDraft(_ draft: Draft, disclose: Bool = false, reviewedRequest: String? = nil) async -> Bool {
-        guard let client = draftClient, connected else { return false }
+        guard let client = draftClient, mailFreshness.allowsSubmission(to: draft.target) else { return false }
         await perform(.message) {
             let submission = try await self.call { try $0.submitDraft(id: draft.id, revision: draft.revision, disclose: disclose, reviewedRequest: reviewedRequest) }
             if case .external(let id) = submission { self.sentExternalConversation = id }
@@ -562,7 +567,7 @@ actor ClientWorker {
         operation = .working(work); failure = nil
         do {
             try await action()
-            if generation == started, inbox != nil, connected {
+            if generation == started, inbox != nil, nativeCurrent {
                 do {
                     navigationContacts = try await call { try $0.navigation() }
                     navigationError = nil
@@ -577,14 +582,14 @@ actor ClientWorker {
         catch is CancellationError {
             if generation == started && !readOnly {
                 // A submitted operation may still have completed or remain journaled.
-                connected = false
+                mailFreshness = .saved
                 notice = "Refresh to check the latest status before trying again."
             }
         }
         catch {
             if generation == started, Task.isCancelled {
                 if !readOnly {
-                    connected = false
+                    mailFreshness = .saved
                     notice = "Refresh to check the latest status before trying again."
                 }
             } else if generation == started {
@@ -592,7 +597,7 @@ actor ClientWorker {
                 if let clientError = error as? ClientError {
                     switch clientError {
                     case .Offline, .Unauthorized, .KeyUnavailable, .StorageUnavailable, .InvalidData, .Unavailable:
-                        connected = false
+                        mailFreshness = .saved
                     default: break
                     }
                 }
@@ -615,9 +620,9 @@ actor ClientWorker {
     private func observeMail() async throws {
         let result = try await call { try $0.refreshMail() }
         inbox = result.inbox
-        connected = result.nativeCurrent && result.externalCurrent
-        notice = connected ? nil : "Refresh is incomplete. Some mail is saved information; pending submissions have not been retried."
-        if connected { retainAvailableMail() }
+        mailFreshness = MailFreshness(nativeCurrent: result.nativeCurrent, externalCurrent: result.externalCurrent)
+        notice = nil
+        if nativeCurrent { retainAvailableMail() }
     }
     func deleteCopies(_ item: MailItem) async {
         searchGeneration += 1; searchMatches = []; searchRelatedMatches = []; relatedContext = nil; searchResultsQuery = nil; searchStatus = nil; searchContext = nil
@@ -635,7 +640,7 @@ actor ClientWorker {
         let started = generation
         do {
             let workspace: InboxWorkspace
-            if connected {
+            if nativeCurrent {
                 workspace = try await call { try $0.inboxWorkspace() }
             } else {
                 workspace = try await Task.detached { try client.cachedInboxWorkspace() }.value

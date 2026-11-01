@@ -10,20 +10,12 @@ pub(super) enum Operation {
     Grant(SignedLaneGrant),
     Control(LaneControl),
 }
-/// Redacted operational diagnosis, separate from a durable business refusal.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ProcessingFailure {
-    AwaitingQuoteSignature,
-    Persistence,
-    RequiresIntervention,
-}
-impl ProcessingFailure {
-    fn observed(error: &StorageError) -> Self {
-        match error {
-            StorageError::QuoteNotSigned => Self::AwaitingQuoteSignature,
-            StorageError::Database(_) => Self::Persistence,
-            _ => Self::RequiresIntervention,
-        }
+pub use cs_mail_application::processing::ProcessingFailure;
+fn observed_failure(error: &StorageError) -> ProcessingFailure {
+    match error {
+        StorageError::QuoteNotSigned => ProcessingFailure::AwaitingQuoteSignature,
+        StorageError::Database(_) => ProcessingFailure::Persistence,
+        _ => ProcessingFailure::RequiresIntervention,
     }
 }
 /// A durable record handle. Construction is confined to authenticated ingress.
@@ -58,6 +50,69 @@ pub(super) fn require_drained(tx: &mut Transaction<'_>) -> Result<(), StorageErr
     {
         return Err(StorageError::PendingCommands);
     }
+    Ok(())
+}
+/// Conservative owner scopes include both directions and every persona of either account.
+/// A shared recipient account also protects merged guest/native request histories.
+fn ordering_scopes(tx: &mut Transaction<'_>, key: &str) -> Result<Vec<String>, StorageError> {
+    use cs_mail_application::processing::{ParticipantOwner, ProcessingOwner, ordering_owners};
+    let rows = tx.query("SELECT p.identity,o.account FROM cs_relationship_aggregates r CROSS JOIN LATERAL (VALUES(r.relationship_state#>>'{relationship,key,sender}'),(r.relationship_state#>>'{relationship,key,recipient}')) p(identity) LEFT JOIN cs_persona_owners o ON o.identity=p.identity WHERE r.aggregate_key=$1", &[&key])?;
+    let participants = rows
+        .into_iter()
+        .map(|row| -> Result<_, StorageError> {
+            Ok(ParticipantOwner {
+                persona: cs_mail_primitives::ProtocolIdentity(
+                    row.get::<_, String>(0)
+                        .parse()
+                        .map_err(|_| StorageError::NumericRange)?,
+                ),
+                account: row
+                    .get::<_, Option<String>>(1)
+                    .map(|id| {
+                        id.parse()
+                            .map(cs_mail_primitives::AccountId)
+                            .map_err(|_| StorageError::NumericRange)
+                    })
+                    .transpose()?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ordering_owners(&participants)?
+        .into_iter()
+        .map(|owner| match owner {
+            ProcessingOwner::Persona(id) => format!("persona:{}", id.0),
+            ProcessingOwner::Account(id) => format!("account:{}", id.0),
+        })
+        .collect())
+}
+/// Separate mailbox/permission commits may not overtake unresolved commands of their owners.
+pub(super) fn require_relationship_drained(
+    tx: &mut Transaction<'_>,
+    key: &str,
+) -> Result<(), StorageError> {
+    lock_receipt_order(tx)?;
+    let scopes = ordering_scopes(tx, key)?;
+    if tx.query_opt("SELECT 1 FROM cs_received_commands WHERE outcome IS NULL AND ordering_scopes && $1 LIMIT 1", &[&scopes])?.is_some() {
+        return Err(StorageError::PendingCommands);
+    }
+    Ok(())
+}
+pub(super) fn require_personas_drained(
+    tx: &mut Transaction<'_>,
+    personas: &[cs_mail_primitives::ProtocolIdentity],
+) -> Result<(), StorageError> {
+    lock_receipt_order(tx)?;
+    let mut scopes = Vec::new();
+    for persona in personas {
+        scopes.push(format!("persona:{}", persona.0));
+        if let Some(row) = tx.query_opt(
+            "SELECT account FROM cs_persona_owners WHERE identity=$1",
+            &[&persona.0.to_string()],
+        )? {
+            scopes.push(format!("account:{}", row.get::<_, String>(0)));
+        }
+    }
+    if tx.query_opt("SELECT 1 FROM cs_received_commands WHERE outcome IS NULL AND ordering_scopes && $1 LIMIT 1", &[&scopes])?.is_some() { return Err(StorageError::PendingCommands); }
     Ok(())
 }
 pub(super) fn registry_locked(
@@ -346,21 +401,21 @@ impl PostgresEngine {
             replayed: false,
         })
     }
-    /// Processes the oldest durable command, including commands for another relationship.
+    /// Processes an eligible owner head; independent ready owners precede failed retries.
     /// # Errors
     /// Database, signing-dependency and internal failures leave the command pending for retry.
     pub fn process_next_received(&self) -> Result<bool, StorageError> {
         let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
         let mut tx = client.transaction()?;
         lock_receipt_order(&mut tx)?;
-        let Some(row)=tx.query_opt("SELECT * FROM cs_received_commands WHERE outcome IS NULL ORDER BY position LIMIT 1 FOR UPDATE",&[])? else { return Ok(false); };
+        let Some(row)=tx.query_opt("SELECT c.* FROM cs_received_commands c WHERE c.outcome IS NULL AND c.processing_failure IS DISTINCT FROM '\"RequiresIntervention\"'::jsonb AND NOT EXISTS(SELECT 1 FROM cs_received_commands prior WHERE prior.outcome IS NULL AND prior.position<c.position AND prior.ordering_scopes && c.ordering_scopes) ORDER BY (c.processing_failure IS NOT NULL),c.position LIMIT 1 FOR UPDATE OF c",&[])? else { return Ok(false); };
         let position: i64 = row.get("position");
         tx.batch_execute("SAVEPOINT process_command")?;
         if let Err(error) = process_received_row(&mut tx, &row, position) {
             tx.batch_execute("ROLLBACK TO SAVEPOINT process_command")?;
             // No attempted effect survives a processing fault. The command remains
             // pending under its original identity and frozen receipt authority.
-            let failure = ProcessingFailure::observed(&error);
+            let failure = observed_failure(&error);
             tx.execute("UPDATE cs_received_commands SET processing_failure=$2,failed_attempts=failed_attempts+1 WHERE position=$1", &[&position, &Json(failure)])?;
             tx.commit()?;
             return Err(error);
@@ -368,13 +423,14 @@ impl PostgresEngine {
         tx.commit()?;
         Ok(true)
     }
-    /// Resolves a durable receipt in canonical order. Exact replay returns the stored outcome.
+    /// Resolves a durable receipt in owner order. Exact replay returns the stored outcome.
     /// # Errors
     /// Returns storage errors. Domain refusals are explicit `ReceivedOutcome::Refused` values.
     pub fn process_received(
         &self,
         handle: &ReceivedCommand,
     ) -> Result<ReceivedOutcome, StorageError> {
+        let mut stalled = false;
         loop {
             {
                 let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
@@ -389,7 +445,12 @@ impl PostgresEngine {
                     return Ok(outcome);
                 }
             }
-            self.process_next_received()?;
+            // Another worker may have committed this receipt after the outcome read.
+            // Re-read that fact before interpreting lack of eligible work as a blocked scope.
+            if stalled {
+                return Err(StorageError::PendingCommands);
+            }
+            stalled = !self.process_next_received()?;
         }
     }
     pub(super) fn execute_system(
@@ -1140,7 +1201,7 @@ impl PostgresEngine {
                 return Err(StorageError::VersionConflict);
             }
         }
-        require_drained(&mut tx)?;
+        require_relationship_drained(&mut tx, &self.aggregate_key)?;
         tx.execute("INSERT INTO cs_admission_policies(aggregate_key,policy) VALUES($1,$2) ON CONFLICT(aggregate_key) DO UPDATE SET policy=EXCLUDED.policy",&[&self.aggregate_key,&Json(policy)])?;
         tx.commit()?;
         Ok(())
@@ -1536,7 +1597,8 @@ pub(super) fn record_received(
     if last.is_some_and(|last| last > at) {
         return Err(StorageError::VersionConflict);
     }
-    Ok(tx.query_one("INSERT INTO cs_received_commands (aggregate_key,idempotency_key,digest,deployment,received_at,operation,policy,replay_fingerprint,authority,content_available) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING position", &[&key,&facts.id.0.to_string(),&facts.digest.as_slice(),&facts.deployment.as_slice(),&at,&Json(facts.operation),&Json(facts.policy),&facts.replay.fingerprint.as_slice(),&Json(facts.authority),&facts.content_available])?.get(0))
+    let scopes = ordering_scopes(tx, key)?;
+    Ok(tx.query_one("INSERT INTO cs_received_commands (aggregate_key,idempotency_key,digest,deployment,received_at,operation,policy,replay_fingerprint,authority,content_available,ordering_scopes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING position", &[&key,&facts.id.0.to_string(),&facts.digest.as_slice(),&facts.deployment.as_slice(),&at,&Json(facts.operation),&Json(facts.policy),&facts.replay.fingerprint.as_slice(),&Json(facts.authority),&facts.content_available,&scopes])?.get(0))
 }
 
 fn persist_receiving_scopes(

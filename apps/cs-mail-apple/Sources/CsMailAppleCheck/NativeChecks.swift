@@ -83,6 +83,13 @@ private final class FixtureRoutes: @unchecked Sendable {
     }
     // Conjecture: reopening preserves ciphertext; a second owner and denied vault cannot access it.
     static func durableReplacementAndExclusiveOwnership() throws {
+        // Conjecture: losing one transport observation must not disable the other;
+        // unresolved recipients must never become submittable through either flag.
+        let memberOnly = MailFreshness(nativeCurrent: true, externalCurrent: false)
+        let emailOnly = MailFreshness(nativeCurrent: false, externalCurrent: true)
+        try require(memberOnly.allowsSubmission(to: .native(other: "1", conversation: "2")) && !memberOnly.allowsSubmission(to: .external(conversation: "3")), "email-failure-disabled-member-mail")
+        try require(emailOnly.allowsSubmission(to: .external(conversation: "3")) && !emailOnly.allowsSubmission(to: .native(other: "1", conversation: "2")), "member-failure-disabled-email")
+        try require(!MailFreshness.current.allowsSubmission(to: .unaddressed) && MailFreshness.current.notice == nil && memberOnly.nativeNotice == nil && memberOnly.externalNotice != nil, "freshness-provenance-confused")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let vault = TestVault()
@@ -110,6 +117,12 @@ private final class FixtureRoutes: @unchecked Sendable {
         }
         try store!.commitRetained(expectedRevision:1,metadata:nil,writes:independent)
         try require(try store!.retainedCopy(id:recordID) == ciphertext && store!.retainedCopy(id:independent.last!.index.id) == payload && store!.retainedState().revision == 2, "independent-record-cap")
+        let mailboxRows = independent.map { RetainedIndexRow(id: $0.index.id, ciphertext: payload) }
+        let mailboxCommitStart = ContinuousClock.now
+        try store!.commitCache(change: CacheCommit(head: ciphertext, keep: mailboxRows.map(\.id), writes: mailboxRows))
+        print("OBSERVE 1,050 mailbox records / 65.625 MiB committed in \(mailboxCommitStart.duration(to: .now))")
+        try require(try mailboxRows.allSatisfy { try store!.cacheRecord(id: $0.id) == $0.ciphertext }, "reused-statement-lost-mailbox-record")
+        try require(try store!.cacheRecord(id: mailboxRows.last!.id) == payload, "mailbox-record-cap")
         sqlite3_close(retainedInjection)
         // Conjecture: draft handoff commits both records or neither, even when the second write fails.
         let workspace = Data(repeating: 0xb6, count: 128)
@@ -119,16 +132,16 @@ private final class FixtureRoutes: @unchecked Sendable {
         defer { sqlite3_close(injection) }
         let trigger = "CREATE TRIGGER refuse_workspace BEFORE UPDATE ON member_workspace BEGIN SELECT RAISE(ABORT, 'injected'); END;"
         try require(sqlite3_exec(injection, trigger, nil, nil, nil) == SQLITE_OK, "sqlite-inject")
-        try refuses { try store!.saveSubmission(cache: Data(repeating: 0xc7, count: 64), workspace: Data(repeating: 0xd8, count: 64), personal: Data(repeating: 0xe9, count: 64)) }
-        try require(try store!.loadCache() == ciphertext && store!.loadWorkspace() == workspace, "partial-draft-handoff")
+        try refuses { try store!.saveSubmission(cache: CacheCommit(head: Data(repeating: 0xc7, count: 64), keep: [], writes: []), workspace: Data(repeating: 0xd8, count: 64), personal: Data(repeating: 0xe9, count: 64)) }
+        try require(try store!.loadCache() == ciphertext && store!.loadWorkspace() == workspace && store!.cacheRecord(id: mailboxRows.last!.id) == payload, "partial-draft-handoff")
         try require(sqlite3_exec(injection, "DROP TRIGGER refuse_workspace", nil, nil, nil) == SQLITE_OK, "sqlite-remove-injection")
         let personal = Data(repeating: 0xe9, count: 64)
         try store!.savePersonal(bytes: personal)
         try require(sqlite3_exec(injection, "CREATE TRIGGER refuse_personal BEFORE UPDATE ON personal_mailbox BEGIN SELECT RAISE(ABORT, 'injected'); END;", nil, nil, nil) == SQLITE_OK, "personal-inject")
-        try refuses { try store!.saveSubmission(cache: Data(repeating: 0xf1, count: 64), workspace: Data(repeating: 0xf2, count: 64), personal: Data(repeating: 0xf3, count: 64)) }
+        try refuses { try store!.saveSubmission(cache: CacheCommit(head: Data(repeating: 0xf1, count: 64), keep: [], writes: []), workspace: Data(repeating: 0xf2, count: 64), personal: Data(repeating: 0xf3, count: 64)) }
         try require(try store!.loadCache() == ciphertext && store!.loadWorkspace() == workspace && store!.loadPersonal() == personal, "third-record-partial-commit")
         try require(sqlite3_exec(injection, "DROP TRIGGER refuse_personal", nil, nil, nil) == SQLITE_OK, "personal-remove-injection")
-        try store!.saveSubmission(cache: ciphertext, workspace: workspace, personal: Data(repeating: 0xe9, count: 64))
+        try store!.saveSubmission(cache: CacheCommit(head: ciphertext, keep: [], writes: []), workspace: workspace, personal: Data(repeating: 0xe9, count: 64))
         try refuses { _ = try SQLiteDeviceStore(directory: directory, vault: vault) }
         store = nil
         let reopened = try SQLiteDeviceStore(directory: directory, vault: vault)
@@ -333,18 +346,20 @@ private final class FixtureRoutes: @unchecked Sendable {
         // Conjecture: the projection cannot offer a crossed relationship request
         // while the received request awaits decision, or confuse it with our own request.
         try require(try bob.directoryLookup(reference: aliceProfile.link).requestEntry == .incomingPending(request: quote.request), "directory-crossed-request-entry-offered")
-        try require(receiving.requestEntry == .incomingPending(request: quote.request), "crossed-request-entry-offered")
-        try require(try alice!.conversation(sender: bobID).requestEntry == .outgoingPending(request: quote.request), "outgoing-request-entry-confused")
+        try require(receiving.actions.initiation == .reviewIncoming(request: quote.request), "crossed-request-entry-offered")
+        try require(try alice!.conversation(sender: bobID).actions.initiation == .awaitRequest(request: quote.request), "outgoing-request-entry-confused")
         let original = try unwrap(receiving.threads.first(where: { $0.request == quote.request }), "native-request-thread")
         try require(original.label == "Native shared subject canary", "request-shared-subject")
-        try require(original.replyAllowed && receiving.messages.contains(where: { $0.text == marker }), "native-request-content-and-answer")
+        try require(receiving.actions.replyConversations.contains(original.id) && receiving.messages.contains(where: { $0.text == marker }), "native-request-content-and-answer")
         _ = try bob.controlRelationship(sender: aliceID, control: .followups(maxMessages: 2, maxPerInterval: 2, intervalMs: 86_400_000))
         _ = try submitDraftForCheck(alice!, target: .followup(other: bobID, request: quote.request), body: .request(text: "native-followup-private-canary"))
         try require(try alice!.requestProgress()?.status == .followupSent, "native-followup")
         _ = try submitDraftForCheck(bob, target: .native(other: aliceID, conversation: original.id), body: .native(text: "native-answer-private-canary", sources: []))
         try require(try alice!.conversation(sender: bobID).threads.first { $0.id == original.id }?.label == "Native shared subject canary", "reply-changed-subject")
         alice = nil; alice = try openAlice()
-        try require(try alice!.cachedConversation(sender: bobID).threads.first { $0.id == original.id }?.label == "Native shared subject canary", "retained-subject-not-reopened")
+        let retained = try alice!.cachedConversation(sender: bobID)
+        try require(retained.threads.first { $0.id == original.id }?.label == "Native shared subject canary", "retained-subject-not-reopened")
+        try require(retained.actions.observation == .saved && retained.actions.initiation == .refreshRequired && retained.actions.replyConversations.isEmpty, "retained-content-implied-current-permission")
         try finishSearchIndex(alice!)
         let localSubjectSearch = try alice!.searchMail(session: try alice!.searchSession(), request: try alice!.beginSearch(session: try alice!.searchSession()), query: "\"Native shared subject canary\"", mode: .suggestions, scope: .all, after: 0, limit: 25)
         try require(!localSubjectSearch.matches.isEmpty, "reopened-subject-not-searchable")
@@ -352,8 +367,8 @@ private final class FixtureRoutes: @unchecked Sendable {
         print("OBSERVE native follow-up and confined answer delivered")
         _ = try bob.decide(sender: aliceID, request: quote.request, decision: .reject)
         receiving = try bob.conversation(sender: aliceID)
-        try require(receiving.requestEntry == .reviewApproaches, "terminal-request-still-blocks-entry")
-        try require(receiving.threads.first(where: { $0.id == original.id })?.replyAllowed == true, "rejection-ended-answer")
+        try require(receiving.actions.initiation == .reviewApproaches, "terminal-request-still-blocks-entry")
+        try require(receiving.actions.replyConversations.contains(original.id), "rejection-ended-answer")
         print("OBSERVE rejected request retains its reply route")
         _ = try bob.sendMessage(other: aliceID, conversation: original.id, text: "answer-after-rejection-canary", sources: [])
         try await Task.sleep(nanoseconds: 1_200_000_000)
@@ -363,7 +378,7 @@ private final class FixtureRoutes: @unchecked Sendable {
         print("OBSERVE second request submitted")
         receiving = try bob.conversation(sender: aliceID)
         print("OBSERVE second conversation read")
-        try require(receiving.threads.filter { $0.request != nil && $0.replyAllowed }.count == 2, "only-latest-request-answerable")
+        try require(receiving.threads.filter { $0.request != nil && receiving.actions.replyConversations.contains($0.id) }.count == 2, "only-latest-request-answerable")
         _ = try bob.sendMessage(other: aliceID, conversation: original.id, text: "old-conversation-answer-canary", sources: [])
         print("OBSERVE both request conversations remain answerable after rejection")
         _ = try bob.decide(sender: aliceID, request: second.request, decision: .accept)
@@ -462,7 +477,7 @@ private final class FixtureRoutes: @unchecked Sendable {
         try require(try alice!.cachedInbox().pendingSend == nil, "refusal-blocked-sync")
         _ = try bob.controlRelationship(sender: aliceID, control: .block)
         _ = try bob.controlRelationship(sender: aliceID, control: .unblock)
-        try require(try alice!.conversation(sender: bobID).reply == .closed, "unblock-restored-old-permission")
+        try require(try alice!.conversation(sender: bobID).actions.reply == .closed, "unblock-restored-old-permission")
         // Conjecture: the expiry reminder belongs to the granting recipient, and
         // upgrading replaces only that direction without granting the reverse one.
         _ = try bob.controlRelationship(sender: aliceID, control: .grantLane(lifetimeMs: 172_800_000))
@@ -475,9 +490,9 @@ private final class FixtureRoutes: @unchecked Sendable {
         try require(incomingNavigationLane?.expiresAt == recipientLane.controls.laneExpiryReminder?.expiresAt,
                     "navigation-lane-expiry-mismatch")
         let senderIncoming = try alice!.conversation(sender: bobID).controls.state
-        try require(try alice!.conversation(sender: bobID).reply == .lane, "active-lane-cannot-start-conversation")
+        try require(try alice!.conversation(sender: bobID).actions.reply == .lane, "active-lane-cannot-start-conversation")
         _ = try bob.controlRelationship(sender: aliceID, control: .grantStanding)
-        try require(try alice!.conversation(sender: bobID).reply == .standing, "recipient-upgrade-not-standing")
+        try require(try alice!.conversation(sender: bobID).actions.reply == .standing, "recipient-upgrade-not-standing")
         try require(try alice!.conversation(sender: bobID).controls.state == senderIncoming, "upgrade-changed-reverse-permission")
         try require(try bob.conversation(sender: aliceID).controls.laneExpiryReminder == nil, "standing-retained-expiry-reminder")
         try require(try alice!.navigation().first { $0.sender == bobID }?.outgoingLane == nil,
@@ -486,7 +501,7 @@ private final class FixtureRoutes: @unchecked Sendable {
         _ = try bob.controlRelationship(sender: aliceID, control: .grantLane(lifetimeMs: 604_800_000))
         try require(try bob.conversation(sender: aliceID).controls.laneExpiryReminder == nil, "early-expiry-reminder")
         _ = try bob.controlRelationship(sender: aliceID, control: .grantLane(lifetimeMs: 1_209_600_000))
-        try require(try alice!.conversation(sender: bobID).reply == .lane, "native-lane-regrant")
+        try require(try alice!.conversation(sender: bobID).actions.reply == .lane, "native-lane-regrant")
         _ = try alice!.sendMessage(other: bobID, conversation: original.id, text: "explicit-lane-message-canary", sources: [])
         try require(try alice!.conversation(sender: bobID).sentRequests.first(where: { $0.id == second.request })?.status == "Accepted", "lane-management-reopened-settlement")
         if ProcessInfo.processInfo.environment["CS_MAIL_APPLE_ADMIN_CONFIG"] != nil {

@@ -52,6 +52,15 @@ enum Command {
         #[arg(long)]
         idempotency_key: Option<u128>,
     },
+    /// Inspect or resume received processing using authenticated operator authority.
+    Processing {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        command: PathBuf,
+        #[arg(long)]
+        idempotency_key: Option<u128>,
+    },
     /// List enrollments held for review because their evidence overlaps another's.
     Reviews {
         #[arg(long)]
@@ -218,6 +227,16 @@ fn run(command: Command) -> Result<(), String> {
             read_json::<OperatorCommand>(&command, "command")?,
             idempotency_key,
             "v1/operator/commands",
+        ),
+        Command::Processing {
+            config,
+            command,
+            idempotency_key,
+        } => send(
+            &config,
+            read_json::<cs_mail_operations::ProcessingCommand>(&command, "processing command")?,
+            idempotency_key,
+            "v1/operator/processing",
         ),
         Command::Reviews { config } => {
             send(&config, ReviewCommand::Open, None, "v1/operator/reviews")

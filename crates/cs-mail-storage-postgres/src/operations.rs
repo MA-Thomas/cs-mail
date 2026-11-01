@@ -32,7 +32,7 @@ fn stored_deployment(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Readiness {
     pub bootstrapped: bool,
-    /// A blocked ordered command prevents admitting subsequent work normally.
+    /// A processing fault degrades its owner scopes; independent scopes remain available.
     pub command_failure: Option<ingress::ProcessingFailure>,
 }
 
@@ -47,7 +47,7 @@ impl PostgresDeployment {
             bootstrapped: client
                 .query_opt("SELECT 1 FROM cs_deployment WHERE singleton", &[])?
                 .is_some(),
-            command_failure: client.query_opt("SELECT processing_failure FROM cs_received_commands WHERE outcome IS NULL ORDER BY position LIMIT 1", &[])?
+            command_failure: client.query_opt("SELECT processing_failure FROM cs_received_commands WHERE outcome IS NULL AND processing_failure IS NOT NULL ORDER BY position LIMIT 1", &[])?
                 .map(|row| row.try_get::<_, Option<Json<ingress::ProcessingFailure>>>(0))
                 .transpose()?.flatten().map(|value| value.0),
         })
@@ -188,5 +188,98 @@ impl OperatorStore for PostgresDeployment {
         }
         tx.commit()?;
         Ok(outcome)
+    }
+}
+
+impl cs_mail_application::processing::ProcessingStore for PostgresDeployment {
+    type Error = StorageError;
+    fn transact_processing(
+        &self,
+        signed: &SignedOperatorCommand<cs_mail_operations::ProcessingCommand>,
+        decide: impl FnOnce(
+            cs_mail_application::processing::ProcessingContext,
+        )
+            -> Result<cs_mail_application::processing::ProcessingDecision, StorageError>,
+    ) -> Result<cs_mail_operations::ProcessingResponse, StorageError> {
+        use cs_mail_application::processing::{
+            ProcessingContext, ProcessingDecision, ProcessingInput, ProcessingTarget,
+        };
+        use cs_mail_operations::{
+            ProcessingCommand, ProcessingInspection, ProcessingResponse, ProcessingStatus,
+        };
+        let mut client = self.client.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut tx = client.transaction()?;
+        ingress::lock_receipt_order(&mut tx)?;
+        let authority = stored_deployment(&mut tx, false)?
+            .ok_or(OperationsError::NotBootstrapped)?
+            .operator_authority();
+        authority.verify(signed)?;
+        let identity = signed.idempotency_key.0.to_string();
+        let prior = tx.query_opt("SELECT digest,outcome FROM cs_operator_commands WHERE family=$1 AND idempotency_key=$2", &[&ProcessingCommand::NAME, &identity])?.map(|row| -> Result<_,StorageError> { Ok((row.get::<_,Vec<u8>>(0).try_into().map_err(|_| StorageError::NumericRange)?, row.get::<_,Json<ProcessingResponse>>(1).0)) }).transpose()?;
+        let inspect = |row: postgres::Row| -> Result<ProcessingInspection, StorageError> {
+            let attempts = super::to_u64(row.get("failed_attempts"))?;
+            let status = if row
+                .get::<_, Option<Json<serde_json::Value>>>("outcome")
+                .is_some()
+            {
+                ProcessingStatus::Completed
+            } else {
+                match row
+                    .get::<_, Option<Json<ingress::ProcessingFailure>>>("processing_failure")
+                    .map(|v| v.0)
+                {
+                    None => ProcessingStatus::Ready,
+                    Some(ingress::ProcessingFailure::AwaitingQuoteSignature) => {
+                        ProcessingStatus::WaitingForQuote { attempts }
+                    }
+                    Some(ingress::ProcessingFailure::Persistence) => {
+                        ProcessingStatus::Retryable { attempts }
+                    }
+                    Some(ingress::ProcessingFailure::RequiresIntervention) => {
+                        ProcessingStatus::Intervention { attempts }
+                    }
+                }
+            };
+            Ok(ProcessingInspection {
+                position: cs_mail_primitives::JournalPosition(super::to_u64(row.get("position"))?),
+                digest: cs_mail_security::CommandDigest(
+                    row.get::<_, Vec<u8>>("digest")
+                        .try_into()
+                        .map_err(|_| StorageError::NumericRange)?,
+                ),
+                status,
+            })
+        };
+        let input = match &signed.command {
+            ProcessingCommand::Inspect { limit } if (1..=100).contains(limit) => ProcessingInput::Pending(tx.query("SELECT position,digest,outcome,processing_failure,failed_attempts FROM cs_received_commands WHERE outcome IS NULL ORDER BY position LIMIT $1", &[&i64::from(*limit)])?.into_iter().map(inspect).collect::<Result<_,_>>()?),
+            ProcessingCommand::Resume { position, .. } => {
+                let row = tx.query_opt("SELECT position,digest,outcome,processing_failure,failed_attempts FROM cs_received_commands WHERE position=$1 FOR UPDATE", &[&super::to_i64(position.0)?])?.ok_or(OperationsError::Invalid)?;
+                let record = inspect(row)?;
+                ProcessingInput::Command(ProcessingTarget { digest: record.digest, status: record.status })
+            }
+            ProcessingCommand::Inspect { .. } => return Err(OperationsError::Invalid.into()),
+        };
+        let decision = decide(ProcessingContext {
+            authority,
+            prior,
+            input,
+        })?;
+        let response = match decision {
+            ProcessingDecision::Observed(response) => response,
+            ProcessingDecision::Resumed {
+                command,
+                at,
+                response,
+            } => {
+                let ProcessingCommand::Resume { position, .. } = command.command() else {
+                    return Err(OperationsError::Invalid.into());
+                };
+                tx.execute("UPDATE cs_received_commands SET processing_failure=NULL WHERE position=$1 AND outcome IS NULL", &[&super::to_i64(position.0)?])?;
+                tx.execute("INSERT INTO cs_operator_commands(family,idempotency_key,operator,digest,command,outcome,authorized_at) VALUES($1,$2,$3,$4,$5,$6,$7)", &[&ProcessingCommand::NAME,&identity,&command.operator().0.to_string(),&command.digest().as_slice(),&Json(command.command()),&Json(&response),&super::to_i64(at.0)?])?;
+                response
+            }
+        };
+        tx.commit()?;
+        Ok(response)
     }
 }

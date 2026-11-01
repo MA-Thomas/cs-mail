@@ -242,8 +242,9 @@ terrazzo appearance shared by all B backdrops. Color and intensity changes apply
 immediately without Apply. The color field selects hue/brightness; Intensity owns
 saturation. Native sliders provide keyboard/accessibility alternatives. Use default
 colors restores the original cached raster exactly and retains the last custom
-choice. Cached neutral flecks are colored independently of the binder; changing
-controls does not regenerate mineral geometry. Preserve the existing texture
+choice. Custom color treatment applies to the original cached raster; changing
+controls does not regenerate mineral geometry or create separate fleck/binder
+layers (corrected 29 October 2026). Preserve the existing texture
 strength roles, opaque writing surfaces and accessibility suppression. These
 preferences carry no account, receiving or disclosure authority.
 
@@ -261,13 +262,63 @@ surfaces in their scope immediately. Opaque writing surfaces remain opaque.
 ### Named appearance profiles
 
 Agreed 24 October 2026. Interface B’s palette can save named snapshots containing
-resolved light/dark appearance, color/default selection and optional main/surrounding
-opacity overrides. Selecting a profile restores its snapshot; later live edits
+resolved light/dark appearance, independent cove-light color, texture/default
+selection and optional main/surrounding opacity overrides. Selecting a profile restores its snapshot; later live edits
 show Modified without changing the saved snapshot. Save as new profile, Update
 profile, Rename and Delete are explicit actions. Deletion leaves the current
-appearance intact. A single device-local encoded document owns profile snapshots
-and selection. Deleting all user profiles does not recreate them on reopening. Unreadable profile data is retained
+appearance intact. A single device-local encoded document owns profile snapshots,
+selection, mode preference and the current unsaved working material. One presentation
+controller owns their complete transitions; views supply context and send intents.
+Deleting all user profiles does not recreate them on reopening. Unreadable profile data is retained
 and reported without overwriting it. Profiles carry no account authority.
+
+### Explicit profile definitions and resolved composition
+
+Clarified 29 October 2026. Separate product definitions, saved static snapshots,
+current working selection and the resolved drawing contract. A product definition
+is fixed or derives color from explicit mode/selected-area context. Saving a copy
+captures a static material; subsequent navigation cannot change it. Original
+pigments (with an explicit hue rotation) and custom colored flecks on neutral binder
+are distinct treatments. Wash color/opacity are independent from fleck pigment.
+The original-treatment color-picker position is authoring data and must not reach
+the renderer as active pigment. Resolve canvas, texture treatment, wash and every
+surface-role opacity before drawing; the renderer must not infer treatment from
+an ambiguous default flag or read profile persistence/navigation itself.
+
+The controller commits the complete appearance transition as one document, rather
+than coordinating a selected profile with separate preference keys. Restored
+colors, rotations, opacities, profile identifiers and selection references are
+validated. Malformed documents are retained; fixed choices remain usable without
+overwriting unreadable saved work. Existing-profile preservation includes visual
+composition as well as numerical values. A material contract change requires
+explicit scope and validation against the affected saved appearances.
+
+Navigation-driven appearance changes must reuse prepared material data and apply
+color/opacity while drawing. Do not regenerate complete bitmaps per area or per
+surface: background execution still causes visibly incomplete, patchy arrival.
+Prepare deterministic mineral geometry/grain offline and package its original
+raster and one interleaved material representation. Every surface draws from the
+same prepared data in its current presentation update. Retain no separate drawable
+fleck/binder layers, per-area image caches or per-surface loading tasks. Validate
+both appearance preservation and switching performance when changing this contract.
+
+Cove-light color is independent material data, separate from texture pigment,
+background wash and texture strength. Store it explicitly with each fixed/custom
+snapshot and unsaved working material. Changing pigment must not change lighting;
+changing lighting must not recolor the texture. The resolved appearance supplies
+one cove color to main-space lighting, Column A selection, preview coves and rims.
+These renderers must not bypass a fixed profile by reading the area palette.
+Only Follow selected area derives this color automatically from context, and its
+manual material controls remain hidden. Saving a copy freezes its complete
+material, including cove color. Validate edit independence, save/reopen and dynamic
+copy capture, not merely unchanged preference numbers. The version-2 document
+requires cove color; existing version-1 data uses an explicit closed-app conversion,
+with no fallback reader. A color that was never saved independently cannot be
+claimed as historically restored by seeding the new field.
+
+Dark main-space lighting is deliberately quieter (29 October): wide spill opacity
+0.44, near-edge opacity 0.64 and pale shoulder opacity 0.14. Light-mode values,
+Column A selection strength, texture and background strengths are independent.
 
 ### Fixed Interface B system defaults
 
@@ -282,6 +333,32 @@ corresponding system default. The current system/custom selection persists local
 first adoption applies the default for the current mode without changing saved
 profile snapshots. System mode follows the operating system while using defaults.
 Unreadable user profile data does not prevent selection of the fixed defaults.
+
+Agreed 29 October 2026. Follow selected area is an additional fixed system profile.
+Its terrazzo speckles derive their color from the same palette as the selected
+Column A area's glow, changing with navigation rather than hover or keyboard
+focus. Light mode uses the original raster with hue-only rotation, preserving
+its pigment variation, tonal detail and alpha. Dark mode uses Dark Green's
+subdued fleck pigment at its fixed brightness and saturation, changing only
+the pigment hue to the selected area. The binder remains neutral. Neither takes
+texture brightness from the selected glow. One offline recipe prepares the original raster and packed material data,
+with no separately cached fleck or binder layers. Existing custom
+profiles color the mineral response while drawing and retain their neutral binder;
+changes for a new system profile must preserve existing profiles' appearance,
+not merely their stored settings. The selected-area profile combines that
+selected-area fleck coloring with a uniform area-colored background wash: 3% in light
+mode and no area-colored wash in dark mode (29 October clarification). Dark
+Follow selected area additionally uses a fixed 60% neutral black shade beneath
+the texture to deepen its canvas. This belongs only to that system definition;
+fixed defaults, user profiles and fleck strengths retain their existing values.
+The independent shade is part of the material captured by Save as new profile.
+The wash sits over the base canvas beneath the texture; opaque reading and writing surfaces keep
+their existing owners. Accessibility suppression covers both decorative effects.
+It follows light/dark appearance while retaining the corresponding fixed
+texture-strength roles. It has no independent color/opacity controls and cannot
+be renamed, updated or deleted. Existing fixed defaults and user profiles remain
+available; Save as new profile may capture the current resolved appearance as an
+editable, static user snapshot. Profile selection persists across reopening.
 
 ### Profile controls reveal the current task
 
@@ -305,7 +382,7 @@ as clicking; Right Arrow opens the correct navigation preview and Escape dismiss
 it. Existing preview pointer tracking, member facts, main-space perimeter lighting
 and saved texture appearance retain their owners.
 
-Column A selection uses the shared area-owned cove-light renderer around the
+Column A selection uses the shared profile-owned cove-light renderer around the
 icon hit region, without a side marker, fill, raised surface or stacked bezel.
 Hover on an unselected icon remains a quiet perimeter; keyboard focus retains a
 separate crisp outer ring. Increased contrast or reduced transparency replaces

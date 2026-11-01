@@ -34,7 +34,20 @@ public enum InterfaceBEditorialStyle {
     public static let reading = text(16)
 }
 
-/// The preview inherits the hovered icon's area, not the open workspace's area.
+/// Organizer labels share a quiet, legible hierarchy without changing B's light titles.
+public struct InterfaceBOrganizerHeading: View {
+    private let title: String
+    @Environment(\.colorScheme) private var scheme
+    public init(_ title: String) { self.title = title }
+    public var body: some View {
+        Text(title)
+            .font(InterfaceBEditorialStyle.text(12, relativeTo: .caption).weight(.medium))
+            .foregroundStyle(InterfaceBEditorialStyle.ink(scheme).opacity(0.82))
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Preview content follows its hovered icon; its lighting inherits the resolved profile.
 public struct InterfaceBEditorialGlassSurface: View {
     @Environment(\.colorScheme) private var scheme
     public init() {}

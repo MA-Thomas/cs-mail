@@ -52,7 +52,7 @@ struct AliasInboxSidebar: View {
     }
     private var mailboxSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-                    section("Mailboxes")
+                    section("Mail views")
                     ForEach(MailboxFolder.allCases.filter { model.selectedInbox == nil || ($0 != .sent && $0 != .outbox) }) { folder in
                         Button { selectMailbox(folder) } label: {
                             Label(folder.rawValue, systemImage: icon(folder))

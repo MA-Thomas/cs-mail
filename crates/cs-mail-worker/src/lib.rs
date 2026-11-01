@@ -332,7 +332,7 @@ pub fn run_member_payment_batch<P: PaymentProcessor>(
     }
     Ok(report)
 }
-/// Drains only a bounded prefix; deadlines cannot pass any remaining received commands.
+/// Drains a bounded prefix; an owner deadline cannot overtake its received decisions.
 /// # Errors
 /// Returns command or schedule errors. Failed schedule claims remain recoverable after expiry.
 pub fn run_schedule_batch(
@@ -348,8 +348,9 @@ pub fn run_schedule_batch(
         return Err(StorageError::NumericRange.into());
     }
     for _ in 0..limit {
-        if !engine.process_next_received()? {
-            break;
+        match engine.process_next_received() {
+            Ok(true) => {}
+            Ok(false) | Err(_) => break,
         }
     }
     let items = match engine.claim_due_schedules(now, lease, limit) {

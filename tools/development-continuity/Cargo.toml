@@ -12,7 +12,7 @@ cs-mail-security = { path = "../../crates/cs-mail-security" }
 cs-mail-privacy = { path = "../../crates/cs-mail-privacy" }
 serde = { version = "1", features = ["derive"] }
 cs-mail-capabilities = { path = "../../crates/cs-mail-capabilities" }
-cs-mail-client = { path = "../../crates/cs-mail-client", features = ["member-runtime"] }
+cs-mail-client = { path = "../../crates/cs-mail-client", features = ["member-runtime", "device-maintenance"] }
 cs-mail-application = { path = "../../crates/cs-mail-application" }
 cs-mail-accounts = { path = "../../crates/cs-mail-accounts" }
 cs-mail-content = { path = "../../crates/cs-mail-content" }

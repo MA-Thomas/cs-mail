@@ -31,6 +31,7 @@ pub enum PendingSetup {
 }
 #[derive(Clone, Debug)]
 pub struct Conversation {
+    pub observed_at: Option<cs_mail_primitives::CanonicalTime>,
     pub sent_requests: Vec<Request>,
     pub controls: RelationshipControls,
     pub threads: Vec<super::correspondence::ConversationSummary>,
@@ -289,6 +290,7 @@ pub(super) fn summary(
 ) -> Conversation {
     let (permission, permission_route) = permission(view.state, view.lane.as_ref(), now);
     Conversation {
+        observed_at: now,
         sent_requests: Vec::new(),
         request_entry: RequestEntry::Unverified,
         controls: RelationshipControls {
@@ -401,6 +403,7 @@ pub(super) fn project_requests(
 }
 pub(super) fn unestablished(other: cs_mail_primitives::ProtocolIdentity) -> Conversation {
     Conversation {
+        observed_at: None,
         sent_requests: Vec::new(),
         request_entry: RequestEntry::Unverified,
         controls: RelationshipControls {

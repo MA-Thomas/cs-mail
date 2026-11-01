@@ -1,3 +1,488 @@
+## Independent cove-light colors and profile-wide lighting — 29 October 2026
+
+Cove lighting color is now an explicit, validated InterfaceBMaterialColor in each
+material definition, independently encoded from terrazzo pigment. The palette has
+separate Cove hue, Cove saturation and Cove brightness controls. Ordinary edits
+change only working material; Update profile or Save as new profile captures the
+complete snapshot. Follow selected area derives its cove color automatically and
+hides manual material controls. Its saved copies freeze both pigment and lighting.
+The inferred-pigment lighting source enum/branch was removed.
+
+Column A selection, preview coves and decorative rims now consume the resolved
+profile cove color, like the main-space perimeter. Fixed profiles no longer use
+navigation-area colors in these lighting paths. Replaced area-lighting parameters
+and unused rim/spill calculations were removed. The earlier main-space dark
+brightness reduction remains: spill 0.55 -> 0.44, near edge 0.80 -> 0.64 and pale
+shoulder 0.18 -> 0.14. Light values and Column A selection strength are unchanged.
+Texture/pigment generation and surface strengths remain unchanged.
+
+The version-2 appearance document requires the independent cove color. With the
+app closed, `tools/development-continuity/add-interface-b-cove-color.py` prepared
+and applied `target/independent-cove-migration.json`. Projection back to v1 verified
+every pre-existing field, profile ID/name, working selection and mode; all other
+preferences were checked unchanged. Initial cove fields preserve the CURRENT
+resolved lighting (colored pigment or neutral original), not an unrecoverable
+historical independent cove color. The member's original preferred lighting was
+never stored independently, so no historical-color restoration is claimed. The
+previous retired-preferences converter was removed; the app has one v2 reader,
+without a v1 fallback. Other retained v1 installations require this closed-app
+conversion before opening this build.
+
+An isolated-preferences experiment compiled the actual controller/presentation
+module and passed cove/pigment edit independence, working-state reopen, complete
+saved-snapshot reopen, selected-area copy capture, original-profile retention and
+malformed-cove refusal. Canonical signed build/install and exact closed-device
+table/key-file preservation passed. Original nonsecret credential metadata and
+signing requirement were preserved; no credential bytes were read or replaced.
+
+Running-app inspection verified the controls on dark Aliases. Incrementing Cove
+hue changed lighting from 0.2596003605769231 to 0.3596003605769231 while texture hue
+stayed 0.2596003605769231; all saved profiles stayed unchanged. Follow selected area
+hid manual controls and retained automatic burgundy lighting. Dark Green system
+default was restored on Aliases, matching pre-install selection/mode/destination.
+The complete v2 document matched its prepared value after the UI checks.
+Before this addition, the installed fixed-lighting correction was also observed
+with matching green Column A/main-space coves in Relationships and Aliases, and
+burgundy lighting only under Follow selected area. Previous profile fields matched
+the earlier palette-update baseline exactly.
+
+Evidence: `target/independent-cove-{build,install,preservation,migration,check}.log`,
+`target/independent-cove-{before,installed,running,migration,live-check}.json`.
+The migration record retains the prior document and the prepared current one.
+Earlier brightness/navigation build evidence is under `target/quiet-cove-*` and
+`target/profile-navigation-*`. Disposable test source/binary, fixture and isolated
+preference domain were removed. No persistent application test cases or unrelated
+Rust/PostgreSQL suites were added/run. iOS, exhaustive accessibility/display
+combinations and save/update/delete actions on the owner's real saved profiles
+were not exercised; snapshot mutations/reopen were checked in isolated preferences.
+
+## Fixed-profile workspace cove ownership — 29 October 2026
+
+The main-space cove bypassed appearance selection and read the selected area
+palette directly. Consequently Dark Green's stored texture was unchanged while
+its visible workspace lighting still followed navigation. Earlier preservation
+checks did not cover that separate rendering path.
+
+Resolved appearance now includes coveColor. An explicit source distinguishes
+material-owned lighting from selected-area derivation: fixed colored profiles
+use their pigment; fixed original profiles use neutral light. Only Follow selected
+area requests area-derived workspace lighting. The main-space perimeter renderer
+no longer reads navigation identity. Navigation icon and preview feedback retain
+their separate area colors. No stored profile values, format, material strengths,
+texture generator or cove opacity/geometry changed.
+
+A disposable isolated-preferences experiment compiled the actual controller and
+presentation module. All three fixed profiles retained cove color across all five
+areas; Follow selected area produced five distinct colors, and saved snapshots
+remained unchanged. Canonical signed build/install passed with exact closed-device
+table/key-file preservation. Running-app checks observed Dark Green's green cove
+in Relationships and Communications, then Follow selected area's green and gold
+coves in those destinations. Dark Green was restored on Relationships. The complete
+appearance document, original credential metadata and signing requirement matched
+their pre-install values; no credential bytes were read or replaced.
+
+Evidence: `target/profile-cove-{build,install,preservation,check}.log`,
+`target/profile-cove-{before,installed,running}.json` and
+`target/profile-cove-appearance-before.json`. The temporary experiment source,
+binary and isolated preference domain were removed. No persistent test-suite cases
+or unrelated Rust/PostgreSQL checks were added/run. iOS, all fixed profiles' visual
+appearance, exhaustive accessibility combinations and static-copy lighting fidelity
+were not inspected; fixed-profile navigation invariance was checked in the isolated
+experiment.
+
+## Deeper dark Follow selected area canvas — 29 October 2026
+
+The owner confirmed that only Follow selected area should have a darker black
+background; saved Dark Green was selected at the time. Its dark system material
+now has a fixed neutral black shade at 60% over the existing charcoal canvas,
+below the unchanged material texture. The selected-area resolver retains this
+fixed shade when area-colored wash is disabled; light still derives its 3% area
+wash. No shared canvas, pigment, strength, palette, saved profile or persistence
+format changed. The existing independent-wash contract captures this shade when
+saving a static copy, without a special rendering branch or profile mutation.
+
+Canonical signed build/install and closed-device table/key-file preservation
+passed. Running-app inspection checked darker Follow selected area in Relationships,
+its light appearance and the original saved Dark Green appearance. The saved
+Dark Green selection was restored on Relationships, matching the pre-install
+context. The entire appearance document matched its pre-install value. Original
+credential metadata and signing requirement were preserved; no credential bytes
+were read or replaced. Evidence: `target/deeper-dark-{build,install,preservation}.log`,
+`target/deeper-dark-{before,installed,running}.json` and
+`target/deeper-dark-appearance-before.json`. No new tests or unrelated Rust/PostgreSQL
+suites ran. iOS, every area/accessibility combination and save-copy UI behavior
+were not exercised in this change.
+
+## Agreed Interface B area colors — 29 October 2026
+
+Applied the owner's reviewed focus colors: Relationships gold `#94703F`,
+Communications forest green `#245847`, Notes inky turquoise `#1D454F`,
+Aliases and Express Lanes inky burgundy `#5B2930`. Home remains unchanged.
+The shared palette supplies the selected navigation/perimeter reflection and
+Follow selected area derivation. Supporting wash/rim colors use the new hue
+families with each area's prior wash-to-reflection brightness ratio. Opacity,
+material rendering and saved static profiles are unchanged.
+
+Canonical signed build/install passed, with exact closed-device table/key-file
+preservation and original credential metadata/signing checks. Inspected all four
+changed areas in dark mode and Notes in light mode, then restored dark Notes
+(the area selected immediately before closing for installation). The complete
+appearance document matched its pre-install value. No credential bytes were read
+or replaced. Evidence: `target/area-palette-{build,install,preservation}.log`,
+`target/area-palette-{before,installed,running}.json` and
+`target/area-palette-appearance-before.json`. No persistent tests or unrelated
+Rust/PostgreSQL suites were added/run. iOS, all four light-mode screens and
+exhaustive accessibility/display combinations were not checked.
+
+## Interface B immediate material drawing — 29 October 2026
+
+Replaces the asynchronous per-surface finished-texture path below. Moving texture
+generation off the UI actor fixed navigation blocking but left visible delays:
+separate opacity variants appeared at different times and cache eviction repeated
+preparation. Area selection now changes only GPU drawing parameters.
+
+The deterministic mineral recipe lives in `tools/terrazzo-assets/main.swift`.
+`scripts/generate-terrazzo-assets.sh` prepares the original PNG and one 1536-square
+interleaved response buffer. A single SwiftUI Metal shader samples that material
+in window coordinates, applying pigment and surface opacity while preserving neutral
+binder and the previous opacity/compositing relationship. This buffer is material
+data, not independently drawable fleck/binder layers. The application has no runtime
+geometry generation, recolored bitmap cache, texture worker or per-surface loading
+tasks. The shared mineral palette still owns original hue derivation. SwiftPM packages
+the assets/shader; the canonical build copies its resource bundle into the signed app.
+Apple's Metal compiler component was installed for this build.
+
+Validation challenged two claims: reusable material preserves the agreed appearances,
+and a new hue does not require expensive bitmap preparation. Thirty direct-recipe
+comparisons covered the exact Dark Green/Dark Teal pigments, primary/gray/white
+pigments, zero/full opacity and the existing surface strengths. Reconstruction errors
+were below 5/255 at the tested profile strengths and below 12/255 at full opacity;
+quantization and fragment-edge compositing mean this is not pixel identity. Actual
+GPU output against direct rendering of Dark Green and Dark Teal, main/workspace,
+had maximum channel error 3/255 and mean errors 0.19–0.27/255. Thirty distinct hue
+draws, each forced through bitmap readback, took median 3.57 ms and maximum 4.13 ms
+in the isolated experiment. These figures do not measure end-to-end app navigation.
+Original raster asset bytes matched regeneration and the installed resource bundle.
+
+Canonical build/sign/install and exact closed-device table/key-file preservation
+passed. Original credential metadata and signing requirement were preserved; no
+credential bytes were read or replaced. Running-app checks visited dark Home,
+Relationships, Aliases, Notes and Communications, then light Communications.
+All observed surfaces contained their current material together, without the earlier
+pending blank-texture state. The app was restored to dark Communications with Follow
+selected area. Its complete appearance document matched the pre-install document.
+
+Evidence: `target/material-draw-{build,install,preservation}.log`,
+`target/material-draw-{before,installed,running}.json`,
+`target/material-draw-appearance-before.json`,
+`target/terrazzo-{material-comparison,shader-check}.json`. The disposable shader
+experiment source/binary and prior renderer copy were removed. The offline recipe
+remains the sole generator. No unrelated Rust/PostgreSQL suites ran. iOS, other GPU
+families, exhaustive accessibility/display combinations and frame-by-frame app
+latency were not checked. The reconstruction check is a regeneration-tool option;
+no application test-suite cases were added.
+
+## Interface B responsive area switching — 29 October 2026
+
+The finished-texture renderer introduced synchronous bitmap generation during
+view evaluation on the main actor. Dark selected-area navigation can require
+three surface-opacity variants per area; a six-entry cache could evict these
+between visits and repeat the blocking work. This was presentation rendering,
+not backend or network latency.
+
+A dedicated actor now owns bitmap preparation and the bounded cache. Views use
+request-keyed asynchronous tasks, cancel obsolete work and display only a result
+matching their current request. Original-raster requests share one bitmap across
+hue rotations and surface opacities. Canvas, wash and content remain immediately
+usable while an uncached decorative texture is prepared. Geometry, grain, pigment,
+composition and cache bound are unchanged; no separate fleck layer was retained.
+
+A disposable experiment challenged main-actor responsiveness during actual cold
+bitmap generation and pixel preservation. Before: longest pulse gap 3.737 seconds,
+three pulses. After: longest gap 0.035 seconds, 306 pulses. Total bitmap preparation
+remained about 3.76 seconds; these are isolated renderer measurements, not measured
+end-to-end navigation times. Original raster and two Dark Green opacity variants
+had identical before/after pixel hashes. Original request normalization and
+immediate cancellation also passed. Temporary experiment sources, old renderer
+copy and binaries were removed; no parallel implementation remains.
+
+Canonical signed build/install passed. Closed-device tables, key files, original
+nonsecret Keychain metadata and signing requirement were preserved. Running-app
+inspection checked dark Home, a cold Relationships switch, rapid Aliases-to-Notes
+navigation, completed dark Communications texture and light Communications.
+Content was visible during pending decoration and the final texture matched the
+current area. The complete appearance document matched its pre-install value.
+The app is left on dark Communications with Follow selected area.
+
+Evidence: `target/area-responsive-{build,install,preservation,check}.log`,
+`target/area-responsive-{before,installed,running,render-before,render-after}.json`
+and `target/area-responsive-appearance-before.json`. No credential bytes were read
+or replaced. No persistent tests or unrelated Rust/PostgreSQL suites were added/run.
+iOS, exhaustive profile/display/accessibility combinations and precise end-to-end
+navigation latency were not measured. Cold decorative texture preparation can
+still complete after navigation content appears.
+
+## Interface B appearance ownership and typed rendering — 29 October 2026
+
+One InterfaceBAppearanceController now owns mode, selection, working material and
+saved profiles in the version-1 csMailInterfaceBAppearanceDocument. The main view
+only supplies mode/area context and sends intents. Product definitions distinguish
+fixed appearances from selected-area derivation; snapshots are static. Explicit
+original-pigment and colored-fleck treatments replace usesDefault and loose
+rotation/color fields. The renderer receives resolved canvas, independent wash,
+texture treatment and surface strengths. Custom pigment always retains neutral
+binder; existing rendering geometry, grain and composition are retained. No
+separate binder/fleck images or retired rendering branches were introduced.
+
+The original device was converted once while closed using
+`tools/development-continuity/convert-interface-b-appearance.py`, preparing and then
+applying `target/appearance-refactor-migration.json`. It verifies the prepared
+input, all profile IDs/names/materials, current selection, unsaved material and mode
+before removing retired B preference keys. The shared A mode preference is retained;
+B now owns its mode inside its document, as C already does in its own presentation
+scope. The app has one reader for the new document, with no old-format fallback.
+Do not rerun preparation over an existing new document. Other retained development
+installations using the retired format require the same explicit closed-app
+conversion before opening the updated app.
+
+Canonical signed build/install, exact closed-device table preservation, original
+nonsecret Keychain metadata/signing requirement and key-file checks passed. A
+standalone isolated-preferences experiment passed these conjectures: static profiles
+ignore navigation; edits preserve saved snapshots; reopen retains working material
+and selection; update/delete have explicit consequences; selected-area copies become
+static; wash and pigment are independent; mode switching retains its agreed meaning;
+invalid restored/edited material is refused; unreadable libraries remain intact while
+fixed choices remain usable. No owner profiles were edited during this experiment.
+The temporary harness/binary and isolated preferences were removed afterward.
+
+Running-app inspection checked saved Dark Green across Home/Communications, Dark
+Teal and Light Terrazzo in Communications, fixed selected-area controls, light Home,
+and selected-area dark Communications/Relationships. The original account reopened
+normally. The entire migrated appearance document matched its prepared value after
+UI selection checks. Normal quit/reopen retained light Follow selected area on Home,
+matching the pre-install destination, mode and source. Original saved appearances
+were preserved; the previous restoration's minor raster-rounding limitation remains.
+
+Evidence: `target/appearance-refactor-{build,install,preservation,check,migration}.log`,
+`target/appearance-refactor-{before,installed,running,migration}.json`. No credential
+bytes were read or replaced. No persistent test cases or unrelated Rust/PostgreSQL
+suites were added/run. iOS, exhaustive display/accessibility combinations, real-owner
+profile save/update/delete and cross-interface mode interaction were not exercised;
+profile mutations were checked only in the isolated preference suite.
+
+## Existing B profile appearance restored — 29 October 2026
+
+The earlier original-raster cutover preserved saved numbers but changed custom
+profiles' composition: it multiplied color into the neutral binder as well as
+flecks. This was outside the requested additional-system-profile scope. Existing
+profiles now retain neutral binder and colored flecks. One generator draws the
+finished texture directly; there are no separately cached binder/fleck images.
+Neutral grain and deterministic geometry are shared, and a six-entry finished
+texture cache is bounded. Surface opacity is applied during custom composition
+so flattening does not change binder/fleck balance. Light's original raster and
+hue-only selected-area treatment remain unchanged. The selected-area dark profile
+uses the same subdued pigment contract with its area hue; dark wash remains zero.
+
+A disposable native rendering comparison challenged restoration against the
+pre-change renderer with the saved Dark Green and Dark Teal settings. On the
+opaque dark workspace, mean channel errors were below 0.2/255 and maximum errors
+were 3/255 for both. This is a close visual match, not a claim of pixel identity:
+direct fragment composition has small antialiasing/rounding differences. The
+original light raster comparison matched exactly. Reference programs, images and
+binaries were removed after recording the measurements. No old renderer remains.
+
+Canonical signed build/install, exact closed-device table preservation, original
+nonsecret Keychain metadata/signing requirement and key-file checks passed. The
+installed executable was verified running with the original account. The entire
+saved profile library, including selection, matched the pre-install document
+after inspection. Checked system Dark Green, saved Dark Green and Dark Teal on
+Home, plus Follow selected area in dark and light Communications. Left on Home
+with the system Dark Green default active, matching pre-install selection/mode.
+
+Evidence: `target/profile-restoration-{build,install,preservation}.log`,
+`target/profile-restoration-{before,installed,running}.json`,
+`target/profile-restoration-profiles-before.json`, and
+`target/profile-restoration-raster-comparison.json`. No credential bytes were read
+or replaced. No persistent test cases or unrelated Rust/PostgreSQL suites were
+added/run. iOS, exhaustive scale/color-space/accessibility combinations and custom
+slider interaction performance were not exercised.
+
+## Selected-area dark texture matches Dark Green treatment — 29 October 2026
+
+Follow selected area now inherits Dark Green's color-multiplication treatment,
+brightness (0.30139508928571423), saturation (1) and texture opacity roles in dark
+mode; only the multiplier hue follows the selected area. The original single
+raster is retained. Dark wash remains zero. Light mode retains its original
+hue-only raster treatment and 3% wash. No new appearance fields or parallel
+renderers were introduced; saved user profile snapshots are unchanged.
+
+Canonical signed build/install and exact closed-device table, nonsecret Keychain
+metadata, signing requirement and key-file preservation checks passed. The installed
+executable was verified running with the original account and unchanged saved user
+profiles. Inspection challenged excessive dark texture brightness in Home,
+Communications and Notes and checked light Communications retained its appearance.
+Left on dark Notes, the member's pre-install destination and mode, with Follow
+selected area active.
+
+Evidence: `target/dark-subdued-{build,install,preservation}.log`,
+`target/dark-subdued-{before,installed,running}.json` and
+`target/dark-subdued-profiles-before.json`. No credential bytes were read or
+replaced. No new tests or unrelated Rust/PostgreSQL suites were run. iOS and
+exhaustive accessibility/custom-profile combinations were not exercised.
+
+## Selected-area wash confined to light mode — 29 October 2026
+
+Follow selected area now has no background wash in dark mode (0%); its original
+raster flecks still change hue with the selected area. Light mode retains its 3%
+wash and existing fleck treatment. Texture opacity roles are unchanged.
+
+Canonical signed build/install and exact closed-device table, nonsecret Keychain
+metadata, signing requirement and key-file preservation checks passed. The installed
+executable was verified running with the original account and unchanged saved user
+profiles. Inspected dark Home and Communications without the wash, then light
+Communications with the wash retained. Left on dark Home, matching the member's
+pre-install destination and mode, with Follow selected area active.
+
+Evidence: `target/dark-no-wash-{build,install,preservation}.log`,
+`target/dark-no-wash-{before,installed,running}.json` and
+`target/dark-no-wash-profiles-before.json`. No credential bytes were read or
+replaced. No new tests or unrelated Rust/PostgreSQL suites were run. iOS and
+exhaustive accessibility/custom-profile combinations were not exercised.
+
+## Subtle selected-area wash and original flecks — 29 October 2026
+
+Follow selected area combines the original raster's hue-only fleck shift with a
+uniform selected-area wash beneath that raster: 3% opacity in light mode and 5%
+in dark mode. Texture opacity roles are unchanged. Both derive from the selected
+Column A area, rather than hover or keyboard focus. The fixed profile hides
+independent controls. Existing defaults have no wash; saved user profile values
+are unchanged. A saved copy can capture the wash, and Use original terrazzo clears
+it together with rotation and opacity overrides. The single original raster remains
+the only texture implementation. Opaque reading/writing surfaces are unaffected;
+the existing accessibility decoration suppression covers both wash and raster.
+
+Validation challenged whether both effects follow navigation without disturbing
+profile or account continuity: the canonical signed build and installation passed,
+all closed device SQLite tables matched exactly across installation, and the
+original nonsecret Keychain metadata, signing requirement and saved user profiles
+were preserved. The installed executable was verified running with the original
+account. Inspection checked Home, Communications and Relationships in light mode,
+Communications and Relationships in dark mode, and the immutable profile controls.
+Left on Home in light mode with Follow selected area active.
+
+Evidence: `target/subtle-area-{build,install,preservation}.log`,
+`target/subtle-area-{before,installed,running}.json` and
+`target/subtle-area-profiles-before.json`. No credential bytes were read or
+replaced. No new persistent tests or unrelated Rust/PostgreSQL suites were run for
+this presentation change. iOS, saving a new user copy, all custom color combinations
+and exhaustive accessibility configurations were not exercised.
+
+## Original raster restored for all B profiles — 29 October 2026
+
+Follow selected area now uses the original raster with hue-only rotation, rather
+than multiplying the selected glow's saturation/brightness into a separate fleck
+layer. Its light texture retains the original pale mineral detail and alpha.
+The same original raster serves every profile: separate fleck/binder contexts,
+images, snapshots and the retired alpha-clipping branch are removed. Custom
+color values apply directly to this original raster. Existing saved profile
+values and opacity settings are retained; custom rendering no longer uses the
+retired layers. A copied hue-only user snapshot can retain its fixed rotation;
+Use original terrazzo clears that rotation as well as opacity overrides.
+
+Validation: canonical signed build/install, strict signing checks, exact closed
+SQLite-table preservation, original Keychain metadata/signing association and
+unchanged original user profile snapshots passed. A disposable source-generator
+comparison challenged whether removing the layers changed the original image:
+both generated exactly the same pixel SHA-256,
+`3f645069e62b255f1526859b7ff5da8a21d2f54ff3771e29a1e3b654432f5084`.
+The temporary old/new generator programs and their compiler cache were removed.
+No old rendering implementation remains in the app.
+
+The current installed executable is verified running with the original account.
+Inspection compared light Follow selected area with unmodified Light Terrazzo on
+Notes, checked dark Notes and light Communications, and confirmed the immutable
+profile still hides independent controls. Left on light Notes, matching the
+member's destination before installation, with Follow selected area selected.
+Evidence: `target/original-raster-{build,install,preservation,pixels}.log`,
+`target/original-raster-{before,installed,running}.json` and
+`target/original-raster-profiles-before.json`. No credential bytes were read or
+replaced. No new persistent test cases or unrelated Rust/PostgreSQL suites were
+run. iOS, all custom color combinations and exhaustive accessibility settings
+were outside this renderer correction.
+
+## Interface B fixed Follow selected area profile — 29 October 2026
+
+Follow selected area is an additional immutable choice under Terrazzo appearance
+→ Defaults. Speckles derive their color directly from the same palette as the
+selected Column A glow, changing with navigation. Hover and keyboard focus do not
+supply its color. It keeps the corresponding existing fixed light/dark opacity
+roles and hides independent color/opacity controls. The existing Light Terrazzo,
+Dark Green and user profiles remain available. Save as new profile captures a
+resolved static user copy; it does not edit the fixed profile.
+
+The canonical signed build is installed and running. Inspection verified the
+fixed choice, absence of independent controls, Communications teal, Relationships
+warm brown in light and dark, Notes purple, and selection persistence across a
+normal quit/reopen. Left on the light Inbox with Follow selected area selected.
+Original account/Keychain association, signing requirement, protocol addresses and
+all original user profile snapshots were preserved. Native and external messages
+opened correctly; mailbox refresh showed no error. The preceding Swift integration
+inspection blocker is now resolved for B.
+
+Evidence: `target/selected-area-{build,install,preservation}.log`,
+`target/selected-area-{before,installed,running}.json` and
+`target/selected-area-profiles-before.json`. No credential bytes were read or replaced
+for this profile update. No new tests or unrelated Rust/PostgreSQL suites were run.
+iOS, exhaustive accessibility configurations and saving a new user copy were not
+exercised. Superseded staged bundles were removed by the canonical installer.
+
+## Swift integration follow-up — 29 October 2026
+
+The canonical app now contains the shared Rust action/content projection, separate
+native/external observation freshness, saved-reading uncertainty, and optimized
+atomic mailbox record commits. A/B/C share the updated behavioral contract.
+Unaddressed writing remains available without a current mail observation.
+
+The signed build was installed at `target/apple/CsMail-continuity-20261012.app`.
+Its initial running inspection was blocked by the locked Mac. That blocker was
+resolved during the selected-area profile update below: the original account
+reopened, and B native/external correspondence plus mailbox refresh were inspected
+in the current running app. See `target/selected-area-running.json`. A/C visual
+inspection and real-UI partial-transport failures remain outside that validation.
+No backend or schema change was made in this follow-up.
+
+Focused client tests, client/FFI linting, formatting, native SQLite/isolated
+Keychain checks, signed build and installation passed. The 1,050-record,
+65.625 MiB native mailbox commit took approximately 0.18 seconds in this fixture;
+this is not a production-scale mailbox benchmark. Browser enrollment was skipped.
+Original signing and nonsecret Keychain metadata are unchanged, as are workspace,
+personal mailbox and all mail record/index/copy tables. The old running app
+advanced retention progress during the checks (8000 to 8010), changing its encrypted
+head and retention metadata without changing those preserved records.
+
+Evidence: `target/swift-audit-{before,installed,running}.json`,
+`target/swift-audit-preservation.log`, and `target/swift-audit-*.log`.
+See [implementation and coverage](../../docs/swift-audit-implementation-20261029.md).
+iOS, real-UI partial transport failure, live providers and large-mailbox startup
+latency remain unvalidated. Existing unrelated presentation work was preserved.
+
+## Rust storage and processing continuity upgrade — 29 October 2026
+
+The current canonical app is installed and running with cache v6 and independently
+encrypted mailbox records. Its original account, Keychain credential association,
+signing requirement and protocol aliases were preserved. Native and external mail
+opened successfully after refresh. The existing backend launch job now uses
+`target/rust-audit-owner-20261029/start.sh`, database
+`cs_mail_rust_audit_owner_20261029`, schema 46, with local payment simulation.
+Running app/backend identity and readiness evidence is in that directory's
+`running.json`; source-fact and key preservation evidence is in `verified.json`.
+
+All eight full quality-gate checks and native storage checks passed. Browser enrollment,
+iOS and live providers were not exercised. See
+[implementation and coverage](../../docs/rust-audit-implementation-20261029.md)
+for architecture, offline conversion, checkpoint retention and remaining limits.
+Earlier deployment sections below are historical unless explicitly referenced here.
+
 ## Interface B fixed system appearance defaults — 28 October 2026
 
 Light Terrazzo is the fixed light default and Dark Green is the fixed dark default,
@@ -1039,12 +1524,11 @@ continuous hue/brightness field, native Hue/Brightness alternatives and Intensit
 restores the original raster, retaining the last custom selection. Device-local
 preferences persist across reopening; no account/client state is involved.
 
-One deterministic generator produces the original raster, binder and neutral fleck
-layers once. Custom rendering multiplies the neutral flecks by the chosen color,
-retaining alpha and mineral variation; binder/noise remain independent. Changes
-reuse cached layers rather than regenerating geometry. Window anchoring, existing
-texture strengths, opaque reading/writing surfaces and accessibility suppression
-retain their owners.
+Corrected 29 October: one deterministic generator now produces only the original
+raster. Follow selected area rotates its hue; custom color treatment also uses
+that raster. Separate binder and fleck generation/caches are removed. Changes do
+not regenerate geometry. Window anchoring, texture-strength roles, opaque reading/
+writing surfaces and accessibility suppression retain their owners.
 
 Validation: canonical build and CsMailAppleCheck compilation, original designated
 signing-requirement comparison, strict signature verification, installation and

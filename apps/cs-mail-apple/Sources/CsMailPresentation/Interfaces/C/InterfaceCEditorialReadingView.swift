@@ -42,10 +42,10 @@ public struct InterfaceCEditorialReadingView: View {
             case .caption: size = 12
             }
             #if os(macOS)
-            let font = NSFont(name: block.style == .title || block.style == .heading ? "HelveticaNeue-Light" : "HelveticaNeue", size: size) ?? NSFont.systemFont(ofSize: size)
+            let font = NSFont(name: block.style == .title || block.style == .heading ? InterfaceCEditorialStyle.headingFontName : InterfaceCEditorialStyle.bodyFontName, size: size) ?? NSFont.systemFont(ofSize: size)
             let color = NSColor(block.style == .warning ? .orange : block.style == .caption ? InterfaceCEditorialStyle.secondaryInk(scheme) : InterfaceCEditorialStyle.ink(scheme))
             #else
-            let font = UIFontMetrics.default.scaledFont(for: UIFont(name: block.style == .title || block.style == .heading ? "HelveticaNeue-Light" : "HelveticaNeue", size: size) ?? UIFont.systemFont(ofSize: size))
+            let font = UIFontMetrics.default.scaledFont(for: UIFont(name: block.style == .title || block.style == .heading ? InterfaceCEditorialStyle.headingFontName : InterfaceCEditorialStyle.bodyFontName, size: size) ?? UIFont.systemFont(ofSize: size))
             let color = UIColor(block.style == .warning ? .orange : block.style == .caption ? InterfaceCEditorialStyle.secondaryInk(scheme) : InterfaceCEditorialStyle.ink(scheme))
             #endif
             var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]

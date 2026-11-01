@@ -17,7 +17,7 @@ public struct InterfaceBMailboxRowContent: View {
         VStack(alignment: .leading, spacing: 4) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .firstTextBaseline, spacing: 16) {
-                    sender.frame(width: 150, alignment: .leading)
+                    sender.frame(width: 180, alignment: .leading)
                     topic.frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
                     timestamp
                 }
@@ -36,7 +36,7 @@ public struct InterfaceBMailboxRowContent: View {
     private var sender: some View {
         HStack(spacing: 6) {
             if unread { Circle().fill(.primary).frame(width: 5, height: 5).accessibilityLabel("Unread") }
-            Text(correspondent).font(.subheadline).fontWeight(unread ? .semibold : .regular).lineLimit(1)
+            Text(correspondent).font(.subheadline).fontWeight(unread ? .semibold : .medium).lineLimit(1)
         }
     }
     private var topic: some View {
@@ -47,7 +47,7 @@ public struct InterfaceBMailboxRowContent: View {
     }
     private var timestamp: some View {
         Text(date, format: .dateTime.month(.abbreviated).day())
-            .font(.caption).foregroundStyle(.secondary).fixedSize()
+            .font(.caption).foregroundStyle(.secondary).monospacedDigit().fixedSize()
             .help(date.formatted(date: .complete, time: .shortened))
             .accessibilityLabel(date.formatted(date: .complete, time: .shortened))
     }

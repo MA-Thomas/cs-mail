@@ -50,4 +50,8 @@ enum SidebarProjection {
     static func date(_ milliseconds: UInt64) -> String {
         Date(timeIntervalSince1970: Double(milliseconds) / 1000).formatted(date: .abbreviated, time: .shortened)
     }
+    static func messageDate(_ milliseconds: UInt64) -> String {
+        let date = Date(timeIntervalSince1970: Double(milliseconds) / 1000)
+        return date.formatted(.dateTime.weekday(.abbreviated)) + " " + date.formatted(date: .abbreviated, time: .shortened)
+    }
 }

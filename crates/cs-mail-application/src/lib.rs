@@ -10,6 +10,7 @@ pub mod guests;
 pub mod members;
 pub mod notices;
 pub mod operations;
+pub mod processing;
 pub mod relationships;
 pub mod request_pricing;
 pub mod requests;

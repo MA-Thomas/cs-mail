@@ -223,7 +223,7 @@ struct MailboxesView: View {
                     }.scrollTargetLayout()
                 }.scrollPosition(id: $navigation.threadAnchor)
             }
-            if let at = model.inbox?.synchronizedAt { Text("Last complete refresh: \(SidebarProjection.date(at))\(model.connected ? "" : " · Saved information; may be out of date")").font(.caption).foregroundStyle(.secondary) }
+            if let explanation = model.mailFreshness.notice { Text(explanation).font(.caption).foregroundStyle(.secondary) }
         }.padding(28)
             .task(id: (model.selectedInbox ?? "all") + "|" + navigation.query + "|" + String(navigation.submitted)) { if !model.hasSearch(navigation.query, submitted: navigation.submitted) { await model.search(navigation.query, submitted: navigation.submitted) } }
             .onChange(of: navigation.folder) { _, _ in navigation.selected.removeAll() }
