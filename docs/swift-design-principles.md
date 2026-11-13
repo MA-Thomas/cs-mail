@@ -499,3 +499,111 @@ Validate line concealment, hover cursor and actual widening/narrowing together.
 C's light/dark mode and named mode-only profiles persist independently. No material
 controls, texture resource bundle or compatibility renderer is retained. Original
 visual references and asset provenance remain outside runtime code.
+
+
+## Interface D burgundy glass — 1 November 2026
+
+D has independently selectable tonal color families and adjustable background opacity for
+the main space, Column B, and Column A plus exterior surround. Background alpha
+reveals the desktop directly, without a native material left at full strength. The
+surround excludes the other regions; Column B owns only the rounded rectangle
+inside its outline. Writing canvases
+retain opaque burgundy backing; original HTML retains its
+sender-authored colors. Reduce Transparency and Increased Contrast use opaque
+backing and legible boundaries. Foreground text and hit regions retain full opacity.
+
+The native window remains shared by all selectable interfaces. D's scoped lease
+captures only the properties it changes and restores them synchronously before
+switching away. Late or obsolete view cleanup cannot release another view's lease.
+No global appearance change, private layer modification, window enumeration or
+replacement account is introduced. A/B/C keep their existing rendering and settings.
+Shared editor appearance is an explicit per-instance choice with unchanged defaults;
+its presentation CSS remains outside captured authored HTML and durable drafts.
+
+D's copied terrazzo runtime and resources are replaced, with the previous D
+appearance document retained unchanged as saved work rather than a fallback reader.
+B's terrazzo, profiles, resources and generation recipe remain independently owned.
+
+D's opaque Appearance popover owns three percentage sliders and saves one validated,
+versioned document under `csMailInterfaceDGlassOpacities`. Zero means transparent backing; 100% means opaque burgundy. Opacity belongs to
+backgrounds, never foreground text or whole content views. Invalid or future saved
+documents are retained without overwrite and editing is disabled. Accessibility
+settings that require opacity take precedence without replacing saved values.
+
+
+### Opaque D navigation previews — 1 November 2026
+
+Column A's floating preview must have an opaque burgundy interior in ordinary
+appearance as well as accessibility modes. It occludes the workspace beneath it;
+a translucent wash or native frosting is not an equivalent guarantee. The border
+may retain its glass detailing. The same D-owned surface serves every preview,
+without changing pointer tracking, keyboard access or navigation semantics.
+
+
+### Invisible D split divider — 1 November 2026
+
+The Column B/main-space divider has no visible rule. D uses a clear SwiftUI split
+layout with a native eight-point resize handle and left/right cursor. Its minimum
+sizes use the shared WorkspaceColumnLayout measurements, while its layout avoids
+NavigationSplitView's native sidebar material. No divider cover or opaque frost
+may remain beneath the independently controlled backgrounds. A/B/C retain their
+existing native split containers and shared resize implementation.
+
+### One D panel-lighting owner — 1 November 2026
+
+The main space and Column A navigation hover boxes render through
+`InterfaceDPanelPerimeterLight` in `InterfaceDSurfaces.swift`. Broad spill strength,
+blur radius, stroke width, near-edge glow, edge color and shoulder treatment belong
+to that component; do not copy parameter values into a separate hover-box renderer.
+The hover box uses this owner both with and without Column B visible, while keeping
+its opaque interior, own rounded shape and existing navigation interaction.
+Selected navigation buttons retain their separately owned selection halo.
+
+Hover-box backing supplies opaque fill only. Do not add a second polished rim,
+inner reflection or popup shadow beneath/over the shared panel-light renderer:
+those layers make the visible edge differ despite identical glow parameters.
+
+### D system color profiles — 1 November 2026
+
+D owns five immutable families: Burgundy, inky dark Turquoise, Gold-olive, Forest
+green and Gray-black. Gray-black uses cool charcoal and near-black with blue-gray
+edge light and cool white primary text; the other families retain their colored pigments
+and warm ivory primary text. Each palette defines
+a surround, deeper reading canvas, pale edge
+light and quieter secondary ink beneath legible primary ink. Burgundy
+retains its previous RGB values. The separate Follow the selected area profile
+resolves Home to neutral/slate, Communications to Forest green, Relationships to
+Gold-olive, Aliases and Express Lanes to Burgundy, and Notes to Turquoise. Hovering
+an icon cannot change this selection. These are presentation colors, not authority.
+
+InterfaceDColorProfile and InterfaceDGlassPalette in InterfaceDAppearance.swift own
+the profile definitions. MemberView resolves the selected D area into one palette
+and injects it into D's presentation tree; its scoped window backing receives the
+same surround pigment. Do not restore fixed burgundy constants in individual
+surfaces. Immutable system-profile selection is persisted in its own versioned
+csMailInterfaceDColorProfile document; the existing opacity document stays separate
+and unchanged by color selection. Invalid/future color documents remain preserved
+with profile selection disabled, independently of the opacity controls.
+
+D's shared editor opts into explicit tonal canvas/ink values. A/B/C retain the
+standard display style. CSS is still confined to the document head, outside authored
+HTML capture. Imported sender-authored designs retain their own presentation.
+
+### Quiet D Column B hover edges — 1 November 2026
+
+Column B region controls use the D region-button style’s organizer-specific thin,
+muted profile-colored perimeter without native glass glints, shadows or cove spill.
+Pressing strengthens that edge; selection markers and keyboard focus retain their
+separate meanings. Reduced transparency and increased contrast use stronger solid
+ink boundaries. Scope is the existing columnBNavigation environment; main-space
+region controls and A/B/C retain their existing feedback owners.
+
+### D preview boundary composition — 1 November 2026
+
+InterfaceDNavigationPreviewSurface owns one shape for the opaque fill, content clip,
+hit shape and shared panel light. Do not reproduce those corner values in the shell.
+The panel-light owner measures the supplied surface bounds and reserves exterior
+canvas space explicitly. Spill, near-edge light and the blurred shoulder are masked
+outside that boundary, preserving the fill through its exact rounded edge. The
+same geometry correction applies to D’s main-space perimeter with unchanged light
+parameters; preview opacity and interaction remain independently owned.

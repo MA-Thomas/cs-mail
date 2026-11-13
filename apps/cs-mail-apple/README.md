@@ -1,3 +1,417 @@
+## D preview fill/perimeter alignment — 1 November 2026
+
+InterfaceDNavigationPreviewSurface now composes the preview’s opaque fill, clipping,
+content shape and shared perimeter through one rounded shape. The shell no longer
+repeats that geometry in separate background, clip and overlay declarations.
+The shared D panel-light renderer measures its actual surface bounds explicitly;
+its drawing canvas reserves exterior spill without participating in surface sizing.
+The blurred shoulder now shares the exterior mask with the spill/near-edge layers,
+so it cannot shade the fill inward and make its boundary appear inset. Lighting
+strengths, stroke widths and blur radii are unchanged. This shared correction also
+reaches D’s main-space perimeter; A/B/C retain their existing rendering.
+
+Validation: canonical signed build/install, strict signature and whitespace checks
+passed. Closed-app comparison preserved encrypted account tables, original signing
+requirement, nonsecret Keychain metadata and B/C/D appearance documents. Running
+Relationships previews were inspected on Home and over Communications Column B:
+the opaque fill reaches its rounded boundary, with lighting outside; the shared
+main-space light was inspected in the same compositions. Keyboard preview and Escape
+dismissal worked without navigating to the previewed area. No new tests or unrelated
+Rust/PostgreSQL suites were run. iOS/compact and accessibility variants were not
+separately exercised in this pass.
+
+## D quiet Column B hover edges — 1 November 2026
+
+D’s organizer region buttons use a thin profile-colored edge on hover, without
+glass glints, shadow or cove spill. Ordinary hover is 0.75 points at 30% edge color;
+pressing is 1 point at 55%. Reduced transparency/increased contrast use stronger
+solid ink edges. The existing columnBNavigation environment scopes this single
+style contract to Column B, preserving main-space region controls, generous hit
+regions, selection markers and native keyboard-focus treatment. A/B/C are unchanged.
+
+Validation: canonical signed build/install, strict signature and whitespace checks
+passed. Closed-app fingerprints preserved encrypted account tables, original signing
+requirement, nonsecret Keychain metadata and B/C/D appearance preferences. Running
+Communications inspection showed the thin unfilled Column B hover edge without
+spill; Relationships organizer composition and selected markers were also checked.
+No new tests or unrelated Rust/PostgreSQL suites were run. Pressed-state strength,
+keyboard-only traversal, accessibility combinations and iOS were source-reviewed
+but not separately exercised at runtime in this pass.
+
+## D Gray-black system profile — 1 November 2026
+
+D’s Appearance panel adds an immutable Gray-black family: cool charcoal surround,
+near-black reading/writing canvas, pale blue-gray edge light and quieter gray secondary
+ink under cool white primary text. The owner’s visual feedback led to a restrained
+blue-gray undertone and removal of the inherited warm ivory text in this family. The existing profile enumeration
+supplies its picker row and persistence; no renderer, controller or storage version
+change is needed. Follow the selected area retains its existing Home slate and
+other area mappings. Background opacity remains independent.
+
+Validation: the initial Gray-black build was signed, installed and inspected on Home
+and Communications, including the Appearance panel. Selection is saved as grayBlack
+in the existing version-1 profile document; the opacity document stayed unchanged.
+Installation preserved encrypted account tables, nonsecret Keychain metadata,
+original signing requirement and appearance documents. The cooler revision passed canonical
+signed installation and strict signature verification after the Mac was unlocked.
+The original account opened successfully, Gray-black selection persisted across
+reopening, and running Communications inspection confirmed the cool surround,
+Column B, main space, edge light and primary/secondary text. Closed-app comparison
+again preserved encrypted account tables, original signing requirement, nonsecret
+Keychain metadata and appearance documents. No new tests or unrelated
+Rust/PostgreSQL suites were run; iOS/accessibility combinations were not exercised.
+
+## D navigation-preview header geometry — 1 November 2026
+
+D’s shared navigation-preview content is top-aligned within its fixed-height popup.
+Unused vertical room stays below the controls rather than centering the whole stack
+and pushing its title and divider downward when an area has fewer controls. The Relationships
+preview exposed this issue. One D-owned header treatment covers all five previews;
+opaque backing, lighting, popup geometry and interaction retain their owners.
+
+Validation: canonical signed build/install, strict signature and whitespace checks
+passed. Closed-app comparison preserved encrypted account tables, original signing
+requirement, nonsecret Keychain metadata and B/C/D appearance documents. Running
+Relationships and Communications previews have the same top-aligned divider, with
+controls visible; Escape dismisses them and Home remains selected. No new tests
+or unrelated Rust/PostgreSQL suites were added/run. Compact/iOS and accessibility
+layouts were not exercised in this pass.
+
+## Product display name — 1 November 2026
+
+The window title and all four interfaces’ sign-in headings use **c-sqd mail**.
+The canonical development bundle’s display name is **c-sqd mail Development**.
+This is a presentation rename: executable, canonical install path, bundle ID,
+signing identity, Keychain namespace and durable account association retain their
+existing values. Historical names and technical identifiers below remain evidence.
+
+Validation: canonical signed build/install and strict signature verification passed.
+Closed-app fingerprints preserved all encrypted device tables, original nonsecret
+Keychain metadata, signing requirement and B/C/D appearance preferences. Running
+inspection confirmed the new sign-in heading, window title and app menu name, then
+successful account opening on D Home. A/B/C source changes are the intended sign-in
+heading literal only. No new tests or unrelated Rust/PostgreSQL suites were run;
+iOS and separate A/B/C runtime sign-in screens were not exercised.
+
+## D tonal system color profiles — 1 November 2026
+
+D's Appearance panel now offers immutable Burgundy, inky dark Turquoise, Gold-olive,
+Forest green and Follow the selected area profiles. Every family keeps saturated
+surround, deeper reading/writing canvas, pale related edge light and quieter
+secondary ink beneath warm ivory primary text. Burgundy preserves its existing RGB
+values. The distinct following profile resolves Home to neutral/slate,
+Communications to Forest green, Relationships to Gold-olive, Aliases and Express
+Lanes to Burgundy, and Notes to Turquoise. Hover/keyboard preview does not replace
+the selected area. Fixed profiles keep their color across navigation.
+
+Definitions and deterministic resolution live in presentation InterfaceDAppearance.
+One resolved palette is injected into D; the window lease receives the same
+surround pigment. Shared main-space/preview lighting and opaque preview interiors
+use that palette. The former fixed D area-palette stub is removed. Profile selection
+is saved in csMailInterfaceDColorProfile, separately from the unchanged opacity
+document and historical D appearance document. Invalid/future/unknown color-profile
+documents are retained with color selection disabled, independently of opacity.
+The common body editor accepts explicitly supplied tonal canvas/ink values for D;
+A/B/C keep their standard style. Presentation CSS remains in the document head
+outside authored HTML capture. Imported authored designs retain their presentation.
+
+Validation: canonical signed build/install, strict signature, whitespace and source
+isolation checks passed; all 102 A/B/C Swift files remain unchanged. Closed-app
+comparison preserved every encrypted device table, original signing requirement,
+nonsecret Keychain metadata and existing appearance documents. No credential bytes
+were read or replaced. A disposable experiment compiled actual profile/controller,
+opacity and composer-canvas sources: profile save/reload, fixed/area resolution,
+RGB tonal ordering, opacity/unrelated-pref isolation, corrupt/future document
+retention and standard light/dark composer CSS checks passed. No persistent tests
+or unrelated Rust/PostgreSQL suites were added/run.
+
+Running inspection selected all four fixed families and checked their backgrounds,
+secondary ink, panel and edge lighting. Follow was checked in all five areas and
+through a different area's keyboard preview; the preview stayed in the selected
+area's family. Reopening retained Follow. Existing opacity bytes and B/C plus
+historical D appearance bytes remained unchanged after all profile selections.
+The original opacity settings are 100% for each region and remain so. Burgundy
+was restored for the member's assessment. iOS, accessibility modes, every detailed
+screen and live composer flows were not exercised in this pass; composer palette
+CSS and unchanged capture paths were checked separately.
+
+Evidence: target/interface-d-profiles-{build,install}.log,
+target/interface-d-profiles-{before,installed,persisted,running}.json and
+target/interface-d-profiles-experiment.swift.
+
+## D hover-box single edge treatment — 1 November 2026
+
+The shared-light update still left a separate InterfaceDGlassRim on the opaque
+preview backing, including a two-point polished border and inset reflection. A
+conditional popup shadow also remained. These layers made the preview edge appear
+heavier despite matching glow settings. Both are now removed. The backing supplies
+only opaque burgundy fill; InterfaceDPanelPerimeterLight alone renders the edge,
+using the same physical widths, blur and strengths as the main-space perimeter.
+Selected-button lighting and preview interaction are unchanged.
+
+Canonical signed build/install, strict signature, whitespace and A/B/C source
+isolation checks passed. Closed-app fingerprints preserved all encrypted device
+tables, original signing requirement, nonsecret Keychain metadata and appearance
+settings. Running inspection opened Communications preview at Home and confirmed
+the former double rim was gone, leaving the soft shared perimeter and an opaque
+interior. D remains at Home. No new tests or unrelated Rust/PostgreSQL suites were
+added/run. iOS, Column B layouts and accessibility combinations were not separately
+exercised in this correction.
+Evidence: `target/interface-d-single-edge-{build,install}.log` and
+`target/interface-d-single-edge-{before,installed,running}.json`.
+
+## D shared main-space and hover-box perimeter light — 1 November 2026
+
+D's Column A navigation hover boxes and main-space perimeter now use one component,
+`InterfaceDPanelPerimeterLight` in presentation `InterfaceDSurfaces.swift`. Editing
+its lighting parameters updates both automatically. Current dark values are 15%
+broad spill, six-point blur, sixteen-point broad stroke and 28% near-edge glow with
+one-point blur/three-point stroke. Their rim/shoulder treatment and accessibility
+fallback also share the owner. Each caller supplies its own rounded shape; masking
+uses that actual outline so the hover box's fourteen-point corners remain clear.
+The same lighting applies when Column B is visible. Its opaque preview interior
+and hover/keyboard interaction remain unchanged. Selected navigation-button halos
+retain their separate owner; the superseded popup cove-light branch was removed.
+
+Canonical signed build/install, strict signature, whitespace and isolation checks
+passed. All 102 A/B/C Swift sources remain unchanged. Closed-app comparison
+preserved every encrypted device table, original signing requirement, nonsecret
+Keychain metadata and current appearance preferences. Running inspection opened
+the Communications preview at Home and over populated Column B, confirming the
+shared exterior light and opaque interior; Escape dismissed it and D was returned
+to Home. No new tests or unrelated Rust/PostgreSQL suites were added/run. iOS,
+all previews, pointer dismissal timing and accessibility modes were not separately
+exercised; preview interaction logic is unchanged.
+Evidence: `target/interface-d-shared-light-{build,install}.log` and
+`target/interface-d-shared-light-{before,installed,running}.json`.
+
+## D Column A near-edge glow alignment — 1 November 2026
+
+The selected Column A button now adds the same narrow exterior glow as the main
+space: 28% in dark appearance (30% in light), a three-point stroke and one-point
+blur, using D's existing edge color. The broader selection halo and rim retain
+their existing values. The added layer is limited to the navigationSelection role;
+preview surfaces and A/B/C are unaffected. Accessibility outline fallbacks remain.
+
+Canonical signed build/install, strict signature, source isolation and whitespace
+checks passed. Closed-app fingerprints preserved all encrypted device tables,
+original signing requirement, nonsecret Keychain metadata and appearance settings.
+Running inspection confirmed the selected Home button's exterior light and retained
+main-space perimeter. D remains at Home. No new tests or unrelated Rust/PostgreSQL
+suites were added/run; iOS and accessibility-mode combinations were not exercised.
+Evidence: `target/interface-d-near-glow-{build,install}.log` and
+`target/interface-d-near-glow-{before,installed,running}.json`.
+
+## D transparency and rounded Column B correction — 1 November 2026
+
+This supersedes the tint/frost behavior described in the earlier opacity entry.
+The first opacity implementation faded burgundy over an unchanged native material;
+it did not establish the requested clear desktop endpoint. D now applies alpha to
+the entire burgundy backing and leaves no native frost beneath it. Its macOS split
+layout uses a clear SwiftUI container and an invisible native eight-point resize
+handle instead of NavigationSplitView's native sidebar material. Shared minimum
+size measurements are reused. No A/B/C source or shared WorkspaceColumn changed.
+
+Column B's background and root exclusion use the same rounded rectangle and
+three-point trailing inset as its outline. Corners and the top/bottom surround are
+owned by Column A + exterior. Foreground text, previews, writing canvases and the
+Appearance panel stay opaque. Existing independent saved values remain in use.
+
+Validation challenged whether the visible backing actually becomes transparent,
+rather than merely losing color. Temporary read-only instrumentation cached the
+running content view into an RGBA bitmap; it was removed before the final build.
+With main 76%, Column B 64%, surround 0%, measured alpha was 0 in Column A/exterior
+and outside B's rounded corner, approximately 0.64 inside B, and 0.76 in the main
+space. With B 0% and surround 50%, B interior was 0, its exterior rounded corner
+and Column A were approximately 0.50, and main remained 0.76. The window was
+nonopaque with a zero-alpha background. These are rendered content-view samples;
+the inspection tool's JPEG window capture flattens clear pixels to white and is
+not an independent photograph of the desktop showing through the window.
+
+Running inspection confirmed the rounded B fill and no divider rule. A real pointer
+drag widened B from 299 to 359 points and returned it to 299. The native cursor
+shape is explicitly resizeLeftRight; the inspection tool did not independently
+capture its glyph. The user's values (76%, 64%, 0%) were restored. Final signed
+build/install, strict signature, whitespace and closed-app preservation comparison
+passed, including every encrypted device table, original signing requirement,
+nonsecret Keychain metadata and B/C plus both D preference documents. No credential
+bytes were read or replaced. iOS, all accessibility modes and every destination or
+window size were not exercised. No persistent tests or Rust/PostgreSQL suites were
+added/run for this presentation correction.
+
+Evidence: `target/interface-d-transparency-{final-build,final-install}.log`,
+`target/interface-d-transparency-{before,installed,running}.json`, and the
+`target/interface-d-transparency-alpha-{zero,half}.{png,txt}` render evidence.
+
+## Independent D background opacity — 1 November 2026
+
+D's toolbar Appearance button opens an opaque burgundy popover with three saved
+percentage sliders: Main space, Column B, and Column A + exterior. Starting values
+are 76%, 64%, and 64%. Zero retains clear native glass/frost; 100% is opaque
+burgundy. Foreground text, writing canvases and navigation previews stay opaque.
+Reduce Transparency/Increased Contrast override the background settings without
+replacing saved values. The settings document is separately owned under
+`csMailInterfaceDGlassOpacities`; invalid/future documents remain untouched and
+editing is disabled. D's historical appearance document is still retained.
+
+Each major region owns its native material and tint. Geometry preferences exclude
+Column B and main-space materials from the root surround, preventing the surround
+slider from tinting the other regions through a shared burgundy backing. D's native
+splitter mask uses the surround setting and retains the shared resize owner.
+A/B/C sources and shared WorkspaceColumn are byte-for-byte unchanged.
+
+Canonical staged build/install, strict signature and whitespace checks passed.
+Closed-app comparison preserved all encrypted device tables, the original signing
+requirement, nonsecret Keychain metadata, B/C preferences and retained D document.
+No credential bytes were read or replaced. Running UI inspection independently
+changed main space to 0%, surround to 100%, then Column B to 0%; screenshots showed
+only the corresponding region changing. Reopening the app showed all three saved
+values. Starting values were restored. Switching D to B restored B's terrazzo and
+controls; returning to D restored its settings. Communications navigation preview
+remained opaque and no B/main divider rule was visible.
+
+A disposable experiment compiled the actual settings/controller sources and
+challenged independent edits, endpoint persistence, invalid-value rejection,
+corrupt/future document retention and unrelated preference isolation; all passed.
+No persistent tests or unrelated Rust/PostgreSQL suites were added/run. iOS,
+accessibility-setting toggles, every destination and all window sizes were not
+exercised. Window-only screenshots do not establish a specific degree of desktop
+visibility; native frost and system settings still govern it.
+
+Evidence: `target/interface-d-opacity-{build,install}.log`,
+`target/interface-d-opacity-{before,installed,running,persisted}.json`, and
+`target/interface-d-opacity-experiment.swift`.
+
+## Hidden D split divider with native resizing — 1 November 2026
+
+D's split surround now samples the same native desktop material as its window and
+sidebar instead of placing a translucent color over the native rule. Its four-point
+separator mask hides the rule through the toolbar and workspace. The mask remains
+noninteractive. Shared WorkspaceColumn sizing, its eight-point cursor region,
+NSCursor.resizeLeftRight handler and native drag forwarding are unchanged; A/B/C
+sources are unchanged.
+
+Canonical signed build/install, strict signature, source preservation and whitespace
+checks passed. Closed-app comparison preserved every encrypted device table,
+original signing requirement, nonsecret Keychain metadata, B/C preferences and the
+retained D appearance document. No credential bytes were read or replaced. Running
+inspection confirmed no vertical divider rule. Pointer dragging widened Column B
+from 275.5 to 335.5 points and returned it to 275.5; the divider remained concealed.
+The inspection tool does not capture the native cursor glyph, so its visible shape
+was not independently confirmed; the existing left/right cursor implementation is
+unchanged. D remains open on All inboxes.
+
+Evidence: `target/interface-d-hidden-divider-{build,install}.log` and
+`target/interface-d-hidden-divider-{before,installed,running}.json`.
+No new tests or unrelated Rust/PostgreSQL suites were added/run. iOS and exhaustive
+window/accessibility combinations were not exercised.
+
+## Opaque D navigation previews and opacity audit — 1 November 2026
+
+D's Column A hover/keyboard preview now has a fully opaque burgundy interior.
+The shared D preview-surface owner supplies the same fill to every navigation
+area. The rim, rounded clipping, generous hit regions and preview interaction
+retain their existing owners. No window-transparency, account or A/B/C change
+is part of this correction.
+
+Canonical signed build/install, whitespace and closed-app preservation checks
+passed. All encrypted device tables, original signing requirement, nonsecret
+Keychain metadata and B/C plus retained D preferences were unchanged across the
+installation. No credential bytes were read or replaced. Running inspection opened
+the Communications preview over the populated mailbox through its accessibility
+preview action and confirmed that underlying labels do not show through its
+interior. Escape dismissed it without changing navigation. The app remains in D
+on All inboxes. Pointer timeout behavior, every preview, iOS and exhaustive
+accessibility combinations were not separately exercised; pointer logic is unchanged.
+No new tests or unrelated Rust/PostgreSQL suites were added/run.
+
+The [opacity audit](../../docs/interface-d-opacity-audit-20261101.md) identifies
+other candidates, including editing popovers, charge review, permission/disclosure
+and account forms, saved/reference text and sustained reading surfaces. These are
+recommendations, not additional implemented changes. Native presentations need
+runtime inspection before asserting bleed-through. B/C navigation-preview fills
+are already opaque; A's frosted preview is flagged but unchanged.
+
+Evidence: `target/interface-d-opaque-preview-{build,install}.log` and
+`target/interface-d-opaque-preview-{before,installed,running}.json`.
+
+## Interface D burgundy glass — 1 November 2026
+
+D now uses a fixed deep burgundy glass treatment across Columns A/B and the main
+space. Public AppKit behind-window materials supply the window and native sidebar
+backdrops; nested surfaces add tint, with subdued perimeter lighting and denser
+reading/writing areas. The editor body is an opaque burgundy canvas for legibility;
+sender-authored HTML retains its own presentation. Accessibility requests for
+reduced transparency or increased contrast produce opaque backing. Actual desktop
+visibility depends on the material, system settings and content behind the window;
+window-only screenshots do not establish a particular degree of wallpaper visibility.
+
+D's copied terrazzo renderer, controls, shader, raster/coefficient resources and
+generator have been removed. Its former appearance document remains unchanged in
+preferences as retained saved work, without a runtime fallback reader. B's material
+assets and recipe remain untouched. The interface picker still uses the same real
+MemberModel, account and Rust client.
+
+Isolation audit: all 102 A/B/C Swift sources and B's prepared material assets remain
+byte-for-byte unchanged. Shared changes are limited to MemberView's D window lease
+and an explicit body-editor display style whose default preserves the existing
+light/dark canvas. The lease targets only its containing window, captures the
+properties it changes, and restores them synchronously before an interface switch.
+There are no private window/layer APIs, global appearance settings or window scans.
+The editor's capture and draft-change paths are unchanged; presentation CSS stays
+in the document head outside captured authored HTML.
+
+Validation: final canonical signed build/install and strict signature passed.
+Closed-app comparison preserved every encrypted device table, original signing
+requirement, nonsecret Keychain metadata and B/C plus retained D preferences.
+No credential bytes were read or replaced. A disposable native experiment passed
+50 enter/leave cycles, exact restoration, detach/replacement, obsolete cleanup and
+unrelated-window isolation. A separate comparison confirmed unchanged standard
+editor CSS, SwiftUI fills and native colors in both light and dark appearance.
+Running inspection covered D Home, populated mailbox, an empty composer and native
+correspondence, plus switching D -> B -> C -> A -> D. B retained terrazzo, C retained
+its metal presentation and A retained its neutral presentation without burgundy
+carryover. The empty inspection draft was discarded without sending anything.
+The app is left in D on All inboxes.
+
+Evidence: `target/interface-d-glass-{build,install}.log`,
+`target/interface-d-glass-{before,installed,running,source-preservation}.json`,
+`target/interface-d-window-check.log` and `target/interface-d-canvas-check.log`.
+Disposable experiment sources/binaries were removed. No persistent tests or unrelated
+Rust/PostgreSQL suites were added/run. iOS, exhaustive accessibility/display/window
+combinations, every screen and live providers were not exercised. Outgoing HTML
+was not submitted as part of this presentation check. This does not close Milestone 4.
+
+## Historical initial Interface D copy — 1 November 2026
+
+Interface D is now selectable from Home in the unified member app. Its 39 Swift
+screen/component sources begin as exact copies of B under interface/resource
+renaming. D has independent concrete types, environment keys, appearance
+controller, Metal entry point, prepared texture assets and offline material recipe.
+Its appearance document uses `csMailInterfaceDAppearanceDocument`. During this
+closed-app installation, the owner's complete current B document was copied once
+to D, preserving every saved profile and working selection; D's runtime reads and
+writes only its own document. Layout preferences, platform/editor services and the
+single real MemberModel/Rust client remain shared. B's source and preferences are
+unchanged. See [interface ownership](Sources/CsMailApple/Interfaces/README.md).
+
+Validation: canonical signed build/staged installation, source-copy comparison,
+byte-identical prepared texture comparison, shader comparison and whitespace checks
+passed. The installed signature and running canonical process were verified.
+Closed-app comparisons preserved every encrypted device table, the original
+signing requirement, nonsecret Keychain entry metadata and B/C appearance preferences.
+No credential bytes were read or replaced. Running inspection selected D from the
+four-interface picker, confirmed its Home appearance against B, and opened the
+existing populated mailbox with the original receiving inboxes. D was left selected
+on Communications. Initial B/D appearance documents remain byte-for-byte equal.
+
+Evidence: `target/interface-d-build.log`, `target/interface-d-install.log`,
+`target/interface-d-before.json`, `target/interface-d-installed.json`, and
+`target/interface-d-running.json`. No persistent test cases or unrelated
+Rust/PostgreSQL suites were added/run. iOS, exhaustive screen/accessibility
+combinations, real-account profile editing and live providers were not exercised.
+This presentation addition does not complete Milestone 4.
+
 ## Independent cove-light colors and profile-wide lighting — 29 October 2026
 
 Cove lighting color is now an explicit, validated InterfaceBMaterialColor in each

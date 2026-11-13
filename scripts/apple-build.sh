@@ -52,7 +52,7 @@ import os, plistlib, sys
 from pathlib import Path
 with open(sys.argv[1], 'rb') as source:
     info = plistlib.load(source)
-info['CFBundleName'] = 'cs-mail Development'
+info['CFBundleName'] = 'c-sqd mail Development'
 info['CFBundleIdentifier'] = 'com.csqd.member.dev.continuity-20261012'
 info['CsMailPersistentAccountSigning'] = True
 info['CsMailClientNamespace'] = 'com.csqd.member.development'

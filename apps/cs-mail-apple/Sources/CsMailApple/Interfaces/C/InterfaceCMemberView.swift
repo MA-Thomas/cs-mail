@@ -105,7 +105,7 @@ struct InterfaceCView: View {
                 memberShell(inbox)
             } else {
                 VStack(spacing: 22) {
-                    Text("cs-mail").font(InterfaceCEditorialStyle.heading(23)).padding(.bottom, 24)
+                    Text("c-sqd mail").font(InterfaceCEditorialStyle.heading(23)).padding(.bottom, 24)
                     Text("Your conversations.\nYour permission.").font(InterfaceCEditorialStyle.heading(34)).multilineTextAlignment(.center)
                     Button("Open account") { Task { await model.unlock() } }.buttonStyle(InterfaceCEditorialButtonStyle(prominent: true)).disabled(accountAccess != .available)
                     Button("Sign in and enroll…") { enrolling = true }.buttonStyle(InterfaceCEditorialButtonStyle()).disabled(accountAccess != .available)
